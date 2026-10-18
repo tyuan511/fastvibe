@@ -226,6 +226,25 @@ test("a stdio server gets the short inherited environment plus its own, not the 
   }
 });
 
+test("a stdio server also inherits the character locale, so it does not run in C", (t) => {
+  if (process.platform === "win32") return t.skip("a Windows console has a code page, not a locale");
+  const previous = { LANG: process.env.LANG, LC_CTYPE: process.env.LC_CTYPE };
+  // Either spelling may be the one that is set: a desktop session's LANG, or the
+  // LC_CTYPE `applyShellLocale` wrote. Both have to reach the server.
+  process.env.LANG = "zh_CN.UTF-8";
+  process.env.LC_CTYPE = "C.UTF-8";
+  try {
+    const transport = createTransport(configOf("s", { command: "node", args: ["x"] }), () => {}) as StdioTransport;
+    assert.equal(transport.options.env?.LANG, "zh_CN.UTF-8");
+    assert.equal(transport.options.env?.LC_CTYPE, "C.UTF-8");
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test("an http server is built with its headers", () => {
   const transport = createTransport(
     { id: "h", name: "h", enabled: true, transport: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer t" } },

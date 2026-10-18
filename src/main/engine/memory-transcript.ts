@@ -1,3 +1,4 @@
+import { isToolImageRef } from "../../shared/tool-image-ref.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -60,7 +61,8 @@ function textOf(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .map((block) => (isRecord(block) && block.type === "text" && typeof block.text === "string" ? block.text : ""))
+    // A picture's reference is a sentence naming a file in FastVibe's own data, not part of the chat.
+    .map((block) => (isRecord(block) && block.type === "text" && typeof block.text === "string" && !isToolImageRef(block) ? block.text : ""))
     .filter(Boolean)
     .join("\n");
 }

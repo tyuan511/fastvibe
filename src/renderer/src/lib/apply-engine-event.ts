@@ -9,7 +9,7 @@ import type {
   ToolCallBlock,
   ToolImage,
 } from "@shared/types";
-import { isRepetitionStop } from "@shared/abort";
+import { assistantStopVerdict, isRepetitionStop } from "@shared/abort";
 import { extractPromptAttachments } from "@shared/attachment-metadata";
 import { toolImagesOf, toolResultStatus } from "@shared/tool-result";
 import { randomUUID } from "../../../shared/random.ts";
@@ -156,9 +156,17 @@ const STREAMED_CONTENT = new Set([
   "tool_call_end",
 ]);
 
-/** User aborts stay silent; only `stopReason: "error"` becomes a visible failure. */
+/**
+ * User aborts stay silent; only a real failure becomes a visible error.
+ *
+ * `stopReason: "error"` alone does not prove one: the SDK files a run it aborted as a
+ * failed request whenever the abort surfaced as a thrown `AbortError`, whose text is
+ * Node's English `"This operation was aborted"`. That is the same event to the reader as
+ * the user's 停止, so it is drawn the same way — see `assistantStopVerdict`.
+ */
 function errorFromAssistant(value: unknown): string | undefined {
   if (!isRecord(value) || value.stopReason !== "error") return undefined;
+  if (assistantStopVerdict(value) === "aborted") return undefined;
   const text = typeof value.errorMessage === "string" ? value.errorMessage.trim() : "";
   return text || (i18n.t("common:errors.requestFailed") as string);
 }
@@ -647,14 +655,15 @@ function applyEvent(
     // on the row below but not an interruption of the queue). When the engine is about
     // to auto-retry (`willRetry`), this is a transient failure the SDK is already
     // recovering from, so it is not a terminal interruption.
-    const stopReason = isRecord(lastEngine) ? asString(lastEngine.stopReason) : undefined;
+    // Read off the reply itself, so an abort the SDK filed as `stopReason: "error"`
+    // counts as the stop it is rather than as a failure.
+    const verdict = assistantStopVerdict(lastEngine);
     const interrupted: ApplyResult["interrupted"] =
-      event.willRetry === true ? undefined : error ? "error" : stopReason === "aborted" ? "aborted" : undefined;
+      event.willRetry === true ? undefined : error ? "error" : verdict === "aborted" ? "aborted" : undefined;
     // A reply that ended early without failing — cut off at the output limit, or
     // stopped. Neither is a red bubble, but neither may be silent: both used to end
     // the run with nothing on screen, which read as the agent quitting on its own.
-    const stop: ChatMessage["stop"] =
-      event.willRetry === true || error ? undefined : stopReason === "length" || stopReason === "aborted" ? stopReason : undefined;
+    const stop: ChatMessage["stop"] = event.willRetry === true || error ? undefined : verdict;
     if (stop) {
       const last = next.at(-1);
       if (last?.role === "assistant") {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { captureCheckpoint, readBefore, restoreCheckpoint, type TurnCheckpoint } from "../src/main/engine/checkpoint.ts";
+import { captureCheckpoint, readBefore, readBeforeBinary, restoreCheckpoint, type TurnCheckpoint } from "../src/main/engine/checkpoint.ts";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -53,6 +53,26 @@ test("a binary file is opaque rather than decoded as text", async () => {
     const captured = readBefore(path);
     assert.equal(captured.opaque, true);
     assert.equal(captured.content, undefined);
+  });
+});
+
+test("an Office zip is kept as bytes and written back on restore", async () => {
+  await withTempDir(async (dir) => {
+    const path = join(dir, "deck.pptx");
+    const original = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x01]);
+    await writeFile(path, original);
+    const captured = readBeforeBinary(path);
+    assert.equal(captured.opaque, undefined);
+    assert.equal(captured.binary, original.toString("base64"));
+    await writeFile(path, Buffer.from([0x00, 0xff]));
+    const result = await restoreCheckpoint({
+      conversationId: "c1",
+      cwd: dir,
+      createdAt: 1,
+      files: [captured],
+    });
+    assert.deepEqual(result.restored, [path]);
+    assert.deepEqual(await readFile(path), original);
   });
 });
 
@@ -141,5 +161,31 @@ test("a turn that writes two repositories records a baseline for each", async ()
     assert.equal(roots.has(realpathSync(left)), true);
     assert.equal(roots.has(realpathSync(right)), true);
     assert.ok(checkpoint.repos?.every((repo) => repo.head));
+  });
+});
+
+test("a rewrite hook runs before each file is touched, and a hook that throws does not stop the rewind", async () => {
+  await withTempDir(async (dir) => {
+    const deck = join(dir, "deck.pptx");
+    const note = join(dir, "note.txt");
+    await writeFile(deck, Buffer.from([0x50, 0x4b, 0x00]));
+    await writeFile(note, "before", "utf8");
+    const files = [readBeforeBinary(deck), { path: note, content: "before" }];
+    await writeFile(deck, Buffer.from([0xff]));
+    await writeFile(note, "after", "utf8");
+    const seen: string[] = [];
+    const result = await restoreCheckpoint(
+      { conversationId: "c1", cwd: dir, createdAt: 1, files },
+      {
+        beforeRewrite: async (path) => {
+          // At the moment the hook runs, the attempt's bytes must still be on disk.
+          seen.push(`${path}:${(await readFile(path)).length}`);
+          if (path === deck) throw new Error("resident would not close");
+        },
+      },
+    );
+    assert.deepEqual(seen, [`${deck}:1`, `${note}:5`]);
+    assert.deepEqual(result.restored, [deck, note]);
+    assert.equal(await readFile(note, "utf8"), "before");
   });
 });

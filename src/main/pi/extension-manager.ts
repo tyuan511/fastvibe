@@ -51,7 +51,7 @@ function resourcesRoot(): string {
 }
 
 /** Built-in skills, by directory name under `resources/skills`. */
-const BUILTIN_SKILLS = ["browser-use", "computer-use", "fastvibe-setup", "skill-creator", "find-skills", "pdf"];
+const BUILTIN_SKILLS = ["browser-use", "computer-use", "fastvibe-setup", "skill-creator", "find-skills", "pdf", "office"];
 
 export function builtinSkillPaths(): string[] {
   const dir = join(resourcesRoot(), "skills");

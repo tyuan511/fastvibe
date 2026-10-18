@@ -144,8 +144,75 @@ function report(asarPath, platform) {
 /** electron-builder `afterPack`. */
 exports.skippedDeps = skippedDeps;
 
+/**
+ * The OfficeCLI binary has to be in the package, executable, and — when this machine can run
+ * it — the version pinned in scripts/officecli.json. A missing one is the same failure as a
+ * missing dependency: the installer would ship, and Office preview would be a blank error.
+ */
+function checkOfficeCli(context) {
+  const { execFileSync } = require("node:child_process");
+  const fs = require("node:fs");
+  const osName = context.electronPlatformName === "darwin" || context.electronPlatformName === "mas"
+    ? "mac"
+    : context.electronPlatformName === "win32"
+      ? "win"
+      : context.electronPlatformName === "linux"
+        ? "linux"
+        : null;
+  const archName = context.arch === 1 || context.arch === "x64"
+    ? "x64"
+    : context.arch === 3 || context.arch === "arm64"
+      ? "arm64"
+      : null;
+  if (!osName || !archName) return;
+  const resources = osName === "mac"
+    ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, "Contents", "Resources")
+    : path.join(context.appOutDir, "resources");
+  const dir = path.join(resources, "officecli");
+  const binaryName = osName === "win" ? "officecli.exe" : "officecli";
+  const binary = path.join(dir, binaryName);
+  if (!fs.existsSync(binary)) {
+    throw new Error(`OfficeCLI is missing from the package (${path.relative(process.cwd(), binary)}). Run scripts/fetch-officecli.mjs for ${osName}-${archName} before packaging.`);
+  }
+  for (const name of ["LICENSE", "NOTICE", "manifest.json"]) {
+    if (!fs.existsSync(path.join(dir, name))) {
+      throw new Error(`OfficeCLI package is missing ${name} next to the binary.`);
+    }
+  }
+  if (osName !== "win") {
+    const mode = fs.statSync(binary).mode;
+    if ((mode & 0o111) === 0) throw new Error(`OfficeCLI binary is not executable: ${binary}`);
+  }
+  const hostOs = process.platform === "darwin" ? "mac" : process.platform === "win32" ? "win" : process.platform === "linux" ? "linux" : null;
+  const hostArch = process.arch === "arm64" || process.arch === "x64" ? process.arch : null;
+  if (hostOs !== osName || hostArch !== archName) return;
+  const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), "scripts", "officecli.json"), "utf8"));
+  const expected = String(manifest.version ?? "").replace(/^v/, "");
+  let actual = "";
+  try {
+    actual = execFileSync(binary, ["--version"], {
+      encoding: "utf8",
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        OFFICECLI_SKIP_UPDATE: "1",
+        OFFICECLI_NO_AUTO_INSTALL: "1",
+        OFFICECLI_STATE_DIR: path.join(context.appOutDir, ".officecli-state"),
+      },
+    }).trim();
+  } catch (error) {
+    throw new Error(`OfficeCLI --version failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const reported = actual.split(/\s+/).pop() ?? "";
+  if (reported !== expected) {
+    throw new Error(`OfficeCLI version is ${reported || actual}, scripts/officecli.json pins ${expected}.`);
+  }
+  console.log(`  • officecli ${reported}`);
+}
+
 exports.default = async function afterPack(context) {
   report(asarPathFor(context), context.electronPlatformName);
+  checkOfficeCli(context);
 };
 
 if (require.main === module) {

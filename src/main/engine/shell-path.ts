@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -21,9 +21,34 @@ export function applyShellPath(
   platform: NodeJS.Platform = process.platform,
   home: string = homedir(),
 ): string {
+  return mergeShellPath(env, platform, home, shellPathEntries(env, platform));
+}
+
+/**
+ * `applyShellPath` without blocking the thread while the login shell starts.
+ *
+ * The desktop starts it at module load and awaits it as the app becomes ready, so the
+ * shell's startup files (100–250ms on a plain setup, up to the 1.5s timeout with nvm or
+ * conda) run while Electron initialises instead of before it. Nothing may spawn a child
+ * before the promise settles; PATH is merged when the shell answers, not when it was asked.
+ */
+export async function applyShellPathAsync(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  home: string = homedir(),
+  probe: (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) => Promise<string[]> = shellPathEntriesAsync,
+): Promise<string> {
+  return mergeShellPath(env, platform, home, await probe(env, platform));
+}
+
+function mergeShellPath(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  home: string,
+  shellEntries: string[],
+): string {
   const key = Object.keys(env).find((name) => name.toLowerCase() === "path") ?? "PATH";
   const current = env[key] ?? "";
-  const shellEntries = shellPathEntries(env, platform);
   const existing = [...shellEntries, ...current.split(delimiter).filter(Boolean)].filter(
     (entry, index, entries) => entries.indexOf(entry) === index,
   );
@@ -108,33 +133,79 @@ const SHELL_PATH_START = "__FASTVIBE_PATH_START__";
 const SHELL_PATH_END = "__FASTVIBE_PATH_END__";
 const SHELL_PATH_TIMEOUT_MS = 1_500;
 
+function loginShell(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
+  if (platform === "win32") return undefined;
+  const shell = env.SHELL || (platform === "darwin" ? "/bin/zsh" : "/bin/sh");
+  return shell.startsWith("/") ? shell : undefined;
+}
+
+const SHELL_PATH_ARGS = ["-ilc", `printf '${SHELL_PATH_START}%s${SHELL_PATH_END}' "$PATH"`];
+
+function parseShellPath(output: string): string[] {
+  const match = output.match(new RegExp(`${SHELL_PATH_START}([\\s\\S]*?)${SHELL_PATH_END}`));
+  return match?.[1]?.split(delimiter).filter(Boolean) ?? [];
+}
+
 function shellPathEntries(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): string[] {
-  if (platform === "win32") return [];
-  const shell = env.SHELL || (platform === "darwin" ? "/bin/zsh" : "/bin/sh");
-  if (!shell.startsWith("/")) return [];
+  const shell = loginShell(env, platform);
+  if (!shell) return [];
 
   try {
-    const output = execFileSync(
-      shell,
-      ["-ilc", `printf '${SHELL_PATH_START}%s${SHELL_PATH_END}' "$PATH"`],
-      {
-        env: { ...env },
-        encoding: "utf8",
-        timeout: SHELL_PATH_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-        stdio: ["ignore", "pipe", "ignore"],
-      },
-    );
-    const match = output.match(
-      new RegExp(`${SHELL_PATH_START}([\\s\\S]*?)${SHELL_PATH_END}`),
-    );
-    return match?.[1]?.split(delimiter).filter(Boolean) ?? [];
+    const output = execFileSync(shell, SHELL_PATH_ARGS, {
+      env: { ...env },
+      encoding: "utf8",
+      timeout: SHELL_PATH_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return parseShellPath(output);
   } catch {
     return [];
   }
+}
+
+/** The same probe as `shellPathEntries`, with the same timeout and output cap, off the thread. */
+function shellPathEntriesAsync(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): Promise<string[]> {
+  const shell = loginShell(env, platform);
+  if (!shell) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    let output = "";
+    let settled = false;
+    const finish = (entries: string[]): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(entries);
+    };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(shell, SHELL_PATH_ARGS, { env: { ...env }, stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      finish([]);
+      return;
+    }
+    // A killed shell can leave a grandchild (a slow rc file's own process) holding the pipe;
+    // the stream is dropped with it so nothing keeps the probe alive past its answer.
+    const abandon = (): void => {
+      child.kill("SIGTERM");
+      child.stdout?.destroy();
+      finish([]);
+    };
+    const timer = setTimeout(abandon, SHELL_PATH_TIMEOUT_MS);
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      output += chunk;
+      if (output.length > 1024 * 1024) abandon();
+    });
+    child.on("error", () => finish([]));
+    child.on("close", (code) => finish(code === 0 ? parseShellPath(output) : []));
+  });
 }
 
 function hasPathEntry(entries: string[], dir: string, platform: NodeJS.Platform): boolean {

@@ -39,6 +39,8 @@ const HEAD_TTL_MS = 3_000;
 
 /** Per-file bound on what is kept, so a huge generated file cannot bloat the store. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+/** An Office file is a zip. The text cap would call every one opaque and then skip the rewind. */
+const MAX_OFFICE_BYTES = 16 * 1024 * 1024;
 /** Per-conversation bound on the whole checkpoint. */
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 /** Paths beyond this many files are recorded without a content copy. */
@@ -53,6 +55,11 @@ export type CheckpointFile = {
   created?: boolean;
   /** True when the pre-turn content was too large / not text and could not be kept. */
   opaque?: boolean;
+  /**
+   * Pre-turn bytes of a binary Office file, base64. A zip has NUL bytes, so the text path
+   * would drop it and a retry would leave the deck the failed attempt already wrote.
+   */
+  binary?: string;
   /**
    * Byte length of `content`, measured when it was read.
    *
@@ -160,6 +167,31 @@ export function readBefore(path: string): CheckpointFile {
 }
 
 /**
+ * The pre-turn bytes of an Office file, kept even though it is a zip.
+ *
+ * `readBefore` refuses a NUL byte, which every docx/xlsx/pptx has. Retry would then skip
+ * the file and re-run against the document the failed attempt already changed. Past
+ * {@link MAX_OFFICE_BYTES} it is still opaque: a snapshot that cannot be stored must not
+ * pretend it can be restored.
+ */
+export function readBeforeBinary(path: string): CheckpointFile {
+  let info: Stats;
+  try {
+    info = statSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" ? { path, created: true } : { path, opaque: true };
+  }
+  if (!info.isFile() || info.size > MAX_OFFICE_BYTES) return { path, opaque: true };
+  try {
+    const buffer = readFileSync(path);
+    return { path, binary: buffer.toString("base64"), bytes: buffer.byteLength };
+  } catch {
+    return { path, opaque: true };
+  }
+}
+
+/**
  * Store the turn's captured files.
  *
  * The caller decides *which* files and what their pre-turn content was, because only it
@@ -207,6 +239,13 @@ async function checkpointRepos(files: CheckpointFile[]): Promise<CheckpointRepo[
   return repos;
 }
 
+function storedBytes(file: CheckpointFile): number {
+  if (file.bytes !== undefined) return file.bytes;
+  if (file.binary !== undefined) return Buffer.from(file.binary, "base64").byteLength;
+  if (file.content !== undefined) return Buffer.byteLength(file.content, "utf8");
+  return 0;
+}
+
 export async function captureCheckpoint(
   conversationId: string,
   cwd: string,
@@ -217,12 +256,13 @@ export async function captureCheckpoint(
   let total = 0;
   let copied = 0;
   for (const file of files) {
-    const bytes = file.content === undefined ? 0 : file.bytes ?? Buffer.byteLength(file.content, "utf8");
-    if (file.content !== undefined && (copied >= MAX_COPIED_FILES || total + bytes > MAX_TOTAL_BYTES)) {
+    const bytes = storedBytes(file);
+    const kept = file.content !== undefined || file.binary !== undefined;
+    if (kept && (copied >= MAX_COPIED_FILES || total + bytes > MAX_TOTAL_BYTES)) {
       trimmed.push({ path: file.path, opaque: true });
       continue;
     }
-    if (file.content !== undefined) {
+    if (kept) {
       copied += 1;
       total += bytes;
     }
@@ -254,8 +294,25 @@ export type RestoreResult = { restored: string[]; removed: string[]; skipped: st
  * and because the git revision may be older than the turn. Files the turn created are
  * removed, but only when the file still exists.
  */
-export async function restoreCheckpoint(checkpoint: TurnCheckpoint): Promise<RestoreResult> {
+export async function restoreCheckpoint(
+  checkpoint: TurnCheckpoint,
+  options: {
+    /**
+     * Called before a file is overwritten or removed. OfficeCLI keeps a document in a resident
+     * process that flushes its in-memory copy later; if that copy outlives the rewind, it
+     * writes the failed attempt back over the file that was just restored.
+     */
+    beforeRewrite?: (path: string) => Promise<void>;
+  } = {},
+): Promise<RestoreResult> {
   const result: RestoreResult = { restored: [], removed: [], skipped: [] };
+  const release = async (path: string): Promise<void> => {
+    try {
+      await options.beforeRewrite?.(path);
+    } catch {
+      // A resident that cannot be closed is no reason to refuse the rewind.
+    }
+  };
 
   const groups = checkpoint.repos?.length
     ? checkpoint.repos
@@ -266,7 +323,7 @@ export async function restoreCheckpoint(checkpoint: TurnCheckpoint): Promise<Res
     if (!group.head) continue;
     const trackedPaths = group.paths.filter((path) => {
       const file = checkpoint.files.find((item) => item.path === path);
-      return file && (file.content !== undefined || file.opaque);
+      return file && (file.content !== undefined || file.binary !== undefined || file.opaque);
     });
     if (trackedPaths.length === 0) continue;
     // One checkout per repository. A path from another checkout must not be restored
@@ -288,12 +345,22 @@ export async function restoreCheckpoint(checkpoint: TurnCheckpoint): Promise<Res
   }
 
   for (const file of checkpoint.files) {
+    await release(file.path);
     if (file.created) {
       try {
         await unlink(file.path);
         result.removed.push(file.path);
       } catch {
         // Already gone.
+      }
+      continue;
+    }
+    if (file.binary !== undefined) {
+      try {
+        await writeFile(file.path, Buffer.from(file.binary, "base64"));
+        result.restored.push(file.path);
+      } catch {
+        result.skipped.push(file.path);
       }
       continue;
     }

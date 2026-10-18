@@ -40,6 +40,11 @@ const DENIED = new Map<string, string>([
 
   // (b) Acts on the desktop that is running the server, not on the client's.
   [Ipc.workspaceReveal, "\u8be5\u64cd\u4f5c\u53ea\u4f5c\u7528\u4e8e\u8fd0\u884c\u670d\u52a1\u7aef\u7684\u7535\u8111"],
+  // Opens whatever app this machine associates with the file — on the server's desktop.
+  [Ipc.workspaceOpenExternal, "\u8be5\u64cd\u4f5c\u53ea\u4f5c\u7528\u4e8e\u8fd0\u884c\u670d\u52a1\u7aef\u7684\u7535\u8111"],
+  // The address is 127.0.0.1 on the machine running the server. A phone cannot open it.
+  [Ipc.officeWatchStart, "\u5b9e\u65f6\u9884\u89c8\u53ea\u5728\u8fd9\u53f0\u7535\u8111\u7684\u4fa7\u680f\u91cc\u6253\u5f00"],
+  [Ipc.officeWatchStop, "\u5b9e\u65f6\u9884\u89c8\u53ea\u5728\u8fd9\u53f0\u7535\u8111\u7684\u4fa7\u680f\u91cc\u6253\u5f00"],
   [Ipc.workspaceOpenTerminal, "\u8be5\u64cd\u4f5c\u53ea\u4f5c\u7528\u4e8e\u8fd0\u884c\u670d\u52a1\u7aef\u7684\u7535\u8111"],
   [Ipc.windowNew, "\u8fdc\u7a0b\u5ba2\u6237\u7aef\u6ca1\u6709\u7a97\u53e3"],
   [Ipc.windowMinimize, "\u8fdc\u7a0b\u5ba2\u6237\u7aef\u6ca1\u6709\u7a97\u53e3"],
@@ -298,8 +303,19 @@ const ALLOWED = new Set<string>([
   Ipc.workspaceGitStatus,
   Ipc.workspaceGitUnstage,
   Ipc.workspacePreview,
+  // Whoever has the password can already have the agent run officecli. The page comes back
+  // as a path the media proxy already knows how to stream.
+  Ipc.officeRender,
+  Ipc.officeSelection,
   Ipc.workspaceFilesExist,
   Ipc.workspaceReadDir,
+  // The tree's create / rename / delete. Allowed for the same reason `workspace:write-file`
+  // is — whoever has the password can already have the agent run commands — and each call is
+  // bounded by the project root it names, so it cannot reach outside a workspace the client
+  // can already see.
+  Ipc.workspaceCreateEntry,
+  Ipc.workspaceRenameEntry,
+  Ipc.workspaceDeleteEntry,
   Ipc.workspaceSearchFiles,
   Ipc.workspaceReadFile,
   Ipc.workspaceWriteFile,

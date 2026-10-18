@@ -1044,6 +1044,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         path: resolved,
         name: resolved.split("/").at(-1) ?? resolved,
         message: error instanceof Error ? error.message : (i18n.t("common:errors.previewFailed") as string),
+        reason: "unknown",
+        detail: error instanceof Error ? error.message : undefined,
       };
       set({ preview });
       useSidePaneStore.getState().openFilePreview(preview);

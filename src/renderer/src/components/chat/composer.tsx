@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEve
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, ChartHistogramIcon, Folder01Icon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
+import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, Folder01Icon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
 import { FileIcon } from "@/components/file-icon";
 import { IconButton } from "@/components/icon-button";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
@@ -30,7 +30,6 @@ import { filesToAttachments, pastedTextAttachmentName, shouldAttachPastedText } 
 import { randomUUID } from "../../../../shared/random.ts";
 import { useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
-import { formatDuration } from "@/lib/time";
 import { matchChord, resolveBinding } from "@/lib/shortcuts";
 import { useShortcutLabel } from "@/lib/use-shortcuts";
 import { useSettingsStore } from "@/stores/settings";
@@ -111,23 +110,39 @@ function formatCount(value: number | null | undefined): string {
   return String(Math.round(value));
 }
 
-function formatSpeed(tokens: number, ms: number | undefined): string {
-  if (!ms || ms <= 0 || tokens <= 0) return "—";
+function formatSpeed(tokens: number | undefined, ms: number | undefined): string {
+  if (!ms || ms <= 0 || !tokens || tokens <= 0) return "—";
   return `~${Math.round(tokens / (ms / 1000))} tok/s`;
 }
 
-function StatRow({ label, value, className }: { label: string; value: string; className?: string }): JSX.Element {
+function StatRow({ label, value, className, hint }: { label: string; value: string; className?: string; hint?: string }): JSX.Element {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className={cn("font-medium tabular-nums", className)}>{value}</dd>
+      <dt className="text-muted-foreground" title={hint}>
+        {label}
+      </dt>
+      <dd className={cn("font-medium tabular-nums", className)} title={hint}>
+        {value}
+      </dd>
     </div>
   );
 }
 
+/** One token row: what went in and what came back out. */
+function tokenPair(input: number | undefined, output: number | undefined): string {
+  return `${formatCount(input)} ↑ · ${formatCount(output)} ↓`;
+}
+
 /**
- * The context ring's popover: context-window usage on top, then the current
- * conversation's turn statistics (speed, timing, tokens, cache hit, cost).
+ * The context ring's popover: context-window usage on top, then the conversation's
+ * usage statistics (tokens, output speed, steps, cache hit, cost).
+ *
+ * Two scopes share this block and the rows say which is which. 本轮 Token and 输出速度 come
+ * from `SessionStats.turn`, cut out of the transcript by `src/main/engine/turn-usage.ts` —
+ * everything after the last user message on the current branch, and that turn's own round
+ * trips for the speed. The rest is the whole conversation: `getSessionStats()` adds up every
+ * session entry (compacted history and abandoned retry branches included), and the heading
+ * over this block used to read 「轮次统计 / Turn stats」, which promised neither.
  */
 function ContextUsagePanel({
   percent,
@@ -156,9 +171,14 @@ function ContextUsagePanel({
   const input = tokens?.input ?? 0;
   const output = tokens?.output ?? 0;
   const cacheRead = tokens?.cacheRead ?? 0;
-  const timing = stats?.timing;
+  const turn = stats?.turn;
+  const turnTokens = turn?.tokens;
+  const turnScope = t("composer.turnScope");
   const cacheBase = input + cacheRead;
   const cacheHit = cacheBase > 0 ? Math.round((cacheRead / cacheBase) * 100) : null;
+  // Everything except the 本轮 rows is the whole conversation; the hint says so where the
+  // label has no room to.
+  const sessionScope = t("composer.sessionScope");
 
   return (
     <div className="space-y-2.5">
@@ -204,22 +224,26 @@ function ContextUsagePanel({
       {stats ? (
         <>
           <Separator />
-          <div className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground">
-            <HugeiconsIcon strokeWidth={2} icon={ChartHistogramIcon} className="size-3.5" />
-            {t("composer.turnStats")}
-          </div>
           <dl className="space-y-1.5 text-xs">
-            <StatRow label={t("composer.speed")} value={formatSpeed(output, timing?.modelMs)} />
-            <StatRow label={t("composer.modelTime")} value={formatDuration(timing?.modelMs) || "—"} />
-            <StatRow label={t("composer.toolTime")} value={formatDuration(timing?.toolMs) || "—"} />
-            <StatRow label={t("composer.steps")} value={stats.steps != null ? String(stats.steps) : "—"} />
-            <StatRow label="Token" value={`${formatCount(input)} ↑ · ${formatCount(output)} ↓`} />
+            <StatRow
+              label={t("composer.turnTokens")}
+              value={turn ? tokenPair(turnTokens?.input, turnTokens?.output) : "—"}
+              hint={turnScope}
+            />
+            <StatRow label={t("composer.sessionTokens")} value={tokenPair(input, output)} hint={sessionScope} />
+            <StatRow
+              label={t("composer.outputSpeed")}
+              value={formatSpeed(turnTokens?.output, turn?.modelMs)}
+              hint={t("composer.turnSpeedScope")}
+            />
+            <StatRow label={t("composer.steps")} value={stats.steps != null ? String(stats.steps) : "—"} hint={sessionScope} />
             <StatRow
               label={t("composer.cacheHit")}
               value={cacheHit != null ? `${cacheHit}%` : "—"}
               className={cacheHit != null && cacheHit > 0 ? "text-success" : undefined}
+              hint={sessionScope}
             />
-            <StatRow label={t("composer.cost")} value={`$${(stats.cost ?? 0).toFixed(3)}`} />
+            <StatRow label={t("composer.cost")} value={`$${(stats.cost ?? 0).toFixed(3)}`} hint={sessionScope} />
           </dl>
         </>
       ) : null}

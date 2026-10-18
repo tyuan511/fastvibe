@@ -17,7 +17,7 @@
 - `ConversationCatalog.ensureProject(cwd)` 按 `cwd` 去重。`projects:add` 弹原生选择框，一次只选一个目录，直接建项目。
 - 现有 `AddProjectDialog`（`components/add-project-dialog.tsx`）是浏览 SSH 远程主机目录的，不是本地创建项目的弹窗。
 - 一个会话只有一个工作目录：`#createSession(conversation, cwd, …)` 把 `cwd` 同时交给 `SettingsManager`、`DefaultResourceLoader` 和 `createAgentSession`。
-- Git 的 IPC（`workspace:git-status|branches|checkout|stage|commit|pull|push|diff…`）**每次调用都带 `cwd`**，后端本身不绑定项目。绑定发生在渲染层：`SidePaneGit` / `SidePaneChanges` / `SidePaneFiles` 各自接收一个 `cwd`。
+- Git 的 IPC（`workspace:git-status|branches|checkout|stage|commit|pull|push|diff…`）**每次调用都带 `cwd`**，后端本身不绑定项目。绑定发生在渲染层：`SidePaneGit` / `SidePaneFiles` 各自接收一个 `cwd`。
 - `checkpoint.ts` 的检查点带单个 `cwd`，用 `git -C cwd rev-parse HEAD` 记基线、`git -C checkpoint.cwd checkout <head> -- <paths>` 还原。
 - 内置扩展可在 `before_agent_start` 里追加系统提示（`output-language.ts`）。委派的子 agent 不加载扩展，靠 `appendSystemPrompt` 补（`process-manager-subagent.ts`）。
 - `folder-consent.ts` 在 `tool_call` 前用主线程 stat 工具要碰的目录，以便 macOS 的受保护文件夹弹窗能被系统记住。
@@ -80,7 +80,7 @@ Git 的 IPC 已经是「每次调用带 `cwd`」，后端不用改协议，要�
 - 不是 git 仓库的文件夹不进仓库列表，但仍在文件树里出现；Git 面板对它显示「不是 Git 仓库」。
 - Git 面板（`SidePaneGit`）顶部加仓库选择器，仅当仓库数 ≥ 2 时出现；只有一个仓库时界面与现在一致。选项显示文件夹名，并附带分支和未提交文件数的小标记，让用户不用逐个点开就知道哪个仓库有改动。
 - 选择器的状态按会话保存在渲染层，默认选会话 `cwd` 所在的仓库；切换后面板里的 status / diff / stage / commit / push / pull / 切分支都用所选仓库的根作为 `cwd`，这些调用本身不需要改。
-- 「本轮改动」面板（`SidePaneChanges`）和聊天里每轮的改动 chips 现在把文件路径相对 `cwd` 显示。多文件夹时，落在其他文件夹里的文件要显示成「文件夹名/相对路径」，否则两个仓库里同名的 `README.md` 无法区分。
+- 聊天里每轮的改动 chips（`chat/file-chips.tsx`）把文件路径相对 `cwd` 显示，点开进的是 `SidePaneGit`（不再有独立的「本轮改动」面板）。多文件夹时，落在其他文件夹里的文件要显示成「文件夹名/相对路径」，否则两个仓库里同名的 `README.md` 无法区分；点开时 `openGitDiff` 带的 `cwd` 仍是会话文件夹，所以落在其他仓库的文件会在当前仓库里找不到，需要用户自己切仓库。
 - 提交信息生成（`commit-message`）和分支操作同样以所选仓库的根为单位，不跨仓库合并。
 - **实现时确认**：`side-pane.tsx` 里 `cwd` 是怎么从会话或项目推出来的，以及 `SidePaneGit` 里 `readGitStatus(cwd, true)` 的缓存键是否只按 `cwd`；若是，选择器切换时缓存天然隔离，不需要改。
 
@@ -163,7 +163,7 @@ Git 的 IPC 已经是「每次调用带 `cwd`」，后端不用改协议，要�
 
 - 设主文件夹换键的涉及面（第 2 节）是最大的不确定项，开工前先枚举所有用项目 `cwd` 当键的地方，再决定是否改用稳定 id。
 - 提示词变长会略增每轮 token，所以单文件夹项目完全不追加，多文件夹也只写路径和一行说明，不列目录内容。
-- agent 同时改多个仓库时，「本轮改动」和检查点是否按仓库给出一致的视图，需要在步骤 4、6 里用真实多仓库项目验证，而不是只靠单元测试。
+- agent 同时改多个仓库时，每轮的改动 chips、变更视图和检查点是否按仓库给出一致的视图，需要在步骤 4、6 里用真实多仓库项目验证，而不是只靠单元测试。
 
 ## 待你确认
 

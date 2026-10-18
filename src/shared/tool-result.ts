@@ -1,4 +1,5 @@
 import type { ToolCallStatus, ToolImage } from "./types";
+import { toolImageRef } from "./tool-image-ref.ts";
 
 type RecordValue = Record<string, unknown>;
 
@@ -52,6 +53,14 @@ export function toolImagesOf(content: unknown): ToolImage[] {
   for (const part of content) {
     if (typeof part !== "object" || part === null) continue;
     const block = part as Record<string, unknown>;
+    // A reference Main did not resolve (the compact transcript a phone reads): still a picture of
+    // this result, named by its file in the pictures folder, which the summary then counts.
+    const ref = toolImageRef(block);
+    if (ref) {
+      images.push({ mimeType: ref.mimeType, path: ref.file });
+      if (images.length >= MAX_RESULT_IMAGES) break;
+      continue;
+    }
     if (block.type !== "image") continue;
     const mimeType = typeof block.mimeType === "string" && block.mimeType.startsWith("image/") ? block.mimeType : "image/png";
     if (typeof block.path === "string" && block.path.length > 0) {

@@ -79,6 +79,52 @@ function reaches(byId: Map<string, EntryLike>, start: string | null, target: str
   return false;
 }
 
+/** A transcript as lines, with every line that parses to an object kept beside its position. */
+type TranscriptLines = { lines: string[]; parsed: Array<{ line: number; entry: MessageEntryLike }> };
+
+function readTranscriptLines(file: string): TranscriptLines | null {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  const lines = raw.split("\n");
+  const parsed: TranscriptLines["parsed"] = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    if (!lines[line].trim()) continue;
+    try {
+      const entry = JSON.parse(lines[line]) as unknown;
+      if (entry && typeof entry === "object" && !Array.isArray(entry)) parsed.push({ line, entry: entry as MessageEntryLike });
+    } catch {
+      // Left as it is; the SDK skips malformed lines too.
+    }
+  }
+  return parsed[0]?.entry.type === "session" ? { lines, parsed } : null;
+}
+
+/** Relink in place, re-serialising only the lines that changed. Returns how many were relinked. */
+function relinkLines(transcript: TranscriptLines): number {
+  const before = transcript.parsed.map(({ entry }) => entry.parentId);
+  const relinked = relinkDanglingEntries(transcript.parsed.map(({ entry }) => entry));
+  if (relinked === 0) return 0;
+  transcript.parsed.forEach(({ line, entry }, index) => {
+    if (entry.parentId !== before[index]) transcript.lines[line] = JSON.stringify(entry);
+  });
+  return relinked;
+}
+
+/** The file as it now reads: every line kept byte for byte unless relinked, then `appended`. */
+function writeTranscriptLines(file: string, transcript: TranscriptLines, appended: readonly unknown[]): void {
+  const body = transcript.lines.join("\n");
+  if (appended.length === 0) {
+    writeTranscriptText(file, body);
+    return;
+  }
+  const lines = appended.map((entry) => JSON.stringify(entry)).join("\n");
+  writeTranscriptText(file, `${body.endsWith("\n") ? body : `${body}\n`}${lines}\n`);
+}
+
 /**
  * Relink a transcript's dangling entries on disk before the SDK opens it.
  *
@@ -87,31 +133,10 @@ function reaches(byId: Map<string, EntryLike>, start: string | null, target: str
  * has no session header, or needs nothing is not touched. Returns the number relinked.
  */
 export function repairTranscriptFile(file: string): number {
-  let raw: string;
-  try {
-    raw = readFileSync(file, "utf8");
-  } catch {
-    return 0;
-  }
-  const lines = raw.split("\n");
-  const parsed: Array<{ line: number; entry: EntryLike }> = [];
-  for (let line = 0; line < lines.length; line += 1) {
-    if (!lines[line].trim()) continue;
-    try {
-      const entry = JSON.parse(lines[line]) as unknown;
-      if (entry && typeof entry === "object" && !Array.isArray(entry)) parsed.push({ line, entry: entry as EntryLike });
-    } catch {
-      // Left as it is; the SDK skips malformed lines too.
-    }
-  }
-  if (parsed[0]?.entry.type !== "session") return 0;
-  const before = parsed.map(({ entry }) => entry.parentId);
-  const relinked = relinkDanglingEntries(parsed.map(({ entry }) => entry));
-  if (relinked === 0) return 0;
-  parsed.forEach(({ line, entry }, index) => {
-    if (entry.parentId !== before[index]) lines[line] = JSON.stringify(entry);
-  });
-  writeTranscriptText(file, lines.join("\n"));
+  const transcript = readTranscriptLines(file);
+  if (!transcript) return 0;
+  const relinked = relinkLines(transcript);
+  if (relinked > 0) writeTranscriptLines(file, transcript, []);
   return relinked;
 }
 
@@ -139,23 +164,43 @@ type MessageEntryLike = EntryLike & { message?: { role?: unknown; content?: unkn
  * Returns the number of calls closed.
  */
 export function closeOrphanToolCalls(file: string, text: (toolName: string) => string, now: Date = new Date()): number {
-  let raw: string;
-  try {
-    raw = readFileSync(file, "utf8");
-  } catch {
-    return 0;
-  }
-  const entries: MessageEntryLike[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line) as unknown;
-      if (entry && typeof entry === "object" && !Array.isArray(entry)) entries.push(entry as MessageEntryLike);
-    } catch {
-      // The SDK skips malformed lines too.
-    }
-  }
-  if (entries[0]?.type !== "session") return 0;
+  const transcript = readTranscriptLines(file);
+  if (!transcript) return 0;
+  const appended = orphanResults(transcript.parsed.map(({ entry }) => entry), text, now);
+  if (appended.length > 0) writeTranscriptLines(file, transcript, appended);
+  return appended.length;
+}
+
+/** What opening a transcript found and fixed, and the entries it read on the way. */
+export type PreparedTranscript = {
+  /** Every entry of the file as it now stands, in order: what `SessionManager` would read. */
+  entries: Array<Record<string, unknown>>;
+  relinked: number;
+  closed: number;
+};
+
+/**
+ * `repairTranscriptFile` then `closeOrphanToolCalls`, from one read and one parse.
+ *
+ * Opening a chat used to read and parse the whole file three times on Main's thread — the
+ * relink, the orphan close, then the SDK's own load — which for a transcript carrying tens of
+ * megabytes of tool screenshots was half a second before the session existed. The entries
+ * parsed here are handed to `openSessionFile`, so the SDK does not read the file again; the
+ * file is written once, only when something was fixed. `null` for a file with no session
+ * header (or none at all), which the SDK's own open then reports as it always has.
+ */
+export function prepareTranscriptForOpen(file: string, text: (toolName: string) => string, now: Date = new Date()): PreparedTranscript | null {
+  const transcript = readTranscriptLines(file);
+  if (!transcript) return null;
+  const relinked = relinkLines(transcript);
+  const entries = transcript.parsed.map(({ entry }) => entry);
+  const appended = orphanResults(entries, text, now);
+  if (relinked > 0 || appended.length > 0) writeTranscriptLines(file, transcript, appended);
+  return { entries: [...entries, ...appended] as Array<Record<string, unknown>>, relinked, closed: appended.length };
+}
+
+/** The error results that close the current branch's unanswered tool calls, chained after its leaf. */
+function orphanResults(entries: readonly MessageEntryLike[], text: (toolName: string) => string, now: Date): Array<Record<string, unknown>> {
   const byId = new Map<string, MessageEntryLike>();
   let leaf: string | null = null;
   for (const entry of entries) {
@@ -163,7 +208,7 @@ export function closeOrphanToolCalls(file: string, text: (toolName: string) => s
     byId.set(entry.id, entry);
     leaf = entry.id;
   }
-  if (leaf === null) return 0;
+  if (leaf === null) return [];
 
   // Walk the branch from the leaf back to its last assistant message; what lies between is
   // the results that already answered it. A user message in between means it was answered
@@ -176,7 +221,7 @@ export function closeOrphanToolCalls(file: string, text: (toolName: string) => s
     const entry: MessageEntryLike | undefined = byId.get(id);
     if (!entry) break;
     const message = entry.type === "message" ? entry.message : undefined;
-    if (message?.role === "user") return 0;
+    if (message?.role === "user") return [];
     if (message?.role === "toolResult" && typeof message.toolCallId === "string") answered.add(message.toolCallId);
     if (message?.role === "assistant") {
       assistant = entry;
@@ -185,20 +230,19 @@ export function closeOrphanToolCalls(file: string, text: (toolName: string) => s
     id = typeof entry.parentId === "string" ? entry.parentId : null;
   }
   const message = assistant?.message;
-  if (!assistant || !message || message.stopReason !== "toolUse" || !Array.isArray(message.content)) return 0;
+  if (!assistant || !message || message.stopReason !== "toolUse" || !Array.isArray(message.content)) return [];
   const open = (message.content as ToolCallLike[]).filter(
     (part) => part && part.type === "toolCall" && typeof part.id === "string" && !answered.has(part.id),
   );
-  if (open.length === 0) return 0;
 
-  const lines: string[] = [];
+  const results: Array<Record<string, unknown>> = [];
   let parentId = leaf;
   for (const call of open) {
     let id = randomUUID().slice(0, 8);
     while (byId.has(id)) id = randomUUID().slice(0, 8);
     const toolName = typeof call.name === "string" ? call.name : "tool";
     byId.set(id, { id });
-    lines.push(JSON.stringify({
+    results.push({
       type: "message",
       id,
       parentId,
@@ -211,11 +255,10 @@ export function closeOrphanToolCalls(file: string, text: (toolName: string) => s
         isError: true,
         timestamp: now.getTime(),
       },
-    }));
+    });
     parentId = id;
   }
-  writeTranscriptText(file, `${raw.endsWith("\n") ? raw : `${raw}\n`}${lines.join("\n")}\n`);
-  return open.length;
+  return results;
 }
 
 function writeTranscriptText(file: string, text: string): void {

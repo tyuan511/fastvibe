@@ -14,9 +14,12 @@ import type { PiProcessManager } from "../main/pi/process-manager";
 import { readFilePreview } from "../main/engine/file-preview";
 import { searchProjectFiles } from "../main/engine/project-files";
 import { readGitStatus as readWorkspaceGitStatus, collectCommitMessageMaterial, readCommitStatusFiles } from "../main/workspace-git";
-import { readWorkspaceDir, writeWorkspaceTextFile } from "../main/engine/workspace-fs";
+import { createWorkspaceEntry, deleteWorkspaceEntry, readWorkspaceDir, renameWorkspaceEntry, writeWorkspaceTextFile } from "../main/engine/workspace-fs";
 import { existingFiles } from "../main/engine/path-exists";
-import { conversationCwd, readFileForPayload } from "../main/engine/file-chunk";
+import { conversationCwd, readFileForPayload, resolveReadPath } from "../main/engine/file-chunk";
+import { officeCliInstall } from "../main/engine/office-cli";
+import { renderOfficeSnapshot } from "../main/engine/office-render";
+import { officeWatches } from "../main/engine/office-watch";
 import { TerminalSessions } from "../main/engine/terminal-sessions";
 import { collectUsageStats } from "../main/engine/usage-stats";
 import { applyLanguages } from "../main/engine/ai-language";
@@ -174,6 +177,20 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.projectsRepos, (payload: { cwd?: string }) => engine.projectRepos(payload?.cwd ?? ""));
 
   handle(Ipc.workspacePreview, (payload: { path: string }) => readFilePreview(payload.path));
+  const officePath = (payload: { path?: unknown; conversationId?: unknown }): string =>
+    resolveReadPath(payload?.path, conversationCwd(engine.listWorkspace(), payload?.conversationId));
+  const watches = officeWatches({
+    onState: (state) => broadcast(Ipc.officeWatchState, state),
+  });
+  handle(Ipc.officeRender, (payload: { path?: unknown; conversationId?: unknown }) => renderOfficeSnapshot(officePath(payload)));
+  handle(Ipc.officeWatchStart, (payload: { path?: unknown; conversationId?: unknown }) => watches.start(officePath(payload)));
+  handle(Ipc.officeWatchStop, (payload: { path?: unknown; conversationId?: unknown }) => {
+    watches.stop(officePath(payload));
+  });
+  handle(Ipc.officeSelection, (payload: { path?: unknown; conversationId?: unknown }) => watches.selection(officePath(payload)));
+  handle(Ipc.workspaceOpenExternal, () => {
+    throw new Error("用系统应用打开只在桌面端可用");
+  });
   handle(Ipc.workspaceFilesExist, (payload: { paths?: unknown; cwd?: unknown }) =>
     existingFiles(payload?.paths, payload?.cwd),
   );
@@ -183,6 +200,17 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   );
   handle(Ipc.workspaceWriteFile, (payload: { path?: unknown; text?: unknown }) => {
     writeWorkspaceTextFile(payload?.path, payload?.text);
+  });
+  // The same three file-tree edits as the desktop. There is no Trash on a headless host, so
+  // `deleteEntry` removes for good — which is why the client names that in its own dialog.
+  handle(Ipc.workspaceCreateEntry, (payload: { cwd?: unknown; path?: unknown; name?: unknown; kind?: unknown }) =>
+    createWorkspaceEntry(payload),
+  );
+  handle(Ipc.workspaceRenameEntry, (payload: { cwd?: unknown; path?: unknown; name?: unknown }) =>
+    renameWorkspaceEntry(payload),
+  );
+  handle(Ipc.workspaceDeleteEntry, async (payload: { cwd?: unknown; path?: unknown }) => {
+    await deleteWorkspaceEntry(payload);
   });
   handle(Ipc.workspaceReadFile, (payload: { path?: unknown; conversationId?: unknown; offset?: unknown; length?: unknown }) =>
     readFileForPayload(payload, () => conversationCwd(engine.listWorkspace(), payload?.conversationId)),
@@ -225,7 +253,14 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
     clearAppSettings(paths);
     if (toolModeSettingsChanged(previous, {})) void engine.refreshToolModes().catch(() => undefined);
   });
-  handle(Ipc.appGetInfo, () => ({ version: process.env.FASTVIBE_VERSION ?? "agent", engineVersion: piVersion, userData: paths.userData, runtimeRoot: paths.runtimeRoot, platform: process.platform }));
+  handle(Ipc.appGetInfo, () => ({
+    version: process.env.FASTVIBE_VERSION ?? "agent",
+    engineVersion: piVersion,
+    officeVersion: officeCliInstall().version,
+    userData: paths.userData,
+    runtimeRoot: paths.runtimeRoot,
+    platform: process.platform,
+  }));
   handle(Ipc.workspaceFileIcons, () => ({ files: {}, folders: {} }));
   handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => collectUsageStats(paths, payload?.range ?? "30d", engine.listWorkspace().conversations));
 

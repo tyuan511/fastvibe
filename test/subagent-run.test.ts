@@ -5,6 +5,7 @@ import test from "node:test";
 import { SubagentControl } from "../src/main/pi/subagent-control.ts";
 import { DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagInputAllowance, estimateDagTokens } from "../src/main/pi/dag-node-runtime.ts";
 import { reduceSubagent } from "../src/shared/subagent-state.ts";
+import { ToolDeltaThrottle } from "../src/main/pi/tool-delta-throttle.ts";
 
 const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
 const source = readFileSync(new URL("../src/main/pi/process-manager-subagent.ts", import.meta.url), "utf8");
@@ -83,6 +84,8 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
     resolveSubagentModel: () => session.model,
     subagentControls: new Map(), subagentSessions: new Map(), subagentMessages: new Map(),
     subagentReasoning: new Map(), reasoningRun: new Map(), stoppedSubagents: new Set(),
+    // The runner's own tool-argument throttle, as Main constructs it.
+    toolDeltas: new ToolDeltaThrottle(),
     extensionUi: () => ({}),
     timeReasoning() {}, withThinkingTiming() {}, fileSubagentReasoning() {},
     resolvePendingUi: (_: unknown, owner: string) => { cleared.push(owner); },

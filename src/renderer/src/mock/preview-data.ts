@@ -481,6 +481,49 @@ export const INLINE_MESSAGES: ChatMessage[] = [
   },
 ];
 
+/**
+ * `?inline=office`: the same 「用时」 strip built from documents instead of pictures. An office
+ * thumb has no frame to show, so it is a brand glyph in a box — the one case where the strip is
+ * drawn rather than photographed, and the one that can look heavy beside a line of text.
+ */
+export const INLINE_OFFICE_MESSAGES: ChatMessage[] = [
+  {
+    id: "msg-inline-office-u",
+    role: "user",
+    text: "用同一套示例数据做一份经营分析：表格、报告、汇报。",
+    tools: [],
+    parts: [{ kind: "text", text: "用同一套示例数据做一份经营分析：表格、报告、汇报。" }],
+    createdAt: NOW - 60_000,
+  },
+  {
+    id: "msg-inline-office-a",
+    role: "assistant",
+    text: "",
+    tools: [
+      {
+        id: "inline-office",
+        name: "present",
+        args: { items: [{ source: "/tmp/report/经营分析报告.docx" }] },
+        result: "已在对话中展示 3 项",
+        status: "done",
+        details: {
+          items: [
+            { ref: "/tmp/report/经营分析.xlsx", title: "经营分析", ok: true },
+            { ref: "/tmp/report/经营分析报告.docx", title: "经营分析报告", ok: true },
+            { ref: "/tmp/report/经营分析汇报.pptx", title: "经营分析汇报", ok: true },
+          ],
+        },
+      },
+    ],
+    parts: [
+      { kind: "tool", toolId: "inline-office" },
+      { kind: "text", text: "三个文件都生成好了，同一套示例数据，互相能对上。" },
+    ],
+    createdAt: NOW - 59_000,
+    completedAt: NOW - 50_000,
+  },
+];
+
 export const MATH_MESSAGES: ChatMessage[] = [
   {
     id: "msg-math-u",
@@ -524,6 +567,7 @@ export const SESSION: EngineSessionState = {
 
 export const STATS: SessionStats = {
   tokens: { input: 48_210, output: 3_180, cacheRead: 12_400, cacheWrite: 2_048, total: 65_838 },
+  turn: { tokens: { input: 12_940, output: 620, cacheRead: 34_100, cacheWrite: 512, total: 48_172 }, modelMs: 18_400 },
   cost: 0.184,
   toolCalls: 7,
   steps: 4,
@@ -854,7 +898,36 @@ export function previewFor(path: string): FilePreview {
     kind: "markdown",
     path,
     name,
-    text: `# ${name}\n\n这是 **${name}** 的预览。\n\n- 支持 Markdown 渲染\n- 支持代码高亮与图片、PDF\n`,
+    // A `.md` preview is the document view, which runs the same pipeline a reply does — so this
+    // is where to look at raw HTML, math and the `<style>` that must not render. The template is
+    // flush-left because markdown is: four spaces of it would be an indented code block.
+    text: `# ${name}
+
+这是 **${name}** 的预览。
+
+- 支持 Markdown 渲染
+- 支持代码高亮与图片、PDF
+- 也支持文档里直接写的 HTML：<kbd>⌘</kbd>+<kbd>K</kbd>、下标 H<sub>2</sub>O、能量 $E=mc^2$
+
+<details>
+<summary>这一段默认收起</summary>
+
+空白行下面的 Markdown 仍然属于这个折叠块，不是它外面的段落。
+
+（正文里直接写一个尖括号标签就是标记本身，不是文字——要写出来得用反引号。）
+
+</details>
+
+<div align="center">
+
+![license](https://img.shields.io/badge/license-MIT-blue)
+
+</div>
+
+<style>body { display: none }</style>
+
+上面那行 \<style\> 既不生效，也不会以文字形式出现——想写出一个标签就得用反引号，裸写它是标记。
+`,
   };
 }
 

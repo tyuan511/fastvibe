@@ -76,11 +76,14 @@ import { summarizeToolCalls } from "@shared/tool-summary";
 import type { ToolDetailLevel, TranscriptReadOptions } from "@shared/transcript-page";
 import { previewTranscript } from "@shared/transcript-preview";
 import { TranscriptReader } from "../engine/transcript-reader";
+import { ToolDeltaThrottle } from "./tool-delta-throttle";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { installNativeCompactionGuard } from "../engine/native-compaction";
+import { turnTokens } from "../engine/turn-usage";
 import { promptPreview } from "../engine/prompt-preview";
 import { searchConversationContent } from "../engine/conversation-search";
-import { closeOrphanToolCalls, readTranscriptPrompt, repairTranscriptFile, transcriptPrompt, writeTranscriptEntries } from "../engine/transcript-file";
+import { prepareTranscriptForOpen, readTranscriptPrompt, transcriptPrompt, writeTranscriptEntries } from "../engine/transcript-file";
+import { openSessionFile } from "../engine/session-open";
 import {
   ConversationTranscriptError,
   loadConversationTranscriptBranch,
@@ -97,8 +100,15 @@ import {
 import { readAppSettings, readDefaultModel, readPreferredModelSettings } from "../engine/runtime-settings";
 import { submitPrompt } from "../engine/prompt-submission";
 import type { SubmitPromptRequest } from "../../shared/prompt-submission";
-import { dropOldToolImages } from "../engine/context-images";
-import { externalizeToolEndEvent, savedToolImagePath, shrinkToolResultImages, toolImageFolder, type ImageResizer } from "../engine/tool-images";
+import { toolImagesExtension } from "../engine/tool-images-extension";
+import {
+  externalizeToolEndEvent,
+  linkToolImages,
+  referenceStoredToolImages,
+  toolImageFolder,
+  ToolImageReader,
+  type ImageResizer,
+} from "../engine/tool-images";
 import { applyToolModes, toolModes } from "../engine/tool-modes";
 import { currentAiLanguageDirective, currentCustomSystemPrompt } from "../engine/ai-language";
 import { buildProjectFoldersPrompt, projectFolderPaths } from "../../shared/project-folders.ts";
@@ -107,7 +117,10 @@ import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
 import { canResumeRun } from "../engine/resume";
 import { ReasoningStore } from "../engine/reasoning-store";
-import { captureCheckpoint, clearCheckpoint, readBefore, readCheckpoint, restoreCheckpoint, saveCheckpoints, loadCheckpoints, checkpointFile, type CheckpointFile } from "../engine/checkpoint";
+import { releaseOfficeResident } from "../engine/office-cli";
+import { captureCheckpoint, clearCheckpoint, readBefore, readBeforeBinary, readCheckpoint, restoreCheckpoint, saveCheckpoints, loadCheckpoints, checkpointFile, type CheckpointFile } from "../engine/checkpoint";
+import { bashCommand, officecliWriteTargets } from "../../shared/office-command.ts";
+import { officeFormatOf } from "../../shared/office.ts";
 import { usageLedgerFor, type UsageLedger } from "../engine/usage-ledger";
 import { cwdUsesWorktree, forkPreview, selectForkEntries, SessionForkError, writeForkSession } from "../engine/session-fork";
 import {
@@ -1819,6 +1832,10 @@ export class PiProcessManager {
         { ...written, cwd },
         { title, activate: false, preview },
       );
+      // The copied results keep their pictures by reference; the fork gets its own links to
+      // them, so deleting the source chat (and its pictures folder) takes nothing from it.
+      const copiedCalls = entries.flatMap((entry) => entry.type === "message" && entry.message.role === "toolResult" ? [entry.message.toolCallId] : []);
+      linkToolImages(this.#paths.toolImagesDir, source.id, conversation.id, copiedCalls);
       const managed = await this.#ensureSession(conversation);
       managed.session.setSessionName(title);
       const state = this.#state(managed.session, conversation.id);
@@ -1864,6 +1881,9 @@ export class PiProcessManager {
         cacheWrite: stats.tokens.cacheWrite,
         total: stats.tokens.total,
       },
+      // The whole conversation above, this turn alone here: the popover shows both, so the
+      // reader can tell "what did I just ask for" from "what has this chat cost".
+      turn: turnTokens(session.sessionManager.getBranch()),
       cost: this.#sessionCost(session),
       toolCalls: stats.toolCalls,
       steps: stats.assistantMessages,
@@ -2021,7 +2041,7 @@ export class PiProcessManager {
   async restoreCheckpoint(conversationId: string): Promise<{ restored: number; removed: number; skipped: number }> {
     const checkpoint = readCheckpoint(conversationId);
     if (!checkpoint) return { restored: 0, removed: 0, skipped: 0 };
-    const result = await restoreCheckpoint(checkpoint);
+    const result = await restoreCheckpoint(checkpoint, { beforeRewrite: (path) => releaseOfficeResident(path) });
     clearCheckpoint(conversationId);
     // Drop the accumulator too: the retry that follows is a new attempt at the same
     // turn and must capture the (now restored) originals again, not skip every path as
@@ -2467,6 +2487,8 @@ export class PiProcessManager {
    * subscribes afterwards discards anything at or below it and applies the rest.
    */
   #transcriptReader = new TranscriptReader();
+  #toolDeltas = new ToolDeltaThrottle();
+  #toolImageReader = new ToolImageReader();
 
   async #readTranscript(conversationId: string | undefined, fromEntryId: string | undefined,
     page: { turnLimit: number; beforeEntryId?: string } | undefined, toolDetail?: ToolDetailLevel,
@@ -2899,6 +2921,17 @@ export class PiProcessManager {
     return [...new Set([...this.#running.keys(), ...this.#compacting.keys(), ...this.#busyBroadcast.keys()])].filter((id) => this.#working(id));
   }
   /**
+   * The conversation on screen: the catalog's active id, which every client follows.
+   *
+   * Main needs it to tell a question the user is looking at (its panel is in the
+   * composer) from one parked in a chat nobody is showing — only the second needs a
+   * desktop notice while a window is in front.
+   */
+  get activeConversationId(): string | null {
+    return this.#catalog.activeId ?? null;
+  }
+
+  /**
    * Every prompt parked waiting for a human, in every conversation, as the
    * `extension_ui_request` events that announced them.
    *
@@ -2982,6 +3015,8 @@ export class PiProcessManager {
     this.#sendNow.end(id);
     this.#busyBroadcast.delete(id);
     this.#turnEvents.delete(id);
+    // A session torn down mid-call must not deliver its last held tool delta afterwards.
+    this.#toolDeltas.drop(id);
     if (wasBusy) this.#emit({ type: "conversation_running", conversationId: id, running: false });
   }
 
@@ -3605,28 +3640,40 @@ export class PiProcessManager {
     if (!this.#runtime || !this.#models) throw new Error("engine not ready");
     const cwd = conversation.cwd || conversation.project || ensureScratchWorkspace(this.#paths.scratchDir, conversation.id);
     const sessionDir = join(this.#paths.sessionsDir, `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
-    // A transcript with a gap in its parent chain reopens as only what follows the gap.
-    // Relink it first; a repair that fails must not keep the chat from opening.
+    // A transcript with a gap in its parent chain reopens as only what follows the gap, and a
+    // run the process did not survive leaves tool calls nothing answered. Both are fixed from
+    // one read, whose entries the SDK then loads instead of parsing the file again; a repair
+    // that fails must not keep the chat from opening, and falls back to the SDK's own read.
+    const openStarted = performance.now();
+    let preloaded: Array<Record<string, unknown>> | undefined;
     if (conversation.sessionFile) {
       try {
-        const relinked = repairTranscriptFile(conversation.sessionFile);
-        if (relinked > 0) console.warn(`[transcript] relinked ${relinked} dangling entr${relinked === 1 ? "y" : "ies"} in ${conversation.sessionFile}`);
-        // A run the process did not survive leaves tool calls nothing answered. Close them
-        // with an error result so the chat can be continued and the model knows the call
-        // may have half-run, rather than being told "No result provided" at the next request.
-        const closed = closeOrphanToolCalls(conversation.sessionFile, (tool) => uiText(
+        // The orphan close's wording is read by the model as well as the user: the call may
+        // have half-run, rather than "No result provided" at the next request.
+        const prepared = prepareTranscriptForOpen(conversation.sessionFile, (tool) => uiText(
           `应用在执行「${tool}」期间退出，这次调用可能已经部分执行。重试前先核对现场，不要假定它没有生效。`,
           `The app exited while "${tool}" was running, so this call may have partly run. Check the current state before retrying; do not assume it had no effect.`,
         ));
-        if (closed > 0) console.warn(`[transcript] closed ${closed} unanswered tool call${closed === 1 ? "" : "s"} in ${conversation.sessionFile}`);
+        if (prepared?.relinked) console.warn(`[transcript] relinked ${prepared.relinked} dangling entr${prepared.relinked === 1 ? "y" : "ies"} in ${conversation.sessionFile}`);
+        if (prepared?.closed) console.warn(`[transcript] closed ${prepared.closed} unanswered tool call${prepared.closed === 1 ? "" : "s"} in ${conversation.sessionFile}`);
+        preloaded = prepared?.entries;
       } catch (error) {
         console.warn(`[transcript] repair failed for ${conversation.sessionFile}`, error);
       }
     }
-    const openStarted = performance.now();
     const sessionManager = conversation.sessionFile
-      ? SessionManager.open(conversation.sessionFile, undefined, cwd)
+      ? openSessionFile(conversation.sessionFile, cwd, preloaded)
       : SessionManager.create(cwd, sessionDir);
+    // A chat from before tool pictures were kept as references still holds them as base64;
+    // swap them in memory before the session is built from these entries, so it does not keep
+    // tens of megabytes alive for as long as it is open. The file itself is left as it is.
+    if (conversation.sessionFile) {
+      try {
+        referenceStoredToolImages(sessionManager.getEntries(), this.#paths.toolImagesDir, conversation.id);
+      } catch (error) {
+        console.warn(`[transcript] could not move tool pictures out of ${conversation.sessionFile}`, error);
+      }
+    }
     const openMs = performance.now() - openStarted;
     const creation = this.#createSession(conversation, cwd, sessionManager, undefined, openMs);
     this.#sessionPromises.set(conversation.id, creation);
@@ -3691,23 +3738,9 @@ export class PiProcessManager {
       }, {
         name: "fastvibe-tool-images",
         hidden: true,
-        factory: (pi) => {
-          const dir = this.#paths.toolImagesDir;
-          // As a tool's pictures arrive: the full-size file is saved for the chat to show, and the
-          // history keeps a smaller copy. The SDK normalizes each picture on its own, which a
-          // 3 MB one passes, so a chat that made many still sent tens of MB with every request.
-          pi.on("tool_result", async (event) => {
-            const content = await shrinkToolResultImages(event.content, dir, conversation.id, event.toolCallId, resizeForModel);
-            return content ? { content: content as unknown as typeof event.content } : undefined;
-          });
-          // What is still too much, bounded before each request. Request-only: the transcript keeps it.
-          pi.on("context", (event) => {
-            const trimmed = dropOldToolImages(event.messages, {
-              locate: (message, index, block) => savedToolImagePath(dir, conversation.id, String(message.toolCallId ?? ""), index, block),
-            });
-            return trimmed === event.messages ? undefined : { messages: trimmed as typeof event.messages };
-          });
-        },
+        // A tool's pictures: saved in full for the chat, a smaller copy for the model, and the
+        // history keeps a reference to it rather than its bytes (`engine/tool-images-extension.ts`).
+        factory: toolImagesExtension({ dir: this.#paths.toolImagesDir, conversationId: conversation.id, resize: resizeForModel, reader: this.#toolImageReader }),
       }, {
         // Switches codemode, tool_search and the dag_* tools on or off from the settings
         // as they are at `session_start`, which a reload emits again — the SDK's
@@ -3997,6 +4030,11 @@ export class PiProcessManager {
       // from the same clock that will be filed against the entry later — including
       // when the user switches back into a block that is still open.
       this.#withThinkingTiming(conversation.id, event, payload);
+      // A tool call's arguments ride every delta whole, so all but the newest are held for a
+      // moment (`tool-delta-throttle.ts`). Any other event of this conversation first delivers
+      // what is held, before it is numbered, so the order clients see is unchanged.
+      if (this.#toolDeltas.offer(conversation.id, event, payload, (held) => this.#deliverStreamPayload(conversation, held))) return;
+      this.#toolDeltas.release(conversation.id);
       // Retained *before* the live filter below, which forwards only the conversation on
       // screen. Which chat that is belongs to one window, so a background conversation
       // whose payloads are dropped here would otherwise lose this panel state entirely
@@ -4061,6 +4099,14 @@ export class PiProcessManager {
     this.#scheduleQueueDrain(conversation.id);
     return managed;
   }
+  /** A held tool-argument delta, delivered the way the session listener delivers any stream payload. */
+  #deliverStreamPayload(conversation: Conversation, payload: Record<string, unknown>): void {
+    this.#stamp(payload);
+    this.#retain(conversation.id, payload, RETAIN_FROM_STREAM);
+    if (this.#activeId === conversation.id || conversation.kind === "side-chat") this.#emit(payload);
+    else this.#publishWatched(conversation.id, payload);
+  }
+
   #emit(event: Record<string, unknown>): void {
     this.#stamp(event);
     const conversationId = event.conversationId;
@@ -4683,24 +4729,36 @@ export class PiProcessManager {
    */
   #captureTurnFile(conversationId: string, cwd: string | undefined, event: Record<string, unknown>): void {
     const toolName = String(event.toolName ?? "").toLowerCase();
-    if (toolName !== "write" && toolName !== "edit") return;
     const args = event.args as Record<string, unknown> | undefined;
-    const raw = typeof args?.path === "string" ? args.path : typeof args?.file_path === "string" ? args.file_path : "";
-    if (!raw) return;
+    const raws: string[] = [];
+    if (toolName === "write" || toolName === "edit") {
+      const raw = typeof args?.path === "string" ? args.path : typeof args?.file_path === "string" ? args.file_path : "";
+      if (raw) raws.push(raw);
+    } else if (toolName === "bash" || toolName === "shell") {
+      // officecli writes the file itself. The checkpoint has to be taken before that
+      // command runs, or a retry rewinds the conversation and leaves the deck behind.
+      raws.push(...officecliWriteTargets(bashCommand(args)));
+    }
+    if (raws.length === 0) return;
     const base = cwd || scratchWorkspace(this.#paths.scratchDir, conversationId);
-    const absolute = raw.startsWith("/") ? raw : join(base, raw);
     let touched = this.#runTouchedFiles.get(conversationId);
     if (!touched) {
       touched = { cwd: base, files: new Map<string, CheckpointFile>(), pending: Promise.resolve() };
       this.#runTouchedFiles.set(conversationId, touched);
     }
-    // Read once, on first sight. A second `edit` of the same file must not re-read it:
-    // by then the first edit has already been written, so the "before" state would be
-    // the *first* edit's output and a rewind would restore a half-applied change.
-    // Read synchronously, too — the tool executes as soon as this handler returns, so an
-    // async read races the very write it is trying to capture.
-    if (touched.files.has(absolute)) return;
-    touched.files.set(absolute, readBefore(absolute));
+    let added = false;
+    for (const raw of raws) {
+      const absolute = raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw) ? raw : join(base, raw);
+      // Read once, on first sight. A second edit of the same file must not re-read it:
+      // by then the first edit has already been written, so the "before" state would be
+      // the *first* edit's output and a rewind would restore a half-applied change.
+      // Read synchronously, too — the tool executes as soon as this handler returns, so an
+      // async read races the very write it is trying to capture.
+      if (touched.files.has(absolute)) continue;
+      touched.files.set(absolute, officeFormatOf(absolute) ? readBeforeBinary(absolute) : readBefore(absolute));
+      added = true;
+    }
+    if (!added) return;
     // Serialized per conversation: `captureCheckpoint` awaits `git rev-parse` before it
     // stores, so two overlapping calls could land out of order and leave the checkpoint
     // missing the file captured by the earlier one.

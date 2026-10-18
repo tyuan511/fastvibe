@@ -558,11 +558,15 @@ function SessionRowContent({
                 thing the row has to say. Stop lives on the composer; archiving a busy
                 chat aborts it. */}
             {waiting ? (
+              // Words, not the running mark: a chat parked on a question is not working,
+              // it is stopped on the reader, and an icon alone read as just another busy
+              // spinner — the one thing this row must not say while it waits.
               <span
-                className="flex size-6 items-center justify-center text-warning group-hover/session:hidden group-focus-within/session:hidden"
+                className="flex h-5 items-center gap-1 rounded-full bg-warning/15 px-1.5 text-xs text-warning group-hover/session:hidden group-focus-within/session:hidden"
                 title={t("sidebar.waitingForYou")}
               >
-                <HugeiconsIcon strokeWidth={2} icon={Alert02Icon} className="size-3.5" />
+                <HugeiconsIcon strokeWidth={2} icon={Alert02Icon} className="size-3" />
+                <span>{t("sidebar.waitingAction")}</span>
               </span>
             ) : showSpinner ? (
               <span className="flex size-6 items-center justify-center group-hover/session:hidden group-focus-within/session:hidden">

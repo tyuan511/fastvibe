@@ -460,11 +460,30 @@ export function createFastVibeApi(t: ApiTransport) {
       reveal: (cwd: string): Promise<{ ok: boolean; reason?: "missing" | "invalid" } | void> =>
         t.invoke(Ipc.workspaceReveal, { cwd }),
       preview: (path: string): Promise<FilePreview> => t.invoke(Ipc.workspacePreview, { path }),
+      /**
+       * Hand a file to the desktop's own default app — Word for a `.doc`, a viewer for a `.pdf`.
+       * The answer only says whether the request went through: the app that opens is on the
+       * machine running this, and the window cannot see it.
+       */
+      openExternal: (path: string): Promise<{ ok: boolean; reason?: string }> =>
+        t.invoke(Ipc.workspaceOpenExternal, { path }),
       /** Resolve a batch of candidate paths and return only paths that are regular files. */
       filesExist: (paths: string[], cwd?: string): Promise<string[]> =>
         t.invoke(Ipc.workspaceFilesExist, { paths, cwd }),
       fileIcons: (): Promise<FileIconMapping> => t.invoke(Ipc.workspaceFileIcons),
       readDir: (path: string): Promise<DirEntry[]> => t.invoke(Ipc.workspaceReadDir, { path }),
+      /**
+       * Create an empty file or a folder under `path` (a directory of the tree). `cwd` is the
+       * project root the row came from, and the host refuses anything outside it.
+       */
+      createEntry: (input: { cwd: string; path: string; name: string; kind: DirEntry["kind"] }): Promise<DirEntry> =>
+        t.invoke(Ipc.workspaceCreateEntry, input),
+      /** Rename one row, staying in its own directory. Returns the entry the tree should show. */
+      renameEntry: (input: { cwd: string; path: string; name: string }): Promise<DirEntry> =>
+        t.invoke(Ipc.workspaceRenameEntry, input),
+      /** Remove one row. The desktop moves it to the Trash; a headless Agent deletes for good. */
+      deleteEntry: (input: { cwd: string; path: string }): Promise<void> =>
+        t.invoke(Ipc.workspaceDeleteEntry, input),
       /** Files in the current project matching a composer `@` query. Paths stay on that machine. */
       searchFiles: (cwd: string, query?: string): Promise<ProjectFileHit[]> =>
         t.invoke(Ipc.workspaceSearchFiles, { cwd, query }),
@@ -498,6 +517,25 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.workspaceTerminalResize, { id, cols, rows }),
       terminalKill: (id: string): Promise<void> => t.invoke(Ipc.workspaceTerminalKill, { id }),
       onTerminalData: (listener: (event: TerminalDataEvent) => void): (() => void) => t.subscribe(Ipc.workspaceTerminalData, listener),
+    },
+    /**
+     * Office documents, rendered by the OfficeCLI this install ships.
+     *
+     * `render` is the static snapshot: one subprocess per file, a cached page, and no server.
+     * It answers with a *path* rather than a URL — the same shape as every other preview — so
+     * a page rendered on an SSH host comes back namespaced and loads through the media proxy.
+     */
+    office: {
+      render: (input: { path: string; conversationId?: string }): Promise<{ path: string }> =>
+        t.invoke(Ipc.officeRender, input),
+      /** Live preview for a file open in the side pane. The URL is 127.0.0.1 on this machine. */
+      watchStart: (input: { path: string; conversationId?: string }): Promise<{ path: string; url: string; port: number }> =>
+        t.invoke(Ipc.officeWatchStart, input),
+      watchStop: (path: string): Promise<void> => t.invoke(Ipc.officeWatchStop, { path }),
+      selection: (path: string): Promise<{ text: string; items: Array<{ path: string; type: string; text: string }> }> =>
+        t.invoke(Ipc.officeSelection, { path }),
+      onWatchState: (listener: (state: { path: string; phase: string; url?: string; port?: number; message?: string }) => void): (() => void) =>
+        t.subscribe(Ipc.officeWatchState, listener),
     },
     app: {
       getInfo: (): Promise<import("@shared/ipc").AppInfo> => t.invoke(Ipc.appGetInfo),

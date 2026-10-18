@@ -443,6 +443,7 @@ export function websiteFixture(language: WebsiteLanguage): WebsiteFixture {
     },
     stats: {
       tokens: { input: 14_820, output: 1_940, cacheRead: 6_200, cacheWrite: 0, total: 22_960 },
+      turn: { tokens: { input: 4_120, output: 540, cacheRead: 6_200, cacheWrite: 0, total: 10_860 }, modelMs: 12_600 },
       cost: 0.12,
       toolCalls: 9,
       steps: 4,

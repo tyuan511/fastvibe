@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   defaultNotificationSettings,
+  focusedApprovalNeedsNotice,
   isBlockingPrompt,
   normalizeNotificationSettings,
   notificationEnabled,
@@ -97,6 +98,18 @@ test("a blocking prompt notifies and points at its chat; a one-way one does not"
   for (const method of ["notify", "setStatus", "setWidget", "set_editor_text", "setTitle"]) {
     assert.equal(notificationForEvent({ type: "extension_ui_request", method }), null, method);
   }
+});
+
+test("a focused window still notices a question for a chat it is not showing", () => {
+  // The panel is drawn only for the conversation on screen, so a prompt in any other
+  // chat is invisible however focused the app is.
+  assert.equal(focusedApprovalNeedsNotice("c2", "c1"), true);
+  // The chat on screen already shows the prompt in its composer.
+  assert.equal(focusedApprovalNeedsNotice("c1", "c1"), false);
+  // Nothing is on screen (no conversation open): every prompt is off it.
+  assert.equal(focusedApprovalNeedsNotice("c1", null), true);
+  // A prompt with no conversation has nothing a click could open.
+  assert.equal(focusedApprovalNeedsNotice(undefined, "c1"), false);
 });
 
 test("the events that arrive constantly raise nothing", () => {

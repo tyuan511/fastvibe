@@ -6,11 +6,13 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   closeOrphanToolCalls,
+  prepareTranscriptForOpen,
   relinkDanglingEntries,
   repairTranscriptFile,
   writeTranscriptEntries,
 } from "../src/main/engine/transcript-file.ts";
 import { canResumeRun } from "../src/main/engine/resume.ts";
+import { openSessionFile } from "../src/main/engine/session-open.ts";
 import { loadConversationTranscriptBranch } from "../src/main/engine/conversation-transcript-search.ts";
 
 const timestamp = "2026-09-23T00:00:00.000Z";
@@ -264,5 +266,55 @@ test("closing orphans keeps every existing line and tolerates missing or headerl
     const foreign = join(dir, "foreign.jsonl");
     await writeFile(foreign, lines([toolTurn(["c1"])]));
     assert.equal(closeOrphanToolCalls(foreign, note), 0);
+  });
+});
+
+test("prepareTranscriptForOpen relinks and closes from one read, and writes the file once", async () => {
+  await withDir(async (dir) => {
+    const file = join(dir, "session.jsonl");
+    // A gap *and* an orphaned call: both fixes land in the same write.
+    const orphaned = { ...toolTurn(["c1"]), id: "a4", parentId: "u4" };
+    await writeFile(file, lines([...gapped(dir), orphaned]));
+    const prepared = prepareTranscriptForOpen(file, note);
+    assert.ok(prepared);
+    assert.equal(prepared.relinked, 1);
+    assert.equal(prepared.closed, 1);
+    // The entries returned are what the file now holds, so the SDK loads the same session from either.
+    const fromDisk = SessionManager.open(file, undefined, dir);
+    const fromEntries = openSessionFile(file, dir, prepared.entries);
+    assert.deepEqual(fromEntries.getEntries(), fromDisk.getEntries());
+    assert.deepEqual(fromEntries.getBranch().map((entry) => entry.id), fromDisk.getBranch().map((entry) => entry.id));
+    assert.equal(fromEntries.getLeafId(), fromDisk.getLeafId());
+    assert.equal(fromEntries.getSessionId(), fromDisk.getSessionId());
+    assert.equal(fromEntries.getSessionFile(), fromDisk.getSessionFile());
+    assert.equal(fromEntries.getCwd(), fromDisk.getCwd());
+    assert.deepEqual(fromEntries.buildSessionContext().messages, fromDisk.buildSessionContext().messages);
+    // A clean file is not written again.
+    const before = await readFile(file, "utf8");
+    const again = prepareTranscriptForOpen(file, note);
+    assert.equal(again?.relinked, 0);
+    assert.equal(again?.closed, 0);
+    assert.equal(await readFile(file, "utf8"), before);
+  });
+});
+
+test("a session opened from preloaded entries appends to the same file", async () => {
+  await withDir(async (dir) => {
+    const file = join(dir, "session.jsonl");
+    await writeFile(file, lines([header(dir), message("u1", null, "user", "hello"), message("a1", "u1", "assistant", "hi")]));
+    const prepared = prepareTranscriptForOpen(file, note);
+    const manager = openSessionFile(file, dir, prepared?.entries);
+    manager.appendMessage({ role: "user", content: "again", timestamp: 2 });
+    const reopened = SessionManager.open(file, undefined, dir);
+    assert.deepEqual(reopened.getBranch().map((entry) => entry.type === "message" ? entry.message.role : entry.type), ["user", "assistant", "user"]);
+  });
+});
+
+test("prepareTranscriptForOpen leaves the SDK's own errors to it", async () => {
+  await withDir(async (dir) => {
+    assert.equal(prepareTranscriptForOpen(join(dir, "missing.jsonl"), note), null);
+    const headerless = join(dir, "headerless.jsonl");
+    await writeFile(headerless, lines([message("u1", null, "user", "hi")]));
+    assert.equal(prepareTranscriptForOpen(headerless, note), null);
   });
 });

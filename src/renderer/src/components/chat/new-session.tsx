@@ -1,39 +1,16 @@
-import { type JSX } from "react";
+import { useMemo, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Bug01Icon, Compass01Icon, MagicWand02Icon, ShieldCheckIcon } from "@hugeicons/core-free-icons";
-import { Button } from "@/components/ui/button";
-
-/**
- * Task templates offered under the composer on a fresh conversation. Kept here
- * (rather than inside MessageList) so the same list feeds the hero and the chip
- * row that sits below the input box.
- */
-export function newSessionSuggestions(): Array<{ icon: JSX.Element; label: string; prompt: string }> {
-  return [
-    {
-      icon: <HugeiconsIcon strokeWidth={2} icon={Compass01Icon} />,
-      label: i18n.t("chat:newSession.explore") as string,
-      prompt: i18n.t("chat:newSession.explorePrompt") as string,
-    },
-    {
-      icon: <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} />,
-      label: i18n.t("chat:newSession.build") as string,
-      prompt: i18n.t("chat:newSession.buildPrompt") as string,
-    },
-    {
-      icon: <HugeiconsIcon strokeWidth={2} icon={ShieldCheckIcon} />,
-      label: i18n.t("chat:newSession.review") as string,
-      prompt: i18n.t("chat:newSession.reviewPrompt") as string,
-    },
-    {
-      icon: <HugeiconsIcon strokeWidth={2} icon={Bug01Icon} />,
-      label: i18n.t("chat:newSession.fix") as string,
-      prompt: i18n.t("chat:newSession.fixPrompt") as string,
-    },
-  ];
-}
+import { Alert02Icon, ArrowRight01Icon, Clock01Icon } from "@hugeicons/core-free-icons";
+import { AppLogo } from "@/components/app-logo";
+import { RunningMark } from "@/components/running-mark";
+import { Kbd } from "@/components/ui/kbd";
+import { useArchivedIds } from "@/stores/archive";
+import { useSessionStore } from "@/stores/session";
+import { useShortcutLabel } from "@/lib/use-shortcuts";
+import { formatRelativeTime } from "@/lib/time";
+import type { Conversation } from "@shared/types";
 
 /** Warm, time-aware greeting. Pure so it stays easy to reason about and reuse. */
 export function greetingForHour(hour: number): string {
@@ -48,7 +25,8 @@ export function greetingForHour(hour: number): string {
 export function NewSessionHero(): JSX.Element {
   useTranslation("chat");
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center gap-4 px-6 text-center">
+      <AppLogo className="size-12 rounded-xl shadow-sm" />
       <h2 className="text-2xl font-semibold tracking-tight">
         {greetingForHour(new Date().getHours())}
       </h2>
@@ -56,24 +34,104 @@ export function NewSessionHero(): JSX.Element {
   );
 }
 
-/** Compact suggestion pills, rendered under the composer like the reference. */
-export function SuggestionChips({ onSelect }: { onSelect: (prompt: string) => void }): JSX.Element {
-  useTranslation("chat");
+const RECENT_LIMIT = 4;
+
+/**
+ * The chats the user was last working in, scoped like the composer: the project the new
+ * chat is bound to, else the chats bound to no project. Side chats, empty drafts,
+ * archived chats and the draft on screen are left out — the same rules the sidebar uses.
+ */
+function useRecentWork(project: string | undefined, exclude: string | null): Conversation[] {
+  const conversations = useSessionStore((state) => state.conversations);
+  const archived = useArchivedIds();
+  return useMemo(
+    () =>
+      conversations
+        .filter((item) =>
+          item.id !== exclude &&
+          item.preview &&
+          item.kind !== "side-chat" &&
+          !archived.has(item.id) &&
+          (item.project ?? undefined) === project,
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, RECENT_LIMIT),
+    [conversations, archived, project, exclude],
+  );
+}
+
+/**
+ * What sits under the composer on a fresh conversation: a way back into recent work
+ * (the sidebar may be collapsed, or a drawer on a phone) and the composer's own
+ * affordances, which are otherwise invisible until somebody types the right key.
+ */
+export function NewSessionFooter({
+  project,
+  projectName,
+  onOpen,
+}: {
+  project?: string;
+  projectName?: string;
+  onOpen: (id: string) => void;
+}): JSX.Element | null {
+  const { t } = useTranslation("chat");
+  const activeId = useSessionStore((state) => state.activeId);
+  const running = useSessionStore((state) => state.running);
+  const pending = useSessionStore((state) => state.pendingPermissions);
+  const recent = useRecentWork(project, activeId);
+  const searchKey = useShortcutLabel("commandPalette");
+
   return (
-    <div className="flex flex-wrap items-center justify-center gap-2 px-6">
-      {newSessionSuggestions().map((item) => (
-        <Button
-          key={item.label}
-          type="button"
-          variant="outline"
-          size="sm"
-          className="gap-1.5 font-normal"
-          onClick={() => onSelect(item.prompt)}
-        >
-          <span className="text-muted-foreground">{item.icon}</span>
-          {item.label}
-        </Button>
-      ))}
+    <div className="flex w-full max-w-3xl flex-col gap-5 px-6">
+      {recent.length > 0 ? (
+        <section className="flex flex-col gap-1">
+          <div className="flex items-center gap-1.5 px-3 text-xs text-muted-foreground">
+            <HugeiconsIcon strokeWidth={2} icon={Clock01Icon} className="size-3.5" />
+            <span className="truncate">
+              {projectName ? t("newSession.recentIn", { name: projectName }) : t("newSession.recent")}
+            </span>
+          </div>
+          <ul className="flex flex-col">
+            {recent.map((item) => {
+              const waiting = (pending[item.id]?.length ?? 0) > 0;
+              const busy = running[item.id] === true;
+              return (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpen(item.id)}
+                    className="group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted pointer-coarse:py-2.5"
+                  >
+                    <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                    {waiting ? (
+                      <span className="flex shrink-0 items-center gap-1 text-xs text-warning">
+                        <HugeiconsIcon strokeWidth={2} icon={Alert02Icon} className="size-3" />
+                        {t("newSession.waiting")}
+                      </span>
+                    ) : busy ? (
+                      <RunningMark />
+                    ) : (
+                      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                        {formatRelativeTime(item.updatedAt)}
+                      </span>
+                    )}
+                    <HugeiconsIcon
+                      strokeWidth={2}
+                      icon={ArrowRight01Icon}
+                      className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:hidden"
+                    />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-muted-foreground pointer-coarse:hidden">
+        <span className="flex items-center gap-1.5"><Kbd>/</Kbd>{t("newSession.hintSlash")}</span>
+        {project ? <span className="flex items-center gap-1.5"><Kbd>@</Kbd>{t("newSession.hintMention")}</span> : null}
+        {searchKey ? <span className="flex items-center gap-1.5"><Kbd>{searchKey}</Kbd>{t("newSession.hintSearch")}</span> : null}
+      </div>
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentRuntimePackages, checkAgentRuntime } from "./check-agent-runtime.mjs";
 import { hashRuntimeDirectory } from "./agent-runtime-hash.mjs";
+import { officeCliPlatform } from "../src/shared/office.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -76,6 +77,23 @@ try {
   for (const name of ["extensions", "models-dev", "skills"]) {
     const source = join(root, "resources", name);
     if (existsSync(source)) cpSync(source, join(staging, "resources", name), { recursive: true });
+  }
+  // The OfficeCLI binary for this CPU. The Agent resolves it the same way a packaged
+  // desktop does: `resources/officecli/officecli`, next to the license and the version
+  // manifest. A runtime without it can run the agent and then fail the first Office preview.
+  const officeKey = `linux-${arch}`;
+  const office = officeCliPlatform(officeKey);
+  const officeDir = join(root, "resources", "officecli", officeKey);
+  const officeBinary = office ? join(officeDir, office.binary) : "";
+  if (!office || !existsSync(officeBinary)) {
+    throw new Error(`OfficeCLI binary missing for ${officeKey}. Run: node scripts/fetch-officecli.mjs --platforms=${officeKey}`);
+  }
+  const officeOut = join(staging, "resources", "officecli");
+  mkdirSync(officeOut, { recursive: true });
+  for (const name of [office.binary, "LICENSE", "NOTICE", "manifest.json"]) {
+    const from = join(officeDir, name);
+    if (!existsSync(from)) throw new Error(`OfficeCLI package is missing ${name} in ${officeDir}`);
+    cpSync(from, join(officeOut, name));
   }
   // Node is intentionally not copied into the Agent archive. The remote bootstrap
   // reuses a compatible system Node, or installs the exact build version under the

@@ -7,6 +7,7 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { relinkDanglingEntries } from "./transcript-file.ts";
+import { isToolImageRef } from "../../shared/tool-image-ref.ts";
 
 export const CONVERSATION_TRANSCRIPT_MAX_FILE_BYTES = 8_000_000;
 export const CONVERSATION_TRANSCRIPT_MAX_QUERY_CHARS = 500;
@@ -240,6 +241,8 @@ function messageContentText(content: unknown): string {
     }
     if (!isRecord(part)) continue;
     if (part.type === "text" && typeof part.text === "string") {
+      // A picture's reference names a file; it is not text anyone wrote.
+      if (isToolImageRef(part)) continue;
       const text = cleanText(part.text);
       if (text) parts.push(text);
       continue;

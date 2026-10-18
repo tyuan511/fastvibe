@@ -15,7 +15,8 @@ import { IconButton } from "@/components/icon-button";
 import { FileIcon } from "@/components/file-icon";
 import { RunningMark } from "@/components/running-mark";
 import { TodoRow } from "@/components/chat/todo-list";
-import { activeTodo, todoSnapshot } from "@/lib/todos";
+import { activeTodo } from "@/lib/todos";
+import { useConversationTodo } from "@/lib/use-conversation-todo";
 import { conversationAgents, resourceAgentFinished, type ResourceAgent } from "@/lib/conversation-resources";
 import { subagentStatusText } from "@/lib/subagent-status";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
@@ -111,9 +112,10 @@ function Repositories({ roots, working, onClose }: { roots: string[]; working: b
   </ResourceSection>;
 }
 
-function Environment({ conversation, project }: { conversation: Conversation; project?: Project }) {
+function Environment({ conversation, project, onClose }: { conversation: Conversation; project?: Project; onClose: () => void }) {
   const { t } = useTranslation("sidepane");
   const remote = isRemoteProject(project);
+  const narrow = useIsNarrowViewport();
   const [host, setHost] = useState<string>();
   const status = useGitStatus(conversation.cwd);
   useEffect(() => {
@@ -139,11 +141,14 @@ function Environment({ conversation, project }: { conversation: Conversation; pr
       <span className="min-w-0 flex-1 truncate">{path}</span>
       <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} className="size-3.5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
     </Button>
-    {status?.isRepository && status.branch ? <div className="flex items-center gap-2 px-2 py-1.5 text-sm">
+    {status?.isRepository && status.branch ? <Button variant="ghost" className={ROW} disabled={narrow} title={t("resources.openBranch", { branch: status.branch })} onClick={() => {
+      useSidePaneStore.getState().openGit(conversation.cwd, "current");
+      onClose();
+    }}>
       <HugeiconsIcon icon={GitBranchIcon} strokeWidth={2} className="size-4 shrink-0 text-muted-foreground" />
       <span className="truncate">{status.branch}</span>
       {conversation.worktree ? <span className="ml-auto text-xs text-muted-foreground">{t("resources.worktree")}</span> : null}
-    </div> : null}
+    </Button> : null}
   </ResourceSection>;
 }
 
@@ -154,7 +159,9 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   const registry = useSessionStore((state) => state.subagents);
   const graph = useDagStore((state) => state.graphs[conversation.id]);
   const working = useConversationWorking();
-  const todo = useMemo(() => todoSnapshot(messages), [messages]);
+  // Same display rule as the panel above the composer: an abandoned checklist is not
+  // a resource of the current turn, so it does not get a section here either.
+  const todo = useConversationTodo();
   const agents = useMemo(() => conversationAgents(conversation.id, messages, registry, graph?.nodes ?? []), [conversation.id, messages, registry, graph]);
   const outputs = useMemo(() => conversationOutputs(messages, (path) => resolvePath(path, conversation.cwd)), [messages, conversation.cwd]);
   const [moreOutputs, setMoreOutputs] = useState(false);
@@ -210,14 +217,14 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   };
   const activeAgents = agents.filter((agent) => !resourceAgentFinished(agent));
   const finishedAgents = agents.filter(resourceAgentFinished);
-  const currentTodo = activeTodo(todo.items);
-  const done = todo.items.filter((item) => item.status === "completed").length;
+  const currentTodo = todo ? activeTodo(todo.items) : undefined;
+  const done = todo ? todo.items.filter((item) => item.status === "completed").length : 0;
   return <div className="divide-y divide-border/50">
-    <Environment conversation={conversation} project={project} />
-    {todo.items.length ? <ResourceSection title={t("resources.todos")} defaultOpen={false}
+    <Environment conversation={conversation} project={project} onClose={onClose} />
+    {todo ? <ResourceSection title={t("resources.todos")} defaultOpen={false}
       summary={t("resources.progress", { done, total: todo.items.length })}
-      collapsed={currentTodo ? <div className="px-1 pb-1"><TodoRow item={currentTodo} compact live={working && !todo.superseded} /></div> : undefined}>
-      <div className="px-2">{todo.items.map((item) => <TodoRow key={item.id} item={item} live={working && !todo.superseded} />)}</div>
+      collapsed={currentTodo ? <div className="px-1 pb-1"><TodoRow item={currentTodo} compact live /></div> : undefined}>
+      <div className="px-2">{todo.items.map((item) => <TodoRow key={item.id} item={item} live />)}</div>
     </ResourceSection> : null}
     {agents.length ? <ResourceSection title={t("resources.agents")} summary={agents.length}>
       {activeAgents.slice(0, moreAgents ? undefined : 5).map(agentRow)}

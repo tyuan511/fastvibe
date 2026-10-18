@@ -183,6 +183,8 @@
   "updated": "模型数据已更新",
   "engine": "内核版本",
   "engineDesc": "当前内嵌的 pi coding agent。",
+  "office": "Office 版本",
+  "officeDesc": "随应用发布，用来预览和编辑 Word、Excel、PowerPoint。",
   "sync": "同步配置到 pi",
   "syncDesc": "把已连接的供应商、默认模型和 MCP 写入本机的 pi。不包含会话。",
   "syncAction": "同步",

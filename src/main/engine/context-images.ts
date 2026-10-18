@@ -18,6 +18,8 @@
  * a reload loses nothing. Only tool-result images are handled; an image the user attached is theirs.
  */
 
+import { toolImageRef, type ToolImageRef } from "../../shared/tool-image-ref.ts";
+
 /** Base64 characters of tool-result images one request may carry. The newest image is always kept. */
 export const MAX_KEPT_IMAGE_CHARS = 4 * 1024 * 1024;
 
@@ -43,7 +45,8 @@ function imageBlocks(message: unknown): Block[] {
 }
 
 function note(block: Block, path: string | undefined): Block {
-  const mime = typeof block.mimeType === "string" ? block.mimeType : "image";
+  const ref = toolImageRef(block);
+  const mime = ref ? ref.mimeType : typeof block.mimeType === "string" ? block.mimeType : "image";
   const where = path ? `It is saved at ${path}; read that file if you need to see it again.` : "Regenerate it if you need to see it again.";
   return { type: "text", text: `[An earlier ${mime} result was left out of the context to keep requests small. ${where}]` };
 }
@@ -74,4 +77,79 @@ export function dropOldToolImages<T>(messages: readonly T[], options: DropOption
     });
     return { ...source, content } as T;
   });
+}
+
+/** Read a referenced picture back as base64; `undefined` when its file is gone. */
+export type LoadImage = (ref: ToolImageRef, message: Message) => Promise<string | undefined>;
+
+export type PrepareOptions = DropOptions & { load: LoadImage };
+
+/** A tool-result picture as a request sees it: inline bytes, or a reference to a file. */
+function isPicture(block: unknown): block is Block {
+  return isImage(block) || toolImageRef(block) !== undefined;
+}
+
+function pictureSize(block: Block): number {
+  const ref = toolImageRef(block);
+  if (ref) return ref.chars;
+  return typeof block.data === "string" ? block.data.length : 0;
+}
+
+/** How many of the oldest pictures leave so that the rest fit; the newest always stays. */
+function oldestToDrop(sizes: readonly number[], maxChars: number): number {
+  let kept = sizes.reduce((sum, size) => sum + size, 0);
+  let toDrop = 0;
+  while (kept > maxChars && toDrop < sizes.length - 1) kept -= sizes[toDrop++];
+  return toDrop;
+}
+
+/**
+ * `dropOldToolImages` for a history that also holds references (`shared/tool-image-ref.ts`):
+ * one budget over both, newest first, and every reference that stays is read back into the
+ * image it stands for. A reference left out becomes the same note an inline picture would; one
+ * whose file is gone becomes a note that it is no longer available. Returns the same array when
+ * there is nothing to change — no reference, and nothing over budget.
+ */
+export async function prepareRequestToolImages<T>(messages: readonly T[], options: PrepareOptions): Promise<readonly T[]> {
+  const { maxChars = MAX_KEPT_IMAGE_CHARS, locate, load } = options;
+  const pictures = (message: unknown): Block[] =>
+    isRecord(message) && message.role === "toolResult" && Array.isArray(message.content) ? message.content.filter(isPicture) : [];
+  const sizes = messages.flatMap((message) => pictures(message).map(pictureSize));
+  let toDrop = oldestToDrop(sizes, maxChars);
+  const hasRef = messages.some((message) => pictures(message).some((block) => toolImageRef(block) !== undefined));
+  if (toDrop === 0 && !hasRef) return messages;
+
+  const next: T[] = [];
+  for (const message of messages) {
+    if (pictures(message).length === 0) {
+      next.push(message);
+      continue;
+    }
+    const source = message as Message;
+    let position = 0;
+    const content: unknown[] = [];
+    for (const block of source.content as unknown[]) {
+      if (!isPicture(block)) {
+        content.push(block);
+        continue;
+      }
+      const index = position++;
+      if (toDrop > 0) {
+        toDrop--;
+        content.push(note(block, locate?.(source, index, block)));
+        continue;
+      }
+      const ref = toolImageRef(block);
+      if (!ref) {
+        content.push(block);
+        continue;
+      }
+      const data = await load(ref, source);
+      content.push(data
+        ? { type: "image", data, mimeType: ref.mimeType }
+        : { type: "text", text: `[An earlier ${ref.mimeType} result is no longer available. Regenerate it if you need to see it again.]` });
+    }
+    next.push({ ...source, content } as T);
+  }
+  return next;
 }

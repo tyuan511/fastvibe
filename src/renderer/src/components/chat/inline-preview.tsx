@@ -7,6 +7,7 @@ import {
   ArrowRight01Icon,
   Cancel01Icon,
   Copy01Icon,
+  File01Icon,
   Folder01Icon,
   Globe02Icon,
   Image01Icon,
@@ -14,10 +15,13 @@ import {
   PlayIcon,
   SidebarRight01Icon,
 } from "@hugeicons/core-free-icons";
-import { inlineSrc, type InlinePreview } from "@shared/inline-media";
+import { inlineSrc, type InlineMediaKind, type InlinePreview } from "@shared/inline-media";
+import { OfficeFrame } from "./office-frame";
+import { FileIcon } from "@/components/file-icon";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isRemoteRef } from "@/lib/remote-project";
 import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
 import { useSessionStore } from "@/stores/session";
@@ -52,7 +56,23 @@ function isLocal(ref: string): boolean {
   return !isData(ref) && !isUrl(ref);
 }
 
-const KIND_ICON = { image: Image01Icon, video: PlayIcon, html: Globe02Icon } as const;
+/** `office` is never drawn from here — see `KindGlyph`; the entry only keeps the map total. */
+const KIND_ICON: Record<InlineMediaKind, typeof Image01Icon> = {
+  image: Image01Icon,
+  video: PlayIcon,
+  html: Globe02Icon,
+  office: File01Icon,
+};
+
+/**
+ * A document gets the Material file icon for its own extension — Word blue, Excel green,
+ * PowerPoint orange. One grey line glyph shared by all three cannot tell a spreadsheet from a
+ * slide deck at the glance a thumbnail strip is meant for; everything else stays monochrome.
+ */
+function KindGlyph({ item, className }: { item: InlinePreview; className?: string }): JSX.Element {
+  if (item.kind === "office") return <FileIcon name={nameOf(item.ref)} className={className} />;
+  return <HugeiconsIcon strokeWidth={2} icon={KIND_ICON[item.kind]} className={className} />;
+}
 
 /**
  * Local files that a result's text only *suggested*: a path a script printed is not proof the
@@ -131,6 +151,9 @@ function ViewerMedia({ preview, failed, onFail }: { preview: InlinePreview; fail
   const label = preview.title ?? nameOf(preview.ref);
   if (failed) {
     return <p className="text-sm text-white/70">{t("preview.inlineFailed", { name: label || t(`preview.kind.${preview.kind}`) })}</p>;
+  }
+  if (preview.kind === "office") {
+    return <OfficeFrame path={preview.ref} name={label} className="h-[75vh] w-full max-w-6xl rounded-lg" />;
   }
   if (preview.kind === "image") {
     return <img src={inlineSrc(preview)} alt={label} decoding="async" className="max-h-full max-w-full rounded-lg object-contain" onError={onFail} />;
@@ -298,7 +321,7 @@ export function InlinePreviews({ items, className }: { items: InlinePreview[]; c
             onClick={() => setViewing(index)}
             className="inline-flex max-w-64 items-center gap-1.5 text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary"
           >
-            <HugeiconsIcon strokeWidth={2} icon={KIND_ICON[item.kind]} className="size-3.5 shrink-0" />
+            <KindGlyph item={item} className="size-3.5 shrink-0" />
             <span className="min-w-0 truncate">{label}</span>
           </button>
         );
@@ -339,56 +362,67 @@ export function InlineThumbStrip({ items }: { items: InlinePreview[] }): JSX.Ele
   if (visible.length === 0) return null;
   const extra = visible.length - STRIP_MAX;
   return (
-    <span className="ml-auto flex shrink-0 items-end gap-1.5 pl-3">
-      {visible.slice(0, STRIP_MAX).map((item, index) => (
-        <button
-          key={item.key}
-          type="button"
-          title={item.title ?? nameOf(item.ref)}
-          aria-label={item.title ?? (nameOf(item.ref) || t(`preview.kind.${item.kind}`))}
-          onClick={() => setViewing(index)}
-          className={cn(
-            "relative flex h-12 items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 text-muted-foreground shadow-xs transition-colors hover:border-ring",
-            item.kind === "video" ? "w-20" : "w-16",
-          )}
-        >
-          {item.kind === "image" && !failed.has(item.key) ? (
-            <img
-              src={inlineSrc(item)}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="size-full object-cover"
-              onError={() => setFailed((previous) => new Set(previous).add(item.key))}
-            />
-          ) : item.kind === "video" && !failed.has(item.key) ? (
-            <>
-              <video
-                src={thumbVideoSrc(inlineSrc(item))}
-                muted
-                playsInline
-                preload="metadata"
-                tabIndex={-1}
-                aria-hidden
-                className="pointer-events-none absolute inset-0 size-full object-cover"
-                onError={() => setFailed((previous) => new Set(previous).add(item.key))}
-              />
-              <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <span className="flex size-5 items-center justify-center rounded-full bg-black/55 text-white">
-                  <HugeiconsIcon strokeWidth={2} icon={PlayIcon} className="size-3" />
-                </span>
-              </span>
-            </>
-          ) : (
-            <HugeiconsIcon strokeWidth={2} icon={KIND_ICON[item.kind]} className="size-4" />
-          )}
-        </button>
-      ))}
+    <span className="ml-auto flex shrink-0 items-end gap-1 pl-3">
+      {visible.slice(0, STRIP_MAX).map((item, index) => {
+        // A thumb is a picture with no text beside it, so the name it stands for only ever
+        // appears on hover — the app's tooltip, not the browser's `title`, which is the one
+        // thing on this row that ignores the theme and arrives after its own delay.
+        const name = nameOf(item.ref) || item.title || t(`preview.kind.${item.kind}`);
+        return (
+          <Tooltip key={item.key}>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={name}
+                  onClick={() => setViewing(index)}
+                  className={cn(
+                    "relative flex h-9 items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 text-muted-foreground shadow-xs transition-colors hover:border-ring",
+                    item.kind === "video" ? "w-14" : "w-12",
+                  )}
+                />
+              }
+            >
+              {item.kind === "image" && !failed.has(item.key) ? (
+                <img
+                  src={inlineSrc(item)}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="size-full object-cover"
+                  onError={() => setFailed((previous) => new Set(previous).add(item.key))}
+                />
+              ) : item.kind === "video" && !failed.has(item.key) ? (
+                <>
+                  <video
+                    src={thumbVideoSrc(inlineSrc(item))}
+                    muted
+                    playsInline
+                    preload="metadata"
+                    tabIndex={-1}
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0 size-full object-cover"
+                    onError={() => setFailed((previous) => new Set(previous).add(item.key))}
+                  />
+                  <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <span className="flex size-4 items-center justify-center rounded-full bg-black/55 text-white">
+                      <HugeiconsIcon strokeWidth={2} icon={PlayIcon} className="size-2.5" />
+                    </span>
+                  </span>
+                </>
+              ) : (
+                <KindGlyph item={item} className={item.kind === "office" ? "size-5" : "size-4"} />
+              )}
+            </TooltipTrigger>
+            <TooltipContent side="top">{name}</TooltipContent>
+          </Tooltip>
+        );
+      })}
       {extra > 0 ? (
         <button
           type="button"
           onClick={() => setViewing(STRIP_MAX)}
-          className="inline-flex h-8 items-center rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="inline-flex h-7 items-center rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           {t("preview.moreItems", { count: extra })}
         </button>

@@ -35,3 +35,7 @@ resources/models-dev/**
 # Fetched at build time by scripts/fetch-cua-driver.mjs, pinned and checksummed there.
 # 63 MB of third-party executable belongs in the release artifact, not in history.
 resources/cua-driver/
+# OfficeCLI binaries, fetched by scripts/fetch-officecli.mjs against scripts/officecli.json.
+# LICENSE and NOTICE stay: distributing the binary requires them (Apache-2.0 §4).
+resources/officecli/*/
+resources/officecli/manifest.json

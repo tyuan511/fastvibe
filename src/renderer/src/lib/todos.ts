@@ -132,6 +132,9 @@ function scanTodos(messages: ChatMessage[]): { items: TodoItem[]; messageIndex: 
   return { items: EMPTY_TODOS, messageIndex: -1 };
 }
 
+/** What `todoSnapshot` reads out of a transcript. */
+export type TodoSnapshot = { items: TodoItem[]; superseded: boolean; entryId?: string };
+
 /**
  * The list the panel would draw, plus whether the newest user prompt arrived after
  * it was written.
@@ -151,8 +154,30 @@ function scanTodos(messages: ChatMessage[]): { items: TodoItem[]; messageIndex: 
  * signal that the work is back on a checklist. A list written during the current turn
  * — including the reply still streaming — is not superseded.
  */
-export function todoSnapshot(messages: ChatMessage[]): { items: TodoItem[]; superseded: boolean; entryId?: string } {
+export function todoSnapshot(messages: ChatMessage[]): TodoSnapshot {
   const { items, messageIndex } = scanTodos(messages);
   if (items.length === 0 || messageIndex < 0) return { items, superseded: false };
   return { items, superseded: lastUserIndex(messages) > messageIndex, entryId: messages[messageIndex].id };
+}
+
+/**
+ * Whether a snapshot is a plan the reader is currently being shown, rather than a
+ * record of some earlier request.
+ *
+ * This is the *one* rule for every surface that draws a live checklist — the panel
+ * above the composer and 会话资源 › 任务清单 alike — so the two cannot disagree about
+ * when a list stops being news. Three conditions, all of them about *now*:
+ *
+ * - the conversation is working (an unfinished list is not news after the run that
+ *   was working through it stopped: it would claim work that is not happening),
+ * - no newer user prompt has arrived (`superseded` — the question has moved on),
+ * - and at least one item is still open (a finished plan needs no panel).
+ *
+ * A surface that keeps an older list as *history* — the transcript's todo card — is
+ * not judged here; that card is a record of what the model submitted, not a claim
+ * about the current turn.
+ */
+export function todoIsCurrent(snapshot: TodoSnapshot, working: boolean): boolean {
+  if (!working || snapshot.superseded) return false;
+  return snapshot.items.some((item) => item.status === "pending" || item.status === "in_progress");
 }

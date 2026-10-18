@@ -138,6 +138,8 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "decision:test",
     "engine:export-html",
     "engine:import-skill",
+    "office:watch-start",
+    "office:watch-stop",
     "projects:add",
     // The folder picker in 创建项目 / 管理文件夹. The phone has no desktop dialog to
     // drive; it can still add a path it already has via projects:add-folder.
@@ -179,6 +181,7 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "window:minimize",
     "window:new",
     "window:toggle-maximize",
+    "workspace:open-external",
     "workspace:open-terminal",
     "workspace:pick",
     "workspace:reveal",

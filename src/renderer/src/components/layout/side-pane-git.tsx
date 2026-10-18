@@ -53,9 +53,9 @@ function GitEmpty({ title, description }: { title: string; description: string }
   return <Empty className="min-h-0 flex-1 border-0"><EmptyHeader><EmptyMedia variant="icon"><HugeiconsIcon icon={GitCompareIcon} /></EmptyMedia><EmptyTitle>{title}</EmptyTitle><EmptyDescription>{description}</EmptyDescription></EmptyHeader></Empty>;
 }
 
-export function SidePaneGit({ cwd: sessionCwd, folders, projectCwd, onError, focusPath, focusCwd, focusRevision, focusSource, onFocusHandled }: {
+export function SidePaneGit({ cwd: sessionCwd, folders, projectCwd, onError, focusPath, focusCwd, focusRevision, focusSource, historyScope, onFocusHandled }: {
   cwd?: string; folders?: string[]; projectCwd?: string; onError: (message: string) => void;
-  focusPath?: string; focusCwd?: string; focusRevision?: number; focusSource?: GitDiffSource; onFocusHandled?: () => void;
+  focusPath?: string; focusCwd?: string; focusRevision?: number; focusSource?: GitDiffSource; historyScope?: GitHistoryScope; onFocusHandled?: () => void;
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
   const [repos, setRepos] = useState<ProjectRepo[]>([]);
@@ -73,11 +73,11 @@ export function SidePaneGit({ cwd: sessionCwd, folders, projectCwd, onError, foc
   if (!cwd) return <GitEmpty title={t("git.unboundTitle")} description={t("git.unboundDesc")} />;
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col">
     {repos.length >= 2 ? <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border p-1">{repos.map((repo) => <Button key={repo.root} size="xs" variant={cwd === repo.root ? "secondary" : "ghost"} title={repo.root} onClick={() => setPicked(repo.root)}>{folderName(repo.folders[0] ?? repo.root)}{repo.branch ? ` · ${repo.branch}` : ""}</Button>)}</div> : null}
-    <RepositoryChanges key={cwd} cwd={cwd} onError={onError} focusPath={focusPath} focusSource={focusSource} focusRevision={focusRevision} onFocusHandled={onFocusHandled} />
+    <RepositoryChanges key={cwd} cwd={cwd} onError={onError} focusPath={focusPath} focusSource={focusSource} focusRevision={focusRevision} requestedHistoryScope={historyScope} onFocusHandled={onFocusHandled} />
   </div>;
 }
 
-function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision, onFocusHandled }: { cwd: string; onError: (message: string) => void; focusPath?: string; focusSource?: GitDiffSource; focusRevision?: number; onFocusHandled?: () => void }): JSX.Element {
+function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision, requestedHistoryScope, onFocusHandled }: { cwd: string; onError: (message: string) => void; focusPath?: string; focusSource?: GitDiffSource; focusRevision?: number; requestedHistoryScope?: GitHistoryScope; onFocusHandled?: () => void }): JSX.Element {
   const { t } = useTranslation("sidepane");
   const messages = useSessionStore((state) => state.messages);
   const streaming = useSessionStore((state) => state.streaming);
@@ -91,7 +91,6 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
   const [message, setMessage] = useState(() => commitDrafts.get(cwd) ?? "");
   const [tree, setTree] = useState(preferTree);
   const [diffMode, setDiffMode] = useState<"unified" | "split">("unified");
-  const [wrap, setWrap] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [historyScope, setHistoryScope] = useState<GitHistoryScope>("all");
   const [busy, setBusy] = useState<string>();
@@ -136,6 +135,15 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
     setSelection({ file: { path: focusPath, index: source === "staged" ? "M" : " ", worktree: "M" }, source });
     onFocusHandled?.();
   }, [focusPath, focusSource, focusRevision]);
+
+  // A caller that asked for this branch's view (the resources panel's branch row)
+  // asks once: the pane honours it and clears the request, so the user's own choice
+  // in the history filter is not overwritten the next time the tab mounts.
+  useEffect(() => {
+    if (!requestedHistoryScope) return;
+    setHistoryScope(requestedHistoryScope);
+    onFocusHandled?.();
+  }, [requestedHistoryScope, focusRevision]);
 
   useEffect(() => {
     if (view !== "branch" && !commit) { setComparison(undefined); setComparisonError(""); return; }
@@ -289,7 +297,10 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
   </div>;
   return <div className="@container/git flex min-h-0 min-w-0 flex-1 flex-col">
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
-      <IconButton size="icon-xs" variant="ghost" label={t(sidebarCollapsed ? "files.showTree" : "files.hideTree")} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed(!sidebarCollapsed)}><HugeiconsIcon icon={sidebarCollapsed ? PanelLeftOpenIcon : PanelLeftCloseIcon} /></IconButton>
+      {/* Same trap as the 文件 tab: the library names these by the panel, but the chevron
+          points the other way — `Close` draws `>` (pull the tree back out), `Open` draws `<`
+          (push it to the edge). So the icon follows the chevron, not the name. */}
+      <IconButton size="icon-xs" variant="ghost" label={t(sidebarCollapsed ? "files.showTree" : "files.hideTree")} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed(!sidebarCollapsed)}><HugeiconsIcon icon={sidebarCollapsed ? PanelLeftCloseIcon : PanelLeftOpenIcon} /></IconButton>
       <HugeiconsIcon icon={GitBranchIcon} className="size-3.5 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate text-xs font-medium">{status?.branch ?? "HEAD"}</span>
       {status?.behind ? <span className="text-xs text-muted-foreground">↓{status.behind}</span> : null}
@@ -304,7 +315,7 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
       {!sidebarCollapsed ? <SplitHandle listSide="start" label={t("git.resize")} {...split} /> : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {commit ? <GitCommitDetails key={commit.hash} commit={commit} count={comparison?.files.length} /> : null}
-      {selected ? <DiffPane key={`${selected.source}:${selected.revision ?? ""}:${selected.file.path}`} cwd={cwd} selection={selected} mode={diffMode} setMode={setDiffMode} wrap={wrap} setWrap={setWrap} epoch={epoch} busy={!!busy} onStage={view === "workspace" && !commit && selected.source === "unstaged" ? () => stage([selected.file.path]) : undefined} onUnstage={selected.source === "staged" ? () => unstage([selected.file.path]) : undefined} onDiscard={view === "workspace" && !commit && selected.source === "unstaged" && !isConflict(selected.file) ? () => setDiscard(selected.file) : undefined} onError={onError} /> : <div className="flex min-w-0 flex-1 items-center justify-center p-8 text-xs text-muted-foreground">{commit ? (!comparison && !comparisonError ? <Spinner /> : t(comparisonError ? "git.comparisonFailed" : "git.emptyCommit")) : !status ? <Spinner /> : t(fileCount ? "git.pickDiff" : "git.clean")}</div>}
+      {selected ? <DiffPane key={`${selected.source}:${selected.revision ?? ""}:${selected.file.path}`} cwd={cwd} selection={selected} mode={diffMode} setMode={setDiffMode} epoch={epoch} busy={!!busy} onStage={view === "workspace" && !commit && selected.source === "unstaged" ? () => stage([selected.file.path]) : undefined} onUnstage={selected.source === "staged" ? () => unstage([selected.file.path]) : undefined} onDiscard={view === "workspace" && !commit && selected.source === "unstaged" && !isConflict(selected.file) ? () => setDiscard(selected.file) : undefined} onError={onError} /> : <div className="flex min-w-0 flex-1 items-center justify-center p-8 text-xs text-muted-foreground">{commit ? (!comparison && !comparisonError ? <Spinner /> : t(comparisonError ? "git.comparisonFailed" : "git.emptyCommit")) : !status ? <Spinner /> : t(fileCount ? "git.pickDiff" : "git.clean")}</div>}
       </div>
     </div>
     <AlertDialog open={!!discard} onOpenChange={(open) => { if (!open) setDiscard(undefined); }}>
@@ -313,7 +324,7 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
   </div>;
 }
 
-function DiffPane({ cwd, selection, mode, setMode, wrap, setWrap, epoch, busy, onStage, onUnstage, onDiscard, onError }: { cwd: string; selection: Selection; mode: "unified" | "split"; setMode: (mode: "unified" | "split") => void; wrap: boolean; setWrap: (wrap: boolean) => void; epoch: number; busy: boolean; onStage?: () => void; onUnstage?: () => void; onDiscard?: () => void; onError: (message: string) => void }): JSX.Element {
+function DiffPane({ cwd, selection, mode, setMode, epoch, busy, onStage, onUnstage, onDiscard, onError }: { cwd: string; selection: Selection; mode: "unified" | "split"; setMode: (mode: "unified" | "split") => void; epoch: number; busy: boolean; onStage?: () => void; onUnstage?: () => void; onDiscard?: () => void; onError: (message: string) => void }): JSX.Element {
   const { t } = useTranslation("sidepane");
   const displayMode = mode;
   const [diff, setDiff] = useState("");
@@ -353,14 +364,13 @@ function DiffPane({ cwd, selection, mode, setMode, wrap, setWrap, epoch, busy, o
     </div>
     <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1">
       <Button size="xs" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={() => setMode(displayMode === "split" ? "unified" : "split")}>{t(displayMode === "split" ? "git.splitDiff" : "git.unifiedDiff")}</Button>
-      <Button size="xs" variant={wrap ? "secondary" : "ghost"} className="h-6 px-1.5 text-[11px]" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>{t("git.wrap")}</Button>
       <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">{hunks ? `${hunk < 0 ? 0 : hunk + 1}/${hunks}` : ""}</span>
       <IconButton size="icon-xs" variant="ghost" label={t("git.previousChange")} disabled={!hunks || loading} onClick={() => setHunk((n) => (n < 0 ? hunks - 1 : (n + hunks - 1) % hunks))}><HugeiconsIcon icon={ArrowUp02Icon} /></IconButton>
       <IconButton size="icon-xs" variant="ghost" label={t("git.nextChange")} disabled={!hunks || loading} onClick={() => setHunk((n) => (n + 1) % hunks)}><HugeiconsIcon icon={ArrowDown02Icon} /></IconButton>
     </div>
     {displayMode === "split" ? <div className="grid shrink-0 grid-cols-2 border-b border-border bg-muted/30 text-[10px] text-muted-foreground"><span className="border-r border-border px-3 py-1">{t(selection.source === "unstaged" ? "git.indexVersion" : selection.source === "staged" || selection.source === "last-turn" ? "git.headVersion" : "git.baseVersion")}</span><span className="px-3 py-1">{selection.revision ? selection.revision.slice(0, 7) : t(selection.source === "staged" ? "git.indexVersion" : selection.source === "branch" ? "git.headVersion" : "git.workingVersion")}</span></div> : null}
     <div className="min-h-0 min-w-0 flex-1 overflow-auto">
-      {loading && !diff ? <div className="flex justify-center py-10"><Spinner /></div> : error ? <p role="alert" className="p-4 text-xs text-destructive">{error}</p> : diff ? <DiffView text={diff} hideFileHeaders mode={displayMode} wrap={wrap} activeHunk={hunk} className="mt-0 max-h-none overflow-visible rounded-none border-0" /> : <p className="p-8 text-center text-xs text-muted-foreground">{t("git.noDiff")}</p>}
+      {loading && !diff ? <div className="flex justify-center py-10"><Spinner /></div> : error ? <p role="alert" className="p-4 text-xs text-destructive">{error}</p> : diff ? <DiffView text={diff} hideFileHeaders mode={displayMode} activeHunk={hunk} className="mt-0 max-h-none rounded-none border-0" /> : <p className="p-8 text-center text-xs text-muted-foreground">{t("git.noDiff")}</p>}
     </div>
   </div>;
 }

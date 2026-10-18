@@ -23,6 +23,7 @@ import { DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagInputAl
 import type { DagReport } from "../../shared/dag";
 import { resolveSubagentModel } from "./subagent-model";
 import { SubagentControl } from "./subagent-control";
+import { ToolDeltaThrottle } from "./tool-delta-throttle";
 import {
   guardSessionListener,
   sessionCompletionTimes,
@@ -112,6 +113,7 @@ export class SubagentTurnRunner {
   #subagentReasoning: Map<string, Map<string, ThinkingTiming[]>>;
   #reasoningRun: Map<string, ReasoningBlocks>;
   #stoppedSubagents: Set<string>;
+  #toolDeltas = new ToolDeltaThrottle();
 
   constructor(host: SubagentRunHost) {
     this.#host = host;
@@ -289,7 +291,13 @@ export class SubagentTurnRunner {
         // reads them off whatever it was handed.
         const nested = slimStreamEvent(event as unknown as Record<string, unknown>);
         this.#withThinkingTiming(subagentId, event, nested);
-        this.#emit({ type: "subagent_event", subagentId, conversationId, event: nested });
+        // The same hold as the parent's stream: a delegated run writing a file sends its
+        // arguments whole with every delta too.
+        const deliver = (inner: Record<string, unknown>): void => this.#emit({ type: "subagent_event", subagentId, conversationId, event: inner });
+        if (!this.#toolDeltas.offer(subagentId, event, nested, deliver)) {
+          this.#toolDeltas.release(subagentId);
+          deliver(nested);
+        }
         // The context window moves at every turn boundary, exactly as it does on the
         // main thread, so the read-only composer's ring is refreshed from the same
         // point rather than only when the run ends.
@@ -311,6 +319,8 @@ export class SubagentTurnRunner {
       thrown = error;
     }
     unsubscribe?.();
+    // A delta still held belongs before the run's final lifecycle, not after it.
+    this.#toolDeltas.release(subagentId);
     try {
       if (session) {
         messages = session.messages.slice();

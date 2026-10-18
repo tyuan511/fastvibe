@@ -1,3 +1,4 @@
+import { bashCommand, officecliWriteTargets } from "../../../shared/office-command.ts";
 import type { ToolCallBlock } from "@shared/types";
 
 /** A file touched by one agent turn, with the lines it added and removed. */
@@ -128,6 +129,9 @@ export function collectChangedFiles(tools: ToolCallBlock[]): ChangedFile[] {
         const content = typeof args?.content === "string" ? args.content : "";
         add(path, countContent(content), 0, addedDiff(content));
       }
+    } else if (/^(bash|shell)$/i.test(tool.name.trim())) {
+      // officecli writes a zip. There is no line diff; the card still has to name the file.
+      for (const target of officecliWriteTargets(bashCommand(tool.args))) add(target, 0, 0);
     }
   }
   return [...files.values()];

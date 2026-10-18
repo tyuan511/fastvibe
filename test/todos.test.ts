@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   activeTodo,
   parseTodoList,
+  todoIsCurrent,
   todoPosition,
   todoSnapshot,
 } from "../src/renderer/src/lib/todos.ts";
@@ -164,4 +165,36 @@ test("a fully finished list reports its length rather than a dangling step", () 
   ]);
   assert.equal(todoPosition(items), 2);
   assert.equal(activeTodo(items), undefined);
+});
+
+/**
+ * `todoIsCurrent` is the one display rule behind both surfaces that draw a live
+ * checklist — the panel above the composer and 会话资源 › 任务清单. The bug it pins is
+ * the resource panel keeping an abandoned plan on screen after the composer's panel
+ * had closed it: two panels, one stale, and the reader cannot tell which turn the
+ * list belongs to.
+ */
+const planItem = (content: string, status: string) => ({ content, status });
+
+test("a checklist only counts as current while the conversation is working", () => {
+  const snapshot = { items: [planItem("step", "in_progress")], superseded: false };
+  assert.equal(todoIsCurrent(snapshot, true), true);
+  assert.equal(todoIsCurrent(snapshot, false), false);
+});
+
+test("a plan the reader has moved past is closed in every surface", () => {
+  // The 0/7 case from the report: seven untouched items from a finished release run,
+  // a newer prompt on top, and the resource panel still listing them as the plan.
+  const snapshot = { items: [planItem("bump version", "pending"), planItem("push tag", "pending")], superseded: true };
+  assert.equal(todoIsCurrent(snapshot, true), false);
+  assert.equal(todoIsCurrent(snapshot, false), false);
+});
+
+test("a list with nothing left open needs no panel", () => {
+  const snapshot = { items: [planItem("done thing", "completed"), planItem("dropped", "cancelled")], superseded: false };
+  assert.equal(todoIsCurrent(snapshot, true), false);
+});
+
+test("an empty transcript is not a plan either", () => {
+  assert.equal(todoIsCurrent({ items: [], superseded: false }, true), false);
 });

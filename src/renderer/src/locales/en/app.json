@@ -93,6 +93,7 @@
   "chats": "Chats",
   "archive": "Archive",
   "waitingForYou": "Waiting for you",
+  "waitingAction": "Awaiting",
   "stoppedAbnormally": "The run stopped unexpectedly; open to see why",
   "backgroundStopped": "“{{title}}” stopped unexpectedly",
   "backgroundStoppedOpen": "Open",

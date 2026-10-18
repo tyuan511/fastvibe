@@ -144,6 +144,12 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Fetch OfficeCLI
+        # The binary is an architecture-specific resource. The runner's CPU is not the
+        # package's: the macOS x64 job runs on an arm64 runner, and `stage:app` only
+        # fetches the host. Name the target, or that package ships without it.
+        run: node scripts/fetch-officecli.mjs --os=${{ matrix.platform }} --arch=${{ matrix.arch || 'x64' }}
+
       - name: Stage app
         run: pnpm stage:app
 

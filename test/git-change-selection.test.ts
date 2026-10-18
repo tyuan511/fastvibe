@@ -34,6 +34,25 @@ test("staging keeps the selected path and switches its diff to the staged source
   assert.equal(selected?.source, "staged");
 });
 
+test("a turn chip's absolute path is relocated to the group that actually holds it", () => {
+  // `TurnFileChips` hands the 变更 view an absolute path (tool args are absolute), and
+  // guesses `unstaged` because a turn's writes may already be staged. The pane reads
+  // the working tree, so the selection has to move to the group that lists the path.
+  const stagedFile = file("src/a.ts", "M", " ");
+  const groups = [
+    { id: "unstaged", source: "unstaged" as const, files: [file("src/other.ts")] },
+    { id: "staged", source: "staged" as const, files: [stagedFile] },
+  ];
+  const focused: GitChangeSelection = { file: file("/repo/src/a.ts"), source: "unstaged" };
+  const selected = selectGitChange(groups, focused, cwd);
+  assert.equal(selected?.file, stagedFile);
+  assert.equal(selected?.source, "staged");
+  // A turn whose files are already committed has nothing to land on, so the pane falls
+  // back to a real change rather than an empty diff for a path git no longer reports.
+  const gone: GitChangeSelection = { file: file("/repo/src/committed.ts"), source: "unstaged" };
+  assert.equal(selectGitChange(groups, gone, cwd)?.file.path, "src/other.ts");
+});
+
 test("explicit file focus resolves an absolute path, and a different revision starts at its own first file", () => {
   const groups = [{ id: "comparison", source: "branch" as const, files: [file("first.ts"), file("second.ts")] }];
   const focused: GitChangeSelection = { file: file("/repo/second.ts"), source: "branch", revision: "old" };

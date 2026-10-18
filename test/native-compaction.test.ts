@@ -120,9 +120,12 @@ test("an endpoint rejecting every size cannot cause an unbounded compaction loop
 async function harness(auto: boolean, options: {
   largeWindow?: number; largeMaxTokens?: number; lastUsage?: number;
   systemPrompt?: string;
-  summaryReply?: () => ReturnType<typeof fauxAssistantMessage>;
-  taskReply?: () => ReturnType<typeof fauxAssistantMessage>;
+  actualWindow?: number; summaryWindow?: number; taskWindow?: number;
+  summaryReply?: (tokens: number, maxOutput: number) => ReturnType<typeof fauxAssistantMessage>;
+  taskReply?: (tokens: number, maxOutput: number) => ReturnType<typeof fauxAssistantMessage>;
   continueAfterError?: boolean;
+  cancelCompaction?: () => boolean;
+  compactEvents?: string[];
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "native-compaction-"));
   const models = [
@@ -131,18 +134,20 @@ async function harness(auto: boolean, options: {
     { id: "roomy", name: "roomy", contextWindow: 200_000, maxTokens: 4096 },
   ].map((model) => ({ ...model, reasoning: false, input: ["text"] as ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }));
   const faux = createFauxCore({ api: "faux-compaction", provider: "faux", models, tokenSize: { min: 1024, max: 1024 } });
-  const requests: Array<{ model: string; summary: boolean; tokens: number; maxOutput: number; fits: boolean }> = [];
+  const requests: Array<{ model: string; summary: boolean; tokens: number; maxOutput: number; fits: boolean; content: string }> = [];
   const respond: FauxResponseFactory = (context, request, _state, model) => {
     const summary = JSON.stringify(context.messages).includes("You are a context summarization assistant");
     const tokens = context.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
-    const fits = tokens + (request?.maxTokens ?? model.maxTokens) <= model.contextWindow;
-    requests.push({ model: model.id, summary, tokens, maxOutput: request?.maxTokens ?? model.maxTokens, fits });
-    if (summary && options.summaryReply) return options.summaryReply();
-    if (!summary && options.taskReply) return options.taskReply();
+    const maxOutput = request?.maxTokens ?? model.maxTokens;
+    const window = (summary ? options.summaryWindow : options.taskWindow) ?? options.actualWindow ?? model.contextWindow;
+    const fits = tokens + maxOutput <= window;
+    requests.push({ model: model.id, summary, tokens, maxOutput, fits, content: JSON.stringify(context.messages) });
+    if (summary && options.summaryReply) return options.summaryReply(tokens, maxOutput);
+    if (!summary && options.taskReply) return options.taskReply(tokens, maxOutput);
     return fits ? fauxAssistantMessage(summary ? "## Goal\nContinue the user's task.\n## Progress\nEarlier work summarized.\n## Next Steps\nContinue from the retained messages." : "continued successfully")
       : fauxAssistantMessage("", { stopReason: "error", errorMessage: "prompt is too long" });
   };
-  faux.setResponses(Array.from({ length: 100 }, () => respond));
+  faux.setResponses(Array.from({ length: 1000 }, () => respond));
   const runtime = await ModelRuntime.create({ credentials: undefined, authPath: join(dir, "auth.json"), modelsPath: null, modelsStore: new InMemoryModelsStore(), allowModelNetwork: false, refreshOnCreate: false });
   runtime.registerProvider("faux", { api: "faux-compaction", baseUrl: "http://faux.invalid", apiKey: "unused", streamSimple: faux.streamSimple, models });
   const sm = SessionManager.inMemory();
@@ -157,12 +162,19 @@ async function harness(auto: boolean, options: {
   let continuations = 0;
   const loader = new DefaultResourceLoader({
     cwd: dir, agentDir: join(dir, "agent"), settingsManager, noExtensions: true, noSkills: true, systemPrompt: options.systemPrompt,
-    extensionFactories: options.continueAfterError ? [{
+    extensionFactories: options.continueAfterError || options.compactEvents ? [{
       name: "test-continue-after-error",
-      factory: (pi) => { pi.on("agent_before_settle", (event) => {
-        if (event.outcome !== "error" || ++continuations > 3) return;
-        return { continue: true, entries: [{ type: "custom_message", customType: "continue-test", content: "Continue the task", display: false }] };
-      }); },
+      factory: (pi) => {
+        if (options.continueAfterError) pi.on("agent_before_settle", (event) => {
+          if (event.outcome !== "error" || ++continuations > 3) return;
+          return { continue: true, entries: [{ type: "custom_message", customType: "continue-test", content: "Continue the task", display: false }] };
+        });
+        if (options.compactEvents) {
+          pi.on("session_before_compact", () => { options.compactEvents!.push("before"); if (options.cancelCompaction?.()) return { cancel: true }; });
+          pi.on("session_compact", () => { options.compactEvents!.push("success"); });
+          pi.on("session_compact_failed", () => { options.compactEvents!.push("failed"); });
+        }
+      },
     }] : [],
   });
   await loader.reload();
@@ -192,6 +204,11 @@ for (const auto of [false, true]) {
       const compactions = h.sm.getBranch().filter((entry) => entry.type === "compaction");
       assert.equal(compactions.length, 1);
       assert.equal(compactions[0].fromHook, false, "the summary and checkpoint remain Pi-native");
+      // Pi's entry has one token field, and it is the size BEFORE. The number the summary
+      // produced is what makes the divider say something other than 「压缩前是多少」.
+      const compacted = compactions[0].details as { tokensAfter?: number } | undefined;
+      assert.equal(typeof compacted?.tokensAfter, "number", "the persisted entry records the size after compaction");
+      assert.ok(compacted!.tokensAfter < compactions[0].tokensBefore, "and it is smaller than what went in");
       assert.ok(h.requests.filter((request) => request.summary).length > 1, "oversized history is handled in slices");
       assert.ok(h.requests.every((request) => request.model === "small" && request.fits));
       assert.equal(h.requests.at(-1)?.summary, false, "the actual task resumes after compaction");
@@ -277,7 +294,7 @@ test("a non-shrinking automatic summary is rejected before it becomes a checkpoi
     await h.session.prompt("Continue").catch(() => undefined);
     assert.equal(h.sm.getBranch().filter((entry) => entry.type === "compaction").length, 0);
     assert.equal(h.errors.length, 1);
-    assert.match(JSON.stringify(h.errors), /did not reduce/);
+    assert.match(JSON.stringify(h.errors), /已停止自动重试/);
     const count = h.requests.length;
     await h.session.prompt("Try to continue automatically").catch(() => undefined);
     assert.equal(h.requests.length, count);
@@ -292,7 +309,7 @@ test("a system prompt that cannot fit stops the cycle, and increasing the model 
     await h.session.prompt("Continue").catch(() => undefined);
     assert.equal(h.sm.getBranch().filter((entry) => entry.type === "compaction").length, 0);
     assert.equal(h.errors.length, 1);
-    assert.match(JSON.stringify(h.errors), /budget/);
+    assert.match(JSON.stringify(h.errors), /预算/);
     const count = h.requests.length;
     await h.session.prompt("Continue again").catch(() => undefined);
     assert.equal(h.requests.length, count);
@@ -304,14 +321,15 @@ test("a system prompt that cannot fit stops the cycle, and increasing the model 
   } finally { h.close(); }
 });
 
-test("an ordinary request still rejected after recovery cannot restart the compaction cycle", { timeout: 10_000 }, async () => {
+test("ordinary request capacity recovery shrinks repeatedly but stays bounded", { timeout: 10_000 }, async () => {
   const h = await harness(true, {
     largeWindow: 1_000_000, lastUsage: 900_001,
     taskReply: () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "prompt is too long", timestamp: Date.now() + 10_000 }),
   });
   try {
     const stopped = await h.session.prompt("Continue").then(() => undefined, (error: unknown) => error);
-    assert.ok(h.requests.filter((request) => !request.summary).length <= 2);
+    const normalRequests = h.requests.filter((request) => !request.summary);
+    assert.ok(normalRequests.length > 2 && normalRequests.length <= 7, "a one-shot recovery is not sufficient, but retries have a cap");
     assert.ok(h.errors.length > 0 || stopped instanceof Error);
     const count = h.requests.length;
     const starts = h.starts();
@@ -323,15 +341,17 @@ test("an ordinary request still rejected after recovery cannot restart the compa
 });
 
 test("editing the failed history releases the block without a manual compaction", { timeout: 10_000 }, async () => {
+  let fail = true;
   const h = await harness(true, {
     largeWindow: 1_000_000, lastUsage: 900_001,
-    summaryReply: () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "context_length_exceeded" }),
+    summaryReply: () => fail ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "context_length_exceeded" }) : fauxAssistantMessage("Edited task checkpoint."),
   });
   try {
     await h.session.prompt("Continue").catch(() => undefined);
     const calls = h.requests.length;
     const user = h.sm.getBranch().find((entry) => entry.type === "message" && entry.message.role === "user")!;
     h.sm.appendContextEdit(user.id, { content: "A shorter corrected request." });
+    fail = false;
     await h.session.prompt("Continue with the edited history");
     assert.ok(h.requests.length > calls);
     assert.equal(h.requests.at(-1)?.summary, false);
@@ -356,5 +376,219 @@ test("cancelling an explicit retry preserves the previous capacity block", { tim
     await h.session.prompt("Continue after cancellation").catch(() => undefined);
     assert.equal(h.requests.length, count);
     assert.equal(h.session.isIdle, true);
+  } finally { h.close(); }
+});
+
+for (const auto of [false, true]) {
+  test(`${auto ? "automatic" : "manual"} recovery learns a smaller physical window and re-cuts the retained tail`, { timeout: 10_000 }, async () => {
+    const h = await harness(auto, { largeWindow: 1_000_000, lastUsage: 900_001, actualWindow: 16_384 });
+    try {
+      const oldMessages = h.sm.getBranch().filter((entry) => entry.type === "message");
+      if (!auto) await h.session.compact();
+      await h.session.prompt("Continue after adapting to the actual endpoint.");
+      assert.ok(h.requests.some((request) => request.summary && !request.fits), "the provider, not metadata, reveals the mismatch");
+      assert.equal(h.requests.at(-1)?.summary, false);
+      assert.equal(h.requests.at(-1)?.fits, true, "the subsequent real request, not just the summary, must fit");
+      assert.deepEqual(h.errors, []);
+      assert.equal(h.session.isIdle, true);
+      const compactions = h.sm.getBranch().filter((entry) => entry.type === "compaction");
+      assert.ok(compactions.length > 0 && compactions.every((entry) => !entry.fromHook));
+      assert.deepEqual(h.sm.getBranch().filter((entry) => entry.type === "message").slice(0, oldMessages.length), oldMessages);
+      assert.equal(h.session.model?.contextWindow, 1_000_000, "learning never rewrites the model catalog");
+      const learnedTail = h.settingsManager.getCompactionKeepRecentTokens(h.session.model);
+      assert.ok(learnedTail < 20_000);
+      await h.session.prompt("Another normal request after recovery.");
+      assert.equal(h.requests.at(-1)?.fits, true);
+      assert.deepEqual(h.errors, []);
+    } finally { h.close(); }
+  });
+}
+
+test("normal replies can recover beyond Pi's single retry even when summaries succeed", { timeout: 10_000 }, async () => {
+  let rejected = 0;
+  const h = await harness(true, {
+    largeWindow: 1_000_000, lastUsage: 900_001,
+    taskReply: () => ++rejected <= 3
+      ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "prompt is too long", timestamp: Date.now() + 10_000 })
+      : fauxAssistantMessage("Recovered task answer.", { timestamp: Date.now() + 10_000 }),
+  });
+  try {
+    await h.session.prompt("Continue after repeated provider capacity failures.");
+    const normal = h.requests.filter((request) => !request.summary);
+    assert.equal(normal.length, 4);
+    assert.ok(normal[1].tokens < normal[0].tokens);
+    assert.ok(normal[2].tokens < normal[1].tokens);
+    assert.ok(h.session.getLastAssistantText()?.includes("Recovered task answer"));
+    assert.deepEqual(h.errors, []);
+    assert.equal(h.session.isIdle, true);
+  } finally { h.close(); }
+});
+
+test("a previous checkpoint can be explicitly compacted again on a smaller actual endpoint", { timeout: 10_000 }, async () => {
+  const h = await harness(false, { largeWindow: 1_000_000, actualWindow: 8192 });
+  try {
+    const tail = h.sm.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "user")!;
+    h.sm.appendCompaction("Old checkpoint. " + "中文".repeat(20_000), tail.id, 900_000);
+    await h.session.compact("Keep the pending user task.");
+    await h.session.prompt("Continue from the updated checkpoint.");
+    assert.equal(h.sm.getBranch().filter((entry) => entry.type === "compaction").length, 2);
+    assert.equal(h.requests.at(-1)?.summary, false);
+    assert.equal(h.requests.at(-1)?.fits, true);
+    assert.deepEqual(h.errors, []);
+  } finally { h.close(); }
+});
+
+test("a giant retained tool result is summarized without splitting or executing its call", { timeout: 10_000 }, async () => {
+  const h = await harness(true, { largeWindow: 1_000_000, actualWindow: 16_384 });
+  try {
+    h.sm.appendMessage({ ...fauxAssistantMessage(""), provider: "faux", model: "large", stopReason: "toolUse", content: [{ type: "toolCall", id: "large-read", name: "read", arguments: { path: "large.ts" } }] });
+    h.sm.appendMessage({ role: "toolResult", toolCallId: "large-read", toolName: "read", content: [{ type: "text", text: "UNIQUE_TOOL_START " + "x".repeat(100_000) + " UNIQUE_TOOL_END" }], isError: false, timestamp: Date.now() });
+    const original = structuredClone(h.sm.getBranch().filter((entry) => entry.type === "message"));
+    await h.session.prompt("Continue after the large read.");
+    assert.equal(h.requests.at(-1)?.summary, false);
+    assert.equal(h.requests.at(-1)?.fits, true);
+    assert.deepEqual(h.errors, []);
+    const summaryInputs = h.requests.filter((request) => request.summary).map((request) => request.content).join("\n");
+    assert.match(summaryInputs, /UNIQUE_TOOL_START/);
+    assert.match(summaryInputs, /more characters truncated/, "Pi's native tool-output cap remains in effect; the raw result is preserved below");
+    assert.deepEqual(h.sm.getBranch().filter((entry) => entry.type === "message").slice(0, original.length), original);
+    const checkpoint = h.sm.getBranch().findLast((entry) => entry.type === "compaction");
+    assert.ok(checkpoint && JSON.stringify(checkpoint.details).includes("large.ts"));
+  } finally { h.close(); }
+});
+
+for (const errorMessage of ["401 invalid API key", "429 rate limit: too many tokens", "502 upstream unavailable", "fetch failed: ECONNRESET"]) {
+  test(`non-capacity summary error is surfaced unchanged without shrinking: ${errorMessage}`, async () => {
+    const h = await harness(false, { summaryReply: () => fauxAssistantMessage("", { stopReason: "error", errorMessage }) });
+    try {
+      await assert.rejects(h.session.compact(), (error: Error) => error.message.includes(errorMessage));
+      assert.equal(h.requests.length, 1);
+      assert.equal(h.settingsManager.getCompactionKeepRecentTokens(h.session.model), 20_000);
+      assert.equal(h.errors.length, 1);
+      assert.equal((h.errors[0] as { aborted: boolean }).aborted, false);
+    } finally { h.close(); }
+  });
+}
+
+test("capacity exhaustion stays a visible error, never a fabricated user interruption", async () => {
+  const h = await harness(true, {
+    largeWindow: 1_000_000, lastUsage: 900_001, continueAfterError: true,
+    summaryReply: () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "context_length_exceeded" }),
+  });
+  try {
+    const settled: boolean[] = [];
+    h.session.subscribe((event) => { if (event.type === "agent_settled") settled.push(event.aborted); });
+    await h.session.prompt("Keep this user request visible.");
+    const last = h.sm.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+    assert.ok(last?.type === "message" && last.message.role === "assistant");
+    assert.equal(last.message.stopReason, "error");
+    assert.match(last.message.errorMessage ?? "", /context_length_exceeded/);
+    assert.deepEqual(settled, [false]);
+    assert.ok(h.errors.every((event) => !(event as { aborted: boolean }).aborted));
+    assert.equal(h.continuations(), 0);
+    assert.equal(h.session.isIdle, true);
+  } finally { h.close(); }
+});
+
+test("a deliberate learned output cap does not omit and regenerate a valid length response", async () => {
+  const h = await harness(true, {
+    largeWindow: 1_000_000, largeMaxTokens: 100_000, lastUsage: 900_001, actualWindow: 16_384,
+    taskReply: (tokens, maxOutput) => {
+      if (tokens + maxOutput > 16_384) return fauxAssistantMessage("", { stopReason: "error", errorMessage: "prompt is too long", timestamp: Date.now() + 10_000 });
+      const prefix = "Valid answer reached its deliberate output limit. ";
+      return fauxAssistantMessage(prefix + "x".repeat(maxOutput * 4 - prefix.length), { stopReason: "length", timestamp: Date.now() + 10_000 });
+    },
+  });
+  try {
+    await h.session.prompt("Write a long answer within the available output room.");
+    const normal = h.requests.filter((request) => !request.summary);
+    assert.equal(normal.filter((request) => request.fits).length, 1, "the capped successful reply is not retried");
+    const branch = h.sm.getBranch();
+    const valid = branch.find((entry) => entry.type === "message" && entry.message.role === "assistant"
+      && entry.message.stopReason === "length" && JSON.stringify(entry.message.content).includes("Valid answer"));
+    assert.ok(valid, "the real capped response stays in the transcript");
+    assert.ok(!branch.some((entry) => entry.type === "context_edit" && entry.targetId === valid.id && entry.replacement === null), "threshold compaction is allowed, recovery omission is not");
+    assert.deepEqual(h.errors, []);
+    assert.equal(h.session.isIdle, true);
+  } finally { h.close(); }
+});
+
+test("a summary-only checkpoint can be re-compacted and cancelled with native hook semantics", async () => {
+  const compactEvents: string[] = [];
+  let cancel = true;
+  const h = await harness(false, { largeWindow: 1_000_000, actualWindow: 8192, compactEvents, cancelCompaction: () => cancel });
+  try {
+    // The checkpoint retains nothing. There is no raw prefix for Pi's prepareCompaction.
+    const boundary = h.sm.appendCustomEntry("test-boundary", {});
+    h.sm.appendCompaction("Checkpoint with pending requirements. " + "中文".repeat(20_000), boundary, 900_000);
+    await assert.rejects(h.session.compact(), isCompactionCancelled);
+    assert.deepEqual(compactEvents, ["before", "failed"]);
+    assert.equal(h.requests.length, 0);
+    assert.equal(h.session.isCompacting, false);
+    cancel = false;
+    await h.session.compact("Preserve the pending requirements.");
+    assert.deepEqual(compactEvents, ["before", "failed", "before", "success"]);
+    assert.equal(h.sm.getBranch().filter((entry) => entry.type === "compaction").length, 2);
+    assert.equal(h.session.isCompacting, false);
+    await h.session.prompt("Continue after explicit recovery.");
+    assert.equal(h.requests.at(-1)?.summary, false);
+    assert.equal(h.requests.at(-1)?.fits, true);
+  } finally { h.close(); }
+});
+
+test("a stale pre-compaction overflow response never lowers the learned budget again", async () => {
+  const h = await harness(true, { largeWindow: 1_000_000, lastUsage: 900_001, actualWindow: 16_384 });
+  try {
+    const stale = h.sm.getBranch().findLast((entry) => entry.type === "message" && entry.message.role === "assistant")!;
+    assert.ok(stale.type === "message" && stale.message.role === "assistant");
+    await h.session.prompt("Recover to the smaller endpoint.");
+    const reserve = h.settingsManager.getCompactionReserveTokens(h.session.model);
+    const count = h.requests.length;
+    const oldOverflow = { ...stale.message, stopReason: "error" as const, errorMessage: "prompt is too long" };
+    const checked = await (h.session as unknown as { _checkCompaction(message: typeof oldOverflow, skipAbortedCheck: boolean): Promise<boolean> })._checkCompaction(oldOverflow, false);
+    assert.equal(checked, false);
+    assert.equal(h.settingsManager.getCompactionReserveTokens(h.session.model), reserve);
+    assert.equal(h.requests.length, count);
+    await h.session.setThinkingLevel("low");
+    assert.equal(h.settingsManager.getCompactionReserveTokens(h.session.model), reserve, "reasoning choice does not discard a physical endpoint budget");
+  } finally { h.close(); }
+});
+
+test("pressure near a learned window compacts before sending an unusably small output cap", async () => {
+  const h = await harness(true, { largeWindow: 1_000_000, lastUsage: 900_001, actualWindow: 16_384 });
+  try {
+    await h.session.prompt("Learn the endpoint capacity first.");
+    const threshold = 1_000_000 - h.settingsManager.getCompactionReserveTokens(h.session.model);
+    const learnedWindow = h.settingsManager.getCompactionKeepRecentTokens(h.session.model) * 4;
+    assert.ok(learnedWindow - threshold >= Math.min(4096, Math.floor(learnedWindow / 8)) + 1020);
+    const count = h.requests.length;
+    // This new input arrives AFTER native pre-turn threshold checks. Its request must
+    // still go through overflow compaction, not to the provider with max_tokens=128.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await h.session.prompt("LATEST_REQUIREMENT " + "y".repeat(threshold * 4));
+    const next = h.requests.slice(count);
+    assert.ok(next.some((request) => request.summary));
+    assert.ok(next.filter((request) => !request.summary).every((request) => request.maxOutput >= 1024));
+    assert.equal(h.requests.at(-1)?.summary, false);
+    assert.equal(h.requests.at(-1)?.fits, true);
+    assert.ok(next.filter((request) => request.summary).some((request) => request.content.includes("LATEST_REQUIREMENT")));
+    assert.deepEqual(h.errors, []);
+  } finally { h.close(); }
+});
+
+test("capacity gating still settles any outstanding native retry bookkeeping", async () => {
+  const h = await harness(true, { largeWindow: 1_000_000, lastUsage: 900_001,
+    summaryReply: () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "context_length_exceeded" }),
+  });
+  try {
+    await h.session.prompt("Fail capacity recovery.");
+    const host = h.session as unknown as { _retryAttempt: number; _handlePostAgentRun(): Promise<boolean> };
+    const retries: unknown[] = [];
+    h.session.subscribe((event) => { if (event.type === "auto_retry_end") retries.push(event); });
+    host._retryAttempt = 1;
+    assert.equal(await host._handlePostAgentRun(), false);
+    assert.equal(host._retryAttempt, 0);
+    assert.equal(retries.length, 1);
+    assert.equal((retries[0] as { success: boolean }).success, false);
   } finally { h.close(); }
 });

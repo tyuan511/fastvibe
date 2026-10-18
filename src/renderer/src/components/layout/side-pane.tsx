@@ -9,7 +9,6 @@ import {
   Cancel01Icon,
   ChromeIcon,
   File01Icon,
-  FileEditIcon,
   Folder01Icon,
   GitCompareIcon,
   MessageSquareIcon,
@@ -44,7 +43,6 @@ import { useSidePanel } from "@/lib/use-resizable-panel";
 import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle, subagentTabName } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
-import { SidePaneChanges } from "./side-pane-changes";
 import { SidePaneFiles } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
 import { SidePaneDagNode } from "./side-pane-dag-node";
@@ -161,7 +159,6 @@ function MaximizeButton(): JSX.Element {
 function tabIcon(type: SidePaneTab["type"]) {
   if (type === "subagent" || type === "dag-node") return BotIcon;
   if (type === "git") return GitCompareIcon;
-  if (type === "changes") return FileEditIcon;
   if (type === "terminal") return TerminalIcon;
   if (type === "browser") return ChromeIcon;
   if (type === "selection-side-chat") return MessageSquareIcon;
@@ -343,8 +340,6 @@ export const SidePane = memo(function SidePane({
       : null,
     { id: "files", label: t("pane.files"), icon: Folder01Icon, onOpen: () => openCapable("workspace", t("pane.files"), openFiles) },
     hasReviewTab ? null : { id: "review", label: t("pane.review"), icon: GitCompareIcon, onOpen: () => openCapable("git", t("pane.review"), openGit) },
-    // 修改记录 has no menu entry: the transcript's changes card mints that tab. An entry
-    // here would let the pane open an empty turn-changes view on its own.
     { id: "terminal", label: t("pane.terminal"), icon: TerminalIcon, onOpen: () => openCapable("terminal", t("pane.terminal"), () => openTerminal(cwd)) },
     {
       id: "browser",
@@ -537,16 +532,8 @@ export const SidePane = memo(function SidePane({
               focusCwd={active.cwd}
               focusRevision={active.gitFocusRevision}
               focusSource={active.gitFocusSource}
-              onFocusHandled={() => patchTab(active.id, { gitFocusPath: undefined, gitFocusSource: undefined })}
-            />
-          ) : null}
-          {active?.type === "changes" ? (
-            <SidePaneChanges
-              cwd={cwd}
-              folders={folders}
-              files={active.changeFiles ?? []}
-              path={active.changePath}
-              onSelect={(path) => patchTab(active.id, { changePath: path })}
+              historyScope={active.gitHistoryScope}
+              onFocusHandled={() => patchTab(active.id, { gitFocusPath: undefined, gitFocusSource: undefined, gitHistoryScope: undefined })}
             />
           ) : null}
           {active?.type === "selection-side-chat" && parentId ? (

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { convertToLlm, estimateTokens, serializeConversation, SessionManager, type AgentSession, type SessionBeforeCompactEvent, type CompactionResult } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, estimateTokens, prepareBranchEntries, serializeConversation, SessionManager, type AgentSession, type SessionBeforeCompactEvent, type CompactionResult } from "@earendil-works/pi-coding-agent";
 import { getCurrentSystemMessage, isContextOverflow, type AssistantMessage, type Usage } from "@earendil-works/pi-ai";
+import { uiText } from "./ui-text.ts";
 
 /**
  * Keep Pi's summarizer, prompt, file tracking and persistence. Trigger at 90% of the window
@@ -12,6 +13,10 @@ type CompactionPreparation = SessionBeforeCompactEvent["preparation"];
 type NativeSummarize = (preparation: CompactionPreparation, focus?: string) => Promise<CompactionResult>;
 type Limits = { contextWindow: number; maxTokens: number };
 const MAX_SHRINKS = 6;
+const MIN_WINDOW = 2048;
+const MIN_REPLY_TOKENS = 1024;
+const LOCAL_CAPACITY = "context_length_exceeded: [FastVibe]";
+const requestMargin = (window: number): number => Math.min(4096, Math.floor(window / 8));
 
 class CompactionCapacityError extends Error {}
 
@@ -60,6 +65,7 @@ export async function compactWithinWindow(
   summarize: NativeSummarize,
   signal?: AbortSignal,
   focus?: string,
+  onShrink?: (inputBudget: number, outputBudget: number) => void,
 ): Promise<CompactionResult> {
   signal?.throwIfAborted();
   if (!Number.isFinite(model.contextWindow) || model.contextWindow <= 0) return summarize(preparation, focus);
@@ -70,7 +76,7 @@ export async function compactWithinWindow(
   // native prompt, caller focus, output and the SDK's own 4K provider safety margin. UTF-8
   // bytes/3 is deliberately more conservative than Pi's chars/4 for Chinese text.
   const output = Math.min(preparation.settings.reserveTokens, model.maxTokens > 0 ? model.maxTokens : Infinity);
-  const inputTokens = Math.max(256, model.contextWindow - output - Math.max(4096, model.contextWindow * 0.05) - Math.ceil(Buffer.byteLength(focus ?? "") / 3));
+  const inputTokens = Math.max(256, model.contextWindow - output - Math.max(Math.min(4096, model.contextWindow / 4), model.contextWindow * 0.05) - Math.ceil(Buffer.byteLength(focus ?? "") / 3));
   const largestInput = Math.max(Buffer.byteLength(history + previous), Buffer.byteLength(turn));
   let shrinks = 0;
   if (Math.ceil(largestInput / 3) <= inputTokens) {
@@ -94,11 +100,12 @@ export async function compactWithinWindow(
   let last: CompactionResult | undefined;
   let budget = shrinks ? Math.floor(Math.min(inputTokens, largestInput / 3) / 2) : Math.floor(inputTokens);
   let reserve = Math.min(preparation.settings.reserveTokens, 4096, Math.max(256, Math.floor(model.contextWindow / 8)));
+  if (shrinks) onShrink?.(budget, reserve);
   while (cursor < source.length) {
     signal?.throwIfAborted();
     const summaryTokens = Math.ceil(Buffer.byteLength(summary ?? "") / 3);
     const part = takeText(source, cursor, Math.max(0, budget - summaryTokens) * 3);
-    if (!part) throw new CompactionCapacityError("Compaction cannot fit any history in this model's context window");
+    if (!part) throw new CompactionCapacityError(uiText("摘要与输入无法同时装入当前上下文预算。", "The summary and input cannot fit within the current context budget."));
     const final = cursor + part.length === source.length;
     const current: CompactionPreparation = {
       ...preparation,
@@ -126,6 +133,7 @@ export async function compactWithinWindow(
       if (smaller < 128) throw error;
       budget = smaller;
       reserve = Math.max(128, Math.floor(reserve / 2));
+      onShrink?.(budget, reserve);
       // Re-pack the already summarized prefix too if the provider's real window is smaller
       // than advertised. No retry sends the same overlarge input, and no accepted work is lost.
       source = [summary, source.slice(cursor)].filter(Boolean).join("\n\n");
@@ -142,6 +150,22 @@ type CompactionHost = {
   _getSummarizationRequestAuth(model: SessionModel, signal: AbortSignal): Promise<{ model: SessionModel }>;
   _runDefaultCompaction(preparation: CompactionPreparation, model: SessionModel, focus: string | undefined, signal: AbortSignal, reason: string): Promise<CompactionResult>;
   _runAutoCompaction(reason: "threshold" | "overflow", willRetry: boolean): Promise<boolean>;
+  _checkCompaction(message: AssistantMessage, skipAbortedCheck?: boolean, toolResults?: unknown[]): Promise<boolean>;
+  _modelForMessage(message: AssistantMessage): SessionModel | undefined;
+  _compactionAbortController: AbortController | undefined;
+  _clearManualCompactionState(): void;
+  _refreshFinalizedContext(): void;
+  _extensionRunner: {
+    hasHandlers(event: string): boolean;
+    emit(event: Record<string, unknown>): Promise<{ cancel?: boolean; compaction?: CompactionResult } | undefined>;
+  };
+  _emitSessionCompactFailed(event: Record<string, unknown>): Promise<void>;
+  _handlePostAgentRun(): Promise<boolean>;
+  _runBeforeSettleBoundary(): Promise<boolean>;
+  _overflowRecoveryAttempted: boolean;
+  _retryAttempt: number;
+  _emit(event: { type: "compaction_start" | "compaction_end"; reason: "manual" | "threshold" | "overflow"; aborted?: boolean; willRetry?: boolean; errorMessage?: string; result?: CompactionResult }
+    | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }): void;
 };
 const installed = new WeakSet<AgentSession>();
 
@@ -153,19 +177,80 @@ function projectedTokens(messages: Projection["messages"]): number {
     + messages.reduce((sum, message) => sum + (message.role === "system" ? 0 : estimateTokens(message)), 0);
 }
 
+/**
+ * What the context will measure once this compaction is projected: the summary plus
+ * the retained tail, on a throwaway copy of the branch. The real entry is not written
+ * yet, so the SDK's own post-append estimate cannot reach this side of the call.
+ */
+function compactedTokens(session: AgentSession, result: CompactionResult): number {
+  const preview = SessionManager.inMemory(".", undefined, [...session.sessionManager.getBranch()]);
+  preview.appendCompaction(result.summary, result.firstKeptEntryId, result.tokensBefore, result.details);
+  return projectedTokens(preview.buildSessionProjection().messages);
+}
+
+/**
+ * The transcript entry has one token field, `tokensBefore`, and `details` is the only
+ * free-form slot that survives a reload. Record the size the summary produced there so
+ * the divider can still say 「248.7K → 12.3K」 after a refresh, a chat switch or a phone
+ * reconnect — with only the before number on screen, a bare count reads as what is left.
+ */
+function stampCompactedTokens(session: AgentSession, result: CompactionResult): number {
+  const after = compactedTokens(session, result);
+  const details = isRecord(result.details) ? result.details : {};
+  result.details = { ...details, tokensAfter: after };
+  return after;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Validate what the SDK will actually persist, including the system/tool checkpoint and tail. */
 function checkCompactedContext(session: AgentSession, result: CompactionResult, model: SessionModel, reason: string): void {
+  const after = stampCompactedTokens(session, result);
   if (!usableWindow(model.contextWindow)) return;
-  const branch = session.sessionManager.getBranch();
   const before = projectedTokens(session.sessionManager.buildSessionProjection().messages);
-  const preview = SessionManager.inMemory(".", undefined, [...branch]);
-  preview.appendCompaction(result.summary, result.firstKeptEntryId, result.tokensBefore, result.details);
-  const after = projectedTokens(preview.buildSessionProjection().messages);
   const outputRoom = Math.min(model.maxTokens > 0 ? model.maxTokens : 4096, 4096);
   const limit = Math.max(0, Math.min(Math.floor(model.contextWindow * 0.9), model.contextWindow - outputRoom - Math.min(4096, Math.floor(model.contextWindow / 8))));
   if (after > limit || (reason !== "manual" && after >= before)) {
-    throw new CompactionCapacityError(`Compaction did not reduce this conversation enough (${before} → ${after} tokens; budget ${limit}). Automatic retries are paused.`);
+    throw new CompactionCapacityError(uiText(
+      `压缩后的上下文仍然过大（${before} → ${after} tokens，预算 ${limit}）。`,
+      `Compacted context is still too large (${before} → ${after} tokens; budget ${limit}).`,
+    ));
   }
+}
+
+/** Re-cut the CURRENT projection, not raw abandoned branches or already summarized history.
+ * A smaller tail may include no raw messages: the latest task then lives in the summary.
+ * Boundaries never separate a tool call from its results. No original entry is removed.
+ */
+function repackPreparation(session: AgentSession, preparation: CompactionPreparation, window: number): CompactionPreparation {
+  const entries = session.sessionManager.buildSessionProjection().entries;
+  const tailBudget = Math.min(preparation.settings.keepRecentTokens, Math.floor(window / 8));
+  let tail = 0;
+  let cut = entries.length;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const messages = entries[i].messages.filter((message) => message.role !== "system");
+    tail += messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    if (tail > tailBudget) break;
+    if (messages.some((message) => ["user", "assistant", "custom", "bashExecution", "branchSummary"].includes(message.role))) cut = i;
+  }
+  // A real, context-invisible boundary lets Pi persist a retain-none checkpoint. It is
+  // metadata only, including after a failed attempt; it never drops or rewrites history.
+  const last = session.sessionManager.getBranch().at(-1);
+  const firstKeptEntryId = cut < entries.length ? entries[cut].sourceEntry.id
+    : last?.type === "custom" && last.customType === "fastvibe-compaction-boundary" ? last.id
+      : session.sessionManager.appendCustomEntry("fastvibe-compaction-boundary", { version: 1 });
+  const prefix = entries.slice(0, cut);
+  const fileOps = prepareBranchEntries(prefix.map((entry) => entry.sourceEntry)).fileOps;
+  for (const key of ["read", "edited", "written"] as const) {
+    for (const file of preparation.fileOps[key]) fileOps[key].add(file);
+  }
+  return {
+    ...preparation, firstKeptEntryId, previousSummary: undefined,
+    messagesToSummarize: prefix.flatMap((entry) => entry.messages).filter((message) => message.role !== "system"),
+    turnPrefixMessages: [], isSplitTurn: false, fileOps,
+  };
 }
 
 /** Extra error rows, retry messages and new prompts must not make the same failed history new. */
@@ -193,22 +278,184 @@ function historyStamp(session: AgentSession, ids?: ReadonlySet<string>): { ids: 
 export function installNativeCompactionGuard(session: AgentSession): void {
   if (installed.has(session)) return;
   const host = session as unknown as CompactionHost;
-  if (typeof host._runDefaultCompaction !== "function" || typeof host._getSummarizationRequestAuth !== "function" || typeof host._runAutoCompaction !== "function") throw new Error("Pi native compaction API changed");
+  for (const method of ["_runDefaultCompaction", "_getSummarizationRequestAuth", "_runAutoCompaction", "_checkCompaction", "_modelForMessage", "_handlePostAgentRun", "_runBeforeSettleBoundary", "_emit", "_clearManualCompactionState", "_refreshFinalizedContext", "_emitSessionCompactFailed"] as const) {
+    if (typeof host[method] !== "function") throw new Error(`Pi native compaction API changed: ${method}`);
+  }
   const native = host._runDefaultCompaction.bind(session);
   const nativeAuto = host._runAutoCompaction.bind(session);
+  const nativeCheck = host._checkCompaction.bind(session);
+  const nativePostRun = host._handlePostAgentRun.bind(session);
+  const nativeBoundary = host._runBeforeSettleBoundary.bind(session);
+  const nativeCompact = session.compact.bind(session);
   const settings = session.settingsManager;
   const nativeReserve = settings.getCompactionReserveTokens.bind(settings);
   const nativeTail = settings.getCompactionKeepRecentTokens.bind(settings);
   let failed: ReturnType<typeof historyStamp> | undefined;
+  let failureMessage: string | undefined;
   let compactionEnds = 0;
+  let overflowShrinks = 0;
+  // Learned limits are per session and physical endpoint/model/window, never written to
+  // provider metadata. Editing the declared window or changing endpoint starts fresh.
+  const ceilings = new Map<string, number>();
+  const modelKey = (model: SessionModel): string => JSON.stringify([model.provider, model.id, model.api, model.baseUrl, model.contextWindow]);
+  const routes = new Map<string, SessionModel>();
+  let lastRequest: { model: SessionModel; input: number; maxOutput: number } | undefined;
+  const windowForModel = (model: SessionModel): number => Math.min(model.contextWindow, ceilings.get(modelKey(model)) ?? Infinity);
+  const boundedModel = (model: SessionModel): SessionModel => {
+    const window = windowForModel(model);
+    return window < model.contextWindow ? { ...model, contextWindow: window, maxTokens: Math.min(model.maxTokens, Math.max(128, Math.floor(window / 4))) } : model;
+  };
+  const learn = (model: SessionModel, window: number): number => {
+    const old = windowForModel(model);
+    const next = Math.min(old, Math.max(MIN_WINDOW, Math.floor(window)));
+    if (next < old) {
+      ceilings.set(modelKey(model), next);
+      console.warn(`[compaction] reducing budget for ${model.provider}/${model.id}: ${old} -> ${next}`);
+    }
+    return next;
+  };
   const blocked = (): boolean => {
     if (!failed) return false;
+    // Once the bounded recovery is exhausted, appending a new prompt is not evidence
+    // that the failed prefix changed. Manual retry, history edits and model changes are.
     if (historyStamp(session, failed.ids).hash === failed.hash) return true;
     failed = undefined;
+    failureMessage = undefined;
+    overflowShrinks = 0;
     return false;
   };
-  const stopBlockedRun = (): void => {
-    queueMicrotask(() => { if (blocked() && !session.isIdle) void session.abort().catch(() => undefined); });
+  const fail = (error: unknown): void => {
+    failed = historyStamp(session);
+    failureMessage = error instanceof Error ? error.message : String(error);
+  };
+  const pausedError = (): CompactionCapacityError => new CompactionCapacityError(uiText(
+    `上下文压缩未能恢复，已停止自动重试。可运行 /compact 重试，或调整模型窗口。原因：${failureMessage ?? "上下文超出容量"}`,
+    `Context compaction could not recover; automatic retries stopped. Run /compact to retry or adjust the model window. Cause: ${failureMessage ?? "context capacity exceeded"}`,
+  ));
+  // Do not call abort() to break a capacity loop: it turns the error into an apparent
+  // user interruption. Gate the post-run scheduler instead, retaining the real error.
+  host._handlePostAgentRun = async () => {
+    if (!blocked()) return nativePostRun();
+    // Preserve the SDK's retry bookkeeping even when queued/extension continuations
+    // must be gated. Otherwise a failed compaction leaks the previous retry attempt.
+    if (host._retryAttempt > 0) {
+      const attempt = host._retryAttempt;
+      host._retryAttempt = 0;
+      host._emit({ type: "auto_retry_end", success: false, attempt, finalError: failureMessage });
+    }
+    return false;
+  };
+  host._runBeforeSettleBoundary = async () => blocked() ? false : nativeBoundary();
+  // Pi rejects re-compacting a checkpoint before its default summarizer is reached.
+  // Adapt just that preparation gap; use the same hooks, abort handle, native summary,
+  // appendCompaction and finalized projection as the SDK's ordinary manual path.
+  const recompactCheckpoint = async (focus?: string): Promise<CompactionResult> => {
+    const model = session.model!;
+    const controller = new AbortController();
+    host._compactionAbortController = controller;
+    host._emit({ type: "compaction_start", reason: "manual" });
+    let fromExtension = false;
+    let cancelled = false;
+    try {
+      const projection = session.sessionManager.buildSessionProjection();
+      const preparation = repackPreparation(session, {
+        firstKeptEntryId: session.sessionManager.getLeafId()!, tokensBefore: projectedTokens(projection.messages),
+        messagesToSummarize: [], turnPrefixMessages: [], isSplitTurn: false,
+        settings: settings.getCompactionSettings(model), fileOps: prepareBranchEntries(session.sessionManager.getBranch()).fileOps,
+      }, windowForModel(model));
+      const hook = host._extensionRunner.hasHandlers("session_before_compact") ? await host._extensionRunner.emit({
+        type: "session_before_compact", preparation, branchEntries: session.sessionManager.getBranch(),
+        customInstructions: focus, reason: "manual", willRetry: false, signal: controller.signal,
+      }) : undefined;
+      if (hook?.cancel) { cancelled = true; throw new Error("Compaction cancelled"); }
+      fromExtension = !!hook?.compaction;
+      const result = hook?.compaction ?? await host._runDefaultCompaction(preparation, model, focus, controller.signal, "manual");
+      if (controller.signal.aborted) throw new Error("Compaction cancelled");
+      // The guarded path already stamped it; an extension's own result has never been checked.
+      if (!isRecord(result.details) || typeof result.details.tokensAfter !== "number") stampCompactedTokens(session, result);
+      const id = session.sessionManager.appendCompaction(result.summary, result.firstKeptEntryId, result.tokensBefore, result.details, fromExtension, result.usage);
+      host._refreshFinalizedContext();
+      result.estimatedTokensAfter = projectedTokens(session.sessionManager.buildSessionProjection().messages);
+      await host._extensionRunner.emit({ type: "session_compact", compactionEntry: session.sessionManager.getEntry(id), fromExtension, reason: "manual", willRetry: false });
+      host._clearManualCompactionState();
+      host._emit({ type: "compaction_end", reason: "manual", result, aborted: false, willRetry: false });
+      return result;
+    } catch (error) {
+      const aborted = controller.signal.aborted || cancelled;
+      const errorMessage = aborted ? undefined : uiText(`压缩失败：${error instanceof Error ? error.message : String(error)}`, `Compaction failed: ${error instanceof Error ? error.message : String(error)}`);
+      host._clearManualCompactionState();
+      host._emit({ type: "compaction_end", reason: "manual", aborted, willRetry: false, errorMessage });
+      await host._emitSessionCompactFailed({ reason: "manual", aborted, willRetry: false, fromExtension, errorMessage });
+      throw error;
+    } finally { host._clearManualCompactionState(); }
+  };
+  session.compact = async (focus) => {
+    await session.abort();
+    const previousFailure = failed;
+    const previousMessage = failureMessage;
+    const previousCeilings = new Map(ceilings);
+    const selected = session.model;
+    if (selected) {
+      const routed = routes.get(modelKey(selected));
+      ceilings.delete(modelKey(selected));
+      if (routed) ceilings.delete(modelKey(routed));
+    }
+    failed = undefined;
+    overflowShrinks = 0;
+    try {
+      const branch = session.sessionManager.getBranch();
+      const lastCheckpoint = branch.map((entry) => entry.type).lastIndexOf("compaction");
+      const onlyMetadataSinceCheckpoint = lastCheckpoint >= 0 && branch.slice(lastCheckpoint + 1)
+        .every((entry) => ["custom", "context_edit", "model_change", "thinking_level_change", "session_info"].includes(entry.type));
+      return session.model && onlyMetadataSinceCheckpoint ? await recompactCheckpoint(focus) : await nativeCompact(focus);
+    }
+    catch (error) {
+      if (!capacityFailure(error)) {
+        failed = previousFailure;
+        failureMessage = previousMessage;
+        ceilings.clear();
+        for (const [key, value] of previousCeilings) ceilings.set(key, value);
+      }
+      throw error;
+    }
+  };
+  host._checkCompaction = async (message, skipAbortedCheck, toolResults) => {
+    if (blocked()) return false;
+    const model = host._modelForMessage(message);
+    const checkpoint = [...session.sessionManager.getBranch()].reverse().find((entry) => entry.type === "compaction");
+    if (checkpoint && message.timestamp <= new Date(checkpoint.timestamp).getTime()) return false;
+    // A request deliberately capped to leave room in a learned window is not an early
+    // provider truncation. Do not let Pi omit that valid length response and regenerate it.
+    if (model && lastRequest && modelKey(model) === modelKey(lastRequest.model)
+      && message.stopReason === "length" && message.usage.output >= lastRequest.maxOutput
+      && lastRequest.maxOutput < model.maxTokens) {
+      overflowShrinks = 0;
+      return nativeCheck({ ...message, stopReason: "stop" }, skipAbortedCheck, toolResults);
+    }
+    if (message.stopReason === "stop" && model && !isContextOverflow(message, model.contextWindow)) {
+      overflowShrinks = 0;
+      const proven = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite + message.usage.output;
+      if (proven > windowForModel(model) && proven <= model.contextWindow) ceilings.set(modelKey(model), proven);
+    }
+    if (settings.getCompactionEnabled() && model && isContextOverflow(message, windowForModel(model))) {
+      const window = windowForModel(model);
+      if (overflowShrinks >= MAX_SHRINKS || window <= MIN_WINDOW) {
+        fail(new CompactionCapacityError(uiText("供应商在缩小上下文后仍返回容量错误。", "The provider still reports a capacity error after reducing context.")));
+        host._emit({ type: "compaction_end", reason: "overflow", aborted: false, willRetry: false, errorMessage: pausedError().message });
+        return false;
+      }
+      overflowShrinks++;
+      // Size against the request that failed, not a possibly enormous advertised window.
+      const estimated = lastRequest && modelKey(lastRequest.model) === modelKey(model) ? lastRequest.input
+        : projectedTokens(session.sessionManager.buildSessionProjection().messages);
+      const recorded = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
+      const input = recorded > 0 ? recorded : estimated;
+      // A local preflight only asks to re-cut at the current learned ceiling; it is
+      // not new evidence that the endpoint's physical window shrank again.
+      if (!message.errorMessage?.startsWith(LOCAL_CAPACITY)) learn(model, Math.min(window, input + Math.min(model.maxTokens, 4096) + 4096) / 2);
+      host._overflowRecoveryAttempted = false;
+    }
+    return nativeCheck(message, skipAbortedCheck, toolResults);
   };
   host._runAutoCompaction = async (reason, willRetry) => {
     if (blocked()) return false;
@@ -217,24 +464,35 @@ export function installNativeCompactionGuard(session: AgentSession): void {
     if (reason === "overflow" && willRetry && !retry && before === compactionEnds) {
       // Pi silently returns false when all visible history is already in its retained tail.
       // There is no compaction_end in that case, but sending that tail again cannot recover.
-      failed = historyStamp(session);
-      stopBlockedRun();
-      throw new CompactionCapacityError("Compaction cannot make a smaller checkpoint from this history. Automatic retries are paused; change the model or edit the conversation.");
+      const error = new CompactionCapacityError(uiText("没有可继续压缩的上下文；请运行 /compact 重试或调整模型窗口。", "No further context could be compacted; run /compact to retry or adjust the model window."));
+      fail(error);
+      host._emit({ type: "compaction_end", reason, aborted: false, willRetry: false, errorMessage: error.message });
     }
     return retry;
   };
   const prepareRequest = session.agent.prepareRequest;
   session.agent.prepareRequest = async (request, signal) => {
-    const check = (): void => {
-      if (blocked()) {
-        stopBlockedRun();
-        throw new Error("Compaction is paused because this history could not fit. Change the model or edit the conversation, or run /compact to retry.");
-      }
-    };
-    check();
+    if (blocked()) throw pausedError();
     const prepared = await prepareRequest?.(request, signal);
-    check();
-    return prepared ?? undefined;
+    if (blocked()) throw pausedError();
+    const model = prepared?.model ?? request.model;
+    const context = prepared?.context ?? request.context;
+    const input = projectedTokens(context.messages);
+    if (session.model) routes.set(modelKey(session.model), model);
+    // Use the remaining request budget, not a fixed share of the window. The checker
+    // above recognizes a response reaching this deliberate cap as a real length stop.
+    const window = windowForModel(model);
+    const maxOutput = window < model.contextWindow
+      ? Math.min(model.maxTokens, Math.max(0, window - input - requestMargin(window))) : model.maxTokens;
+    lastRequest = { model, input, maxOutput };
+    if (maxOutput < Math.min(MIN_REPLY_TOKENS, model.maxTokens)) {
+      // Do not turn pressure into an empty 128-token reply. A synthetic capacity
+      // error enters native overflow recovery after the current user/tool data is
+      // persisted; no oversized provider request or fake user abort is needed.
+      throw new CompactionCapacityError(`${LOCAL_CAPACITY} ${uiText("剩余上下文不足以生成回复，需要先压缩。", "Not enough context remains for a reply; compaction is required.")}`);
+    }
+    return maxOutput === model.maxTokens ? prepared ?? undefined
+      : { ...prepared, model: { ...model, maxTokens: maxOutput } };
   };
   host._runDefaultCompaction = async (preparation, selected, focus, signal, reason) => {
     const previousFailure = failed;
@@ -243,18 +501,36 @@ export function installNativeCompactionGuard(session: AgentSession): void {
       // A virtual selection can route to a different physical model. Resolve first, then keep
       // that model for every slice so all requests obey the limits that were actually checked.
       const { model } = await host._getSummarizationRequestAuth(selected, signal);
+      routes.set(modelKey(selected), model);
       // Pi reuses reserveTokens as the summarizer's output budget. The 10% used to trigger
       // compaction must not turn a 1M window into an 80K-token summary request.
-      const summaryReserve = boundedNativeBudget(nativeReserve(model), model.contextWindow);
-      const sized = { ...preparation, settings: { ...preparation.settings, reserveTokens: summaryReserve } };
-      const result = await compactWithinWindow(sized, model, (part, instructions) => native(part, model, instructions, signal, reason), signal, focus);
-      signal.throwIfAborted();
-      checkCompactedContext(session, result, model, reason);
-      failed = undefined;
-      return result;
+      let current = preparation;
+      let usage: Usage | undefined;
+      for (let attempt = 0; ; attempt++) {
+        const bounded = boundedModel(model);
+        const summaryReserve = boundedNativeBudget(nativeReserve(model), bounded.contextWindow);
+        const sized = { ...current, settings: { ...current.settings, reserveTokens: summaryReserve } };
+        const result = await compactWithinWindow(sized, bounded, (part, instructions) => native(part, bounded, instructions, signal, reason), signal, focus,
+          (inputBudget, outputBudget) => { learn(model, inputBudget + outputBudget + 4096); });
+        signal.throwIfAborted();
+        usage = addUsage(usage, result.usage);
+        try {
+          checkCompactedContext(session, result, boundedModel(model), reason);
+          failed = undefined;
+          failureMessage = undefined;
+          return { ...result, usage };
+        } catch (error) {
+          if (!capacityFailure(error) || attempt >= MAX_SHRINKS || windowForModel(model) <= MIN_WINDOW) throw error;
+          const window = attempt === 0 ? windowForModel(model) : learn(model, windowForModel(model) / 2);
+          console.warn(`[compaction] re-cutting retained history for ${model.provider}/${model.id}; budget ${window}`);
+          // A small summary alone is not recovery. Re-cut the retained tail as well,
+          // then summarize every displaced message with Pi's own incremental prompt.
+          current = repackPreparation(session, current, window);
+        }
+      }
     } catch (error) {
-      if (!signal.aborted && capacityFailure(error)) failed = historyStamp(session);
-      else if (reason === "manual") failed = previousFailure;
+      if (!signal.aborted && capacityFailure(error)) { fail(error); throw pausedError(); }
+      if (reason === "manual") failed = previousFailure;
       throw error;
     }
   };
@@ -263,20 +539,21 @@ export function installNativeCompactionGuard(session: AgentSession): void {
     compactionEnds++;
     if (event.result || event.aborted) return;
     // Pi also emits this when the normal reply still overflows after its one recovery retry.
-    if (capacityFailure(event.errorMessage) || /Context overflow recovery failed after one compact-and-retry attempt/i.test(event.errorMessage ?? "")) {
-      failed = historyStamp(session);
-    }
-    if (event.reason !== "manual" && blocked()) {
-      // Emit the actual compaction error first. Abort asynchronously: awaiting abort from
-      // inside the compaction would wait for this very compaction to finish.
-      stopBlockedRun();
+    if (!failed && (capacityFailure(event.errorMessage) || /Context overflow recovery failed after one compact-and-retry attempt/i.test(event.errorMessage ?? ""))) {
+      fail(event.errorMessage);
     }
   });
-  const windowFor = (model?: Parameters<typeof nativeReserve>[0]): number | undefined =>
-    (model as (typeof model & { contextWindow?: number }))?.contextWindow ?? session.model?.contextWindow;
+  const windowFor = (model?: Parameters<typeof nativeReserve>[0]): number | undefined => {
+    const full = model && "contextWindow" in model ? model as SessionModel : session.model;
+    return full ? Math.min(full.contextWindow, windowForModel(routes.get(modelKey(full)) ?? full)) : undefined;
+  };
   settings.getCompactionReserveTokens = (model) => {
     const window = windowFor(model);
-    return usableWindow(window) ? window - Math.floor(window * 9 / 10) : nativeReserve(model);
+    const declared = (model && "contextWindow" in model ? model as SessionModel : session.model)?.contextWindow;
+    if (!usableWindow(window) || !usableWindow(declared)) return nativeReserve(model);
+    const threshold = window < declared ? Math.min(Math.floor(window * 9 / 10), window - requestMargin(window) - MIN_REPLY_TOKENS)
+      : Math.floor(window * 9 / 10);
+    return declared - Math.max(0, threshold);
   };
   // The native recent tail is still capped for small windows, independently of the trigger.
   settings.getCompactionKeepRecentTokens = (model) => boundedNativeBudget(nativeTail(model), windowFor(model));

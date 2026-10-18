@@ -1,8 +1,9 @@
 import type { ChatAttachment, ChatMessage, DagSettledInfo, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
-import { isRepetitionStop } from "../../shared/abort.ts";
+import { assistantStopVerdict, isRepetitionStop } from "../../shared/abort.ts";
 import { extractPromptAttachments } from "../../shared/attachment-metadata.ts";
 import { stripMemoryCitation } from "../../shared/memory-citation.ts";
 import { toolImagesOf, toolResultStatus } from "../../shared/tool-result.ts";
+import { isToolImageRef } from "../../shared/tool-image-ref.ts";
 import { uiText } from "./ui-text.ts";
 
 /**
@@ -111,9 +112,14 @@ export function mapEngineMessages(
     if (message.role === "compactionSummary") {
       const summary = typeof message.summary === "string" ? message.summary : "";
       const tokensBefore = typeof message.tokensBefore === "number" ? message.tokensBefore : undefined;
+      // What the context measures after this summary lands. The SDK's own message carries
+      // only the pre-compaction count, so the projection passes it in alongside (see
+      // projectSessionMessages) — without it the divider shows one bare number and a
+      // reader cannot tell whether it is what was compressed or what is left.
+      const tokensAfter = isRecord(entry) && typeof entry.tokensAfter === "number" ? entry.tokensAfter : undefined;
       const createdAt = typeof message.timestamp === "number" ? message.timestamp : Date.now();
       const id = idOf?.(entry) ?? `compact:${createdAt}`;
-      const compact = { status: "done" as const, tokensBefore };
+      const compact = { status: "done" as const, tokensBefore, tokensAfter };
       const compactPart = { kind: "compact" as const, text: summary, compact };
       // Its own row, after the reply it followed — not a part of that reply. A
       // divider glued onto the previous turn reads as something that turn said.
@@ -191,11 +197,20 @@ function applyThinkingTimings(parts: MessagePart[], timings: ThinkingTiming[] | 
   }
 }
 
-/** Surface a failed model request as an error on the assistant turn. */
+/**
+ * Surface a failed model request as an error on the assistant turn.
+ *
+ * An aborted run is not one: the SDK files it as `stopReason: "error"` whenever the
+ * abort surfaced as a thrown `AbortError`, and its text is Node's English
+ * `"This operation was aborted"` — untranslated, and shouted in red over what was
+ * really a stop. `assistantStopVerdict` recognises it, so it goes to the same quiet
+ * 已中断 row the user's own 停止 gets.
+ */
 function assistantError(message: Record<string, unknown>): string | undefined {
   if (message.role !== "assistant" || message.stopReason !== "error") return undefined;
+  if (assistantStopVerdict(message) === "aborted") return undefined;
   const text = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
-  return text || "请求失败";
+  return text || uiText("请求失败", "Request failed");
 }
 
 /**
@@ -205,7 +220,7 @@ function assistantError(message: Record<string, unknown>): string | undefined {
  */
 function assistantStop(message: Record<string, unknown>): ChatMessage["stop"] {
   if (message.role !== "assistant") return undefined;
-  return message.stopReason === "length" || message.stopReason === "aborted" ? message.stopReason : undefined;
+  return assistantStopVerdict(message);
 }
 
 function unwrapMessage(entry: unknown): Record<string, unknown> | null {
@@ -338,6 +353,8 @@ function rawToolText(value: unknown): string | undefined {
     return value
       .map((part) => {
         if (typeof part === "string") return part;
+        // A picture's reference: drawn as the picture (`toolImagesOf`), never as output.
+        if (isToolImageRef(part)) return "";
         if (isRecord(part) && typeof part.text === "string") return part.text;
         return "";
       })

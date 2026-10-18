@@ -1,4 +1,5 @@
 import type { AppCapability } from "./app-protocol.ts";
+import type { OfficeFormat } from "./office.ts";
 import type { ProjectBindingState } from "./project-binding.ts";
 
 export type EngineStatusState = "idle" | "starting" | "ready" | "error" | "missing";
@@ -21,13 +22,27 @@ export type ProjectModelDefault = {
   thinkingLevel: ThinkingLevel | "auto";
 };
 
+/** The token buckets a conversation (or one turn of it) spent. */
+export type SessionTokenTotals = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
 export type SessionStats = {
-  tokens?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
+  /** Whole conversation: every transcript entry, compacted history included. */
+  tokens?: SessionTokenTotals;
+  /**
+   * The current turn only — everything after the last user message on this branch.
+   * See `engine/turn-usage.ts` for what counts as a turn and for why `modelMs` leaves the
+   * tool gaps out.
+   */
+  turn?: {
+    tokens?: SessionTokenTotals;
+    /** This turn's round trips, tool execution between them excluded. */
+    modelMs: number;
   };
   cost?: number;
   toolCalls?: number;
@@ -431,9 +446,32 @@ export type FileIconMapping = {
   fileExtensions: Record<string, string>;
   /** Lowercased file name → icon name. */
   fileNames: Record<string, string>;
+  /** Lowercased folder name → icon name. Absent means the folder uses `folder`. */
+  folderNames?: Record<string, string>;
+  /** The same, for the open state. Falls back to `folderNames`. */
+  folderNamesExpanded?: Record<string, string>;
   file: string;
   folder: string;
   folderExpanded: string;
+  /**
+   * What the icon pack draws differently on a **light** colour theme — only the entries that
+   * actually differ, so a lookup tries the override and otherwise falls back to the maps above.
+   * Absent when the pack has no light artwork at all.
+   */
+  light?: FileIconVariant;
+  /** Which icon pack produced this file, and its version. Debugging only. */
+  source?: string;
+};
+
+/** The `light` block of `FileIconMapping`: every field optional, absent means "use the default". */
+export type FileIconVariant = {
+  fileExtensions?: Record<string, string>;
+  fileNames?: Record<string, string>;
+  folderNames?: Record<string, string>;
+  folderNamesExpanded?: Record<string, string>;
+  file?: string;
+  folder?: string;
+  folderExpanded?: string;
 };
 
 export type McpServerConfig = {
@@ -483,11 +521,51 @@ export type FilePreview =
   | { kind: "video"; path: string; name: string; mimeType: string; size: number }
   | { kind: "markdown"; path: string; name: string; text: string }
   | { kind: "html"; path: string; name: string; text: string }
-  | { kind: "csv"; path: string; name: string; rows: string[][] }
+  | {
+      kind: "csv";
+      path: string;
+      name: string;
+      rows: string[][];
+      /** Cut short, and by what. `null` means the whole file is here. */
+      truncated: "rows" | "size" | null;
+      /** Records in the file, including the ones `rows` left out. */
+      totalRows: number;
+    }
   | { kind: "diff"; path: string; name: string; text: string }
   | { kind: "code"; path: string; name: string; language: string; text: string }
+  /**
+   * An Office document: no bytes are read for it here. The client asks for a rendered page
+   * (`office:render`) and frames it, because a `.docx` is a zip of XML and any text extraction
+   * that pretends otherwise shows a document with its formulas, layout and columns missing.
+   */
+  | { kind: "office"; path: string; name: string; format: OfficeFormat; size: number }
+  /**
+   * A document this app will never preview — the binary Office formats, ODF, the macro-enabled
+   * variants. A distinct kind rather than `error` because nothing went wrong: the format is
+   * simply not one OfficeCLI takes, and the pane's answer is the system's own app.
+   */
+  | { kind: "unsupported"; path: string; name: string; format: string }
   | { kind: "binary"; path: string; name: string; size: number }
-  | { kind: "error"; path: string; name: string; message: string };
+  /**
+   * A file that could not be drawn. `reason` is what the pane answers with: a file that is
+   * simply gone is not the same problem as one this app may not read, and each has its own
+   * way out. `message` is the friendly line for clients that only show text, `detail` the
+   * host's own words for the small print — an `ENOENT` is never the sentence a user reads.
+   */
+  | {
+      kind: "error";
+      path: string;
+      name: string;
+      message: string;
+      reason: FilePreviewFailure;
+      /** The raw failure (`code: message`), shown muted under the friendly line. */
+      detail?: string;
+      /** The directory the file should sit in, so the pane can open it. */
+      directory?: string;
+    };
+
+/** Why a preview failed. Every producer of `kind: "error"` must pick one. */
+export type FilePreviewFailure = "missing" | "not-a-file" | "permission" | "unknown";
 
 /** A local Chromium profile that can be used as the source for browser data import. */
 export type BrowserProfileInfo = {

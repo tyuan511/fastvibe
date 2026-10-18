@@ -83,6 +83,23 @@ export function isBlockingPrompt(event: Record<string, unknown>): boolean {
 }
 
 /**
+ * Whether a blocking prompt needs a desktop notice even though a window is in front.
+ *
+ * The prompt's panel is drawn only for the conversation on screen, so a question that
+ * lands in any *other* chat is invisible however focused the app is — the notice is the
+ * only thing that says a chat has stopped on the user. A prompt for the chat on screen
+ * needs nothing: its panel is already in the composer. One with no conversation id has
+ * nothing a click could open, so it waits for the window to lose focus like any other
+ * background event.
+ */
+export function focusedApprovalNeedsNotice(
+  conversationId: string | undefined,
+  activeConversationId: string | null,
+): boolean {
+  return conversationId !== undefined && conversationId !== activeConversationId;
+}
+
+/**
  * Which desktop notice this engine event should raise, or null for one that raises none.
  *
  * The wording is not decided here — Main applies it, because every user-facing string in

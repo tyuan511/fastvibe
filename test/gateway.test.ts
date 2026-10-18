@@ -627,6 +627,8 @@ test("nested snapshot ids are namespaced; message ids are left alone", async () 
       [Ipc.workspaceTerminalStart]: { id: "term-1", cwd: "/home/dev/app" },
       [Ipc.workspacePreview]: { kind: "code", path: "/home/dev/app/a.ts", name: "a.ts", language: "ts", text: "x" },
       [Ipc.workspaceReadDir]: [{ name: "a.ts", path: "/home/dev/app/a.ts", kind: "file" }],
+      [Ipc.workspaceCreateEntry]: { name: "b.ts", path: "/home/dev/app/b.ts", kind: "file" },
+      [Ipc.workspaceRenameEntry]: { name: "c.ts", path: "/home/dev/app/c.ts", kind: "file" },
       [Ipc.engineGetRunning]: ["c1", "c2"],
       "engine:prompt": { id: "tool-should-not-walk", messages: [{ id: "msg-keep" }] },
     },
@@ -677,6 +679,13 @@ test("nested snapshot ids are namespaced; message ids are left alone", async () 
 
   const entries = await instance.dispatch(Ipc.workspaceReadDir, { path: "remote:srv_alpha:/home/dev/app" }, {}) as Array<{ path: string }>;
   assert.equal(entries[0]!.path, "remote:srv_alpha:/home/dev/app/a.ts");
+
+  // The tree's own edits come back with a path the pane can click, so it has to be qualified
+  // for this server exactly like a listing's — otherwise a new file opens on the wrong machine.
+  const created = await instance.dispatch(Ipc.workspaceCreateEntry, { cwd: "remote:srv_alpha:/home/dev/app", path: "remote:srv_alpha:/home/dev/app", name: "b.ts", kind: "file" }, {}) as { path: string };
+  assert.equal(created.path, "remote:srv_alpha:/home/dev/app/b.ts");
+  const renamed = await instance.dispatch(Ipc.workspaceRenameEntry, { cwd: "remote:srv_alpha:/home/dev/app", path: "remote:srv_alpha:/home/dev/app/b.ts", name: "c.ts" }, {}) as { path: string };
+  assert.equal(renamed.path, "remote:srv_alpha:/home/dev/app/c.ts");
 
   const running = await instance.dispatch(Ipc.engineGetRunning, { conversationId: id }, {}) as string[];
   assert.deepEqual(running, [id, encodeRemoteConversationId("srv_alpha", "c2")]);

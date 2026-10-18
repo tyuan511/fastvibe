@@ -35,7 +35,7 @@ const DEFAULT_WINDOW_SIZE = { width: 1280, height: 840 } as const;
 const MIN_WINDOW_SIZE = { width: 920, height: 640 } as const;
 const WINDOW_STATE_SAVE_DELAY_MS = 250;
 
-export function createDesktopWindow(windows: Set<BrowserWindow>): void {
+export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => void): void {
   const paths = getFastVibePaths();
   const restored = readWindowState(paths.windowStateFile);
   const workArea = screen.getPrimaryDisplay().workAreaSize;
@@ -99,6 +99,10 @@ export function createDesktopWindow(windows: Set<BrowserWindow>): void {
     window.show();
   });
   window.on("resize", scheduleWindowStateSave);
+  // The app leaving the foreground is a signal of its own: Main names the prompts still
+  // parked waiting for an answer at that moment, because a question raised while the
+  // user was watching had nothing anywhere saying so once they walk away.
+  if (onBlur) window.on("blur", onBlur);
   window.on("close", () => {
     if (stateSaveTimer) clearTimeout(stateSaveTimer);
     stateSaveTimer = undefined;

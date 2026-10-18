@@ -47,6 +47,23 @@ const sessionCache = new Map<string, ParsedSession & { mtimeMs: number; size: nu
  * ledger with history that predates it. Transcripts only ever grow, so results are
  * memoised on `mtimeMs` + `size`.
  */
+/**
+ * A tool result or a prompt, told from its envelope without parsing the line.
+ *
+ * They carry no usage and are nearly all of a transcript's bytes — one screenshot result is
+ * hundreds of KB of base64 — so parsing them only to throw them away was most of what reading
+ * the statistics cost. The entry's own `"message":` key is the first one on the line (`type`,
+ * `id`, `parentId` and `timestamp` hold plain strings), and only its role counts: a tool call's
+ * arguments can hold the same words further in, and such a line is parsed as before.
+ */
+function carriesNoUsage(line: string): boolean {
+  if (!line.startsWith('{"type":"message"')) return false;
+  const at = line.indexOf('"message":');
+  if (at < 0 || at > 1024) return false;
+  const role = line.slice(at, at + 40);
+  return role.startsWith('"message":{"role":"toolResult"') || role.startsWith('"message":{"role":"user"');
+}
+
 export async function parseSessionTurns(
   file: string,
   options?: { since?: number },
@@ -82,6 +99,7 @@ export async function parseSessionTurns(
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
+    if (carriesNoUsage(trimmed)) continue;
     let entry: unknown;
     try {
       entry = JSON.parse(trimmed);

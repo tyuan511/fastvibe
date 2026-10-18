@@ -44,6 +44,10 @@ afterPack: scripts/check-packaged-deps.cjs
 extraResources:
   - from: resources/models-dev
     to: models-dev
+  # The vendored vscode-icons set: `file-icons.ts` reads `manifest.json` and serves `icons/` at
+  # runtime, so a packaged build without this directory draws no file glyphs at all.
+  - from: resources/file-icons
+    to: file-icons
   # Built-in pi extensions (`/goal`, todo, session-title, web-search) are loaded by path at runtime, so
   # they must stay outside the asar archive.
   - from: resources/extensions
@@ -56,6 +60,11 @@ extraResources:
   # The memory pipeline's prompt templates are read by path at runtime (`memory-templates.ts`).
   - from: resources/memories
     to: memories
+  # The OfficeCLI binary for this architecture, plus the license and the version manifest the
+  # fetch script writes beside it. One directory per `${os}-${arch}`, so a mac build of both
+  # CPUs does not ship the other one's 32 MB, and a Windows package does not ship the Unix one.
+  - from: resources/officecli/${os}-${arch}
+    to: officecli
   # The floating grant panel is a static page loaded by path into its own window, and
   # it references `../icon.png` — which is why it sits next to the icon out here rather
   # than becoming a third renderer entry point.

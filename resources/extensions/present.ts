@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
- * `present` puts an image, a video or an HTML page into the conversation itself.
+ * `present` puts an image, a video, an HTML page or an Office document into the conversation itself.
  *
  * The tool does nothing to the file: it checks that the reference can be shown and records it in
  * the result's `details`, which the transcript draws as a preview under the call. A model that
@@ -23,9 +23,12 @@ export const PRESENTABLE_FILE_EXTENSIONS = [
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp",
   ".mp4", ".m4v", ".webm", ".ogv", ".mov",
   ".html", ".htm",
+  ".docx", ".xlsx", ".pptx",
 ] as const;
-/** An https URL is shown only as a picture or a film — never as a page. */
-export const PRESENTABLE_URL_EXTENSIONS = PRESENTABLE_FILE_EXTENSIONS.filter((ext) => ext !== ".html" && ext !== ".htm");
+/** An https URL is shown only as a picture or a film — never as a page, and never as an Office file (that has to be rendered locally). */
+export const PRESENTABLE_URL_EXTENSIONS = PRESENTABLE_FILE_EXTENSIONS.filter(
+  (ext) => ext !== ".html" && ext !== ".htm" && ext !== ".docx" && ext !== ".xlsx" && ext !== ".pptx",
+);
 
 type Item = { ref: string; title?: string; ok: boolean; error?: string };
 
@@ -79,14 +82,15 @@ export default function presentExtension(pi: ExtensionAPI): void {
     name: TOOL,
     label: "Present",
     description: [
-      "Show images, videos or HTML pages to the user inside the conversation, where they can look at them directly.",
+      "Show images, videos, HTML pages or Office documents to the user inside the conversation, where they can look at them directly.",
       "Give a local file path (absolute, or relative to the working directory) or an https URL that ends in an image or video extension.",
       "An .html file is shown as a live page, so it may use inline <script>/<style> and https CDN libraries; it cannot read local files.",
+      "A .docx, .xlsx or .pptx is shown by name; opening it renders the document. An https URL cannot be an Office file.",
       "Writing a path in your reply does NOT show anything — use this tool.",
     ].join("\n"),
-    promptSnippet: "Show an image, video or HTML file to the user inside the conversation",
+    promptSnippet: "Show an image, video, HTML or Office file to the user inside the conversation",
     promptGuidelines: [
-      "Use present when you have made or fetched something the user should look at — a generated image, a chart, a rendered video, a prototype or report as .html — and name its file or https URL.",
+      "Use present when you have made or fetched something the user should look at — a generated image, a chart, a rendered video, a prototype or report as .html, or a .docx / .xlsx / .pptx — and name its file or https URL.",
       "Images returned directly by a clearly named image generation/editing tool, and image/html files you create with write, are already shown automatically; do not present those again.",
       "Paths in shell, script or MCP text output are not shown automatically. Call present directly for those deliverables, and for images from tools of uncertain purpose or scripts mixing reads with generation.",
       "Present only the few results that matter (at most 8 per call), then say in your reply what each one is. Do not present input files you were merely reading.",

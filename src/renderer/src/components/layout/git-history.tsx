@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -19,6 +19,13 @@ function GraphCell({ row, columns }: { row: GitGraphRow; columns: number }): JSX
   const step = columns > 6 ? 14 : 18;
   const x = (column: number): number => 11 + column * step;
   const width = 22 + (columns - 1) * step;
+  const radius = row.commit.isHead ? 6 : 4;
+  // The lanes end at the commit's centre, so the ring used to hide them by filling
+  // itself with `--background`. That colour is translucent under 玻璃效果, which left
+  // the line showing through the ring. Masking the lanes away around the commit needs
+  // no opaque background and so holds in every theme; the clearance is a hair over the
+  // ring's own outline, whose stroke stays 2px at any 界面字号 while the radius scales.
+  const mask = useId();
   return (
     <svg
       width={width}
@@ -30,6 +37,13 @@ function GraphCell({ row, columns }: { row: GitGraphRow; columns: number }): JSX
       className="size-auto block shrink-0 overflow-visible"
       style={{ width: `${width / 16}rem`, height: `${ROW_HEIGHT / 16}rem` }}
     >
+      <defs>
+        <mask id={mask} maskUnits="userSpaceOnUse" x="0" y="0" width={width} height={ROW_HEIGHT}>
+          <rect x="0" y="0" width={width} height={ROW_HEIGHT} fill="#fff" />
+          <circle cx={x(row.column)} cy="14" r={row.commit.isHead ? radius + 1.2 : 0} fill="#000" />
+        </mask>
+      </defs>
+      <g mask={`url(#${mask})`}>
       {row.edges.map((edge, i) => {
         const from = x(edge.from);
         const to = x(edge.to);
@@ -38,8 +52,9 @@ function GraphCell({ row, columns }: { row: GitGraphRow; columns: number }): JSX
           : `M${from} 14C${from} 23 ${to} 20 ${to} 28`;
         return <path key={i} d={path} stroke={COLORS[edge.color % COLORS.length]} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" fill="none" />;
       })}
-      <circle cx={x(row.column)} cy="14" r={row.commit.isHead ? 6 : 4} fill={row.commit.isHead ? "var(--background)" : COLORS[row.color % COLORS.length]} stroke={COLORS[row.color % COLORS.length]} strokeWidth={row.commit.isHead ? 2.25 : 1.5} vectorEffect="non-scaling-stroke" />
-      {row.commit.parents.length > 1 ? <circle cx={x(row.column)} cy="14" r="1.6" fill="var(--background)" /> : null}
+      </g>
+      <circle cx={x(row.column)} cy="14" r={radius} fill={row.commit.isHead ? "none" : COLORS[row.color % COLORS.length]} stroke={COLORS[row.color % COLORS.length]} strokeWidth={row.commit.isHead ? 2.25 : 1.5} vectorEffect="non-scaling-stroke" />
+      {row.commit.parents.length > 1 ? <circle cx={x(row.column)} cy="14" r="1.6" fill={row.commit.isHead ? COLORS[row.color % COLORS.length] : "var(--background)"} /> : null}
     </svg>
   );
 }

@@ -3,8 +3,9 @@ import { chmodSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import type { IPty } from "node-pty";
-import { uiText } from "./ui-text";
+import { uiText } from "./ui-text.ts";
 
 type Session = {
   id: string;
@@ -37,18 +38,61 @@ function ensureSpawnHelper(ptyEntry: string): void {
   }
 }
 
+/**
+ * The native pty, resolved on the first shell rather than at import — for two reasons:
+ * an install that never opens a terminal does not pay for loading it, and a load failure
+ * can be reported from `start()`, the only place that knows a terminal was asked for.
+ * This module cannot use the file logger (that imports Electron, and the headless Agent
+ * runs this same file), so `console.warn` is the channel: Main hooks it into
+ * `logs/main.log`.
+ */
+let pty: { module: typeof import("node-pty"); entry: string } | null | undefined;
+let ptyError: unknown;
+let warnedNoPty = false;
+
 function loadPty(): { module: typeof import("node-pty"); entry: string } | null {
+  if (pty !== undefined) return pty;
   try {
     const require = createRequire(import.meta.url);
     const entry = require.resolve("node-pty");
     ensureSpawnHelper(entry);
-    return { module: require("node-pty") as typeof import("node-pty"), entry };
-  } catch {
-    return null;
+    pty = { module: require("node-pty") as typeof import("node-pty"), entry };
+  } catch (error) {
+    ptyError = error;
+    pty = null;
   }
+  return pty;
 }
 
-const pty = loadPty();
+/**
+ * Say why this shell got no pty, once. The fallback is not equivalent — it cannot resize
+ * the pty, so output wraps at whatever size the shell started with — and without this
+ * line a garbled (or absent) terminal has no explanation anywhere. `reason` is either the
+ * module's load failure or, when it did load, the failed spawn.
+ */
+function warnNoPty(reason: unknown): void {
+  if (warnedNoPty) return;
+  warnedNoPty = true;
+  const outcome =
+    process.platform === "win32" || process.platform === "linux"
+      ? "using a plain child process, which cannot resize the pty"
+      : "no terminal can start";
+  console.warn(`[terminal] no pty for this shell, ${outcome}: ${String(reason)}`);
+}
+
+/**
+ * Decode a fallback shell's output as one UTF-8 stream.
+ *
+ * `chunk.toString("utf8")` per chunk turns a character split across two reads into two
+ * U+FFFD, and a pty hands over whatever fits its buffer, so a 3-byte CJK character is
+ * split routinely under load. `StringDecoder` holds the incomplete tail for the next
+ * chunk. stdout and stderr share one decoder: in the `script` fallback they are two ends
+ * of the same pty, so their bytes are already in a single order.
+ */
+export function createChunkDecoder(): (chunk: Buffer) => string {
+  const decoder = new StringDecoder("utf8");
+  return (chunk) => decoder.write(chunk);
+}
 
 /** One frame of coalescing for terminal output, and the burst size that skips it. */
 const FLUSH_MS = 16;
@@ -72,16 +116,19 @@ export class TerminalSessions {
     const cols = size?.cols && size.cols > 1 ? size.cols : 80;
     const rows = size?.rows && size.rows > 1 ? size.rows : 24;
     const shell = process.env.SHELL || (process.platform === "win32" ? "cmd.exe" : "/bin/zsh");
-    if (pty) {
+    if (loadPty()) {
       try {
-        ensureSpawnHelper(pty.entry);
+        ensureSpawnHelper(pty!.entry);
         const session = this.#startPty(id, cwd, shell, cols, rows);
         this.#sessions.set(id, session);
         return { id, cwd };
-      } catch {
-        // fall through
+      } catch (error) {
+        // The module is there but the spawn is not (a spawn-helper with no +x, a cwd
+        // that vanished). Say which, or the reason below reads "undefined".
+        ptyError = error;
       }
     }
+    warnNoPty(ptyError);
     if (process.platform === "win32" || process.platform === "linux") {
       this.#sessions.set(id, this.#startScript(id, cwd, shell));
       return { id, cwd };
@@ -146,8 +193,15 @@ export class TerminalSessions {
             cwd,
             env: { ...process.env, TERM: "xterm-256color" },
           });
-    child.stdout.on("data", (chunk: Buffer) => this.#data(id, chunk.toString("utf8")));
-    child.stderr.on("data", (chunk: Buffer) => this.#data(id, chunk.toString("utf8")));
+    const decode = createChunkDecoder();
+    child.stdout.on("data", (chunk: Buffer) => {
+      const text = decode(chunk);
+      if (text) this.#data(id, text);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      const text = decode(chunk);
+      if (text) this.#data(id, text);
+    });
     child.on("close", () => {
       this.#sessions.delete(id);
       this.#emit({ id, exited: true });

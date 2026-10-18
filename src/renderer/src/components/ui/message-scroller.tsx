@@ -43,7 +43,11 @@ function MessageScrollerViewport({
     <MessageScrollerPrimitive.Viewport
       data-slot="message-scroller-viewport"
       className={cn(
-        "size-full min-h-0 min-w-0 scroll-fade-b transcript-gutter overflow-y-auto overscroll-contain contain-content data-autoscrolling:scrollbar-thumb-transparent data-autoscrolling:scrollbar-track-transparent data-pending-scroll:invisible",
+        // No `scrollbar-thumb-*` utility here: Tailwind's own writes `scrollbar-color`,
+        // which opts the viewport out of the app's `::-webkit-scrollbar` rules and gives
+        // it a platform bar instead. The transparent thumb while `data-autoscrolling`
+        // is set lives in `index.css`, next to the rules it has to override.
+        "size-full min-h-0 min-w-0 scroll-fade-b transcript-gutter overflow-y-auto overscroll-contain contain-content data-pending-scroll:invisible",
         className
       )}
       {...props}

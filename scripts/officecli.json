@@ -1,0 +1,40 @@
+{
+  "version": "v1.0.157",
+  "repository": "iOfficeAI/OfficeCLI",
+  "mirror": "https://d.officecli.ai",
+  "license": "Apache-2.0",
+  "assets": {
+    "mac-arm64": {
+      "asset": "officecli-mac-arm64",
+      "sha256": "0dae0990a9cc29688a5d54469f984c34e5b15ab6bbd194a0ffdc571bb9040124"
+    },
+    "mac-x64": {
+      "asset": "officecli-mac-x64",
+      "sha256": "178c1e9ebaf44c24d2b4b359064a5dea6eb7b2f539809871a3de1c09599dff9f"
+    },
+    "win-x64": {
+      "asset": "officecli-win-x64.exe",
+      "sha256": "bd64eba587e56cc71709cdd1f38ae9ac77cd65a9c8ea744b0996897c0557e343"
+    },
+    "win-arm64": {
+      "asset": "officecli-win-arm64.exe",
+      "sha256": "786e08b1ccf09c3a2107912537fe25fa82970b30145e3c59e09d83bf4032b065"
+    },
+    "linux-x64": {
+      "asset": "officecli-linux-x64",
+      "sha256": "f8eefe88dbfa7464bee421e5421efe57fc26bc3180b30e56eef58594c8245c94"
+    },
+    "linux-arm64": {
+      "asset": "officecli-linux-arm64",
+      "sha256": "60db926c8a1371984b9e99622a834777befb02b6f73d0f3fff914ffcc2760d2f"
+    },
+    "linux-alpine-x64": {
+      "asset": "officecli-linux-alpine-x64",
+      "sha256": "e251ac54288a57f01937823f4002caf83754aace22d2481b081fc4a57723c4e1"
+    },
+    "linux-alpine-arm64": {
+      "asset": "officecli-linux-alpine-arm64",
+      "sha256": "b3f8df1985b354a02b74a6f838249f247dcfa631b8eeeb9d9cd088bbf518d7ee"
+    }
+  }
+}

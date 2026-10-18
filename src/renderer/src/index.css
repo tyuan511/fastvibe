@@ -476,13 +476,19 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
  * scrolls, so the composer stack shares the transcript's column exactly.
  *
  * Both elements must carry the same class: the browser — not a hard-coded number —
- * decides the width, and only equal `scrollbar-width` + `scrollbar-gutter` values
- * reserve equal widths. `overflow: hidden` is what turns the plain wrapper into a
- * scroll container at all, and it never clips because the wrapper only ever holds
- * its own content.
+ * decides the width, and only equal `scrollbar-gutter` values on boxes styled by the
+ * same scrollbar rules reserve equal widths. `overflow: hidden` is what turns the
+ * plain wrapper into a scroll container at all, and it never clips because the
+ * wrapper only ever holds its own content.
+ *
+ * This deliberately carries no `scrollbar-width`: naming a width (even `thin`) makes
+ * Chromium drop the element out of the `::-webkit-scrollbar` rules below and repaint
+ * a platform bar — the unstyled look this file exists to avoid, and a different width
+ * the moment only one of the two boxes opts out (15px classic against the 11px this
+ * file paints), which would put the composer beside the transcript's column instead
+ * of under it.
  */
 @utility transcript-gutter {
-  scrollbar-width: thin;
   scrollbar-gutter: stable;
 }
 
@@ -518,32 +524,79 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
 }
 
 /* Scrollbars -----------------------------------------------------------------
-   Slim, rounded thumbs with a transparent track, so the scrollbar reads as part
-   of the surface instead of a chrome bar. Chromium paints these through the
-   WebKit pseudo-elements; Base UI's ScrollArea draws its own bar, matched below
-   via data-slot. */
-::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
+   One look for every scrollbar in the app. Base UI's ScrollArea draws its own bar
+   (a 10px track holding a 7px rounded thumb, `--scrollbar-thumb` over a
+   transparent track, darkening on hover); the rules below give the *platform*
+   scrollbars — the transcript, a code fence, a settings list, a textarea, the
+   terminal — the same silhouette, so no surface reads as chrome bolted onto the
+   theme. 11px of track with a 2px transparent border is the same 7px pill, and
+   the extra pixel is hit area nobody sees.
+
+   Three Chromium behaviours shape this block, all measured rather than assumed:
+
+   * `scrollbar-width` or `scrollbar-color` set to anything but `auto` makes an
+     element **ignore** every `::-webkit-scrollbar` rule and repaint the platform
+     bar (11px thin, 15px classic — square, and no colour of ours). Neither
+     property may appear on a surface whose bar this file is styling, which rules
+     out more than it looks like: Tailwind's `scrollbar-thumb-*` / `scrollbar-track-*`
+     utilities are `scrollbar-color` shorthand, and `no-scrollbar` (from
+     `shadcn/tailwind.css`) is the one place a platform bar is wanted, because it
+     is asking for no bar at all.
+   * `scrollbar-gutter: stable` on its own is safe: it reserves the *styled* width
+     (probed: an 11px author width reserves an 11px gutter).
+   * Unlayered declarations beat every layered one, so these rules sit in
+     `@layer base`: a utility can still reach a surface, and the two rules that do
+     need to win here — the composer's transparent highlight layer below, and the
+     ScrollArea's own thumb — are written unlayered for that reason.
+
+   Windows and Linux paint steppers at each end of a custom scrollbar and a 7px
+   thumb cannot share the track with them, so those are switched off. */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+  }
+
+  ::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-color: var(--scrollbar-thumb);
+    background-clip: content-box;
+    transition: background-color 120ms ease;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  /* The transcript is auto-scrolled by every streamed token, and a thumb that
+     redraws itself at a new position each time is noise. `@shadcn/react`'s message
+     scroller sets `data-autoscrolling` for exactly that window, so the bar stands
+     down during a run and comes back the moment the reader takes over. It is done
+     here rather than with Tailwind's own `scrollbar-thumb-*` utility because that
+     one writes `scrollbar-color`, which would hand the transcript a platform bar
+     4px wider than the one being hidden — the gutter would jump every time a reply
+     started. It sits after the hover rule so a bar cannot darken under the pointer
+     while it is meant to be invisible. */
+  [data-autoscrolling]::-webkit-scrollbar-thumb {
+    background-color: transparent;
+  }
 }
 
-::-webkit-scrollbar-track,
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 9999px;
-  background-color: var(--scrollbar-thumb);
-  background-clip: content-box;
-  transition: background-color 120ms ease;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background-color: var(--scrollbar-thumb-hover);
-}
-
+/* The ScrollArea's own bar: Base UI draws it in the DOM, so nothing above reaches
+   it — it is matched by data-slot instead, and unlayered so it beats the thumb's
+   `bg-border` utility. */
 [data-slot="scroll-area-thumb"] {
   background-color: var(--scrollbar-thumb);
   transition: background-color 120ms ease;
@@ -1315,9 +1368,11 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
 .chat-editor .chat-editor-highlight {
   background: transparent;
   pointer-events: none;
-  /* Painted transparent rather than hidden: a hidden scrollbar gives the gutter back,
-   * and the two layers would then wrap their lines at different widths. */
-  scrollbar-color: transparent transparent;
+  /* The bar is painted transparent rather than hidden — see the pair of rules
+   * below. `scrollbar-color` (or `scrollbar-width`) would do that job too, but it
+   * also hands the element a platform scrollbar, and a platform bar is 15px where
+   * the textarea above it reserves 11px: the two layers would then wrap their
+   * lines at different widths and the colouring would drift off the text. */
 }
 
 .chat-editor .chat-editor-highlight::-webkit-scrollbar-thumb,

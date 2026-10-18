@@ -13,6 +13,9 @@ import { RemoteServer } from "../main/server/server";
 import { broadcast, subscribe } from "../main/ipc/broadcast";
 import { dispatch } from "../main/ipc/registry";
 import { applyShellPath } from "../main/engine/shell-path";
+import { applyShellLocale } from "../main/engine/shell-locale";
+import { applyOfficeCliEnv } from "../main/engine/office-cli";
+import { stopOfficeWatches } from "../main/engine/office-watch";
 import { loadOrCreateServerIdentity } from "../main/server/identity";
 import { HEADLESS_CAPABILITIES } from "../main/app-server/capabilities";
 import { createAppServer, initAppServer } from "../main/app-server/runtime";
@@ -42,11 +45,17 @@ const resourcesPath = process.env.FASTVIBE_RESOURCES_PATH || join(here, "../../r
 if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error("FASTVIBE_AGENT_PORT 无效");
 const listen = resolveListenHost(option("--host") ?? process.env.FASTVIBE_AGENT_HOST);
 
-// The headless service can also start outside a login shell.
+// The headless service can also start outside a login shell, which is where both a
+// PATH and a character locale come from.
+applyShellLocale();
 applyShellPath();
 configureAgentHttpProxy();
 
 const runtime = createAgentRuntime({ userData, resourcesPath });
+// Paths and the resources directory are only known once the runtime has configured them, and
+// both are needed to point at the OfficeCLI that came in this package — so this is beside
+// `applyShellPath`, not above it: still before any session, terminal or MCP server is forked.
+applyOfficeCliEnv();
 const terminals = new TerminalSessions();
 
 registerAgentIpc({
@@ -100,6 +109,7 @@ async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
   await server.stop();
+  await stopOfficeWatches();
   removeStateFile();
   terminals.dispose();
   await runtime.engine.stop();

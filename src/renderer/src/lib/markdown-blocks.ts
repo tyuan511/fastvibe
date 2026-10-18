@@ -21,6 +21,10 @@
  * - A list, a blockquote and a table are cut only where the next line starts something
  *   else, so a loose list (blank lines between its items) stays whole — split, its
  *   second half would restart at `1.`.
+ * - Raw HTML that is still open across a blank line (`<details>` and the answer under it,
+ *   `<div align="center">` around a picture) is one block for the same reason: split, the
+ *   first half closes the element where it stands and the reader gets an empty disclosure
+ *   plus a stray `</details>`.
  * - A link-reference or footnote definition is glued to the block above it for the same
  *   reason. This is where the seam shows: a definition at the *end* of a long answer
  *   cannot be seen by a reference earlier in it, since that block was parsed alone.
@@ -71,6 +75,34 @@ function startsBlock(line: string): boolean {
   return true;
 }
 
+/**
+ * Raw HTML that is open across a blank line must stay in one block.
+ *
+ * A `<details>` whose answer follows after a blank line, a `<div align="center">` wrapping a
+ * picture: CommonMark ends an HTML block at the blank line and lets the markdown in between be
+ * parsed, and one parse then stitches the two halves back together — the paragraph really does
+ * end up inside the `<details>`. Cutting the reply at that blank line instead hands each half to
+ * its own parse, and the first one closes the element where it stands: the reader gets an empty
+ * disclosure and a stray `</details>`.
+ *
+ * Only *unbalanced* tags are the problem, which is what this counts. A tag is recognised by the
+ * character after its name — whitespace, `/` or `>` — because that is what separates `<kbd>`
+ * from the autolink `<https://example.com>` and from prose that says `a < b`; void elements
+ * (`<br>`, `<img>`) open nothing, and an unterminated tag costs one big block, the same way an
+ * unterminated fence does.
+ */
+const HTML_TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)(?=[\s/>])/g;
+const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+
+/** How many elements this line leaves open (negative when it only closes some). */
+function htmlDepth(line: string): number {
+  let depth = 0;
+  for (const match of line.matchAll(HTML_TAG)) {
+    if (match[2] && !VOID_TAGS.has(match[2].toLowerCase())) depth += match[1] ? -1 : 1;
+  }
+  return depth;
+}
+
 export function splitMarkdownBlocks(text: string): string[] {
   // No blank line, nothing to cut: the common case (a short answer, a single
   // paragraph, one code fence) keeps its single parse and its single component.
@@ -82,6 +114,8 @@ export function splitMarkdownBlocks(text: string): string[] {
   let content = false;
   let blank = false;
   let fence: Fence | null = null;
+  /** Elements still open from a previous line: the block cannot be cut while this is above 0. */
+  let htmlOpen = 0;
 
   for (const line of lines) {
     if (fence) {
@@ -96,13 +130,14 @@ export function splitMarkdownBlocks(text: string): string[] {
       blank = content;
       continue;
     }
-    if (blank && startsBlock(line)) {
+    if (blank && startsBlock(line) && htmlOpen === 0) {
       blocks.push(current.join("\n"));
       current = [];
       content = false;
     }
     blank = false;
     fence = openFence(line);
+    if (!fence) htmlOpen = Math.max(0, htmlOpen + htmlDepth(line));
     current.push(line);
     content = true;
   }

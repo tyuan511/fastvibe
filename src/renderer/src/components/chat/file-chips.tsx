@@ -10,6 +10,7 @@ import { useSidePaneStore } from "@/stores/side-pane";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
 import { displayProjectPath, projectFolderPaths } from "@shared/project-folders";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
+import { officeFormatOf } from "@shared/office";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -104,7 +105,9 @@ function FileRow({
         {file.diff ? (
           <DiffView text={file.diff} className="mt-0 min-h-0 max-h-none rounded-none border-0" />
         ) : (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">{t("files.noDiff")}</p>
+          <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+            {t(officeFormatOf(file.path) ? "files.officeChanged" : "files.noDiff")}
+          </p>
         )}
       </HoverCardContent>
     </HoverCard>
@@ -114,18 +117,24 @@ function FileRow({
 /**
  * One turn's writes, as the Codex card: a header naming how many files changed
  * and the line totals, with three paths shown until expanded. Hover previews the
- * turn's own diff; a path (or 审查) opens it in the side pane.
+ * turn's own diff; a path (or 查看变更) opens the file in the 变更 view.
  */
 export function TurnFileChips({ files, className }: { files: ChangedFile[]; className?: string }): JSX.Element | null {
   const { t } = useTranslation("chat");
   const [open, setOpen] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const cwd = useWorkspacePath();
-  const openTurnChanges = useSidePaneStore((state) => state.openTurnChanges);
+  const openGitDiff = useSidePaneStore((state) => state.openGitDiff);
   if (files.length === 0) return null;
   const added = files.reduce((sum, file) => sum + file.added, 0);
   const removed = files.reduce((sum, file) => sum + file.removed, 0);
-  const review = (): void => openTurnChanges(files, files[0].path);
+  // The turn's chips are a pointer into the working tree, not a second diff view:
+  // the file may already be staged, committed or reverted by a later turn, and the
+  // 变更 view reads what is true now rather than what this turn wrote then.
+  // The path goes out absolute — the tools reported it against this conversation's
+  // cwd, while the 变更 list and its `git diff` resolve against the repository root,
+  // which is not the same folder for a project bound to a subdirectory.
+  const review = (path: string): void => openGitDiff(resolvePath(path, cwd), "unstaged", cwd);
   return (
     <Collapsible
       open={open}
@@ -155,7 +164,7 @@ export function TurnFileChips({ files, className }: { files: ChangedFile[]; clas
             <DiffStatBadge added={added} removed={removed} />
           </span>
         </CollapsibleTrigger>
-        <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={review}>
+        <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={() => review(files[0].path)}>
           {t("files.review")}
         </Button>
       </div>
@@ -163,12 +172,12 @@ export function TurnFileChips({ files, className }: { files: ChangedFile[]; clas
         <Collapsible open={expanded} onOpenChange={setExpanded} className="px-1.5 pb-1.5">
           <div className="max-h-60 overflow-y-auto">
             {files.slice(0, VISIBLE_FILE_LIMIT).map((file) => (
-              <FileRow key={file.path} file={file} cwd={cwd} onOpen={(changed) => openTurnChanges(files, changed.path)} />
+              <FileRow key={file.path} file={file} cwd={cwd} onOpen={(changed) => review(changed.path)} />
             ))}
             {files.length > VISIBLE_FILE_LIMIT ? (
               <CollapsibleContent>
                 {files.slice(VISIBLE_FILE_LIMIT).map((file) => (
-                  <FileRow key={file.path} file={file} cwd={cwd} onOpen={(changed) => openTurnChanges(files, changed.path)} />
+                  <FileRow key={file.path} file={file} cwd={cwd} onOpen={(changed) => review(changed.path)} />
                 ))}
               </CollapsibleContent>
             ) : null}

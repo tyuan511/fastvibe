@@ -19,7 +19,6 @@ test("singleton tabs are named by their type, never by a stored label", () => {
     ["git", "审查"],
     ["terminal", "终端"],
     ["browser", "浏览器"],
-    ["changes", "修改记录"],
   ] as const) {
     assert.equal(tabTitleIsData({ type, title: staleTitle }), false, `${type} must derive its label`);
   }

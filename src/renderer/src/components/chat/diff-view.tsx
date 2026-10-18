@@ -53,19 +53,23 @@ function Gutter({ row, width }: { row: DiffRow; width: number }): JSX.Element {
  * fence in a reply, a `.patch` preview and the right pane's git diff. Numbers come
  * from the diff itself (`lib/diff.ts`), so a fragment that carries none is drawn
  * without a gutter rather than with an invented one.
+ *
+ * Lines always wrap. A diff is read for its content, not for its column alignment,
+ * and the horizontal scrollbar a long line used to cost was worse than the wrap:
+ * the transcript's cards are narrow, so the part worth reading sat off-screen with
+ * no hint that anything was there. `overflow-x-hidden` is the promise, not the
+ * wrapping — a row that cannot overflow cannot need one either way.
  */
 export const DiffView = memo(function DiffView({
   text,
   className,
   mode = "unified",
-  wrap = false,
   activeHunk,
   hideFileHeaders = false,
 }: {
   text: string;
   className?: string;
   mode?: "unified" | "split";
-  wrap?: boolean;
   activeHunk?: number;
   hideFileHeaders?: boolean;
 }): JSX.Element {
@@ -90,28 +94,28 @@ export const DiffView = memo(function DiffView({
     <div
       ref={root}
       className={cn(
-        "mt-1.5 max-h-80 overflow-auto rounded-md border border-border bg-background font-mono text-xs leading-5 select-text",
+        "mt-1.5 max-h-80 overflow-x-hidden overflow-y-auto rounded-md border border-border bg-background font-mono text-xs leading-5 select-text",
         className,
       )}
     >
       {mode === "split" ? (
-        <div className={cn("grid min-w-full", wrap ? "grid-cols-2" : "grid-cols-[minmax(max-content,1fr)_minmax(max-content,1fr)]")}>
+        <div className="grid w-full grid-cols-2">
           {pairs.filter((pair) => !hidden || pair.sourceIndex < ROW_LIMIT).map((pair, index) => pair.header ? (
             <div key={index} data-diff-hunk={pair.header.kind === "hunk" ? "" : undefined} className={cn("col-span-2 px-3 py-0.5 whitespace-pre-wrap break-all", ROW_STYLE[pair.header.kind])}>{pair.header.text}</div>
           ) : (
             <div key={index} className="contents">
-              <SplitCell row={pair.left} other={pair.right} side="old" width={numberWidth} wrap={wrap} />
-              <SplitCell row={pair.right} other={pair.left} side="new" width={numberWidth} wrap={wrap} />
+              <SplitCell row={pair.left} other={pair.right} side="old" width={numberWidth} />
+              <SplitCell row={pair.right} other={pair.left} side="new" width={numberWidth} />
             </div>
           ))}
         </div>
       ) : shown.map((row, index) => (
-        <div key={index} data-diff-hunk={row.kind === "hunk" ? "" : undefined} className={cn("flex min-w-full border-l-2 border-l-transparent", wrap ? "w-full" : "w-max", ROW_STYLE[row.kind])}>
+        <div key={index} data-diff-hunk={row.kind === "hunk" ? "" : undefined} className={cn("flex w-full border-l-2 border-l-transparent", ROW_STYLE[row.kind])}>
           {numberWidth > 0 ? <Gutter row={row} width={numberWidth} /> : null}
           <span aria-hidden className={cn("w-4 shrink-0 text-center select-none", MARKER_STYLE[row.kind])}>
             {row.marker}
           </span>
-          <code className={cn("block min-w-0 flex-1 px-2", wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre")}>{row.text || " "}</code>
+          <code className="block min-w-0 flex-1 px-2 whitespace-pre-wrap break-all">{row.text || " "}</code>
         </div>
       ))}
       {hidden > 0 ? (
@@ -127,13 +131,13 @@ export const DiffView = memo(function DiffView({
   );
 });
 
-function SplitCell({ row, other, side, width, wrap }: { row?: DiffRow; other?: DiffRow; side: "old" | "new"; width: number; wrap: boolean }): JSX.Element {
+function SplitCell({ row, other, side, width }: { row?: DiffRow; other?: DiffRow; side: "old" | "new"; width: number }): JSX.Element {
   const changed = row && (row.kind === "added" || row.kind === "removed");
   const range = changed && other ? changedRange(row.text, other.text) : undefined;
   return (
     <div className={cn("flex min-w-0 border-l-2 border-l-transparent first:border-r first:border-r-border", row ? ROW_STYLE[row.kind] : "bg-muted/40")}>
       {width > 0 ? <span aria-hidden className="shrink-0 border-r border-border px-1.5 text-right text-muted-foreground/60 select-none" style={{ minWidth: `calc(${width}ch + 0.75rem)` }}>{(side === "old" ? row?.oldNumber : row?.newNumber) ?? ""}</span> : null}
-      <code className={cn("block min-w-0 flex-1 px-2", wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre")}>
+      <code className="block min-w-0 flex-1 px-2 whitespace-pre-wrap break-all">
         {range && row ? <>{row.text.slice(0, range[0])}<span className={row.kind === "added" ? "bg-success/25" : "bg-destructive/25"}>{row.text.slice(range[0], range[1])}</span>{row.text.slice(range[1])}</> : row?.text || " "}
       </code>
     </div>

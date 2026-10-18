@@ -1,10 +1,13 @@
 import type { JSX } from "react";
 import { cn } from "@/lib/utils";
+import { useIsDarkTheme } from "@/lib/use-theme";
 import { fileIconUrl, resolveFileIcon, useFileIcons } from "@/lib/file-icons";
 
 /**
- * A Material Icon Theme glyph for a file or folder name. The mapping loads once
- * for the whole renderer, so this is cheap to render per row (file tree, chips).
+ * A file-icon glyph for a file or folder name (vscode-icons, vendored into
+ * `resources/file-icons`). The mapping loads once for the whole renderer, so this is
+ * cheap to render per row (file tree, chips), and the light-theme artwork follows the
+ * active theme because the pack draws some marks differently on a white row.
  */
 export function FileIcon({
   name,
@@ -19,13 +22,8 @@ export function FileIcon({
   className?: string;
 }): JSX.Element {
   const mapping = useFileIcons();
-  const icon = !mapping
-    ? "file"
-    : kind === "folder"
-      ? expanded
-        ? mapping.folderExpanded
-        : mapping.folder
-      : resolveFileIcon(mapping, name);
+  const dark = useIsDarkTheme();
+  const icon = !mapping ? "default_file" : resolveFileIcon(mapping, name, { kind, expanded, light: !dark });
   return (
     <img
       src={fileIconUrl(icon)}

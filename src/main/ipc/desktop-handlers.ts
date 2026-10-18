@@ -15,10 +15,13 @@ import { registerEngineIpc } from "./engine-handlers";
 import { handle, type CallerContext } from "./registry";
 import { registerBrowserWorkspaceIpc } from "./browser-workspace";
 import { readFilePreview } from "../engine/file-preview";
+import { assertAbsolutePreviewPath, renderOfficeSnapshot } from "../engine/office-render";
+import { officeCliInstall } from "../engine/office-cli";
+import { officeWatches } from "../engine/office-watch";
 import { searchProjectFiles } from "../engine/project-files";
-import { readWorkspaceDir, writeWorkspaceTextFile } from "../engine/workspace-fs";
+import { createWorkspaceEntry, deleteWorkspaceEntry, readWorkspaceDir, renameWorkspaceEntry, writeWorkspaceTextFile } from "../engine/workspace-fs";
 import { existingFiles } from "../engine/path-exists";
-import { conversationCwd, readFileForPayload } from "../engine/file-chunk";
+import { conversationCwd, readFileForPayload, resolveReadPath } from "../engine/file-chunk";
 import { loadModelsDev, type ModelsDevStats } from "../engine/models-dev";
 import {
   applyNativeTheme,
@@ -349,8 +352,39 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     }
   });
   handle(Ipc.workspacePreview, (payload: { path: string }) => {
-    if (!payload.path) return { kind: "error", path: "", name: "", message: uiText("路径无效", "Invalid path") };
+    if (!payload.path)
+      return {
+        kind: "error",
+        path: "",
+        name: "",
+        message: uiText("路径无效", "Invalid path"),
+        reason: "unknown" as const,
+      };
     return readFilePreview(payload.path);
+  });
+  // An Office file's own page. The preview above only names the format; this is the call that
+  // runs the renderer, and it is the one place the bundled OfficeCLI is asked to do anything.
+  const officePath = (payload: { path?: unknown; conversationId?: unknown }): string =>
+    resolveReadPath(payload?.path, conversationCwd(engine.listWorkspace(), payload?.conversationId));
+  const watches = officeWatches({
+    onState: (state) => broadcast(Ipc.officeWatchState, state),
+  });
+  handle(Ipc.officeRender, async (payload: { path?: unknown; conversationId?: unknown }) => {
+    // A path the model wrote is relative to the conversation, the same way a file download is.
+    // An absolute one — what the file tree hands over — is used as it is.
+    return renderOfficeSnapshot(officePath(payload));
+  });
+  handle(Ipc.officeWatchStart, (payload: { path?: unknown; conversationId?: unknown }) => watches.start(officePath(payload)));
+  handle(Ipc.officeWatchStop, (payload: { path?: unknown; conversationId?: unknown }) => {
+    watches.stop(officePath(payload));
+  });
+  handle(Ipc.officeSelection, (payload: { path?: unknown; conversationId?: unknown }) => watches.selection(officePath(payload)));
+  handle(Ipc.workspaceOpenExternal, async (payload: { path?: unknown }) => {
+    const path = assertAbsolutePreviewPath(payload?.path);
+    // `openPath` answers with a reason rather than throwing, and the reason is in the system's
+    // own words — which is the only honest thing to show for "no app claims this file".
+    const reason = await shell.openPath(path);
+    return reason ? { ok: false as const, reason } : { ok: true as const };
   });
   handle(Ipc.workspaceFilesExist, (payload: { paths?: unknown; cwd?: unknown }) =>
     existingFiles(payload?.paths, payload?.cwd),
@@ -368,6 +402,23 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   );
   handle(Ipc.workspaceWriteFile, (payload: { path?: unknown; text?: unknown }) => {
     writeWorkspaceTextFile(payload?.path, payload?.text);
+  });
+  // The file tree's own edits. `cwd` is the project root the row was read from and bounds
+  // what the call may touch; see `engine/workspace-fs.ts`.
+  handle(Ipc.workspaceCreateEntry, (payload: { cwd?: unknown; path?: unknown; name?: unknown; kind?: unknown }) =>
+    createWorkspaceEntry(payload),
+  );
+  handle(Ipc.workspaceRenameEntry, (payload: { cwd?: unknown; path?: unknown; name?: unknown }) =>
+    renameWorkspaceEntry(payload),
+  );
+  handle(Ipc.workspaceDeleteEntry, async (payload: { cwd?: unknown; path?: unknown }) => {
+    // A desktop delete goes to the Trash, so the user can take the file back. `trashItem`
+    // rejecting (a volume that has no Trash) is reported instead of falling through to a
+    // permanent remove the click never asked for. One residual gap, unfixable from here: the
+    // call returns no word about what it did, and Electron documents that an unsupported
+    // volume is deleted permanently rather than moved — hence the confirm dialog's wording
+    // rather than a silent menu item.
+    await deleteWorkspaceEntry({ ...payload, trash: (path) => shell.trashItem(path) });
   });
   // A phone cannot reach `fastvibe-media://`, so a file it opens or saves arrives in slices.
   handle(Ipc.workspaceReadFile, (payload: { path?: unknown; conversationId?: unknown; offset?: unknown; length?: unknown }) =>
@@ -484,6 +535,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     return {
       version: app.getVersion(),
       engineVersion: piVersion,
+      officeVersion: officeCliInstall().version,
       userData: paths.userData,
       runtimeRoot: paths.runtimeRoot,
       platform: process.platform,

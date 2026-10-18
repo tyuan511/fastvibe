@@ -1,4 +1,5 @@
 import { isHtmlFile, mediaPreviewKind, mediaPreviewUrl } from "./media-preview.ts";
+import { officeFormatOf } from "./office.ts";
 import type { ToolCallBlock } from "./types.ts";
 
 /**
@@ -19,7 +20,7 @@ import type { ToolCallBlock } from "./types.ts";
  * file preview does (`fastvibe-media://`). That keeps the list recomputable from the transcript.
  */
 
-export type InlineMediaKind = "image" | "video" | "html";
+export type InlineMediaKind = "image" | "video" | "html" | "office";
 
 export type InlinePreview = {
   /** Unique within one reply. */
@@ -52,6 +53,7 @@ function kindOfExt(ext: string): InlineMediaKind | null {
   if (WEB_IMAGE.has(ext)) return "image";
   if (WEB_VIDEO.has(ext)) return "video";
   if (ext === ".html" || ext === ".htm") return "html";
+  if (ext === ".docx" || ext === ".xlsx" || ext === ".pptx") return "office";
   return null;
 }
 
@@ -79,11 +81,14 @@ export function classifyRef(ref: string): InlineMediaKind | null {
       return null;
     }
     const kind = kindOfExt(extOf(pathname));
-    return kind === "html" ? null : kind;
+    // A page, and an Office file, are rendered from a local path. An https URL of either is a
+    // download, not something this transcript can frame.
+    return kind === "html" || kind === "office" ? null : kind;
   }
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return null;
   // A path, absolute or relative: the extension decides.
   if (isHtmlFile(value)) return "html";
+  if (officeFormatOf(value)) return "office";
   const media = mediaPreviewKind(value);
   if (media === "image" || media === "video") return kindOfExt(extOf(value));
   return null;

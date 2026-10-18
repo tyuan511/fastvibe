@@ -12,7 +12,7 @@ import { ExtensionNotices, ExtensionWidgets, GoalPanel } from "@/components/chat
 import { TodoPanel } from "@/components/chat/todo-list";
 import { ComposerSlot, DraftKeeper, MessageThread, availableModels, orderProjectsByCwd } from "@/app-thread";
 import { useAppBootstrap, type ConversationOpenSource } from "@/use-app-bootstrap";
-import { NewSessionHero, SuggestionChips } from "@/components/chat/new-session";
+import { NewSessionFooter, NewSessionHero } from "@/components/chat/new-session";
 import { PermissionDialog } from "@/components/chat/permission-dialog";
 import { PermissionPanel, type PermissionResponse } from "@/components/chat/permission-panel";
 import { usagePercent } from "@/components/chat/session-controls";
@@ -1956,17 +1956,26 @@ export function App(): JSX.Element {
               </div>
             </motion.header>
             {showHero ? (
-              // New conversation: the greeting hero sits above the composer and the
-              // suggestion chips below it, with the group centred like the reference.
-              <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
-                <NewSessionHero />
-                <ExtensionWidgets className="pb-2" />
-                <GoalPanel className="pb-2" disabled={conversationWorking} />
-                <TodoPanel className="pb-2" />
+              // New conversation: the greeting hero sits above the composer and the way back
+              // into recent work below it. The composer is pinned by the two areas around it
+              // rather than centred with them, so a footer of one recent chat or four does not
+              // move it: the hero grows upward from it, the footer downward. The lower area is
+              // weighted heavier, which sits the composer a little above centre.
+              <div className="flex min-h-0 w-full flex-1 flex-col items-center">
+                <div className="flex w-full flex-[2] flex-col items-center justify-end gap-6 pb-6">
+                  <NewSessionHero />
+                  <ExtensionWidgets className="pb-2" />
+                  <GoalPanel className="pb-2" disabled={conversationWorking} />
+                  <TodoPanel className="pb-2" />
+                </div>
                 {composerSlot}
-                {/* The suggestion chips write the draft, which a model-less composer refuses to
-                    type — offering them there would fill a box the user cannot send from. */}
-                {hasModel ? <SuggestionChips onSelect={setDraft} /> : null}
+                <div className="flex min-h-0 w-full flex-[3] flex-col items-center overflow-y-auto pt-1">
+                  <NewSessionFooter
+                    project={active?.project}
+                    projectName={activeProject?.name}
+                    onOpen={onSidebarOpen}
+                  />
+                </div>
               </div>
             ) : (
               <>

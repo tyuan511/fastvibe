@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { engine, getStatus, onConversationReady, onEvent, onStatus } from "@/lib/engine-client";
 import { createConversationRefresh } from "@/lib/conversation-refresh";
+import { coalesce } from "@/lib/coalesce";
 import { createWorkspaceRestore } from "@/lib/workspace-restore";
 import { isDagNodeId } from "@shared/dag";
 import { findSubagent } from "@shared/subagent-state";
@@ -14,7 +15,14 @@ import { useSessionStore, working } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
 import type { ConversationOpenResult, EngineEvent, EngineSessionState, EngineStatus, SlashCommand, WorkspaceSnapshot } from "@shared/types";
 
-const { refreshStats, reloadActiveState, reloadActiveMessages } = createConversationRefresh(engine, useSessionStore.getState);
+const conversationRefresh = createConversationRefresh(engine, useSessionStore.getState);
+// The events below ask for the same reads in bursts: a finished run sends `agent_end` and then
+// `agent_settled`, each asking for state, transcript and stats, and every tool result asked for
+// the stats again. Collapsed (`lib/coalesce.ts`), a burst is one read, and a read asked for while
+// one is in flight still runs once more after it.
+const reloadActiveState = coalesce(conversationRefresh.reloadActiveState, 16);
+const reloadActiveMessages = coalesce(conversationRefresh.reloadActiveMessages, 16);
+const refreshStats = coalesce(conversationRefresh.refreshStats, 250);
 
 export type ConversationOpenSource = "user" | "history" | "remote" | "restore";
 

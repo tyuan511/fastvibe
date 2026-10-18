@@ -30,10 +30,19 @@ import { installDecisionTaskDependencies, revokeDecisionTasks } from "./pi/decis
 import { loadProviderKeys, setProviderKey } from "./engine/providers";
 import { presentNotification, readNotificationSettings } from "./engine/notifications";
 import { readAgentConfig } from "./engine/runtime-config";
-import { notificationEnabled, notificationForEvent, type NotificationRequest } from "@shared/notifications";
+import {
+  focusedApprovalNeedsNotice,
+  isBlockingPrompt,
+  notificationEnabled,
+  notificationForEvent,
+  type NotificationRequest,
+} from "@shared/notifications";
 import { applyLanguages } from "./engine/ai-language";
 import { uiText } from "./engine/ui-text";
-import { applyShellPath } from "./engine/shell-path";
+import { applyShellPathAsync } from "./engine/shell-path";
+import { applyShellLocale } from "./engine/shell-locale";
+import { applyOfficeCliEnv } from "./engine/office-cli";
+import { stopOfficeWatches } from "./engine/office-watch";
 import { exportLogs, initLogger, log, writeRendererLog } from "./engine/logger";
 import { applyKeepAwake, clearRunningConversations, setConversationRunning } from "./engine/keep-awake";
 import { createNetworkProxy } from "./engine/network-proxy";
@@ -80,9 +89,23 @@ process.env.FASTVIBE_RESOURCES_PATH = app.isPackaged
   ? process.resourcesPath
   : join(app.getAppPath(), "resources");
 
-// GUI-launched Electron inherits a stub PATH. Fill in Homebrew / user bins
-// before any agent session, MCP stdio server or in-app terminal is spawned.
-applyShellPath();
+// GUI-launched Electron inherits a stub environment: no PATH beyond launchd's and no
+// locale at all. Fill both in before any agent session, MCP stdio server or in-app
+// terminal is spawned — a shell with no `LC_CTYPE` runs in the C locale and draws
+// every non-ASCII character as garbage (see `engine/shell-locale.ts`).
+applyShellLocale();
+// The OfficeCLI that ships in this bundle goes on PATH ahead of anything else, with its
+// self-update and its self-installer switched off (`engine/office-cli.ts`). Before any session,
+// terminal or MCP server is forked, so all of them inherit it.
+applyOfficeCliEnv();
+// The login shell's PATH is asked for without blocking: its startup files run while Electron
+// initialises, and `whenReady` awaits this before anything can spawn. The bundled OfficeCLI is
+// put back in front afterwards, since the shell's entries are merged ahead of what was there.
+const childEnvironment = applyShellPathAsync()
+  .catch(() => undefined)
+  .then(() => {
+    applyOfficeCliEnv();
+  });
 
 // Privileged schemes must be declared before the app is ready.
 registerFileIconScheme();
@@ -94,10 +117,13 @@ guardGuestPopups();
 // File logger before anything that can throw: engine construction, IPC, windows.
 initLogger();
 
-// Extensions are TypeScript modules jiti compiles at load time. Its on-disk cache
-// cannot be written inside the packaged asar, so turn it off there; dev keeps the
-// cache for faster reloads.
-if (app.isPackaged) process.env.JITI_FS_CACHE = "false";
+// Extensions are TypeScript modules jiti compiles at load time, and its on-disk cache is
+// left on in every build. The SDK keeps loaded extensions for one cwd only, so a chat in
+// another folder (every scratch chat has its own) loads them all again: ~110ms of
+// transpiling without the cache, ~6ms with it. The cache is not written into the asar —
+// jiti puts it under `os.tmpdir()/jiti` when the loader has no `node_modules/.cache`
+// beside it, turns itself off when that is not writable, and keys every file by a hash
+// of its source, so an update never serves stale code.
 
 function bundledAgentRuntime(): AgentRuntimeSource {
   const metadata = app.isPackaged
@@ -262,7 +288,9 @@ const gateway = new RemoteGateway({
 });
 const windows = new Set<BrowserWindow>();
 function createWindow(): void {
-  createDesktopWindow(windows);
+  // Leaving the app is when a question raised while the user was watching first needs
+  // saying out loud — see notifyParkedPrompts.
+  createDesktopWindow(windows, scheduleParkedPromptNotice);
 }
 function openWindow(): void {
   const existing = [...windows].find((window) => !window.isDestroyed());
@@ -532,6 +560,10 @@ const singleInstance = Boolean(process.env.ELECTRON_RENDERER_URL) || app.request
 app.whenReady().then(async () => {
   if (!singleInstance) return;
   if (shutdownPhase !== "running") return;
+  // PATH has to be complete before the first child: an agent session, an MCP server, a
+  // terminal or a git call from the window. Usually already settled by the time Electron is.
+  await childEnvironment;
+  if (shutdownPhase !== "running") return;
   log.info("app ready");
   installBrowserGlobal();
   installDecisionTaskDependencies({
@@ -783,6 +815,11 @@ function requestShutdown(reason: string): void {
     log.warn(`terminal cleanup failed: ${String(error)}`);
   }
   try {
+    void stopOfficeWatches();
+  } catch (error) {
+    log.warn(`office preview cleanup failed: ${String(error)}`);
+  }
+  try {
     clearRunningConversations();
   } catch (error) {
     log.warn(`keep-awake cleanup failed: ${String(error)}`);
@@ -895,7 +932,43 @@ if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
 const NOTIFIABLE_EVENTS = new Set(["conversation_activity", "extension_ui_request"]);
 
 /**
- * Raise one notice, if the user asked for that scenario and no window is in front.
+ * The notice a parked prompt raises: one wording for every dialog method, because what
+ * the user has to do is the same — open that chat and answer.
+ */
+function approvalRequest(conversationId: string | undefined): NotificationRequest {
+  return {
+    setting: "notifyApproval",
+    conversationId,
+    title: uiText("有一个会话在等你", "A chat is waiting for you"),
+    body: uiText("切换到这个会话继续处理。", "Switch to that conversation to continue."),
+  };
+}
+
+const notificationSink = () => ({
+  windows: () => windows,
+  createWindow: () => createWindow(),
+  openConversation: (id: string) => engine.openConversation(id),
+});
+
+/**
+ * Prompts a notice has already named, so one question is not announced twice.
+ *
+ * A prompt can outlive the moment it arrived: it was raised while the user was watching
+ * (no notice then — the window was in front), or it landed in the chat on screen and the
+ * user switched away afterwards. Both paths below meet it again, and a banner per path
+ * would say the same sentence twice. Entries leave when the prompt does.
+ */
+const notifiedPrompts = new Set<string>();
+
+function pruneNotifiedPrompts(): void {
+  if (notifiedPrompts.size === 0) return;
+  const parked = new Set(engine.getPendingUi().map((prompt) => String(prompt.id)));
+  for (const id of [...notifiedPrompts]) if (!parked.has(id)) notifiedPrompts.delete(id);
+}
+
+/**
+ * Raise one notice, if the user asked for that scenario and is not already looking at
+ * what it is about.
  *
  * The wording lives here rather than in `notificationForEvent`: that function is a pure
  * scenario decision the tests load without a process environment, while every user-facing
@@ -905,23 +978,27 @@ const NOTIFIABLE_EVENTS = new Set(["conversation_activity", "extension_ui_reques
  * for every streamed token of a reply the user is watching, so nothing expensive —
  * resolving the paths behind `settings.json`, let alone parsing it — happens until the
  * app is genuinely in the background and an event worth noticing has actually arrived.
+ * A blocking prompt is the one exception: its panel is drawn only for the conversation on
+ * screen, so a question parked in any other chat is invisible however focused the app is,
+ * and the notice is the only thing that says so.
  */
 function raiseNotification(event: Record<string, unknown>): void {
   const focused = [...windows].some((window) => !window.isDestroyed() && window.isFocused());
-  if (focused) return;
+  const approval = event.type === "extension_ui_request" && isBlockingPrompt(event);
+  if (focused && !approval) return;
   const notice = notificationForEvent(event);
   if (!notice) return;
+  if (notice.setting === "notifyApproval" && focused && !focusedApprovalNeedsNotice(notice.conversationId, engine.activeConversationId)) return;
   if (!notificationEnabled(readNotificationSettings(), notice.setting)) return;
-  // A blocking prompt parks the tool until it is answered, and its panel is only drawn for
-  // the conversation on screen — so without this notice a background chat could sit
-  // waiting with nothing anywhere to say so.
+  if (notice.setting === "notifyApproval") {
+    const id = typeof event.id === "string" ? event.id : "";
+    pruneNotifiedPrompts();
+    if (id && notifiedPrompts.has(id)) return;
+    if (id) notifiedPrompts.add(id);
+  }
   const request: NotificationRequest =
     notice.setting === "notifyApproval"
-      ? {
-          ...notice,
-          title: uiText("有一个会话在等你", "A chat is waiting for you"),
-          body: uiText("切换到这个会话继续处理。", "Switch to that conversation to continue."),
-        }
+      ? approvalRequest(notice.conversationId)
       : {
           ...notice,
           title: notice.title ?? uiText("会话", "Chat"),
@@ -930,11 +1007,46 @@ function raiseNotification(event: Record<string, unknown>): void {
               ? uiText("任务出错了，可以回来看看。", "The task failed. Come back to see what happened.")
               : uiText("任务已完成，可以回来查看结果。", "The task is done. Come back to see the result."),
         };
-  presentNotification(request, {
-    windows: () => windows,
-    createWindow: () => createWindow(),
-    openConversation: (id) => engine.openConversation(id),
-  });
+  presentNotification(request, notificationSink());
+}
+
+/**
+ * Name every prompt still parked when the last window loses focus, once each.
+ *
+ * A question raised while the user was watching got no notice at the time — the window
+ * was in front, and its panel was on screen — so walking away is the first moment
+ * nothing anywhere says a chat is stopped on an answer. Prompts already named (one that
+ * landed in a background chat) are skipped; a prompt raised after this runs is named by
+ * `raiseNotification`, which sees no focused window by then.
+ */
+let parkedNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * The blur handler, delayed a beat: focus moving between this app's own windows blurs one
+ * before the other is focused, and the check inside `notifyParkedPrompts` re-reads focus
+ * when it actually runs, so a hand-over within the delay names nothing.
+ */
+function scheduleParkedPromptNotice(): void {
+  if (parkedNoticeTimer) clearTimeout(parkedNoticeTimer);
+  parkedNoticeTimer = setTimeout(() => {
+    parkedNoticeTimer = undefined;
+    notifyParkedPrompts();
+  }, 250);
+}
+
+function notifyParkedPrompts(): void {
+  if ([...windows].some((window) => !window.isDestroyed() && window.isFocused())) return;
+  pruneNotifiedPrompts();
+  const parked = engine.getPendingUi();
+  if (parked.length === 0) return;
+  if (!notificationEnabled(readNotificationSettings(), "notifyApproval")) return;
+  for (const prompt of parked) {
+    const id = typeof prompt.id === "string" ? prompt.id : "";
+    if (!id || notifiedPrompts.has(id)) continue;
+    notifiedPrompts.add(id);
+    const conversationId = typeof prompt.conversationId === "string" ? prompt.conversationId : undefined;
+    presentNotification(approvalRequest(conversationId), notificationSink());
+  }
 }
 
 /**

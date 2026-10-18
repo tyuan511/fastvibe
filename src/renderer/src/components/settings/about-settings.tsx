@@ -132,6 +132,13 @@ export function AboutSettings(): JSX.Element {
           }
         />
         <SettingsRow
+          title={t("about.office")}
+          description={t("about.officeDesc")}
+          control={
+            <span className="font-mono text-sm">{info?.officeVersion ?? "—"}</span>
+          }
+        />
+        <SettingsRow
           title={t("about.sync")}
           description={t("about.syncDesc")}
           control={

@@ -112,13 +112,34 @@ export const Ipc = {
   projectsSetPrimary: "projects:set-primary",
   projectsRepos: "projects:repos",
   workspaceReveal: "workspace:reveal",
+  /** Hand one file to the desktop's own default app. Opens something on this machine, so it is never remote. */
+  workspaceOpenExternal: "workspace:open-external",
   workspacePreview: "workspace:preview",
   workspaceFilesExist: "workspace:files-exist",
   workspaceFileIcons: "workspace:file-icons",
   workspaceReadDir: "workspace:read-dir",
+  /** The file tree's create / rename / delete, each bound to the project root it was read from. */
+  workspaceCreateEntry: "workspace:create-entry",
+  workspaceRenameEntry: "workspace:rename-entry",
+  workspaceDeleteEntry: "workspace:delete-entry",
   workspaceSearchFiles: "workspace:search-files",
   workspaceWriteFile: "workspace:write-file",
   workspaceReadFile: "workspace:read-file",
+  /**
+   * Render an Office document to a static HTML snapshot with the bundled OfficeCLI.
+   *
+   * One call per file, one short-lived subprocess, and a cached page: this is the preview every
+   * surface uses. The live `watch` server is a separate call and only ever for a local file in
+   * the side pane.
+   */
+  officeRender: "office:render",
+  /** Start or reuse the live preview for a local Office file. Returns a 127.0.0.1 URL. */
+  officeWatchStart: "office:watch-start",
+  officeWatchStop: "office:watch-stop",
+  /** Read the elements selected in the live preview. */
+  officeSelection: "office:selection",
+  /** Pushed when a live preview starts, fails or exits. The URL is this machine's loopback. */
+  officeWatchState: "office:watch-state",
   workspaceGitStatus: "workspace:git-status",
   workspaceOpenTerminal: "workspace:open-terminal",
   workspaceGitBranches: "workspace:git-branches",
@@ -323,6 +344,13 @@ export type AppInfo = {
   version: string;
   /** The embedded pi coding agent version, shown as 内核版本 in Settings → 关于. */
   engineVersion: string;
+  /**
+   * The OfficeCLI version this install ships, shown as Office 版本. Null when the binary is not
+   * there — a dev tree that never ran `scripts/fetch-officecli.mjs`, or a platform with no
+   * asset in the manifest. Read from the manifest the fetch wrote beside the binary, so the
+   * number is the one the build verified, not whatever `--version` happens to answer.
+   */
+  officeVersion: string | null;
   userData: string;
   runtimeRoot: string;
   platform: string;

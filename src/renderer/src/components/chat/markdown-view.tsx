@@ -1,13 +1,8 @@
 import { createContext, forwardRef, memo, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
-import type { PluggableList } from "unified";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import { remarkStrictInlineMath } from "@/lib/remark-strict-inline-math";
-import { rehypeHeadingIds } from "@/lib/rehype-heading-ids";
-import { isPathLike, remarkPathLinks } from "@/lib/remark-path-links";
+import { REMARK_PLUGINS, REHYPE_PLUGINS, REHYPE_PLUGINS_WITH_HEADING_IDS } from "@/lib/markdown-pipeline";
+import { isPathLike } from "@/lib/remark-path-links";
 import { useValidatedMarkdownPaths } from "@/lib/markdown-path-validation";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
@@ -24,40 +19,17 @@ import { DiffView } from "./diff-view";
 import { InlineMediaItem } from "./inline-preview";
 
 /**
- * Markdown, with math.
+ * Markdown, with math and raw HTML.
  *
- * `remark-math` + `rehype-katex` are wired in with the options the app needs, and
- * both are **module-level constants**: `react-markdown` builds its processor from
- * these props, and inline arrays would be a new identity on every render of every
- * streamed token — the one thing `memo` on this component exists to prevent.
+ * The pipeline itself is `@/lib/markdown-pipeline` — a module this file can share with a test,
+ * which is what lets the order of `rehype-raw`, the sanitizer and KaTeX be pinned rather than
+ * eyeballed. What stays here is only how the tokens it produces are drawn: the fence becomes
+ * `CodeBlock`, a path link becomes a `PathLink`, a table gets its scroll wrapper.
  *
- * `remarkStrictInlineMath` follows `remark-math` because it inspects what that
- * plugin tokenized: `$HOME`, `$PATH` and `$5 到 $10` are prose here, not formulas.
+ * The constants are module-level in that module for the same reason they are here: an inline
+ * array would be a new identity on every render of every streamed token, and that is the one
+ * thing `memo` on the block component exists to prevent.
  */
-const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkMath, remarkStrictInlineMath, remarkPathLinks];
-const REHYPE_PLUGINS: PluggableList = [
-  [
-    rehypeKatex,
-    {
-      // A half-streamed formula is the normal case, not an error: KaTeX must never
-      // throw into React, just draw the offending fragment in the error colour.
-      throwOnError: false,
-      // …and it must not warn about the constructs it merely tolerates (\tag,
-      // unicode text). A broken formula is shown, not logged.
-      strict: false,
-      errorColor: "var(--destructive)",
-    },
-  ],
-];
-
-/**
- * The same pipeline plus heading ids, for the file pane's document view.
- *
- * A module-level constant like `REHYPE_PLUGINS`: a new array identity per render is
- * what makes `react-markdown` rebuild its processor for every streamed token.
- */
-const REHYPE_PLUGINS_WITH_HEADING_IDS: PluggableList = [...REHYPE_PLUGINS, rehypeHeadingIds];
-
 /** Fence languages whose body is a diff, drawn by `DiffView` rather than Shiki. */
 const DIFF_LANGUAGES = new Set(["diff", "patch"]);
 const MAX_CODE_PREVIEW_CHARS = 24_000;

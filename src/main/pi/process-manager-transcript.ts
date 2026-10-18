@@ -48,6 +48,11 @@ export function projectSessionMessages(
   const transcript: unknown[] = [];
   const completionTimes = new Map<string, number>();
   for (const entry of entries) {
+    // The size the summary left behind is not part of the SDK's projected message; it rides
+    // in the entry's `details` (see native-compaction). Hand it to the mapper beside it.
+    const tokensAfter = entry.type === "compaction" && isRecord(entry.details) && typeof entry.details.tokensAfter === "number"
+      ? entry.details.tokensAfter
+      : undefined;
     for (const message of sessionEntryToContextMessages(entry)) {
       // The SDK keeps the active system prompt on a compaction entry so the model can
       // rebuild its context. It is not a user-visible transcript message; projecting
@@ -60,7 +65,14 @@ export function projectSessionMessages(
       // when it was sent — and `mapEngineMessages` can only prefer it when it travels
       // with the message. Wrapping only the user rows keeps an assistant message's own
       // request-start stamp intact.
-      transcript.push(role === "user" ? { id: entry.id, timestamp: entry.timestamp, message } : message);
+      if (role === "user") {
+        transcript.push({ id: entry.id, timestamp: entry.timestamp, message });
+      } else if (tokensAfter !== undefined) {
+        transcript.push({ message, tokensAfter });
+        entryIds.set(transcript[transcript.length - 1], entry.id);
+      } else {
+        transcript.push(message);
+      }
     }
     if (entry.type !== "message") continue;
     const completedAt = Date.parse(entry.timestamp);

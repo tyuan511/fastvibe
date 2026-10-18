@@ -1,6 +1,6 @@
 import type { DagNode, DagNodeStatus } from "@shared/dag";
 import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
-import type { ChatMessage, ConversationOpenResult, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
+import type { ChatMessage, Conversation, ConversationOpenResult, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus, RemoteServerState } from "@shared/ipc";
 import type { OfficialState } from "@shared/official";
 import type { MemoryState } from "@shared/memory";
@@ -14,6 +14,7 @@ import {
   MCP_SERVERS,
   MESSAGES,
   INLINE_MESSAGES,
+  INLINE_OFFICE_MESSAGES,
   MATH_MESSAGES,
   MODELS,
   PREVIEW_CWD,
@@ -56,6 +57,24 @@ const website = params.get("website") === "1";
 const websiteLanguage: WebsiteLanguage = params.get("lang") === "en" ? "en" : "zh";
 const websiteScene = params.get("scene") ?? "workspace";
 const websiteData = website ? websiteFixture(websiteLanguage) : null;
+
+/**
+ * `?inline=1` shows what a reply made as pictures; `?inline=office` shows the same 「用时」 strip
+ * built from documents, which is drawn as a brand glyph rather than photographed from a frame.
+ */
+function inlineFixture() {
+  if (website) return null;
+  const mode = params.get("inline");
+  if (mode === "office") return INLINE_OFFICE_MESSAGES;
+  return mode ? INLINE_MESSAGES : null;
+}
+
+/** The thread the harness answers with: a math or inline-preview fixture instead of the default. */
+function transcriptFixture() {
+  if (website) return fixtureMessages;
+  if (params.get("math") === "1") return [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
+  return inlineFixture() ?? fixtureMessages;
+}
 // The settings scenes are routes, so they have to be entered before the shell mounts.
 if (website && websiteScene === "models") window.location.hash = "#/settings/providers";
 if (website && websiteScene === "market") window.location.hash = "#/plugins";
@@ -140,7 +159,12 @@ const fixtureProjects = (websiteData?.projects ?? PROJECTS).map((project) =>
   params.get("resources") === "sample" && project.cwd === PREVIEW_CWD
     ? { ...project, folders: [PREVIEW_CWD + "-services"] } : project,
 );
-const fixtureConversations = websiteData?.conversations ?? CONVERSATIONS;
+// `?new=1` opens on an empty draft in the preview project, so the new-conversation hero
+// (greeting, recent chats, composer hints) can be looked at.
+const newDraft: Conversation | null = !websiteData && params.get("new") === "1"
+  ? { id: "conv-new", title: "新对话", cwd: PREVIEW_CWD, project: PREVIEW_CWD, createdAt: Date.now(), updatedAt: Date.now() }
+  : null;
+const fixtureConversations = websiteData?.conversations ?? (newDraft ? [newDraft, ...CONVERSATIONS] : CONVERSATIONS);
 const fixtureMessages = websiteData?.messages ?? MESSAGES;
 const fixtureSession = websiteData?.session ?? SESSION;
 const fixtureStats = websiteData?.stats ?? STATS;
@@ -150,7 +174,7 @@ function mockSession(conversationId?: string): EngineSessionState {
   return { ...fixtureSession, ...mockSessionOverrides, conversationId: conversationId ?? fixtureActiveId } as EngineSessionState;
 }
 const fixtureCwd = websiteData?.cwd ?? PREVIEW_CWD;
-const fixtureActiveId = websiteData?.activeId ?? "conv-theme";
+const fixtureActiveId = websiteData?.activeId ?? newDraft?.id ?? "conv-theme";
 
 const snapshot = (): WorkspaceSnapshot => ({
   projects: fixtureProjects,
@@ -249,9 +273,10 @@ const openResult = (id: string): ConversationOpenResult => {
   // conv-theme in `engine:getRunning` (see `runningIds`), which the app asks for once
   // at mount — a state reply is not the mark's source, because `setSession` refuses to
   // speak for a conversation that is not on screen when it lands.
-  let messages = isActive ? fixtureMessages : [];
+  let messages = isActive && !newDraft ? fixtureMessages : [];
   if (!website && isActive && params.get("math") === "1") messages = [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
-  if (!website && isActive && params.get("inline") === "1") messages = INLINE_MESSAGES;
+  const inline = inlineFixture();
+  if (isActive && inline) messages = inline;
   // `?older=1` ages the thread so the footers have to name their day. Every fixture is
   // from today, so without this the date half of the timestamp rule has nothing to
   // render and could not be looked at at all. The newest turn is still from today and
@@ -288,6 +313,7 @@ const status: EngineStatus = { state: "ready", cwd: fixtureCwd };
 const APP_INFO: AppInfo = {
   version: "0.1.0",
   engineVersion: "1.2.0",
+  officeVersion: "v1.0.157",
   userData: "/Users/dev/Library/Application Support/FastVibe",
   runtimeRoot: "/Users/dev/Library/Application Support/FastVibe/runtime/engine",
   platform,
@@ -296,37 +322,22 @@ const APP_INFO: AppInfo = {
 
 /* ------------------------------------------------------------------ file icons */
 
-// `?url&no-inline` keeps the asset as a servable `/@fs/...` URL instead of
-// inlining a data URL, so the icon base can be derived from it. Bare
-// `/node_modules/...` paths are no good: the dev server answers them with HTML.
-import fileIconAsset from "material-icon-theme/icons/file.svg?url&no-inline";
-import materialIconsRaw from "material-icon-theme/dist/material-icons.json?raw";
+// `?url&no-inline` keeps the asset as a servable `/@fs/...` URL instead of inlining a data URL,
+// so the icon base can be derived from it. The manifest itself is committed (vscode-icons,
+// vendored by `scripts/vendor-file-icons.mjs`), so `?raw` costs a build-time file that always exists.
+import fileIconAsset from "../../../../resources/file-icons/icons/default_file.svg?url&no-inline";
+import fileIconsRaw from "../../../../resources/file-icons/manifest.json?raw";
+import type { FileIconMapping } from "@shared/types";
 
-// Under the Vite dev server the package's SVGs are served in place. The pre-compiled copy
-// the marketing site embeds (its own `scripts/build-app-preview.mjs`) ships the few the
-// fixtures use in its own `icons/` directory instead; anything else falls back to `file.svg`.
+// Under the Vite dev server the vendored SVGs are served in place. The pre-compiled copy the
+// marketing site embeds (its own `scripts/build-app-preview.mjs`) ships the few the fixtures use
+// in its own `icons/` directory instead; anything else falls back to `default_file.svg`.
 const ICONS_BASE =
   import.meta.env.BASE_URL === "/"
     ? fileIconAsset.slice(0, fileIconAsset.lastIndexOf("/") + 1)
     : `${import.meta.env.BASE_URL}icons/`;
 
-type MaterialManifest = {
-  fileExtensions: Record<string, string>;
-  fileNames: Record<string, string>;
-  file: string;
-  folder: string;
-  folderExpanded: string;
-};
-
-const MANIFEST = JSON.parse(materialIconsRaw) as MaterialManifest;
-
-const ICON_MAPPING = {
-  fileExtensions: MANIFEST.fileExtensions,
-  fileNames: MANIFEST.fileNames,
-  file: MANIFEST.file,
-  folder: MANIFEST.folder,
-  folderExpanded: MANIFEST.folderExpanded,
-};
+const ICON_MAPPING = JSON.parse(fileIconsRaw) as FileIconMapping;
 
 async function loadIconMapping() {
   return ICON_MAPPING;
@@ -334,7 +345,7 @@ async function loadIconMapping() {
 
 /**
  * The real app serves icons through a private `fastvibe-icon://` scheme in the desktop
- * window, which this harness does not have, so it is rewritten to the package's SVGs that
+ * window, which this harness does not have, so it is rewritten to the vendored SVGs that
  * the Vite dev server exposes.
  */
 function rewriteIcons(scope: ParentNode): void {
@@ -346,7 +357,7 @@ function rewriteIcons(scope: ParentNode): void {
       .replace(/\.svg$/, "");
     image.onerror = () => {
       image.onerror = null;
-      image.src = `${ICONS_BASE}file.svg`;
+      image.src = `${ICONS_BASE}default_file.svg`;
     };
     image.src = `${ICONS_BASE}${name}.svg`;
   });
@@ -446,6 +457,36 @@ function accountMock(): typeof window.fastvibe.account {
       return () => listeners.delete(listener);
     },
   };
+}
+
+/** The harness speaks the language `mock.html?lang=` asks for, like every other string in it. */
+function mockMessage(zh: string, en: string): string {
+  return params.get("lang") === "en" ? en : zh;
+}
+
+/**
+ * The file tree as the preview harness holds it: the fixture listings, plus whatever the
+ * create / rename / delete stubs changed. A directory is copied out of the fixture the first
+ * time something is edited inside it, so a rename visibly moves a row with no filesystem.
+ */
+const mutableTree = new Map<string, DirEntry[]>();
+
+function mutableEntries(dir: string): DirEntry[] {
+  const existing = mutableTree.get(dir);
+  if (existing) return existing;
+  const copy = (websiteData?.tree[dir] ?? TREE[dir] ?? []).map((entry) => ({ ...entry }));
+  mutableTree.set(dir, copy);
+  return copy;
+}
+
+function mockParentOf(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash > 0 ? path.slice(0, slash) : path;
+}
+
+/** Directories first, then files, alphabetical — the order the host's own listing uses. */
+function sortEntries(list: DirEntry[]): void {
+  list.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "directory" ? -1 : 1));
 }
 
 const api = {
@@ -557,8 +598,8 @@ const api = {
     },
     setInterruptMode: async () => fixtureSession,
     setAutoCompaction: async () => fixtureSession,
-    branch: async () => (!website && params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : !website && params.get("inline") === "1" ? INLINE_MESSAGES : fixtureMessages),
-    getMessages: async () => (!website && params.get("math") === "1" ? [...MESSAGES.slice(0, 2), ...MATH_MESSAGES] : !website && params.get("inline") === "1" ? INLINE_MESSAGES : fixtureMessages),
+    branch: async () => transcriptFixture(),
+    getMessages: async () => transcriptFixture(),
     getStats: async () => fixtureStats,
     setSteeringMode: async () => fixtureSession,
     setFollowUpMode: async () => fixtureSession,
@@ -668,6 +709,7 @@ const api = {
     pick: async () => null,
     reveal: async () => undefined,
     preview: async (path: string) => websiteData?.previewFor(path) ?? previewFor(path),
+    openExternal: async () => ({ ok: true }),
     writeFile: async () => undefined,
     filesExist: async (paths: string[]) => paths.filter((path) => /\.[A-Za-z0-9]{1,12}$/.test(path)),
     fileIcons: loadIconMapping,
@@ -685,12 +727,52 @@ const api = {
     readDir: async (path: string) => {
       const decoded = decodeRemoteProjectKey(path);
       const raw = decoded?.remoteWorkspaceId ?? path;
-      const base = websiteData?.tree[raw] ?? TREE[raw] ?? [];
+      const base = mutableTree.get(raw) ?? websiteData?.tree[raw] ?? TREE[raw] ?? [];
       if (!decoded) return base;
       return base.map((entry) => ({
         ...entry,
         path: remoteProjectKey(decoded.serverInstanceId, entry.path),
       }));
+    },
+    // The tree's own edits, kept in memory: `mock.html?pane=files` shows a rename moving a
+    // row and a delete taking it away, which is what the pane's wiring is worth checking.
+    createEntry: async ({ path, name, kind }: { cwd: string; path: string; name: string; kind: DirEntry["kind"] }) => {
+      const decoded = decodeRemoteProjectKey(path);
+      const dir = decoded?.remoteWorkspaceId ?? path;
+      const list = mutableEntries(dir);
+      if (list.some((entry) => entry.name === name)) throw new Error(mockMessage(`「${name}」已存在`, `“${name}” already exists`));
+      const entry: DirEntry = { name, path: `${dir}/${name}`, kind };
+      list.push(entry);
+      sortEntries(list);
+      return decoded ? { ...entry, path: remoteProjectKey(decoded.serverInstanceId, entry.path) } : entry;
+    },
+    renameEntry: async ({ path, name }: { cwd: string; path: string; name: string }) => {
+      const decoded = decodeRemoteProjectKey(path);
+      const raw = decoded?.remoteWorkspaceId ?? path;
+      const parent = mockParentOf(raw);
+      const list = mutableEntries(parent);
+      const current = list.find((entry) => entry.path === raw);
+      if (!current) throw new Error(mockMessage("文件不存在", "The file does not exist"));
+      if (list.some((entry) => entry.name === name)) throw new Error(mockMessage(`「${name}」已存在`, `“${name}” already exists`));
+      const next: DirEntry = { ...current, name, path: `${parent}/${name}` };
+      // A folder's own listings move with it, the way the real pane re-keys them after a rename.
+      for (const [key, value] of [...mutableTree]) {
+        if (key !== raw && !key.startsWith(`${raw}/`)) continue;
+        const to = key === raw ? next.path : next.path + key.slice(raw.length);
+        mutableTree.delete(key);
+        mutableTree.set(to, value.map((item) => ({ ...item, path: next.path + item.path.slice(raw.length) })));
+      }
+      mutableTree.set(parent, list.map((item) => (item.path === raw ? next : item)));
+      sortEntries(mutableTree.get(parent)!);
+      return decoded ? { ...next, path: remoteProjectKey(decoded.serverInstanceId, next.path) } : next;
+    },
+    deleteEntry: async ({ path }: { cwd: string; path: string }) => {
+      const decoded = decodeRemoteProjectKey(path);
+      const raw = decoded?.remoteWorkspaceId ?? path;
+      const parent = mockParentOf(raw);
+      mutableTree.set(parent, mutableEntries(parent).filter((entry) => entry.path !== raw));
+      // A directory carries its own listing; empty it so a re-open shows no ghosts.
+      mutableTree.set(raw, []);
     },
     gitStatus: async (cwd: string): Promise<GitStatus> => gitPreviewOverrides.get(cwd) ?? (params.get("git") === "large" ? gitTreeFixture(cwd) : undefined) ?? websiteData?.gitStatus ?? ({
       cwd,
@@ -749,6 +831,30 @@ const api = {
     terminalResize: async () => undefined,
     terminalKill: async () => undefined,
     onTerminalData: () => () => undefined,
+  },
+  office: {
+    render: async ({ path }: { path: string }) => {
+      const mode = params.get("office");
+      if (mode === "error") throw new Error("演示：文件已加密");
+      if (mode === "starting") return new Promise(() => undefined);
+      const title = path.split("/").pop() ?? "document";
+      const html = `<!doctype html><html><body style="margin:0;background:#f0f0f0;font-family:sans-serif"><div style="max-width:720px;margin:24px auto;background:#fff;min-height:480px;padding:64px 72px;box-shadow:0 2px 8px rgba(0,0,0,.12)"><h1 style="font-size:28px;margin:0 0 16px">${title}</h1><p>浏览器里没有 officecli，这是固定的预览页。</p></div></body></html>`;
+      return { path: `data:text/html;charset=utf-8,${encodeURIComponent(html)}` };
+    },
+    watchStart: async ({ path }: { path: string }) => {
+      const mode = params.get("office");
+      if (mode === "error") throw new Error("演示：实时预览没有起来");
+      if (mode === "starting") return new Promise(() => undefined);
+      const title = path.split("/").pop() ?? "document";
+      const html = `<!doctype html><html><body style="margin:0;background:#f0f0f0;font-family:sans-serif"><div style="max-width:720px;margin:24px auto;background:#fff;min-height:480px;padding:64px 72px"><h1>${title}</h1><p>实时预览占位。</p></div></body></html>`;
+      return { path, port: 0, url: `data:text/html;charset=utf-8,${encodeURIComponent(html)}` };
+    },
+    watchStop: async () => undefined,
+    selection: async () => ({
+      items: [{ path: "/body/p[@paraId=00100000]", type: "paragraph", text: "选中的一段" }],
+      text: "引用自 demo.docx 的选中内容：\n- /body/p[@paraId=00100000] (paragraph) — 选中的一段",
+    }),
+    onWatchState: () => () => undefined,
   },
   app: {
     /** Read by `lib/platform.ts` before the first paint; `?platform=` overrides it. */
@@ -1345,8 +1451,38 @@ if (pane === "files" || pane === "preview" || pane === "git") {
       }
       store.openFiles();
       if (maximize) store.toggleMaximized();
-      if (pane === "preview") {
+      const office = params.get("office");
+      if (office) {
+        const format = office === "xlsx" || office === "pptx" ? office : "docx";
+        store.openFilePreview({
+          kind: "office",
+          path: `${PREVIEW_CWD}/demo.${format}`,
+          name: `demo.${format}`,
+          format,
+          size: 4096,
+        });
+      } else if (pane === "preview") {
         store.openFilePreview(previewFor(`${PREVIEW_CWD}/src/renderer/src/components/settings/theme-select.tsx`));
+      } else if (params.get("preview") === "markdown") {
+        // `mock.html?pane=files&preview=markdown`: a `.md` as the document view renders it, which
+        // is the other half of what a reply's markup looks like — raw HTML, math and a `<style>`
+        // that must neither apply nor show.
+        store.openFilePreview(previewFor(`${PREVIEW_CWD}/docs/DESIGN.md`));
+      }
+      // A file the pane cannot open. The state is worth looking at on its own: it used to be
+      // the host's errno in red, and the whole point of the notice is that it is not.
+      const broken = params.get("preview");
+      if (broken === "missing" || broken === "permission" || broken === "folder" || broken === "unknown") {
+        const path = `${PREVIEW_CWD}/docs/DESIGN.md`;
+        store.openFilePreview(
+          broken === "missing"
+            ? { kind: "error", path, name: "DESIGN.md", reason: "missing", message: "文件不存在", detail: `ENOENT: no such file or directory, stat '${path}'`, directory: `${PREVIEW_CWD}/docs` }
+            : broken === "permission"
+              ? { kind: "error", path, name: "DESIGN.md", reason: "permission", message: "没有读取权限", detail: "EACCES: permission denied", directory: `${PREVIEW_CWD}/docs` }
+              : broken === "folder"
+                ? { kind: "error", path: `${PREVIEW_CWD}/docs`, name: "docs", reason: "not-a-file", message: "这是一个文件夹", detail: "EISDIR: illegal operation on a directory", directory: `${PREVIEW_CWD}/docs` }
+                : { kind: "error", path, name: "DESIGN.md", reason: "unknown", message: "读取失败：文件系统在写入中被替换", detail: "EBUSY: resource busy", directory: `${PREVIEW_CWD}/docs` },
+        );
       }
     });
   }, 400);

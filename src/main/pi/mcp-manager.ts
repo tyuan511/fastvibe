@@ -39,13 +39,21 @@ function withTimeout<T>(work: Promise<T>, label: string): Promise<T> {
  * The variables a stdio server inherits before its own `env` is laid on top. The
  * transport would hand over the whole of `process.env` by default; the app's own
  * environment is not the server's business, so only what a process needs to find its
- * interpreter and home directory goes through — the same short list the MCP reference
- * client uses.
+ * interpreter and home directory goes through — the MCP reference client's short list,
+ * plus the character locale.
+ *
+ * The locale is the one addition. Without it a server runs in the C locale, where a byte
+ * above 0x7f is not part of a character — the same hole `engine/shell-locale.ts` closes
+ * for the terminal, reopened here by this list, and the one place a server started inside
+ * FastVibe would behave worse than the same `npx` run by hand in Terminal.app (which does
+ * pass `LANG`). Both spellings are listed because either may be the one that is set: a
+ * desktop session's `LANG`, or the `LC_CTYPE` Main wrote. Windows has a console code page
+ * rather than a locale, and ConPTY is UTF-8 either way.
  */
 const INHERITED_ENV =
   process.platform === "win32"
     ? ["APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PROCESSOR_ARCHITECTURE", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "USERNAME", "USERPROFILE", "PROGRAMFILES"]
-    : ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"];
+    : ["HOME", "LANG", "LC_CTYPE", "LOGNAME", "PATH", "SHELL", "TERM", "USER"];
 
 function inheritedEnvironment(): Record<string, string> {
   const env: Record<string, string> = {};

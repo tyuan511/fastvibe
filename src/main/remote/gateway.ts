@@ -698,7 +698,10 @@ export class RemoteGateway {
     if (QUEUE_RESULT_METHODS.has(method)) return scopeQueueResult(result, serverInstanceId);
     if (STATE_METHODS.has(method)) return scopeSessionState(result, serverInstanceId);
     if (method === Ipc.workspaceTerminalStart) return scopeTerminal(result, serverInstanceId);
-    if (method === Ipc.workspacePreview) return scopePreview(result, serverInstanceId);
+    if (method === Ipc.workspacePreview || method === Ipc.officeRender) return scopePathField(result, serverInstanceId);
+    // A created or renamed entry comes back as `{ path }`; the tree keeps working with the
+    // namespaced path the way a listing does.
+    if (method === Ipc.workspaceCreateEntry || method === Ipc.workspaceRenameEntry) return scopePathField(result, serverInstanceId);
     if (method === Ipc.workspaceReadDir) return scopeReadDir(result, serverInstanceId);
     if (method === Ipc.engineGetRunning) return namespaceIdList(result, serverInstanceId);
     if (method === Ipc.engineGetSubagents) return scopeSubagents(result, serverInstanceId);
@@ -886,7 +889,8 @@ function scopeTerminal(result: unknown, serverInstanceId: string): unknown {
   return next;
 }
 
-function scopePreview(result: unknown, serverInstanceId: string): unknown {
+/** Qualify the `path` one of the workspace file methods returns. */
+function scopePathField(result: unknown, serverInstanceId: string): unknown {
   if (!isRecord(result)) return result;
   const next: Record<string, unknown> = { ...result };
   if (typeof next.path === "string" && next.path) next.path = scopeId(next.path, serverInstanceId);

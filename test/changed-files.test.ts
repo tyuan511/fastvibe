@@ -87,6 +87,19 @@ test("collectChangedFiles aggregates two writes to the same path", () => {
   assert.equal(files[0].diff, "+a\n-b");
 });
 
+test("an officecli write in bash is a changed file, without a line diff", () => {
+  const files = collectChangedFiles([
+    tool({
+      id: "1",
+      name: "bash",
+      args: { command: 'officecli create out/deck.pptx && officecli view notes.txt html' },
+    }),
+  ]);
+  assert.equal(files.length, 1);
+  assert.equal(files[0].path, "out/deck.pptx");
+  assert.equal(files[0].diff, undefined);
+});
+
 test("collectChangedFiles skips running and failed tools", () => {
   const files = collectChangedFiles([
     tool({

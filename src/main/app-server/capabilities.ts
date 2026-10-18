@@ -11,6 +11,9 @@ function capabilityOf(method: string): AppCapability | null {
   if (method.startsWith("workspace:terminal")) return "terminal";
   if (method.startsWith("workspace:git")) return "git";
   if (method.startsWith("workspace:")) return "workspace";
+  // Previewing a document in a project is the workspace's job; the live-watch calls that only
+  // make sense on the desktop are refused by `remote-policy.ts`, not by a missing capability.
+  if (method.startsWith("office:")) return "workspace";
   if (method.startsWith("providers:")) return "providers";
   if (method.startsWith("models-dev:")) return "providers";
   if (method.startsWith("settings:")) return "settings";

@@ -1,13 +1,14 @@
-import { useMemo, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon, Cancel01Icon, CircleIcon, ListChecksIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { RunningMark } from "@/components/running-mark";
-import { activeTodo, todoPosition, todoSnapshot, type TodoItem, type TodoStatus } from "@/lib/todos";
+import { activeTodo, todoPosition, type TodoItem, type TodoStatus } from "@/lib/todos";
+import { useConversationTodo } from "@/lib/use-conversation-todo";
 import { cn } from "@/lib/utils";
-import { useConversationWorking, useSessionStore } from "@/stores/session";
+import { useConversationWorking } from "@/stores/session";
 
 function StatusIcon({ status, live }: { status: TodoStatus; live: boolean }): JSX.Element {
   if (status === "completed") {
@@ -93,9 +94,9 @@ export function TodoChecklist({ items }: { items: TodoItem[] }): JSX.Element {
 }
 
 /**
- * Live checklist above the composer. Reads the latest `todo` tool call in the
- * transcript — shown only while this conversation is working, and hidden once every
- * item is completed or cancelled.
+ * Live checklist above the composer. Shown only while the conversation is working and
+ * only for the list that describes the request in front of the reader — see
+ * `todoIsCurrent`, the same rule 会话资源 › 任务清单 reads through `useConversationTodo`.
  *
  * The composer slot is the scarcest space in the app, so this is a one-line
  * collapsible by default: the header carries the position in the list plus the
@@ -104,25 +105,11 @@ export function TodoChecklist({ items }: { items: TodoItem[] }): JSX.Element {
  */
 export function TodoPanel({ className }: { className?: string }): JSX.Element | null {
   const { t } = useTranslation("chat");
-  // Select the transcript itself: `todoSnapshot` allocates a new object on every
-  // call, and Zustand/React's `useSyncExternalStore` treats that as a changed
-  // snapshot — "Maximum update depth exceeded" on every paint.
-  const messages = useSessionStore((state) => state.messages);
-  const snapshot = useMemo(() => todoSnapshot(messages), [messages]);
-  const items = snapshot.items;
+  const snapshot = useConversationTodo();
   const [open, setOpen] = useState(false);
-  // 「This chat is working」 is this panel's whole premise: an unfinished list is not
-  // news once the run that was working through it has stopped — it would sit above
-  // the composer with a busy mark, claiming work that is not happening. The plan is
-  // still in the transcript's todo card, one collapsed row away.
-  const working = useConversationWorking();
-  const unfinished = items.some((item) => item.status === "pending" || item.status === "in_progress");
-  // And a list from before the user's newest message is not this turn's plan: the
-  // question has moved on, so the checklist is closed until the agent writes one for
-  // the work actually in front of it. Otherwise an unrelated prompt resurfaced the
-  // last task's leftovers the moment its run started.
-  if (!working || !unfinished || snapshot.superseded) return null;
+  if (!snapshot) return null;
 
+  const items = snapshot.items;
   const done = items.filter((item) => item.status === "completed").length;
   const inProgress = items.some((item) => item.status === "in_progress");
   // The one item the header shows while folded: what is running, else what is next.

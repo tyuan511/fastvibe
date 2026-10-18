@@ -98,6 +98,34 @@ test("leading and trailing blank lines do not produce empty blocks", () => {
   assert.equal(blocks[0], "\n\nOnly paragraph.\n\n\n");
 });
 
+test("raw HTML open across a blank line is one block", () => {
+  // Cut, the first half closes the element where it stands and the reader gets an empty
+  // disclosure plus a stray `</details>`; parsed whole, the markdown in between lands inside it.
+  const blocks = assertLossless("Intro.\n\n<details><summary>why</summary>\n\nbecause **so**\n\n</details>\n\nAfter.\n");
+  assert.deepEqual(blocks, ["Intro.\n", "<details><summary>why</summary>\n\nbecause **so**\n\n</details>\n", "After.\n"]);
+  assert.equal(assertLossless('<div align="center">\n\n![s](b.svg)\n\n</div>\n').length, 1);
+});
+
+test("markup that closes where it opened still splits like prose", () => {
+  const blocks = assertLossless("<b>lead</b> in a sentence.\n\nNext paragraph.\n\n<kbd>Esc</kbd> then more.\n");
+  assert.equal(blocks.length, 3);
+});
+
+test("a void element and an autolink are not an open tag", () => {
+  // `<br>`/`<img>` close by themselves, and `<https://…>` is a name followed by `:` — reading
+  // either as an element would glue the rest of the answer into one unparsable block.
+  const blocks = assertLossless("line<br/>\n\nsee <https://example.com>\n\nnext.\n");
+  assert.equal(blocks.length, 3);
+  assert.equal(assertLossless("a < b and c > d\n\nsecond\n").length, 2);
+});
+
+test("an unterminated tag costs one block, not correctness", () => {
+  // The same trade an unterminated fence already makes: the tail of a malformed reply is one
+  // big parse instead of being cut in half.
+  const blocks = assertLossless("<div class=\"card\">\n\none\n\ntwo\n\nthree\n");
+  assert.equal(blocks.length, 1);
+});
+
 test("growing text keeps the settled blocks byte-identical", () => {
   // What the memoisation depends on: appending to the tail must not disturb any block
   // before it, or the components above would re-parse on every streamed flush.

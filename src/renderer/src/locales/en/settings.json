@@ -183,6 +183,8 @@
   "updated": "Model data updated",
   "engine": "Engine version",
   "engineDesc": "The pi coding agent embedded in this install.",
+  "office": "Office version",
+  "officeDesc": "Ships with the app. Previews and edits Word, Excel and PowerPoint.",
   "sync": "Sync configuration to pi",
   "syncDesc": "Writes connected providers, the default model and MCP servers into pi on this machine. Sessions stay here.",
   "syncAction": "Sync",

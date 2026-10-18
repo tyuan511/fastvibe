@@ -93,6 +93,7 @@
   "chats": "聊天",
   "archive": "归档",
   "waitingForYou": "正在等你确认",
+  "waitingAction": "等待操作",
   "stoppedAbnormally": "运行异常停止，打开查看",
   "backgroundStopped": "「{{title}}」的运行异常停止",
   "backgroundStoppedOpen": "查看",

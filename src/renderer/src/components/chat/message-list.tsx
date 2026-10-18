@@ -734,7 +734,9 @@ export function MessageList({
             {/* Named container: the rail is only worth showing when the gutter beside the
                 message column can hold it. */}
             <MessageScroller className="@container/thread">
-              <MessageScrollerViewport ref={viewportCallback} className="scrollbar-thumb-scrollbar">
+              {/* No scrollbar class here on purpose: the app's `::-webkit-scrollbar`
+                  rules (index.css) already paint this bar like every ScrollArea. */}
+              <MessageScrollerViewport ref={viewportCallback}>
                 <MessageScrollerContent className={CHAT_COLUMN_CLASS} style={{ overflowAnchor: "none" }}>
                   {/*
                    * The turns' own layer, inside the column rather than the column itself:

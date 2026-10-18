@@ -91,6 +91,35 @@ test("steering between a tool call and result cannot split that result away from
   assert.equal(transcriptWindow(branch, 1, "steer").found, false);
 });
 
+/**
+ * The transcript entry can carry the size the summary left behind (`details.tokensAfter`,
+ * written by the compaction guard). Without it the divider shows one bare number and a
+ * reader cannot tell whether it is what was compressed or what is left over.
+ */
+test("a reloaded compaction divider keeps both numbers and its stable entry id", () => {
+  const branch: Entry[] = [
+    entry("a0", "assistant", "first"),
+    { id: "c1", type: "compaction", timestamp: stamp, summary: "summary", tokensBefore: 248_700, details: { readFiles: ["a.ts"], tokensAfter: 12_300 } },
+    entry("u1", "user", "next"),
+  ];
+  const deps = setup(branch);
+  const divider = project(deps).messages.find((message) => message.kind === "compact");
+  assert.equal(divider?.compact?.tokensBefore, 248_700);
+  assert.equal(divider?.compact?.tokensAfter, 12_300);
+  assert.equal(divider?.id, "c1", "the wrapper that carries the number must not lose the entry id");
+  assert.deepEqual(allPages(deps, 1).messages, project(deps).messages);
+});
+
+test("a compaction written before the number existed still projects", () => {
+  const branch: Entry[] = [
+    entry("a0", "assistant", "first"),
+    { id: "c1", type: "compaction", timestamp: stamp, summary: "summary", tokensBefore: 248_700 },
+  ];
+  const divider = project(setup(branch)).messages.find((message) => message.kind === "compact");
+  assert.equal(divider?.compact?.tokensBefore, 248_700);
+  assert.equal(divider?.compact?.tokensAfter, undefined);
+});
+
 test("a running compaction is a divider after the reply, not inside it", () => {
   const deps = setup([entry("a0", "assistant", "first")], false, true);
   const messages = project(deps).messages;
