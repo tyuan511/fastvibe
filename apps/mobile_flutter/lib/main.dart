@@ -4,7 +4,6 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'account/account.dart';
 import 'account/official_devices.dart';
@@ -33,11 +32,9 @@ Future<void> startApp({bool checkUpdates = true}) async {
     if (remote == null) return Future<List<Object?>>.value(const <Object?>[]);
     return readModelCatalog(remote);
   });
-  // None of these needs another's result, and each is a platform-channel round trip or a
-  // shader compile, so the first frame waits for the slowest one rather than for the sum.
+  // None of these needs another's result, and each is a platform-channel round trip, so the
+  // first frame waits for the slowest one rather than for the sum.
   await Future.wait<void>(<Future<void>>[
-    // Pre-warms the fragment shaders so the first glass frame is not a white flash.
-    LiquidGlassWidgets.initialize(),
     loadAppVersion(),
     i18n.load(),
     Preferences.instance.load(),
@@ -111,7 +108,8 @@ class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
     // server give up on it.
     ConnectionLifecycle.handle(state);
     // Which computers are online changes while the phone is in a pocket.
-    if (state == AppLifecycleState.resumed && AccountService.instance.signedIn) {
+    if (state == AppLifecycleState.resumed &&
+        AccountService.instance.signedIn) {
       unawaited(OfficialDevices.instance.refresh());
     }
   }
@@ -120,76 +118,54 @@ class _FastVibeAppState extends State<FastVibeApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: Listenable.merge(<Listenable>[i18n, Preferences.instance]),
-      builder: (context, _) => LiquidGlassWidgets.wrap(
-        brightnessResolver: Theme.maybeBrightnessOf,
-        adaptiveQuality: true,
-        respectSystemAccessibility: true,
-        adaptiveConfig: GlassAdaptiveScopeConfig(
-          maxQuality: Preferences.instance.reduceGlass
-              ? GlassQuality.minimal
-              // `premium` is the full refraction pipeline, meant for static headers on a
-              // Pixel 6 / A15 or newer; every bar here sits over a scrolling chat.
-              // `standard` is the lightweight shader the package recommends for that.
-              : GlassQuality.standard,
-        ),
-        theme: GlassThemeData.simple(blur: 12, thickness: 25),
-        child: MaterialApp.router(
-          title: 'FastVibe',
-          debugShowCheckedModeBanner: false,
-          scrollBehavior: const _IosScrollBehavior(),
-          routerConfig: appRouter,
-          theme: buildTheme(light),
-          darkTheme: buildTheme(dark),
-          themeMode: Preferences.instance.themeMode,
-          builder: (context, child) {
-            // Every route gets the palette, the toast host and the overlay scope: a
-            // toast raised from a modal must be drawn by that modal, which is its own
-            // route and would otherwise cover a host mounted only at the root.
-            final palette = Theme.of(context).brightness == Brightness.dark
-                ? dark
-                : light;
-            return LanguageScope(
-              // Above every route, not inside one: go_router keeps a page by its key,
-              // so the root rebuilding alone repaints the bar and leaves the already
-              // open chat, device list and server screen on the language they were
-              // opened with. Pages subscribe through `t(key, context: context)`, and
-              // this is the value they are subscribing to.
-              language: i18n.language,
-              child: PaletteScope(
-                palette: palette,
-                // Text drawn outside any page's Material — the bar's pull-down menus,
-                // which GlassNavigationShell hoists above the Navigator, and every other
-                // overlay — falls back to the framework's debug style, the yellow double
-                // underline. One default here, above the shell and the Navigator, covers
-                // all of them instead of patching each overlay as it turns up.
-                child: DefaultTextStyle(
-                  style: Theme.of(context).textTheme.bodyMedium!.copyWith(
-                    color: palette.text,
-                    decoration: TextDecoration.none,
-                  ),
-                  child: ToastHost(
-                    child: UpdatePrompt(
-                      enabled: widget.checkUpdates,
-                      child: AnnotatedRegion<SystemUiOverlayStyle>(
-                        value: Theme.of(context).brightness == Brightness.dark
-                            ? SystemUiOverlayStyle.light
-                            : SystemUiOverlayStyle.dark,
-                        child: GlassAccessibilityScope(
-                          reduceTransparency: Preferences.instance.reduceGlass
-                              ? true
-                              : null,
-                          child: GlassNavigationShell(
-                            child: child ?? const SizedBox.shrink(),
-                          ),
-                        ),
-                      ),
+      builder: (context, _) => MaterialApp.router(
+        title: 'FastVibe',
+        debugShowCheckedModeBanner: false,
+        scrollBehavior: const _IosScrollBehavior(),
+        routerConfig: appRouter,
+        theme: buildTheme(light),
+        darkTheme: buildTheme(dark),
+        themeMode: Preferences.instance.themeMode,
+        builder: (context, child) {
+          // Every route gets the palette, the toast host and the overlay scope: a
+          // toast raised from a modal must be drawn by that modal, which is its own
+          // route and would otherwise cover a host mounted only at the root.
+          final palette = Theme.of(context).brightness == Brightness.dark
+              ? dark
+              : light;
+          return LanguageScope(
+            // Above every route, not inside one: go_router keeps a page by its key,
+            // so the root rebuilding alone repaints the bar and leaves the already
+            // open chat, device list and server screen on the language they were
+            // opened with. Pages subscribe through `t(key, context: context)`, and
+            // this is the value they are subscribing to.
+            language: i18n.language,
+            child: PaletteScope(
+              palette: palette,
+              // Text drawn outside any page's Material — a menu or any other overlay —
+              // falls back to the framework's debug style, the yellow double underline.
+              // One default here, above the Navigator, covers all of them instead of
+              // patching each overlay as it turns up.
+              child: DefaultTextStyle(
+                style: Theme.of(context).textTheme.bodyMedium!.copyWith(
+                  color: palette.text,
+                  decoration: TextDecoration.none,
+                ),
+                child: ToastHost(
+                  child: UpdatePrompt(
+                    enabled: widget.checkUpdates,
+                    child: AnnotatedRegion<SystemUiOverlayStyle>(
+                      value: Theme.of(context).brightness == Brightness.dark
+                          ? SystemUiOverlayStyle.light
+                          : SystemUiOverlayStyle.dark,
+                      child: child ?? const SizedBox.shrink(),
                     ),
                   ),
                 ),
               ),
-            );
-          },
-        ),
+            ),
+          );
+        },
       ),
     );
   }

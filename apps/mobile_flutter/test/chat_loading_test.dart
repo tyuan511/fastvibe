@@ -5,7 +5,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'support/plain.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fastvibe_mobile/chat/composer.dart';
@@ -70,10 +70,6 @@ void main() {
   final connection = Connection.instance;
   late ProtocolServer server;
   late SavedServer saved;
-  setUpAll(
-    () async =>
-        LiquidGlassWidgets.initialize(warmUpMode: GlassWarmUpMode.never),
-  );
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     FlutterSecureStorage.setMockInitialValues({});
@@ -101,9 +97,7 @@ void main() {
 
   Future<void> pump(WidgetTester tester, PreviewCache cache) async {
     await tester.pumpWidget(
-      LiquidGlassWidgets.wrap(
-        brightnessResolver: Theme.maybeBrightnessOf,
-        theme: GlassThemeData.simple(quality: GlassQuality.minimal),
+      plain(
         child: MaterialApp(
           theme: buildTheme(light),
           home: PaletteScope(
@@ -146,6 +140,11 @@ void main() {
       );
       expect(find.text('cached recent text'), findsOneWidget);
       expect(tester.widget<Composer>(find.byType(Composer)).disabled, isTrue);
+      // A sync that has only just begun is not worth a banner: it would flash, and grow the
+      // footer under the transcript twice. One that runs long gets one.
+      expect(find.text(t('chat.syncing')), findsNothing);
+      await tester.pump(const Duration(milliseconds: 1600));
+      expect(find.text(t('chat.syncing')), findsOneWidget);
       expect(
         server.calls.any((call) => call['method'] == 'engine:get-state'),
         isFalse,
@@ -176,6 +175,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
       expect(find.text('fresh authoritative text'), findsOneWidget);
       expect(find.text('cached recent text'), findsNothing);
+      expect(find.text(t('chat.syncing')), findsNothing);
       expect(tester.widget<Composer>(find.byType(Composer)).disabled, isFalse);
       await clean(tester);
       expect(tester.takeException(), isNull);

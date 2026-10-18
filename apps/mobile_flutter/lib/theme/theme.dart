@@ -1,4 +1,5 @@
-import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 /// The phone's design tokens.
@@ -57,23 +58,19 @@ class Palette {
   final Color overlay;
   final Color shadow;
 
-  /// Glass shows the page through itself, so a glass theme lightens the page and lets
-  /// the material read as a material rather than as a flat fill. Content cards stay
-  /// opaque either way — see the glass rules in the project instructions.
-  Palette copyWithGlass() => this;
 }
 
 const Palette light = Palette(
   dark: false,
-  background: Color(0xFFF2F6FA),
+  background: Color(0xFFF3F4F7),
   card: Color(0xFFFFFFFF),
   field: Color(0xFFECEEF2),
   text: Color(0xFF0F1115),
   muted: Color(0xFF6B7080),
-  subtle: Color(0xFF717B8C),
+  subtle: Color(0xFFA0A4B0),
   border: Color(0xFFE3E5EA),
   separator: Color(0xFFECEEF2),
-  accent: Color(0xFF1769DE),
+  accent: Color(0xFF2563EB),
   accentSoft: Color(0xFFE7EEFE),
   accentText: Color(0xFFFFFFFF),
   brand: <Color>[Color(0xFF3BA8FF), Color(0xFF4A3CFF)],
@@ -89,14 +86,14 @@ const Palette light = Palette(
 
 const Palette dark = Palette(
   dark: true,
-  background: Color(0xFF0C111B),
-  card: Color(0xFF171F2C),
-  field: Color(0xFF222C3C),
+  background: Color(0xFF0B0C0F),
+  card: Color(0xFF17181C),
+  field: Color(0xFF212329),
   text: Color(0xFFF2F3F5),
   muted: Color(0xFF9A9EA9),
-  subtle: Color(0xFF8B97A9),
-  border: Color(0xFF334054),
-  separator: Color(0xFF222C3C),
+  subtle: Color(0xFF62666F),
+  border: Color(0xFF2A2C33),
+  separator: Color(0xFF212329),
   accent: Color(0xFF5B8CFF),
   accentSoft: Color(0xFF1A2544),
   accentText: Color(0xFFFFFFFF),
@@ -111,18 +108,18 @@ const Palette dark = Palette(
   shadow: Color(0xFF000000),
 );
 
-/// Continuous, generous corners for the glass design.
+/// Radius tokens, identical to the Expo client's — the phone's original corners.
 abstract final class Radii {
   static const double sm = 8;
-  static const double md = 16;
-  static const double lg = 24;
-  static const double xl = 30;
+  static const double md = 12;
+  static const double lg = 16;
+  static const double xl = 22;
 
   /// An inset grouped section's corners.
-  static const double group = 24;
+  static const double group = 16;
 
-  /// A free-standing list card (one conversation): a little tighter than a group.
-  static const double card = 20;
+  /// A free-standing list card (one conversation).
+  static const double card = 16;
   static const double pill = 999;
 }
 
@@ -222,19 +219,66 @@ String clipText(
   return value;
 }
 
-/// The app's single spinner: the iOS activity indicator (`UIActivityIndicatorView`), at
-/// the size and colour asked for.
-class DesktopSpinner extends StatelessWidget {
+/// The app's single spinner: a rotating arc, linear, 700 ms a turn.
+class DesktopSpinner extends StatefulWidget {
   const DesktopSpinner({super.key, this.size = 16, required this.color});
 
   final double size;
   final Color color;
 
   @override
-  Widget build(BuildContext context) => SizedBox.square(
-    dimension: size,
-    child: CupertinoActivityIndicator(radius: size / 2, color: color),
-  );
+  State<DesktopSpinner> createState() => _DesktopSpinnerState();
+}
+
+class _DesktopSpinnerState extends State<DesktopSpinner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 700),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RotationTransition(
+      turns: _controller,
+      child: CustomPaint(
+        size: Size.square(widget.size),
+        painter: _ArcPainter(widget.color),
+      ),
+    );
+  }
+}
+
+class _ArcPainter extends CustomPainter {
+  _ArcPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(1.6, size.width * 0.16)
+      ..strokeCap = StrokeCap.round;
+    final rect = Offset.zero & size;
+    canvas.drawArc(
+      rect.deflate(paint.strokeWidth / 2),
+      -math.pi / 2,
+      math.pi * 1.15,
+      false,
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ArcPainter oldDelegate) => oldDelegate.color != color;
 }
 
 /// The brand gradient, drawn from the top-left to the bottom-right like the icon.

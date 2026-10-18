@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../chat/dag_data.dart';
 import '../chat/image_bytes.dart';
@@ -57,7 +56,6 @@ class TranscriptView extends StatefulWidget {
     this.onLoadContent,
     this.dagWatcher,
     this.onOpenFile,
-    this.topInset = 0,
     this.bottomInset = 0,
   });
 
@@ -78,9 +76,8 @@ class TranscriptView extends StatefulWidget {
   /// Open a file a reply produced. Null where there is no machine to read it from.
   final void Function(OutputFile file)? onOpenFile;
 
-  /// How far the glass bar above and the footer below reach into this view. The list runs
-  /// under both, so its content is padded by them rather than clipped at their edges.
-  final double topInset;
+  /// How far the footer below reaches into this view. The list runs under it, so its content
+  /// is padded by that much rather than clipped at the footer's edge.
   final double bottomInset;
 
   @override
@@ -271,7 +268,7 @@ class _TranscriptViewState extends State<TranscriptView> {
           child: ListView.builder(
             controller: _controller,
             reverse: true,
-            padding: EdgeInsets.fromLTRB(22, 16 + widget.topInset, 22, 16),
+            padding: const EdgeInsets.fromLTRB(22, 16, 22, 16),
             itemCount: rows.length + 1,
             itemBuilder: (context, index) {
               // Index 0 of the list is the visual bottom: the spacer.
@@ -307,26 +304,41 @@ class _TranscriptViewState extends State<TranscriptView> {
                     ? _workingScrollSpace + 4
                     : 12) +
                 widget.bottomInset,
-            child: GlassIconButton(
-              icon: HugeIcon(
-                icon: AppIcons.arrowDownLong,
-                size: 20,
-                color: palette.text,
+            // A plain round button floating over the list.
+            child: Semantics(
+              button: true,
+              label: t('chat.latest', context: context),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  Haptic.tap();
+                  if (MediaQuery.disableAnimationsOf(context)) {
+                    _controller.jumpTo(0);
+                  } else {
+                    _controller.animateTo(
+                      0,
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOutCubic,
+                    );
+                  }
+                },
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: palette.card,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: palette.border, width: 0.5),
+                    boxShadow: elevation(palette, 1),
+                  ),
+                  child: HugeIcon(
+                    icon: AppIcons.arrowDownLong,
+                    size: 20,
+                    color: palette.text,
+                  ),
+                ),
               ),
-              semanticLabel: t('chat.latest', context: context),
-              size: 44,
-              onPressed: () {
-                Haptic.tap();
-                if (MediaQuery.disableAnimationsOf(context)) {
-                  _controller.jumpTo(0);
-                } else {
-                  _controller.animateTo(
-                    0,
-                    duration: const Duration(milliseconds: 260),
-                    curve: Curves.easeOutCubic,
-                  );
-                }
-              },
             ),
           ),
       ],

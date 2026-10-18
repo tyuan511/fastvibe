@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../account/account.dart';
 import '../account/official_devices.dart';
@@ -12,7 +11,7 @@ import '../session/connection.dart';
 import '../storage/servers.dart';
 import '../theme/theme.dart';
 import '../ui/feedback.dart';
-import '../ui/glass_screen.dart';
+import '../ui/app_screen.dart';
 import '../ui/dock.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
@@ -29,9 +28,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
   List<SavedServer> _servers = [];
   bool _loaded = false;
   final _query = TextEditingController();
-
-  /// The large 设备列表 title's collapse into the bar; owns the list's scroll controller.
-  final _title = GlassLargeTitleController();
   int _loadGeneration = 0;
 
   @override
@@ -51,7 +47,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
     AccountService.instance.removeListener(_changed);
     OfficialDevices.instance.removeListener(_changed);
     _query.dispose();
-    _title.dispose();
     super.dispose();
   }
 
@@ -171,12 +166,11 @@ class _DevicesScreenState extends State<DevicesScreen> {
         .toList();
     final favorites = shown.where((s) => s.favorite).toList();
     final others = shown.where((s) => !s.favorite).toList();
-    return GlassScreen(
+    return AppScreen(
       title: t('devices.workspaces', context: context),
       showBack: false,
-      largeTitleController: _title,
       actions: [
-        GlassAction(
+        AppAction(
           icon: AppIcons.settings,
           tooltip: t('nav.settings', context: context),
           onPressed: () => context.push('/settings'),
@@ -185,33 +179,26 @@ class _DevicesScreenState extends State<DevicesScreen> {
       bottomBar: DeviceDock(onAdd: () => context.push('/add')),
       body: Builder(
         builder: (context) {
-          final top = GlassInsets.pad(context).top;
           return CustomScrollView(
-            controller: _title.scrollController,
             slivers: <Widget>[
-              iosRefreshControl(onRefresh: _refresh, topInset: top),
-              SliverToBoxAdapter(child: SizedBox(height: top)),
-              GlassLargeTitle(
-                text: t('devices.workspaces', context: context),
-                controller: _title,
-                searchBar: _servers.isEmpty
-                    ? null
-                    : GlassSearchBar(
-                        controller: _query,
-                        placeholder: t('devices.search', context: context),
-                        onChanged: (_) => setState(() {}),
-                        height: 40,
-                      ),
-              ),
+              iosRefreshControl(onRefresh: _refresh),
+              if (_servers.isNotEmpty)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  sliver: SliverToBoxAdapter(
+                    child: SearchField(
+                      controller: _query,
+                      placeholder: t('devices.search', context: context),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                )
+              else
+                const SliverToBoxAdapter(child: SizedBox(height: 12)),
               SliverPadding(
-                padding: EdgeInsets.fromLTRB(
-                  16,
-                  0,
-                  16,
-                  GlassInsets.pad(
-                    context,
-                    const EdgeInsets.only(bottom: 8),
-                  ).bottom,
+                padding: AppInsets.pad(
+                  context,
+                  const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 ),
                 sliver: SliverList(
                   delegate: SliverChildListDelegate(<Widget>[

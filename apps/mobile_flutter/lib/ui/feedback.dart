@@ -1,9 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/cupertino.dart' show showCupertinoDialog;
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../i18n/core.dart';
 import '../theme/theme.dart';
@@ -151,14 +149,18 @@ class _ToastBody extends StatelessWidget {
       ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 440),
-        child: GlassContainer(
-          useOwnLayer: true,
-          shape: const LiquidRoundedSuperellipse(borderRadius: 26),
+        child: Container(
           padding: const EdgeInsets.fromLTRB(16, 13, 20, 13),
+          decoration: BoxDecoration(
+            color: palette.card,
+            borderRadius: BorderRadius.circular(Radii.lg),
+            border: Border.all(color: palette.border, width: 0.5),
+            boxShadow: elevation(palette, 2),
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              // iOS's own HUD capsule: a tinted glyph, no disc behind it.
+              // A tinted glyph, no disc behind it.
               HugeIcon(icon: icon, color: tint, size: 20, strokeWidth: 2),
               const SizedBox(width: 8),
               Flexible(
@@ -182,42 +184,119 @@ class _ToastBody extends StatelessWidget {
   }
 }
 
-/// A confirmation, a notice, or a text prompt. Drawn as a liquid-glass dialog.
+/// One button under a dialog's text.
+class _DialogAction {
+  const _DialogAction({
+    required this.label,
+    required this.onPressed,
+    this.destructive = false,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+  final bool destructive;
+}
+
+/// A confirmation, a notice, or a text prompt: a plain card with the actions in a row under
+/// a hairline.
 ///
 /// Never `AlertDialog`: a confirmation, a notice and a text prompt all have one look
 /// here, and the typed text must survive an outside press — a modal backdrop covers the
 /// whole window, so one stray tap would otherwise throw away an answer that took a while
 /// to write.
-/// `GlassDialog.show` is `showCupertinoDialog` around the package's dialog, and a
-/// Cupertino route has no `Material` above it: every `Text` in the dialog then falls
-/// back to the framework's debug style — the yellow double underline. The route also
-/// ran the full refractive shader (own layer, plus one per action button) over the page
-/// behind it, which is what made opening one stutter. So the dialog is built here:
-/// a `Material` for the text style, and `GlassQuality.minimal` — the same frosted card
-/// from a plain backdrop blur, no shader pass.
-Future<void> _showGlassDialog({
+Future<void> _showDialog({
   required BuildContext context,
-  required List<GlassDialogAction> actions,
+  required List<_DialogAction> actions,
   String? title,
   String? message,
   Widget? content,
 }) {
   final p = paletteOf(context);
-  return showCupertinoDialog<void>(
+  return showDialog<void>(
     context: context,
     useRootNavigator: true,
-    builder: (dialogContext) => Material(
-      type: MaterialType.transparency,
-      child: GlassDialog(
-        title: title,
-        message: message,
-        content: content,
-        actions: actions,
-        quality: GlassQuality.minimal,
-        settings: LiquidGlassSettings(
-          glassColor: p.card.withValues(alpha: p.dark ? 0.72 : 0.82),
-          blur: 22,
-          thickness: 14,
+    barrierDismissible: false,
+    barrierColor: p.overlay,
+    builder: (dialogContext) => PaletteScope(
+      palette: p,
+      child: Dialog(
+        backgroundColor: p.card,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 36, vertical: 24),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Radii.xl),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (title != null)
+                      Text(
+                        title,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: p.text,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    if (message != null) ...<Widget>[
+                      const SizedBox(height: 6),
+                      Text(
+                        message,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: p.muted, fontSize: 14, height: 1.4),
+                      ),
+                    ],
+                    if (content != null) ...<Widget>[
+                      const SizedBox(height: 14),
+                      content,
+                    ],
+                  ],
+                ),
+              ),
+              Divider(height: 0.5, thickness: 0.5, color: p.separator),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    for (var i = 0; i < actions.length; i++) ...<Widget>[
+                      if (i > 0)
+                        VerticalDivider(width: 0.5, thickness: 0.5, color: p.separator),
+                      Expanded(
+                        child: InkWell(
+                          onTap: actions[i].onPressed,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            child: Text(
+                              actions[i].label,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: actions[i].destructive ? p.danger : p.accent,
+                                fontSize: 16,
+                                fontWeight: i == actions.length - 1
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     ),
@@ -232,12 +311,12 @@ class AppDialog {
     required String title,
     String? message,
   }) {
-    return _showGlassDialog(
+    return _showDialog(
       context: context,
       title: title,
       message: message,
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
+      actions: <_DialogAction>[
+        _DialogAction(
           label: t('common.ok'),
           onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
         ),
@@ -253,18 +332,18 @@ class AppDialog {
     bool destructive = false,
   }) async {
     var confirmed = false;
-    await _showGlassDialog(
+    await _showDialog(
       context: context,
       title: title,
       message: message,
-      actions: <GlassDialogAction>[
-        GlassDialogAction(
+      actions: <_DialogAction>[
+        _DialogAction(
           label: t('common.cancel'),
           onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
         ),
-        GlassDialogAction(
+        _DialogAction(
           label: confirmLabel ?? t('common.ok'),
-          isDestructive: destructive,
+          destructive: destructive,
           onPressed: () {
             confirmed = true;
             Navigator.of(context, rootNavigator: true).pop();
@@ -291,7 +370,7 @@ class AppDialog {
     var typed = initial ?? '';
     String? value;
     final palette = paletteOf(context);
-    await _showGlassDialog(
+    await _showDialog(
       context: context,
       title: title,
       message: message,
@@ -302,11 +381,11 @@ class AppDialog {
         onChanged: (text) => typed = text,
       ),
       actions: [
-        GlassDialogAction(
+        _DialogAction(
           label: t('common.cancel'),
           onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
         ),
-        GlassDialogAction(
+        _DialogAction(
           label: submitLabel ?? t('common.save'),
           onPressed: () {
             value = typed.trim();

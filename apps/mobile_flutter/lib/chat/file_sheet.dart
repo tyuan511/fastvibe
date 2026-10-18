@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import '../i18n/core.dart';
 import '../protocol/client.dart';
@@ -80,6 +81,13 @@ class _TextPreview extends _Preview {
   final int? truncatedAt;
 }
 
+/// The host-rendered page for a docx, xlsx or pptx.
+class _OfficePreview extends _Preview {
+  const _OfficePreview(this.controller);
+
+  final WebViewController controller;
+}
+
 /// Nothing to draw; [message] is the i18n key that says why.
 class _NoPreview extends _Preview {
   const _NoPreview(this.message, {this.failed = false});
@@ -136,6 +144,7 @@ class _FileViewerState extends State<FileViewer> {
       final preview = switch (file.kind) {
         OutputFileKind.image => await _loadImage(),
         OutputFileKind.markdown || OutputFileKind.text => await _loadText(),
+        OutputFileKind.office => await _loadOffice(),
         OutputFileKind.other => const _NoPreview('file.noPreview'),
       };
       if (mounted) setState(() => _preview = preview);
@@ -154,6 +163,22 @@ class _FileViewerState extends State<FileViewer> {
     if (read.truncated) return const _NoPreview('file.tooLarge');
     if (read.bytes.isEmpty) return const _NoPreview('file.empty');
     return _ImagePreview(read.bytes);
+  }
+
+  Future<_Preview> _loadOffice() async {
+    final rendered = await widget.transfer.renderOffice(widget.file.path, cancel: _cancel);
+    final read = await widget.transfer.read(
+      rendered,
+      maxBytes: 8 * 1024 * 1024,
+      cancel: _cancel,
+    );
+    if (read.bytes.isEmpty) return const _NoPreview('file.empty');
+    if (read.truncated) return const _NoPreview('file.tooLarge');
+    final html = utf8.decode(read.bytes, allowMalformed: true);
+    final controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..loadHtmlString(html);
+    return _OfficePreview(controller);
   }
 
   Future<_Preview> _loadText() async {
@@ -284,6 +309,7 @@ class _FileViewerState extends State<FileViewer> {
             child: Center(child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true)),
           ),
         ),
+      _OfficePreview(:final controller) => WebViewWidget(controller: controller),
       _TextPreview(:final text, :final markdown, :final truncatedAt) => ListView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
           children: <Widget>[
@@ -360,6 +386,6 @@ class _FileGlyph extends StatelessWidget {
 
 List<List<dynamic>> fileGlyph(OutputFileKind kind) => switch (kind) {
       OutputFileKind.image => AppIcons.imageAdd,
-      OutputFileKind.markdown || OutputFileKind.text => AppIcons.fileText,
+      OutputFileKind.markdown || OutputFileKind.text || OutputFileKind.office => AppIcons.fileText,
       OutputFileKind.other => AppIcons.fileDownload,
     };

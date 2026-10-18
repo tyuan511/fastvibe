@@ -14,6 +14,7 @@ import '../protocol/client.dart' show TransportError, ConnectionError;
 typedef FileCall = Future<Object?> Function(String method, Object? payload, int? timeoutMs);
 
 const String readFileMethod = 'workspace:read-file';
+const String officeRenderMethod = 'office:render';
 
 /// One slice is about half a megabyte on the wire after base64: few enough round trips over a
 /// relay, small enough that a transcript update waiting behind it on the ordered channel
@@ -186,6 +187,23 @@ class FileTransfer {
   Future<FileStat> stat(String path) async {
     final slice = await _slice(path, 0, 0);
     return FileStat(size: slice.size, mtimeMs: slice.mtimeMs, resumable: slice.resumable);
+  }
+
+  /// The rendered HTML page for an Office file, as a path on the machine that has it.
+  ///
+  /// The phone cannot lay a docx out itself. The host runs OfficeCLI and this reads the
+  /// page back through the same slice channel as any other file.
+  Future<String> renderOffice(String path, {CancelToken? cancel}) async {
+    if (cancel?.cancelled == true) throw const FileTransferError('cancelled');
+    final reply = await call(
+      officeRenderMethod,
+      <String, Object?>{'path': path, 'conversationId': conversationId},
+      const Duration(seconds: 90).inMilliseconds,
+    );
+    if (reply is! Map) throw const FileTransferError('invalid');
+    final rendered = reply['path'];
+    if (rendered is! String || rendered.isEmpty) throw const FileTransferError('invalid');
+    return rendered;
   }
 
   /// The file's bytes, up to [maxBytes]. [truncated] says the file went on past that.

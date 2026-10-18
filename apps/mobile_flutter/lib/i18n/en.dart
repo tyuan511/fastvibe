@@ -442,8 +442,6 @@ const Map<String, String> en = <String, String>{
   'devices.favorites': 'Favorites',
   'devices.allDevices': 'All devices',
   'devices.actions': 'Device actions',
-  'settings.reduceGlass': 'Reduce glass effects',
-  'settings.reduceGlassHint': 'Use clearer surfaces with less graphics work. System accessibility settings are always respected.',
   'settings.personalize': 'Make this workspace yours.',
   'server.filterAll': 'All',
   'server.filterActive': 'Active',

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'support/plain.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fastvibe_mobile/chat/composer.dart';
 import 'package:fastvibe_mobile/chat/images.dart';
@@ -25,7 +26,6 @@ import 'package:fastvibe_mobile/main.dart';
 import 'package:fastvibe_mobile/theme/theme.dart';
 import 'package:fastvibe_mobile/ui/feedback.dart';
 import 'package:fastvibe_mobile/ui/kit.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 /// Renders every screen and the chat's own widgets.
 ///
@@ -44,7 +44,6 @@ void main() {
     // test happened to be running. The app's own storage layer is exercised against the
     // in-memory store the mock installs.
     SharedPreferences.setMockInitialValues(<String, Object>{});
-    await LiquidGlassWidgets.initialize(warmUpMode: GlassWarmUpMode.never);
     await I18n.instance.setPreference(LanguagePreference.zh);
   });
 
@@ -55,8 +54,7 @@ void main() {
   }) async {
     final active = palette ?? light;
     await tester.pumpWidget(
-      LiquidGlassWidgets.wrap(
-        brightnessResolver: Theme.maybeBrightnessOf,
+      plain(
         child: ListenableBuilder(
           listenable: i18n,
           builder: (context, _) => MaterialApp(

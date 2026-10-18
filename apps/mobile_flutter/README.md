@@ -1,17 +1,17 @@
 # FastVibe for Flutter
 
 A native iOS / Android client for FastVibe machines, using the same App Protocol v1
-as the desktop and web clients. Flutter owns its visual design: soft light
-and dark backgrounds, pinned liquid-glass navigation, floating composer, glass
-sheets and dialogs. Transcripts and dense content stay readable and opaque.
+as the desktop and web clients. Flutter owns its visual design: flat light
+and dark backgrounds, a plain top bar, a floating composer, and solid cards, sheets and
+dialogs. There is no blur or translucency anywhere.
 
-The device page keeps connection actions in a bottom dock. On a machine, the bottom
-glass pill combines All / Active / Waiting with the new-chat button. Search and
+The device page keeps connection actions in a bottom bar. On a machine, the bottom
+bar combines All / Active / Waiting with the new-chat button. Search and
 project selection stay by the conversation list. Short menus open at their content
 height; model, task, archive and search sheets share a close control and can expand.
 Markdown uses a reading scale, restrained headings, highlighted code panels, inline
 code, quotations, typeset math and horizontally scrollable tables. Settings includes
-a live appearance preview and glass switches.
+a live appearance preview.
 
 ## Run locally
 
@@ -35,9 +35,7 @@ flutter run
 | Phone settings | System/light/dark themes, Chinese/English, haptics, local notifications, connection diagnostics, Android updates |
 
 Additional phone features: favorite and search saved devices, filter conversations
-by activity, search an entire conversation including older history, paste images,
-and reduce glass effects. The last option caps rendering quality and reduces
-transparency; system accessibility settings remain respected.
+by activity, search an entire conversation including older history, and paste images.
 
 The notification payload identifies both the machine and conversation. A cold-start
 or cross-device tap connects to the correct saved machine before opening the chat.

@@ -434,8 +434,6 @@
   "devices.favorites": "已收藏",
   "devices.allDevices": "所有设备",
   "devices.actions": "设备操作",
-  "settings.reduceGlass": "减少玻璃效果",
-  "settings.reduceGlassHint": "使用更清晰的表面，降低图形开销；同时遵循系统辅助功能设置。",
   "settings.personalize": "让工作空间更适合你。",
   "server.filterAll": "全部",
   "server.filterActive": "进行中",

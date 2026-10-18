@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'support/plain.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fastvibe_mobile/chat/markdown_chunks.dart';
 import 'package:fastvibe_mobile/chat/markdown_view.dart';
@@ -13,7 +13,7 @@ import 'package:fastvibe_mobile/main.dart';
 import 'package:fastvibe_mobile/screens/transcript.dart';
 import 'package:fastvibe_mobile/theme/theme.dart';
 import 'package:fastvibe_mobile/ui/dock.dart';
-import 'package:fastvibe_mobile/ui/glass_screen.dart';
+import 'package:fastvibe_mobile/ui/app_screen.dart';
 import 'package:fastvibe_mobile/ui/kit.dart';
 
 import 'support/reading_sample.dart';
@@ -21,15 +21,12 @@ import 'support/reading_sample.dart';
 void main() {
   setUpAll(() async {
     SharedPreferences.setMockInitialValues({});
-    await LiquidGlassWidgets.initialize(warmUpMode: GlassWarmUpMode.never);
   });
   Future<void> pump(WidgetTester tester, Widget child, Palette palette) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
-      LiquidGlassWidgets.wrap(
-        theme: GlassThemeData.simple(quality: GlassQuality.minimal),
-        brightnessResolver: Theme.maybeBrightnessOf,
+      plain(
         child: MaterialApp(
           theme: buildTheme(palette),
           builder: (_, child) => PaletteScope(palette: palette, child: child!),
@@ -169,7 +166,7 @@ void main() {
     var created = false;
     await pump(
       tester,
-      GlassScreen(
+      AppScreen(
         title: 'Workspace',
         body: const SizedBox.expand(),
         bottomBar: ConversationDock(

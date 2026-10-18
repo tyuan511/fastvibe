@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../account/account.dart';
 import '../app_info.dart';
@@ -8,7 +7,7 @@ import '../i18n/core.dart';
 import '../protocol/diagnostics.dart';
 import '../theme/theme.dart';
 import '../ui/feedback.dart';
-import '../ui/glass_screen.dart';
+import '../ui/app_screen.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
@@ -31,9 +30,6 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _checking = false;
 
-  /// The large 设置 title's collapse into the bar; owns the list's scroll controller.
-  final _title = GlassLargeTitleController();
-
   @override
   void initState() {
     super.initState();
@@ -47,7 +43,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     i18n.removeListener(_onChange);
     Preferences.instance.removeListener(_onChange);
     AccountService.instance.removeListener(_onChange);
-    _title.dispose();
     super.dispose();
   }
 
@@ -163,26 +158,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
     final preferences = Preferences.instance;
-    return GlassScreen(
+    return AppScreen(
       title: t('nav.settings', context: context),
-      largeTitleController: _title,
       body: Builder(
         builder: (context) => CustomScrollView(
-          controller: _title.scrollController,
           slivers: <Widget>[
-            SliverToBoxAdapter(
-              child: SizedBox(height: GlassInsets.pad(context).top),
-            ),
-            GlassLargeTitle(text: t('nav.settings', context: context), controller: _title),
             SliverPadding(
-              padding: EdgeInsets.fromLTRB(
-                16,
-                0,
-                16,
-                GlassInsets.pad(
-                  context,
-                  const EdgeInsets.only(bottom: 16),
-                ).bottom,
+              padding: AppInsets.pad(
+                context,
+                const EdgeInsets.fromLTRB(16, 8, 16, 16),
               ),
               sliver: SliverList(
                 delegate: SliverChildListDelegate(<Widget>[
@@ -230,17 +214,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       SettingsRow(
-                        icon: AppIcons.sparkles,
-                        label: t('settings.reduceGlass', context: context),
-                        trailing: GlassSwitch(
-                          useOwnLayer: true,
-                          enableHaptics: preferences.haptics,
-                          activeColor: palette.accent,
-                          value: preferences.reduceGlass,
-                          onChanged: preferences.setReduceGlass,
-                        ),
-                      ),
-                      SettingsRow(
                         icon: AppIcons.globe,
                         label: t('settings.language', context: context),
                         value: switch (i18n.preference) {
@@ -259,13 +232,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       SettingsRow(
                         icon: AppIcons.notification,
                         label: t('settings.notifications', context: context),
-                        trailing: GlassSwitch(
-                          useOwnLayer: true,
-                          enableHaptics: preferences.haptics,
-                          value: preferences.notifications,
-                          thumbColor: palette.accentText,
-                          activeColor: palette.accent,
-                          onChanged: (value) async {
+                        trailing: AppSwitch(
+ value: preferences.notifications,
+ onChanged: (value) async {
                             if (value) {
                               await enableLocalNotifications();
                             } else {
@@ -278,13 +247,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       SettingsRow(
                         icon: AppIcons.touchInteraction,
                         label: t('settings.haptics', context: context),
-                        trailing: GlassSwitch(
-                          useOwnLayer: true,
-                          enableHaptics: preferences.haptics,
-                          value: preferences.haptics,
-                          thumbColor: palette.accentText,
-                          activeColor: palette.accent,
-                          onChanged: (value) {
+                        trailing: AppSwitch(
+ value: preferences.haptics,
+ onChanged: (value) {
                             preferences.setHaptics(value);
                             if (value) Haptic.success();
                             setState(() {});
@@ -400,17 +365,11 @@ class _Segmented extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassSegmentedControl(
-      segments: [for (final label in items.values) GlassSegment(label: label)],
-      selectedIndex: items.keys.toList().indexOf(value),
-      onSegmentSelected: (index) => onChanged(items.keys.elementAt(index)),
+    return Segmented(
+      labels: items.values.toList(),
+      selected: items.keys.toList().indexOf(value),
+      onSelect: (index) => onChanged(items.keys.elementAt(index)),
       height: 44,
-      selectedTextStyle: TextStyle(
-        color: palette.text,
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
-      ),
-      unselectedTextStyle: TextStyle(color: palette.muted, fontSize: 14),
     );
   }
 }

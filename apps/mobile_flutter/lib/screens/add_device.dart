@@ -13,7 +13,7 @@ import '../protocol/discovery.dart';
 import '../session/connection.dart';
 import '../storage/servers.dart';
 import '../theme/theme.dart';
-import '../ui/glass_screen.dart';
+import '../ui/app_screen.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
@@ -183,13 +183,13 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
     final parsed = _parsed;
-    return GlassScreen(
+    return AppScreen(
       title: t('nav.addDevice', context: context),
       body: GestureDetector(
         onTap: () => FocusScope.of(context).unfocus(),
         child: Builder(
           builder: (context) => ListView(
-            padding: GlassInsets.pad(
+            padding: AppInsets.pad(
               context,
               const EdgeInsets.fromLTRB(16, 4, 16, 16),
             ),

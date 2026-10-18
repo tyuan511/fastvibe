@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'support/plain.dart';
 import 'package:go_router/go_router.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fastvibe_mobile/chat/option_sheet.dart';
@@ -15,7 +15,6 @@ import 'package:fastvibe_mobile/ui/kit.dart';
 void main() {
   setUpAll(() async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
-    await LiquidGlassWidgets.initialize(warmUpMode: GlassWarmUpMode.never);
     await i18n.setPreference(LanguagePreference.zh);
   });
 
@@ -34,9 +33,7 @@ void main() {
           ],
         );
         await tester.pumpWidget(
-          LiquidGlassWidgets.wrap(
-            brightnessResolver: Theme.maybeBrightnessOf,
-            theme: GlassThemeData.simple(quality: GlassQuality.minimal),
+          plain(
             child: MaterialApp.router(
               routerConfig: router,
               theme: buildTheme(palette),

@@ -1,13 +1,15 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../i18n/core.dart';
+import '../theme/theme.dart';
 import 'feedback.dart';
 import 'icons.dart';
 import 'kit.dart';
 
-/// A compact floating platter first; expand only when the content needs more room.
-/// Height is a hint in logical pixels and remains bounded by the phone/keyboard.
+/// A bottom sheet: a plain card rising from the bottom edge, as tall as its content needs up
+/// to a bound. `height` is a hint in logical pixels and remains bounded by the phone.
 Future<T?> showAppSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
@@ -16,56 +18,54 @@ Future<T?> showAppSheet<T>({
 }) {
   final p = paletteOf(context);
   final screen = MediaQuery.sizeOf(context);
-  final bottomSafeArea = MediaQuery.paddingOf(context).bottom;
   final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
   final desired = height == null
       ? (expanded ? 620.0 : 400.0)
       : height * scale.clamp(1, 1.4);
-  final fraction = (desired / screen.height).clamp(0.3, 0.82);
-  return GlassModalSheet.show<T>(
+  final fraction = (desired / screen.height).clamp(0.3, 0.9);
+  return showModalBottomSheet<T>(
     context: context,
-    initialState: GlassSheetState.half,
-    halfSize: fraction,
-    fullSize: 0.92,
-    // The package defaults to `instant`: the glass holds until `fillThreshold`, then snaps
-    // to the opaque `expandedColor` in one frame — a hard white flash at the top of the
-    // drag. `gradual` cross-fades glass → solid along an ease-in-out over the rest of the
-    // travel, so the blur thins out as the sheet rises instead of cutting away.
-    fillTransition: GlassFillTransition.gradual,
-    fillThreshold: 0.2,
-    horizontalMargin: 12,
-    // Keep the floating sheet above the gesture/navigation area while retaining a
-    // small visual gap on devices without a bottom inset.
-    bottomMargin: 12 + bottomSafeArea,
-    topBorderRadius: 32,
-    bottomBorderRadius: 32,
-    fullTopBorderRadius: 32,
-    fullBottomBorderRadius: 32,
-    padding: const EdgeInsets.only(top: 12, bottom: 8),
-    dragIndicatorWidth: 32,
-    dragIndicatorHeight: 4,
-    dragIndicatorColor: p.subtle.withValues(alpha: 0.45),
-    barrierColor: p.overlay.withValues(alpha: p.dark ? 0.48 : 0.22),
-    expandedColor: p.card,
-    expandedDarkColor: p.card,
-    settings: LiquidGlassSettings(
-      glassColor: p.card.withValues(alpha: 0.62),
-      blur: 24,
-      thickness: 18,
+    useRootNavigator: true,
+    isScrollControlled: true,
+    backgroundColor: p.card,
+    barrierColor: p.overlay,
+    elevation: 0,
+    clipBehavior: Clip.antiAlias,
+    constraints: BoxConstraints(maxWidth: math.min(screen.width, 640)),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(Radii.xl)),
     ),
     builder: (context) => PaletteScope(
       palette: p,
       child: ToastHost(
         child: Material(
           type: MaterialType.transparency,
-          child: SafeArea(
-            top: false,
-            minimum: const EdgeInsets.only(bottom: 12),
-            child: MediaQuery.removePadding(
-              context: context,
-              removeTop: true,
-              removeBottom: true,
-              child: builder(context),
+          child: SizedBox(
+            height: screen.height * fraction,
+            child: SafeArea(
+              top: false,
+              minimum: const EdgeInsets.only(bottom: 12),
+              child: Column(
+                children: <Widget>[
+                  Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(top: 8, bottom: 8),
+                    decoration: BoxDecoration(
+                      color: p.subtle.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  Expanded(
+                    child: MediaQuery.removePadding(
+                      context: context,
+                      removeTop: true,
+                      removeBottom: true,
+                      child: builder(context),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -75,7 +75,7 @@ Future<T?> showAppSheet<T>({
 }
 
 /// Sheets share hierarchy and an explicit close control. The control is ordinary ink
-/// because the sheet already provides the refractive surface.
+/// because the sheet already provides the surface.
 class AppSheetHeader extends StatelessWidget {
   const AppSheetHeader({
     super.key,

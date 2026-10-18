@@ -3,7 +3,6 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../i18n/core.dart';
 import '../protocol/model_cache.dart';
@@ -78,6 +77,7 @@ const List<String> _thinkingLevels = <String>[
 
 class _ComposerState extends State<Composer> {
   final FocusNode _focus = FocusNode();
+  bool _focused = false;
   int _refreshGeneration = 0;
   bool _imageBusy = false;
   Map<String, Object?>? _session;
@@ -88,8 +88,14 @@ class _ComposerState extends State<Composer> {
     super.initState();
     Connection.instance.addListener(_refresh);
     widget.draft.addListener(_onDraft);
+    _focus.addListener(_onFocus);
     _hasText = widget.draft.text.trim().isNotEmpty;
     _refresh();
+  }
+
+  void _onFocus() {
+    if (_focus.hasFocus == _focused || !mounted) return;
+    setState(() => _focused = _focus.hasFocus);
   }
 
   /// Whether the draft has anything in it. The send button is the only thing that reads
@@ -125,6 +131,7 @@ class _ComposerState extends State<Composer> {
   void dispose() {
     Connection.instance.removeListener(_refresh);
     widget.draft.removeListener(_onDraft);
+    _focus.removeListener(_onFocus);
     _focus.dispose();
     super.dispose();
   }
@@ -417,9 +424,16 @@ class _ComposerState extends State<Composer> {
         10,
         math.max(MediaQuery.paddingOf(context).bottom, 10),
       ),
-      child: GlassContainer(
-        useOwnLayer: true,
-        shape: const LiquidRoundedSuperellipse(borderRadius: Radii.xl),
+      // A plain card: it floats over the transcript, so it stays opaque.
+      child: Container(
+        decoration: BoxDecoration(
+          color: palette.card,
+          borderRadius: BorderRadius.circular(Radii.xl),
+          border: Border.all(
+            color: _focused ? palette.accent : palette.border,
+            width: 0.5,
+          ),
+        ),
         padding: const EdgeInsets.only(bottom: 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -669,8 +683,7 @@ class _Chip extends StatelessWidget {
       child: GestureDetector(
         onTap: enabled ? onTap : null,
         // An iOS pop-up button (the model, the thinking level): the current value and the
-        // up-down chevron, on a faint capsule — the composer is already glass, so no
-        // glass control of its own inside it.
+        // up-down chevron, on a faint capsule.
         child: Container(
           height: 32,
           constraints: const BoxConstraints(maxWidth: 200),

@@ -6,7 +6,6 @@ import 'package:fastvibe_mobile/chat/draft_storage.dart';
 import 'package:fastvibe_mobile/notifications/target.dart';
 import 'package:fastvibe_mobile/protocol/address.dart';
 import 'package:fastvibe_mobile/storage/servers.dart';
-import 'package:fastvibe_mobile/ui/preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -81,13 +80,6 @@ void main() {
       expect((await listDrafts('b')).single.text, 'elsewhere');
     },
   );
-
-  test('reduced glass preference survives a reload', () async {
-    await Preferences.instance.setReduceGlass(true);
-    await Preferences.instance.load();
-    expect(Preferences.instance.reduceGlass, isTrue);
-    await Preferences.instance.setReduceGlass(false);
-  });
 
   test('notification target supports routed ids, legacy payloads and invalid input', () {
     const target = NotificationTarget('server|1', 'remote:host:chat/2');

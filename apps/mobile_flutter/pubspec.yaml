@@ -11,15 +11,8 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # iOS 26 / 27 liquid glass: shader-based blur, refraction, jelly physics.
-  liquid_glass_widgets: ^1.11.0
-
   # The same icon set as the desktop client.
   hugeicons: ^1.2.0
-
-  # Not used directly: `liquid_glass_widgets` draws several of its defaults with it, and
-  # without the font they render as blank boxes.
-  cupertino_icons: ^1.0.8
 
   # Markdown with tables, code fences and LaTeX (`$…$` / `$$…$$`).
   gpt_markdown: ^1.3.4
@@ -50,6 +43,10 @@ dependencies:
 
   url_launcher: ^6.3.3
   path_provider: ^2.1.6
+
+  # Office preview is HTML the host rendered. The page has its own scripts (KaTeX), so it
+  # cannot be a text view.
+  webview_flutter: ^4.13.0
 
   # Android self-update: download the APK and hand it to the installer.
   dio: ^5.11.1

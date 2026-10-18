@@ -124,8 +124,7 @@ _MarkdownTheme _themeFor(Palette palette, bool compact) {
   return built;
 }
 
-/// Reading typography stays on the content plane. The glass is around the conversation,
-/// never behind a paragraph, code fence or table.
+/// Reading typography stays on the content plane.
 class MarkdownView extends StatelessWidget {
   const MarkdownView({
     super.key,

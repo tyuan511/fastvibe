@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 import '../chat/composer.dart';
@@ -32,7 +31,7 @@ import '../session/connection.dart';
 import '../session/conversation_actions.dart';
 import '../theme/theme.dart';
 import '../ui/feedback.dart';
-import '../ui/glass_screen.dart';
+import '../ui/app_screen.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
@@ -256,6 +255,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool get _connected => _remote != null && _restored;
+
+  /// What is on screen is a saved copy and the host's current state is on its way.
+  bool _syncingBanner(Connection connection) =>
+      _cachedPreview && _remote != null && !connection.reconnecting;
 
   @override
   void initState() {
@@ -903,10 +906,10 @@ class _ChatScreenState extends State<ChatScreen> {
       List<List<dynamic>> icon,
       VoidCallback onTap, {
       bool destructive = false,
-    }) => GlassMenuItem(
+    }) => AppMenuItem(
       title: label,
-      icon: HugeIcon(icon: icon, size: 18),
-      isDestructive: destructive,
+      icon: icon,
+      destructive: destructive,
       onTap: onTap,
     );
     return <Widget>[
@@ -916,7 +919,7 @@ class _ChatScreenState extends State<ChatScreen> {
         final done = await archiveConversation(chat.id, running: _running);
         if (done && mounted) context.pop();
       }),
-      const GlassMenuDivider(),
+      const AppMenuDivider(),
       item(
         t('common.delete'),
         AppIcons.delete,
@@ -1082,26 +1085,22 @@ class _ChatScreenState extends State<ChatScreen> {
     // scaffold; only the composer moves, and the transcript's layer shifts
     // with it instead of being laid out again.
     return KeyboardLift(
-      child: GlassScreen(
+      child: AppScreen(
         title: chat?.title ?? t('common.conversation', context: context),
         subtitle: _projectName,
         actions: <Widget>[
           if (chat != null)
-            GlassMenuAction(
+            AppMenuAction(
               icon: AppIcons.moreHorizontal,
               tooltip: t('server.chatActions', context: context),
               items: _menuItems(chat),
             ),
         ],
-        // The transcript runs under the glass bar and under the footer, dissolving into the
-        // page at both (a scroll view under an iOS 26 bar and a floating input), rather than
-        // being cut off at their edges. It pads itself by how far each reaches.
-        fadeBottom: false,
-        topScrim: false,
+        // The transcript sits below the bar and runs under the footer, which it pads itself
+        // by (`bottomInset`); nothing is blurred or faded where the two meet.
         resizeToAvoidBottomInset: false,
         body: Builder(
           builder: (context) {
-            final top = GlassInsets.topOf(context);
             return LayoutBuilder(
               builder: (context, constraints) => Stack(
                 children: <Widget>[
@@ -1109,11 +1108,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: _ShiftAboveKeyboard(
                       child: Column(
                         children: <Widget>[
-                          if (_dag != null)
-                            Padding(
-                              padding: EdgeInsets.only(top: top),
-                              child: MobileDagSummary(watcher: _dag!),
-                            ),
+                          if (_dag != null) MobileDagSummary(watcher: _dag!),
                           Expanded(
                             child: _loading && _messages.isEmpty
                                 ? BrandLoading(
@@ -1125,7 +1120,6 @@ class _ChatScreenState extends State<ChatScreen> {
                                 : empty
                                 ? _Welcome(
                                     projectName: _projectName,
-                                    topInset: _dag != null ? 0 : top,
                                     bottomInset: _footerHeight,
                                     onPick: (text) => _draft.text = text,
                                   )
@@ -1135,7 +1129,6 @@ class _ChatScreenState extends State<ChatScreen> {
                                     running: running,
                                     waiting: prompt != null,
                                     workingSince: workingSince,
-                                    topInset: _dag != null ? 0 : top,
                                     bottomInset: _footerHeight,
                                     onLongPress: _messageAction,
                                     onOlder: () {
@@ -1171,16 +1164,24 @@ class _ChatScreenState extends State<ChatScreen> {
                             children: [
                               if (connection.reconnecting ||
                                   (!_loading && !_connected))
-                                _ReconnectBanner(
-                                  syncing: _cachedPreview && _remote != null && !connection.reconnecting,
-                                  onRetry: () {
-                                    Haptic.tap();
-                                    if (_remote != null) {
-                                      _reload();
-                                    } else {
-                                      connection.reconnectNow();
-                                    }
-                                  },
+                                _AppearAfter(
+                                  // A sync is usually done in a moment; a banner that flashes
+                                  // for it, and grows then shrinks the footer under the
+                                  // transcript, costs two relayouts for nothing to read.
+                                  delay: _syncingBanner(connection)
+                                      ? const Duration(milliseconds: 1500)
+                                      : Duration.zero,
+                                  child: _ReconnectBanner(
+                                    syncing: _syncingBanner(connection),
+                                    onRetry: () {
+                                      Haptic.tap();
+                                      if (_remote != null) {
+                                        _reload();
+                                      } else {
+                                        connection.reconnectNow();
+                                      }
+                                    },
+                                  ),
                                 ),
                               if (_queue.items.isNotEmpty)
                                 QueuePanel(
@@ -1355,12 +1356,10 @@ class _Welcome extends StatelessWidget {
   const _Welcome({
     required this.projectName,
     required this.onPick,
-    this.topInset = 0,
     this.bottomInset = 0,
   });
 
   final String? projectName;
-  final double topInset;
   final double bottomInset;
   final ValueChanged<String> onPick;
 
@@ -1374,7 +1373,7 @@ class _Welcome extends StatelessWidget {
       (AppIcons.code, t('chat.suggest4', context: context)),
     ];
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(24, 32 + topInset, 24, 32 + bottomInset),
+      padding: EdgeInsets.fromLTRB(24, 32, 24, 32 + bottomInset),
       child: Column(
         children: <Widget>[
           const SizedBox(height: 24),
@@ -1462,6 +1461,52 @@ class _Welcome extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Draws [child] only once [delay] has passed since it was mounted.
+class _AppearAfter extends StatefulWidget {
+  const _AppearAfter({required this.delay, required this.child});
+
+  final Duration delay;
+  final Widget child;
+
+  @override
+  State<_AppearAfter> createState() => _AppearAfterState();
+}
+
+class _AppearAfterState extends State<_AppearAfter> {
+  Timer? _timer;
+  late bool _shown = widget.delay == Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!_shown) {
+      _timer = Timer(widget.delay, () {
+        if (mounted) setState(() => _shown = true);
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(_AppearAfter oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Turning into a banner that must be seen at once (the link dropped) cannot wait.
+    if (!_shown && widget.delay == Duration.zero) {
+      _timer?.cancel();
+      _shown = true;
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _shown ? widget.child : const SizedBox.shrink();
 }
 
 class _ReconnectBanner extends StatelessWidget {

@@ -15,7 +15,7 @@ import 'package:fastvibe_mobile/ui/feedback.dart';
 import 'package:fastvibe_mobile/ui/kit.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'support/plain.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 ToolBlock tool(String name, Object? args, {String status = 'done', Object? details}) =>
@@ -100,7 +100,6 @@ class _InterruptedDownload extends FileTransfer {
 void main() {
   setUpAll(() async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
-    await LiquidGlassWidgets.initialize(warmUpMode: GlassWarmUpMode.never);
     await i18n.setPreference(LanguagePreference.en);
   });
 
@@ -168,7 +167,8 @@ void main() {
       expect(outputFileKind('a.json'), OutputFileKind.text);
       expect(outputFileKind('a.svg'), OutputFileKind.text);
       expect(outputFileKind('a.pdf'), OutputFileKind.other);
-      expect(outputFileKind('a.xlsx'), OutputFileKind.other);
+      expect(outputFileKind('a.xlsx'), OutputFileKind.office);
+      expect(outputFileKind('deck.PPTX'), OutputFileKind.office);
       expect(outputFileKind('Makefile'), OutputFileKind.other);
       expect(outputFileKind('.png'), OutputFileKind.other);
     });
@@ -407,9 +407,7 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(390, 844));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
-        LiquidGlassWidgets.wrap(
-          theme: GlassThemeData.simple(quality: GlassQuality.minimal),
-          brightnessResolver: Theme.maybeBrightnessOf,
+        plain(
           child: MaterialApp(
             theme: buildTheme(palette),
             builder: (_, child) => PaletteScope(palette: palette, child: ToastHost(child: child!)),

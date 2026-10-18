@@ -3,11 +3,11 @@ import 'package:flutter/widgets.dart';
 /// Dissolves a scrollable's content into whatever is behind it at an edge that still
 /// has more to scroll, instead of letting the viewport cut it with a straight line.
 ///
-/// A sheet's list is clipped by its own bounds, which inside a rounded glass sheet read
+/// A sheet's list is clipped by its own bounds, which inside a rounded sheet read
 /// as a hard, square cut through the middle of a rounded card. Each fade's strength
 /// follows how far there is left to scroll on that side, so it arrives and leaves with
 /// the content rather than snapping on at the last pixel; an edge with nothing beyond it
-/// is drawn untouched. A mask rather than a painted gradient, so it works over glass.
+/// is drawn untouched. A mask rather than a painted gradient, so it works over any surface.
 class ScrollFade extends StatefulWidget {
   const ScrollFade({super.key, required this.child, this.extent = 32});
 

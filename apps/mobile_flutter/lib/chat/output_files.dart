@@ -3,7 +3,7 @@ import 'tool_card.dart' show argString;
 
 /// What a file on the phone can be drawn as. Anything else is downloaded and handed to the
 /// system, which knows how to open a PDF, a spreadsheet or a video.
-enum OutputFileKind { image, markdown, text, other }
+enum OutputFileKind { image, markdown, text, office, other }
 
 /// A file a reply wrote or presented.
 class OutputFile {
@@ -55,7 +55,33 @@ OutputFileKind outputFileKind(String name) {
   if (_imageExt.contains(ext)) return OutputFileKind.image;
   if (_markdownExt.contains(ext)) return OutputFileKind.markdown;
   if (_textExt.contains(ext)) return OutputFileKind.text;
+  if (ext == 'docx' || ext == 'xlsx' || ext == 'pptx') return OutputFileKind.office;
   return OutputFileKind.other;
+}
+
+/// Office files a shell command will write. A scan, not a shell: `$FILE` is skipped.
+List<String> officecliWriteTargets(String command) {
+  final found = <String>[];
+  final pattern = RegExp(
+    r'''officecli(?:\.exe)?\s+(set|add|remove|move|swap|raw-set|add-part|batch|import|create|merge|refresh)\s+(?:"([^"]+\.(?:docx|xlsx|pptx))"|'([^']+\.(?:docx|xlsx|pptx))'|(\S+\.(?:docx|xlsx|pptx)))''',
+    caseSensitive: false,
+  );
+  for (final match in pattern.allMatches(command)) {
+    final verb = (match.group(1) ?? '').toLowerCase();
+    final path = match.group(2) ?? match.group(3) ?? match.group(4) ?? '';
+    if (path.isEmpty || path.contains(r'$')) continue;
+    if (verb == 'merge') {
+      final output = RegExp(
+        r'''(?:"([^"]+\.(?:docx|xlsx|pptx))"|'([^']+\.(?:docx|xlsx|pptx))'|(\S+\.(?:docx|xlsx|pptx)))\s*$''',
+        caseSensitive: false,
+      ).firstMatch(command.substring(match.start));
+      final written = output?.group(1) ?? output?.group(2) ?? output?.group(3);
+      if (written != null && written.isNotEmpty) found.add(written);
+      continue;
+    }
+    found.add(path);
+  }
+  return found;
 }
 
 String fileBaseName(String path) {
@@ -114,6 +140,12 @@ List<OutputFile> collectOutputFiles(Iterable<ToolBlock> tools) {
           final ref = item['ref'];
           if (ref is String) add(ref, true);
         }
+      }
+      continue;
+    }
+    if (tool.name == 'bash' || tool.name == 'shell') {
+      for (final path in officecliWriteTargets(argString(tool.args, const <String>['command']))) {
+        add(path, true);
       }
       continue;
     }

@@ -2,10 +2,10 @@ import 'package:flutter/cupertino.dart'
     show
         CupertinoActivityIndicator,
         CupertinoSliverRefreshControl,
+        CupertinoSwitch,
         RefreshIndicatorMode;
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../theme/theme.dart';
 import 'icons.dart';
@@ -180,8 +180,7 @@ class Pill extends StatelessWidget {
   }
 }
 
-/// A search field on a surface that is already glass (a sheet), where `GlassSearchBar`
-/// would refract inside refraction. Drawn to `UISearchTextField`'s metrics: 36pt tall,
+/// A search field, drawn to `UISearchTextField`'s metrics: 36pt tall,
 /// 10pt corners, the system fill, 17pt text, a magnifier and a clear button.
 class SearchField extends StatelessWidget {
   const SearchField({
@@ -264,7 +263,7 @@ class SearchField extends StatelessWidget {
   }
 }
 
-/// The brand-gradient primary action: 登录并保存, 开始新对话, 连接.
+/// The primary action: 登录并保存, 开始新对话, 连接. A solid accent pill.
 class PrimaryButton extends StatelessWidget {
   const PrimaryButton({
     super.key,
@@ -287,51 +286,27 @@ class PrimaryButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
     final active = enabled && !busy && onPressed != null;
-    return GlassButton.custom(
-      onTap: onPressed ?? () {},
-      enabled: active,
+    return _PillButton(
       label: label,
+      semanticLabel: label,
+      onPressed: active ? onPressed : null,
       height: height,
-      useOwnLayer: true,
-      shape: const LiquidRoundedSuperellipse(borderRadius: 25),
-      settings: LiquidGlassSettings(
-        glassColor: palette.accent.withValues(alpha: 0.88),
-        blur: 12,
-        thickness: 18,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: busy
-            ? CupertinoActivityIndicator(color: palette.accentText)
-            : Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (icon != null) ...[
-                    HugeIcon(icon: icon!, size: 19, color: palette.accentText),
-                    const SizedBox(width: 8),
-                  ],
-                  Flexible(
-                    child: Text(
-                      label,
-                      maxLines: 2,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: palette.accentText,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-      ),
+      background: palette.accent,
+      dimmed: !active && !busy,
+      child: busy
+          ? DesktopSpinner(size: 18, color: palette.accentText)
+          : _ButtonLabel(
+              label: label,
+              icon: icon,
+              color: palette.accentText,
+              maxLines: 2,
+            ),
     );
   }
 }
 
-/// A secondary action: 取消, 重新连接. The iOS 26 `.glass` button — the neutral twin of
-/// [PrimaryButton]'s `.glassProminent` — rather than a bordered card.
+/// A secondary action: 取消, 重新连接. The neutral twin of [PrimaryButton]: the recessed
+/// field colour with accent text.
 class SecondaryButton extends StatelessWidget {
   const SecondaryButton({
     super.key,
@@ -349,45 +324,185 @@ class SecondaryButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    return GlassButton.custom(
-      onTap: onPressed ?? () {},
-      enabled: onPressed != null,
+    return _PillButton(
       label: label,
+      semanticLabel: label,
+      onPressed: onPressed,
       height: height,
-      useOwnLayer: true,
-      shape: const LiquidRoundedSuperellipse(borderRadius: 25),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            if (icon != null) ...<Widget>[
-              HugeIcon(
-                icon: icon!,
-                color: palette.accent,
-                size: 19,
-                strokeWidth: 2,
-              ),
-              const SizedBox(width: 8),
-            ],
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: palette.accent,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w500,
-                ),
+      background: palette.field,
+      dimmed: onPressed == null,
+      child: _ButtonLabel(label: label, icon: icon, color: palette.accent),
+    );
+  }
+}
+
+class _PillButton extends StatelessWidget {
+  const _PillButton({
+    required this.label,
+    required this.semanticLabel,
+    required this.onPressed,
+    required this.height,
+    required this.background,
+    required this.child,
+    this.dimmed = false,
+  });
+
+  final String label;
+  final String semanticLabel;
+  final VoidCallback? onPressed;
+  final double height;
+  final Color background;
+  final Widget child;
+  final bool dimmed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      enabled: onPressed != null,
+      label: semanticLabel,
+      child: Opacity(
+        opacity: dimmed ? 0.45 : 1,
+        child: Material(
+          color: background,
+          borderRadius: BorderRadius.circular(Radii.lg),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onPressed,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: height),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Center(child: child),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
   }
+}
+
+class _ButtonLabel extends StatelessWidget {
+  const _ButtonLabel({
+    required this.label,
+    required this.icon,
+    required this.color,
+    this.maxLines = 1,
+  });
+
+  final String label;
+  final List<List<dynamic>>? icon;
+  final Color color;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: <Widget>[
+        if (icon != null) ...<Widget>[
+          HugeIcon(icon: icon!, size: 19, color: color, strokeWidth: 2),
+          const SizedBox(width: 8),
+        ],
+        Flexible(
+          child: Text(
+            label,
+            maxLines: maxLines,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: color,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A segmented control: a recessed track with the chosen segment raised on it.
+class Segmented extends StatelessWidget {
+  const Segmented({
+    super.key,
+    required this.labels,
+    required this.selected,
+    required this.onSelect,
+    this.height = 40,
+  });
+
+  final List<String> labels;
+  final int selected;
+  final ValueChanged<int> onSelect;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = paletteOf(context);
+    return Container(
+      height: height,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: palette.field,
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Row(
+        children: <Widget>[
+          for (var i = 0; i < labels.length; i++)
+            Expanded(
+              child: Semantics(
+                button: true,
+                selected: i == selected,
+                label: labels[i],
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => onSelect(i),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: i == selected ? palette.card : Colors.transparent,
+                      borderRadius: BorderRadius.circular(Radii.md - 3),
+                      boxShadow: i == selected ? elevation(palette, 0) : null,
+                    ),
+                    child: Text(
+                      labels[i],
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: i == selected ? palette.text : palette.muted,
+                        fontSize: 14,
+                        fontWeight: i == selected
+                            ? FontWeight.w600
+                            : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The on/off switch every settings row uses, in the accent colour.
+class AppSwitch extends StatelessWidget {
+  const AppSwitch({super.key, required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) => CupertinoSwitch(
+    value: value,
+    onChanged: onChanged,
+    activeTrackColor: paletteOf(context).accent,
+  );
 }
 
 /// The header above an inset grouped section: 收藏, 等你处理, 最近. iOS draws it in the
@@ -723,16 +838,9 @@ class SettingsCard extends StatelessWidget {
       InsetGroup(separatorIndent: 16 + 29 + 12, children: children);
 }
 
-/// iOS pull-to-refresh, for a list that runs under the glass bar.
-///
-/// `CupertinoSliverRefreshControl` only sees the pull when it is the scroll view's
-/// **first** sliver (a spacer before it swallows the overscroll — pinned by a probe test),
-/// so it cannot sit below the bar's spacer. It goes first, and the indicator is drawn
-/// `topInset` lower than its box, so it appears just under the bar instead of behind it.
-Widget iosRefreshControl({
-  required Future<void> Function() onRefresh,
-  required double topInset,
-}) {
+/// iOS pull-to-refresh. `CupertinoSliverRefreshControl` only sees the pull when it is the
+/// scroll view's **first** sliver (a spacer before it swallows the overscroll).
+Widget iosRefreshControl({required Future<void> Function() onRefresh}) {
   const diameter = 28.0;
   return CupertinoSliverRefreshControl(
     onRefresh: onRefresh,
@@ -752,24 +860,11 @@ Widget iosRefreshControl({
         ),
       };
       if (indicator == null) return const SizedBox.shrink();
-      // The strip the pull has opened is `pulled` tall and starts under the bar, at
-      // `topInset`; the title sits right below it and rides up as it closes. The
-      // indicator is centred in that strip and fades out before the strip is thinner
-      // than itself, so on the way back it never runs into the title.
+      // Fades out before the strip is thinner than the indicator, so on the way back it
+      // never runs into the first row.
       final fade = ((pulled - diameter) / diameter).clamp(0.0, 1.0);
-      return Stack(
-        clipBehavior: Clip.none,
-        children: <Widget>[
-          Positioned(
-            top: topInset + pulled / 2 - diameter / 2,
-            left: 0,
-            right: 0,
-            child: Opacity(
-              opacity: fade,
-              child: Center(child: indicator),
-            ),
-          ),
-        ],
+      return Center(
+        child: Opacity(opacity: fade, child: indicator),
       );
     },
   );

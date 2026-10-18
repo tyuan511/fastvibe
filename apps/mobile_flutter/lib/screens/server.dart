@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../account/account.dart';
 import '../chat/draft_storage.dart';
@@ -16,7 +15,7 @@ import '../session/conversation_actions.dart';
 import '../storage/servers.dart';
 import '../theme/theme.dart';
 import '../ui/feedback.dart';
-import '../ui/glass_screen.dart';
+import '../ui/app_screen.dart';
 import '../ui/dock.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
@@ -41,8 +40,6 @@ class ServerScreen extends StatefulWidget {
 class _ServerScreenState extends State<ServerScreen> {
   final TextEditingController _query = TextEditingController();
 
-  /// Drives the large 会话 title's collapse into the bar, and owns the list's scroll controller.
-  final GlassLargeTitleController _title = GlassLargeTitleController();
   SavedServer? _server;
   bool _loaded = false;
   String _password = '';
@@ -77,7 +74,6 @@ class _ServerScreenState extends State<ServerScreen> {
   void dispose() {
     _query.removeListener(_onQueryChanged);
     _query.dispose();
-    _title.dispose();
     Connection.instance.removeListener(_onConnection);
     _searchTimer?.cancel();
     super.dispose();
@@ -172,15 +168,6 @@ class _ServerScreenState extends State<ServerScreen> {
         .toList();
     rows.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return rows;
-  }
-
-  /// The pages that have no large title of their own and so keep the bar's.
-  bool get _showsBarTitle {
-    if (!_loaded) return false;
-    if (_server == null) return true;
-    final connection = Connection.instance;
-    return connection.server?.id == widget.serverId &&
-        connection.status == ConnectionStatus.error;
   }
 
   /// How many of the visible chats each project holds — the filter's rows.
@@ -549,18 +536,12 @@ class _ServerScreenState extends State<ServerScreen> {
     final palette = paletteOf(context);
     final status = _statusLine(palette);
 
-    return GlassScreen(
+    return AppScreen(
       title: _server?.alias ?? t('common.device', context: context),
       // The connection state belongs in the bar: it is the answer to the question a
       // failed call raises, and a row of its own would be read after the error.
       subtitle: status?.$1,
       statusColor: status?.$2,
-      // Held from the first frame, loading included: the bar's own title is the one the
-      // large 会话 title hands over to on scroll, so attaching the controller only once
-      // the list was ready showed 「设备名 · 已连接」 in the bar for the loading moment
-      // and then hid it again — a flash on every entry. Only the two pages with no large
-      // title (a machine not found, a connection that failed) keep the bar title.
-      largeTitleController: _showsBarTitle ? null : _title,
       actions: [
         if (_loaded &&
             _server != null &&
@@ -569,7 +550,7 @@ class _ServerScreenState extends State<ServerScreen> {
           // A sheet, not a pull-down: the menu grows from the bar and the package
           // clipped a long project list with no way to reach the rest. The sheet
           // scrolls and searches, like the project picker for a new chat.
-          GlassAction(
+          AppAction(
             icon: AppIcons.folder,
             tooltip: t('server.projectFilter', context: context),
             active: _project != null,
@@ -668,33 +649,20 @@ class _ServerScreenState extends State<ServerScreen> {
 
     return Builder(
       builder: (context) => CustomScrollView(
-        controller: _title.scrollController,
         slivers: <Widget>[
-          iosRefreshControl(
-            onRefresh: _refresh,
-            topInset: GlassInsets.pad(context).top,
-          ),
-          SliverToBoxAdapter(
-            child: SizedBox(height: GlassInsets.pad(context).top),
-          ),
-          // The iOS large title and its search field: they scroll away with the list
-          // (the title first, then the field) and the bar's own title fades in as they go.
-          GlassLargeTitle(
-            text: t('server.workspaceTitle'),
-            controller: _title,
-            searchBar: GlassSearchBar(
-              controller: _query,
-              placeholder: t('server.searchPlaceholder'),
-              height: 40,
+          iosRefreshControl(onRefresh: _refresh),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            sliver: SliverToBoxAdapter(
+              child: SearchField(
+                controller: _query,
+                placeholder: t('server.searchPlaceholder'),
+                onChanged: (_) => setState(() {}),
+              ),
             ),
           ),
           SliverPadding(
-            padding: EdgeInsets.only(
-              bottom: GlassInsets.pad(
-                context,
-                const EdgeInsets.only(bottom: 4),
-              ).bottom,
-            ),
+            padding: AppInsets.pad(context, const EdgeInsets.only(bottom: 4)),
             sliver: SliverList(
               delegate: SliverChildListDelegate(<Widget>[
                 // Connected is the normal state, so it is not announced here (the bar's title

@@ -40,7 +40,6 @@ void main() {
         await server.close();
       });
       await Preferences.instance.setNotifications(false);
-      await Preferences.instance.setReduceGlass(false);
       await Preferences.instance.setTheme(ThemePreference.light);
       await i18n.setPreference(LanguagePreference.zh);
       // Remove only this test's fixtures from a previous interrupted simulator run.
@@ -261,9 +260,6 @@ void main() {
         () => find.text(t('settings.reduceGlass')).evaluate().isNotEmpty,
       );
       await shot('settings-dark');
-      await Preferences.instance.setReduceGlass(true);
-      await shot('settings-reduced-glass');
-      await Preferences.instance.setReduceGlass(false);
       await i18n.setPreference(LanguagePreference.en);
       await shot('settings-en');
 

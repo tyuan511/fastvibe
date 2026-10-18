@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'support/plain.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fastvibe_mobile/chat/composer.dart';
@@ -19,14 +19,13 @@ import 'package:fastvibe_mobile/storage/servers.dart';
 import 'package:fastvibe_mobile/theme/theme.dart';
 import 'package:fastvibe_mobile/ui/context_menu.dart';
 import 'package:fastvibe_mobile/ui/feedback.dart';
-import 'package:fastvibe_mobile/ui/glass_screen.dart';
+import 'package:fastvibe_mobile/ui/app_screen.dart';
 import 'package:fastvibe_mobile/ui/icons.dart';
 import 'package:fastvibe_mobile/ui/kit.dart';
 import 'package:fastvibe_mobile/ui/scroll_fade.dart';
 
 void main() {
   setUpAll(() async {
-    await LiquidGlassWidgets.initialize(warmUpMode: GlassWarmUpMode.never);
   });
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -42,9 +41,7 @@ void main() {
     double scale = 1,
   }) async {
     await tester.pumpWidget(
-      LiquidGlassWidgets.wrap(
-        brightnessResolver: Theme.maybeBrightnessOf,
-        theme: GlassThemeData.simple(quality: GlassQuality.minimal),
+      plain(
         child: MaterialApp(
           theme: buildTheme(palette),
           builder: (context, child) => MediaQuery(
@@ -68,18 +65,18 @@ void main() {
     'a long press asked from above the screen still opens its context menu',
     (tester) async {
       // A screen's handlers run in its State's context, which is above its
-      // GlassScreen and so above the menu host. That lookup used to find nothing and
+      // AppScreen and so above the menu host. That lookup used to find nothing and
       // every long press (a chat row, a device, a message) silently did nothing.
       var renamed = false;
       await pump(
         tester,
         Builder(
-          builder: (outer) => GlassScreen(
+          builder: (outer) => AppScreen(
             title: 'List',
             body: Center(
               child: GestureDetector(
                 onLongPress: () => showContextMenu(outer, <Widget>[
-                  GlassMenuItem(title: 'Rename', onTap: () => renamed = true),
+                  AppMenuItem(title: 'Rename', onTap: () => renamed = true),
                 ]),
                 child: const Text('row'),
               ),
@@ -114,7 +111,7 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.text('Studio'), findsOneWidget);
-      // The search field is the iOS one now (GlassSearchBar), not a Material TextField;
+      // The search field is the iOS one now (SearchField), not a Material TextField;
       // every text input ends in an EditableText, so that is what is looked for.
       await tester.enterText(find.byType(EditableText), 'missing');
       await tester.pump();
@@ -176,17 +173,16 @@ void main() {
     String? picked;
     await pump(
       tester,
-      GlassScreen(
+      AppScreen(
         title: 'List',
         actions: <Widget>[
-          GlassMenuAction(
+          AppMenuAction(
             icon: AppIcons.folder,
             tooltip: 'Projects',
             items: <Widget>[
               for (var i = 0; i < 30; i++)
-                GlassMenuItem(
+                AppMenuItem(
                   title: 'Project $i',
-                  subtitle: '$i chats',
                   onTap: () => picked = '$i',
                 ),
             ],

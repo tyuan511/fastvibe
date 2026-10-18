@@ -10,7 +10,7 @@ import '../i18n/core.dart';
 import '../theme/theme.dart';
 import '../ui/icons.dart';
 import '../ui/kit.dart';
-import '../ui/glass_screen.dart';
+import '../ui/app_screen.dart';
 import '../ui/feedback.dart';
 
 /// Scans the QR code from 设置 → 远程访问. The address goes back through
@@ -68,9 +68,8 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final palette = paletteOf(context);
-    return GlassScreen(
+    return AppScreen(
       title: t('nav.scan', context: context),
-      edgeFade: false,
       body: MobileScanner(
         controller: _controller,
         onDetect: _handle,

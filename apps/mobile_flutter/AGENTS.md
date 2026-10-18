@@ -41,7 +41,7 @@ lib/
   storage/servers.dart
   chat/              message model, queue, snapshot sync, tool cards, composer, DAG
   screens/           one file per route
-  ui/                kit (buttons, avatars, chips), glass_screen, feedback (toast/dialog)
+  ui/                kit (buttons, avatars, chips), app_screen, feedback (toast/dialog)
   update/            GitHub release lookup and the Android self-update
   notifications/     local-notification policy and bridge
 tool/
@@ -54,23 +54,24 @@ tool/
 
 ## The rules that matter
 
-### Liquid glass is the chrome, never the content
+### A flat, quiet UI: no glass, no blur
 
-`liquid_glass_widgets` (iOS 26/27 material, shader-based) is used for the navigation and
-control layer only: `GlassScaffold` per screen, `GlassIconButton` / `GlassButton` in the
-bars, `GlassModalSheet` for every picker and sheet. A conversation's rows, a settings
-card and a transcript stay **opaque** — a reader has to read them, and glass over text is
-noise. `lib/ui/glass_screen.dart` is the one place that composes the shell.
+The phone draws plain surfaces only: a flat page (`palette.background`), opaque cards, solid
+buttons, hairline separators. There is no translucency, blur or shader anywhere — a blur over
+a scrolling transcript is a pass over the whole list on every frame, which is what made the
+chat stutter on a mid-range Android phone, and nothing in this app needs it.
+`lib/ui/app_screen.dart` is the one place that composes a screen: `AppScreen` (a top bar with
+back, title, subtitle and actions, then the body, then an optional bottom bar), `AppAction`,
+`AppMenuAction`, `AppInsets` and `KeyboardLift`. Menus (`AppMenuItem`, `showAppMenu`,
+`showContextMenu`), sheets (`showAppSheet`), dialogs (`AppDialog`) and toasts live in
+`ui/context_menu.dart`, `ui/sheet.dart` and `ui/feedback.dart`; buttons, `Segmented` and
+`AppSwitch` in `ui/kit.dart`. Colours and corner radii are the phone's original ones
+(`theme/theme.dart`, the Expo client's tokens). Do not add `liquid_glass_widgets` or a
+`BackdropFilter` back.
 
-**`GlassScaffold` is not a `Scaffold` and provides no `Material` ancestor.** Every
-`TextField`, `InkWell` and `Switch` in a body throws `No Material widget found` without
-one, at render time, taking the whole tree down. `GlassScreen` wraps the body in
-`Material(type: MaterialType.transparency)` for exactly this reason — do not remove it,
-and do not add a screen that bypasses the shell.
-
-Never nest refractive glass in refractive glass (`GlassButton` inside a `GlassCard`):
-it double-refracts, clips the jelly animation, and wastes fill rate. Inside a glass
-container use plain text and icons.
+Nothing scrolls under a bar: the body is the strip between them, so a scroll view pads only its
+end (`AppInsets.pad`, the home indicator plus a little air). A control that floats over the
+transcript (the composer, jump-to-latest) is a plain card.
 
 ### Every string goes through `t()`
 
@@ -159,6 +160,9 @@ Read `lib/chat/message.dart`, `live_events.dart`, `snapshot_sync.dart` and
   row fetches its `deferredIds` through `engine:get-message`; merged replies preserve
   all of those ids. Copy, reuse and Copy All must resolve every required body first.
   Live tails retain their full prefix for the stream reducer.
+- **The "syncing" banner waits 1.5 s.** A cached preview is on screen while the authoritative
+  snapshot is in flight; a sync that finishes within that shows nothing (the banner grew and
+  shrank the footer, which relaid the transcript twice). A dropped link shows its banner at once.
 - **A cached transcript is only a display hint.** `transcript_cache.dart` keeps the
   recent window under the app cache directory, keyed by saved host and conversation,
   with 256 KiB per entry, twenty entries and a seven-day expiry. It never persists a
@@ -241,7 +245,7 @@ list is the marker) — the desktop's rule for 界面语言.
   **both themes**. This is the layer `flutter analyze` cannot see: a render-time throw
   (a missing ancestor, a component used outside the group it needs) unmounts the whole
   tree and produces a white window, and it is exactly how the missing `Material` ancestor
-  in `GlassScreen` was found.
+  in the screen shell was found.
 
 Add a screen or a chat widget → render it here. `SharedPreferences.setMockInitialValues`
 is required in `setUpAll`, or every storage read throws `MissingPluginException` as a

@@ -49,9 +49,8 @@ const int _searchThreshold = 9;
 
 /// Bottom sheet of options — pickers, and a chat's actions.
 ///
-/// Presented through the liquid-glass modal sheet so it matches the platform: it has
-/// detents, it can be dragged down to close, and it morphs rather than sliding under a
-/// separate barrier.
+/// Presented through the app's bottom sheet so it matches the platform: it can be
+/// dragged down to close.
 Future<void> showOptionSheet(
   BuildContext context, {
   required String title,

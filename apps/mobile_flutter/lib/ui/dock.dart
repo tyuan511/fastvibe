@@ -1,7 +1,4 @@
-import 'package:flutter/cupertino.dart' show CupertinoActivityIndicator;
 import 'package:flutter/material.dart';
-import 'package:hugeicons/hugeicons.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../i18n/core.dart';
 import 'icons.dart';
@@ -25,11 +22,10 @@ class ConversationDock extends StatelessWidget implements PreferredSizeWidget {
   final bool creating;
 
   @override
-  Size get preferredSize => const Size.fromHeight(72);
+  Size get preferredSize => const Size.fromHeight(64);
 
   @override
   Widget build(BuildContext context) {
-    final p = paletteOf(context);
     return Align(
       heightFactor: 1,
       child: ConstrainedBox(
@@ -39,37 +35,25 @@ class ConversationDock extends StatelessWidget implements PreferredSizeWidget {
           child: Row(
             children: <Widget>[
               Expanded(
-                child: GlassSegmentedControl(
-                  segments: <GlassSegment>[
-                    GlassSegment(label: t('server.filterAll', context: context)),
-                    GlassSegment(label: t('server.filterActive', context: context)),
-                    GlassSegment(label: t('server.filterWaiting', context: context)),
+                child: Segmented(
+                  labels: <String>[
+                    t('server.filterAll', context: context),
+                    t('server.filterActive', context: context),
+                    t('server.filterWaiting', context: context),
                   ],
-                  selectedIndex: selected,
-                  onSegmentSelected: onSelect,
-                  height: 48,
-                  selectedTextStyle: TextStyle(
-                    color: p.text,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  unselectedTextStyle: TextStyle(color: p.muted, fontSize: 15),
+                  selected: selected,
+                  onSelect: onSelect,
+                  height: 44,
                 ),
               ),
               const SizedBox(width: 10),
-              GlassIconButton(
-                icon: creating
-                    ? CupertinoActivityIndicator(color: p.accent)
-                    : HugeIcon(
-                        icon: AppIcons.chatAdd,
-                        size: 22,
-                        color: p.accent,
-                      ),
+              IconAction(
+                icon: AppIcons.chatAdd,
+                tone: IconTone.accent,
+                size: 44,
+                tooltip: t('common.newChat', context: context),
+                enabled: !creating,
                 onPressed: creating ? null : onCreate,
-                size: 48,
-                iconSize: 22,
-                shape: GlassIconButtonShape.circle,
-                semanticLabel: t('common.newChat', context: context),
               ),
             ],
           ),
@@ -90,40 +74,17 @@ class DeviceDock extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    final p = paletteOf(context);
     return Align(
       heightFactor: 1,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 540),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: GlassButton.custom(
-            height: 60,
-            shape: const LiquidRoundedSuperellipse(borderRadius: 30),
-            onTap: onAdd,
+          child: PrimaryButton(
             label: t('devices.add', context: context),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                HugeIcon(
-                  icon: AppIcons.plus,
-                  size: 22,
-                  color: p.accent,
-                  strokeWidth: 2.2,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  t('devices.add', context: context),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: p.text,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
+            icon: AppIcons.plus,
+            height: 52,
+            onPressed: onAdd,
           ),
         ),
       ),
