@@ -21,7 +21,9 @@ Runtime data lives under the app userData directory:
 ```
 ~/Library/Application Support/FastVibe/
   settings.json          UI prefs (theme, chat behaviour) — not localStorage
-  conversations.json
+  fastvibe.db            所有「数据类」状态：会话目录、检查点、思考耗时、记忆账本、
+                         排队消息、DAG、定时任务（见 SQLite 存储）
+  dag.json.results/      每个 DAG 节点运行的完整产出文本（大块产物，仍是文件）
   providers.json
   account.json           FastVibe account sign-in (device token + who it is), 0600, never served
   mcp.json
@@ -31,14 +33,17 @@ Runtime data lives under the app userData directory:
     agent/.env           provider API keys, injected into the SDK's in-memory auth storage
     agent/oauth.json     subscription (OAuth) tokens — the one credential written to disk
     agent/models.json    the only provider config the SDK reads (custom + builtin providers)
-    reasoning.json       thinking-block start/end times Main timed from the live stream
     usage-ledger.jsonl   append-only record of finalized turns, so 使用统计 survives deletion
-    memory.json          长期记忆开关（`{ version: 2, enabled }`）
-    memory-state.json    记忆整理的账本：每个对话提取出了什么、使用次数、重试状态
+    decision-trace.jsonl 决策轨迹（写多读少，仍是 JSONL）
+    memory.json          长期记忆开关（`{ version: 2, enabled }`，配置不迁）
     memories/            智能体读取的记忆文件夹：memory_summary.md、MEMORY.md、rollout_summaries/…
     wt                   git worktrees for isolated conversations
     scratch/<conversationId>   workspace for one conversation not bound to a project
 ```
+
+`conversations.json`、`checkpoints.json`、`reasoning.json`、`memory-state.json`、
+`message-queue.json`、`dag.json`、`scheduled-tasks.json` 是这些表的*前身*：每个 store 第一次打开时
+把自己的旧文件导入数据库，然后改名成 `<名字>.migrated-<时间戳>` 留在原地，不再读写。
 
 Paths are handed to `createAgentSession` programmatically (`agentDir`, `sessionManager`,
 `settingsManager`) rather than through environment variables. Agent IPC channels use the
@@ -601,18 +606,82 @@ A client's own snapshot is not skipped (no `except: origin`): the originator alr
 the same state as its call's result, so applying it again changes nothing, and threading an
 origin down through the engine to the catalog would buy only that.
 
-### 目录落盘是合并，不是整份覆盖（`ConversationCatalog.#flush`）
+### SQLite 存储（`src/main/engine/db.ts`，设计见 `docs/sqlite-storage.md`）
 
-`conversations.json` 每次都从内存整份写出，而同一个数据目录上可以同时有两个进程：安装版旁边再开一个 `pnpm dev`
-（开发态跳过单实例锁）。整份覆盖意味着后写的一方只留下它自己认识的会话，另一方新建的会话从侧栏消失，
-转写文件却还在磁盘上——用户看到的是「正在运行的会话不见了」。
+「数据类」状态（会话目录、检查点、思考耗时、记忆账本、排队消息、DAG、定时任务）都在一个
+`<userData>/fastvibe.db` 里；「配置类」（`settings.json`、`providers.json`、`mcp.json`、`memory.json`…）
+和凭据文件仍是各自的 JSON——前者要整份发给每个渲染窗口，后者要保持独立 0600 与「不经任何方法返回」。
+会话转写仍然是 JSONL：格式归 pi SDK 所有。迁移动机不是快，是整份重写造成的多进程互相覆盖、
+只在退出时落盘的状态（检查点）崩溃即丢，以及「只能全量扫描」。
 
-- **落盘前先吸收磁盘上的新会话。** `#adoptFromDisk` 把文件里有、而本进程从未持有过的会话和项目并进内存再写；
-  「持有过」记在 `#knownIds` / `#knownProjects`，所以本进程自己删掉的会话不会被读回来。两边都有的会话仍是后写者赢。
-- **写入是临时文件 + rename**，另一个进程读到的不会是被截断的前缀。
-- **读不出来的目录先留一份副本**（`conversations.json.corrupt-<时间戳>`），再从空开始；以前是静默清空，下一次写入就把原文件盖掉了。
+- **只有 `db.ts` 可以 import `node:sqlite`。** 这个模块还是 development status，跨 Node 版本 API 会变；
+  收口之后换成 `better-sqlite3` 只改这一个文件。store 拿到的是 `Db`（`run` / `get` / `all` / `exec` /
+  `transaction`），除了 SQL 本身不认识 SQLite。
+- **一个进程一个连接，按路径缓存**（`openDatabase`）。测试要「第二个进程」时用 `openDatabaseConnection`
+  拿一条独立连接；`closeDatabases()` 在退出路径上（桌面 `requestShutdown`、无头 Agent `stop()`）
+  先 `wal_checkpoint(TRUNCATE)` 再关。`:memory:` 永不缓存——两个调用各要一个内存库时它们确实是两个库。
+- **PRAGMA 的顺序有坑**：`auto_vacuum = INCREMENTAL` 必须在 `journal_mode = WAL` *之前*设——实测新建的库
+  反过来设会被接受然后无声忽略（`PRAGMA auto_vacuum` 一直读回 0）。其余是 `synchronous=NORMAL`、
+  `busy_timeout=5000`（另一个进程在写时等一会儿，而不是立刻抛 `SQLITE_BUSY`）、`foreign_keys=ON`。
+- **文件从第一个字节起 0600**，`-wal` / `-shm` 从主文件继承权限——但*不假设*：`test/db.test.ts` 直接断言
+  三个文件，因为检查点存的是工作区源码。
+- **表的形状是「主键 + 少数派生列 + 一个 `data TEXT`（整份对象的 JSON）」**，所以给 `Conversation`、
+  `DagNode`、`ScheduledTask` 加字段不需要 schema 迁移。派生列只在真被查/排序时才存在，而且
+  **按行比较要把派生列一起算**（`RowWriter` 比的是 JSON 加列的指纹）：项目拖拽顺序只活在
+  `projects.position` 里，只比 JSON 会静默丢掉一次重排。时间是 epoch ms 的 INTEGER，不用 BigInt。
+- **schema 版本用 `PRAGMA user_version`**，迁移是 `db-schema.ts` 里有序的函数数组，一步一个事务，
+  并且在事务*内*重读版本号：两个进程同时第一次建库时，后进的那个要跳过而不是撞上
+  `CREATE TABLE … already exists`。库版本高于本应用已知版本时**拒绝打开**并给出可读错误，不猜怎么降级。
+- **旧 JSON 由每个 store 在自己第一次打开时导入**（`importLegacyJson`），用该 store 现有的读取/规范化代码，
+  所以会话目录的 v0/v1 迁移不必重写第二遍。导入与写行在同一个事务里，提交前比对「写入方声明的行数」与
+  `SELECT COUNT(*)`，对不上就整笔回滚、旧文件原样不动。提交后把旧文件**改名**成 `.migrated-<时间戳>`
+  （不删，也不原地留着：原地留着的话回退到旧版本会继续写它，再升级时新版本因为已有导入记录而忽略这些改动）。
+  读不出来的改名 `.corrupt-<时间戳>` 并从空开始、记为已完成。**幂等**：崩溃在提交与改名之间，下次只补改名。
+  唯一的例外是排队消息——它拒绝「读不出来就当空」，因为紧接着的一次写入会把没人读到过的提示词真丢掉，
+  所以那条路径是 `unreadable: "throw"`，让这次启动失败而不是悄悄清空。
+- **损坏的库改名 `.corrupt-*` 并报错**，不静默重建：一个库现在装着十几个文件各自曾经的东西，
+  而且不做滚动备份（已确认）；转写不在库里，所以对话正文不会丢。
+- **store 的内存模型与业务逻辑不变**，只把 `#flush()` 里「整份序列化 + rename」换成「一个事务里 upsert
+  变化的行 + 删掉没了的行」。写入器（`RowWriter`）自己不写事务：原子单位归 store（整次 flush、或一个检查点
+  的删旧+写新），而导入器已经持有事务时再开一层会直接抛（`db.transaction` 不嵌套）。
+- 退出路径上 `PiProcessManager.flush()` 不再「顺便存一下检查点」：**检查点在捕获时就落盘**，这是本次唯一
+  有用户可感知差别的变化（崩溃后「重试」仍会提示回退文件）。实测存储写入：35 文件 × 8 KB 0.4ms、
+  32 MB 上限 79ms、200 文件 20 MB 52ms（`node scripts/bench-sqlite.mjs`）；`capture()` 里每文件一次的
+  `git rev-parse --show-toplevel` 是迁移之前就有的开销，不是这次加的。
+- **收益跟着数据集体积走，不跟操作走**（`node scripts/compare-storage-backends.mjs`，旧 store 用
+  `git show HEAD:` 的真代码在同一份副本上对照）：250–400 KB 的文件一次动作少写 13–51×（思考耗时
+  序列化从 254 KB 到 130 B），**小于 ~10 KB 的文件反而多写**——SQLite 的落盘粒度是 4 KB 页，排队消息
+  8 KB → 16 KB、定时任务 282 B → 12 KB。稳态启动慢 3.6ms、第一次多 37ms（导入），库文件比 7 个 JSON
+  大 0.46 MB。所以别把这套改动当性能优化验收：真正的收益是崩溃不丢检查点与两个进程不互相覆盖，
+  完整表格在 `docs/sqlite-storage.md` §11。
+- 无头 Agent 跑同一份引擎代码、用在自己的 `--data-dir` 上的库，两端各自迁移各自的数据，不需要对 schema
+  版本达成一致。`node:sqlite` 是 Node 内置，打包没有原生依赖要带；但预检那句 `require("node:sqlite")`
+  让 Agent 机器的实际下限变成 **22.13**（22.5–22.12 需要 `--experimental-sqlite` 标志）。
+- 演练与回归：`node scripts/drill-sqlite-import.mjs` 把真实 userData **复制到临时目录**后跑一遍导入并比对
+  行数/往返（不碰正在运行的数据目录）；`test/db.test.ts`、`test/reasoning-store.test.ts`、
+  `test/memory-state.test.ts`、`test/checkpoint-store.test.ts` 和各 store 的导入用例钉住上面每一条。
+
+### 目录落盘是按行比较，不是整份覆盖（`ConversationCatalog.#flush`）
+
+同一个数据目录上可以同时有两个进程：安装版旁边再开一个 `pnpm dev`（开发态跳过单实例锁）。
+`conversations.json` 时代每次 flush 都从内存整份写出，后写的一方只留下它自己认识的会话，另一方新建的
+会话从侧栏消失，转写文件却还在磁盘上——用户看到的是「正在运行的会话不见了」，于是要在文件格式上手搓
+一套「合并写」。现在状态在 `fastvibe.db` 的表里，这个问题被按行写入取代：
+
+- **落盘前先吸收表里的新会话。** `#adoptFromTable` 一次 `SELECT` 找出本进程从未见过的 id 并进内存；
+  「持有过」仍记在 `#knownIds` / `#knownProjects`，所以本进程自己删掉的会话不会被读回来。
+- **只写变化的行。** `RowWriter` 比较整份序列化结果与上次落盘的字节（含派生列），不同才
+  `INSERT … ON CONFLICT DO UPDATE`；内存里没了的行是一条 `DELETE`。所以进程 B 内存里还留着 A
+  刚删掉的会话 X 时，B 的 flush 不会把 X 写回去——B 没改它就没有写入。两边都改同一会话仍是后写者赢。
+- **`projects.position` 是被比较的一部分。** 拖拽顺序只存在于列里、对象没变，所以「这行变了没有」
+  必须把派生列一起算，否则一次重排会静默丢失。
+- **activeId 的空是显式的。** `catalog_meta` 里写 `''` 表示「没有打开的会话」，行缺失才是「没记过」，
+  后者才退回最新一条——和文件时代 `undefined` 被 JSON 丢掉的行为区分开。
+- 读不出来的旧文件先改名留一份（`conversations.json.corrupt-<时间戳>`）再从空开始；数据库本身损坏时
+  见 SQLite 存储那一节的 `.corrupt-*`。
 - 这挡不住两个进程同时*运行*同一个会话（转写会被交错追加）；开发实例和安装版共用数据目录本身仍是风险。
-- 测试：`test/conversation-catalog-merge.test.ts`，用同一个文件上的第二个 `ConversationCatalog` 当作第二个进程。
+- 测试：`test/conversation-catalog-merge.test.ts`（第二个连接当作第二个进程）、
+  `test/conversation-catalog-import.test.ts`（v0 / v1 旧文件的导入）。
 
 ### 多文件夹项目
 
@@ -2134,6 +2203,10 @@ Deliberately deferred. Plugin authors are expected to degrade via `ctx.mode` /
   整合取前 256 个；30 天没人用的丢掉。看的是转写**文件的 mtime**，不是 catalog 的 `updatedAt`（改名也会动它）。
 - **阶段 1**：模型读一个对话，返回 `{ raw_memory, rollout_summary, rollout_slug }`；笔记或回顾为空 = 没什么
   值得记的，记下来、转写不变就不再问。读入和输出两端都过 `redactSecrets`（`[REDACTED_SECRET]`）。
+- **账本在数据库里**：`MemoryStateStore`（`engine/memory-state.ts`）把 `outputs` / `empty` / `failures`
+  三个按会话 id 键住的 map 各写成一张表，`lastRunAt` / `error` 进 `memory_meta`。它替代了整份重写
+  295 KB 的 `memory-state.json`；「清除」要连着清这几张表，不只是删文件夹。`memory.json`（开关与模型
+  选择）是配置，不迁。
 - **阶段 2**：把选中的写成 `raw_memories.md` 和 `rollout_summaries/`，再起一个**一次性 agent 会话**（工作目录
   就是记忆文件夹，工具只有 read/edit/write/grep/find/ls，没有 bash、没有扩展，medium 推理），用 Codex 的
   `consolidation.md` 当唯一一条用户消息。Codex 用 git 仓库给它 `phase2_workspace_diff.md`；这里没有 git 可依赖，
@@ -2146,7 +2219,12 @@ Deliberately deferred. Plugin authors are expected to degrade via `ctx.mode` /
 - **使用次数靠引用块**：read_path 要求用了记忆的回复末尾带 `<oai-mem-citation>`，里面的 `rollout_ids`
   （就是对话 id）经 `MemoryManager.noteReply` 记一次使用，决定整合时谁留下。引用块对读者没用，
   `stripMemoryCitation`（`shared/memory-citation.ts`）在 Main 映射转写时和渲染层 markdown 里都会去掉，
-  流式时连半截标签也不露。
+  流式时连半截标签也不露；手机读的是同一份投影，所以不必自己认这个标记。
+- **只包住引用块的代码围栏要一起删。** 模型照抄协议的示例（示例本身画在围栏里）就会带上一对
+  ``` ，只删标签会把那对留下，而「一对空围栏」正是界面眼中的代码块——每条回复末尾多出一个空框。
+  判定条件是**围栏行与标签之间只有一个换行、且围栏行除标记和信息串外没有别的内容**；隔着一个空行的
+  围栏属于上面那个真正的代码块，绝不能被吃掉（`test/memory-citation.test.ts` 同时钉住正例和这些反例）。
+  半截引用块也在围栏里时同样删掉开栏，否则流式期间会画出一个不断变长的空代码框。
 - **纯逻辑与副作用分开**：`memory-plan.ts` / `memory-transcript.ts` / `memory-templates.ts` / `memory-workspace.ts`
   只碰文件或不碰，`memory.ts` 的 `MemoryManager` 通过 `MemoryRuntime`（目录、转写、模型、agent）与引擎对话，
   所以 `test/memory-*.test.ts` 能用假的运行时完整跑一遍。
@@ -2259,6 +2337,11 @@ pnpm test           # node's own runner over test/*.test.ts — pure modules onl
 pnpm check:scripts  # only the browser page scripts (a compile error there is a
                     # `Script failed to execute` at tool-call time, not a build error)
 pnpm shadcn add <component> -y
+
+# SQLite 存储的演练与基线（都不碰正在运行的数据目录）
+node scripts/drill-sqlite-import.mjs   # 复制真实 userData 到临时目录，跑一遍旧 JSON 导入并比对行数/往返
+node scripts/bench-sqlite.mjs          # 检查点写入、目录 flush、启动打开 store 的耗时基线
+node scripts/compare-storage-backends.mjs  # 同一份真实副本上跑「旧 store（HEAD 的真代码）vs 新 store」：耗时与每次动作落盘字节
 ```
 
 ## 依赖版本与安装包完整性
@@ -2603,6 +2686,14 @@ Without the re-serve, switching away and back mid-compaction lost it until the s
 
 ## 排队消息的「立即发送」
 
+队列本身在 `fastvibe.db`：`queue_items` 一行一条提示词（`position` 是同一会话内的顺序，拖动重排
+只改这一列），`queue_state` 一个会话一行，装 `revision` 和那次 pause。它取代了 0600 的整份
+`message-queue.json`。**「每次改动先落盘才对用户可见」这条没有变**：`#mutate` 先写行、后换内存，
+写失败就抛，于是一条没进数据库的排队消息也不会出现在界面上。崩溃后的规范化也没有变——
+`claimed` 的行保持 claimed、其余回到 pending、并把该会话暂停——那套规则是业务语义而不是文件格式，
+`normalizeQueueFile` 现在读的是表。旧文件读不出来时这个 store 仍旧**报错**而不是当成空队列：
+下一次写入会把没人读到过的提示词覆盖掉。
+
 立即 on a queued row means: stop the reply in flight and send this row as the next turn.
 Between the two runs there is a real gap — the old run has to settle, and the new prompt
 still passes session setup, input hooks and memory retrieval before `agent_start` — and
@@ -2753,7 +2844,9 @@ summary rows alike — and leaves only the final answer on screen.
 
 A thinking block's duration is measured, not derived from the transcript: pi records one timestamp
 per message (its request start), so Main times each block as it streams and files the bounds in
-`runtime/engine/reasoning.json`, keyed by the session entry id the message becomes
+`fastvibe.db`'s `reasoning_blocks` table (it was `runtime/engine/reasoning.json`, 268 KB rewritten
+whole every 500 ms; a flush now writes the entries the last reply actually touched), keyed by the
+session entry id the message becomes
 (`ReasoningStore`, `#timeReasoning`). `#messages` hands those bounds to `mapEngineMessages`, which
 stamps them onto the thinking parts, and the renderer derives the elapsed value at render time —
 which is why an open block keeps counting from its real start across a chat switch or a reload.
@@ -2772,7 +2865,7 @@ The bounds can be missing, and the transcript must still say something:
   is driven for a sub-session as well, filing into `#subagentReasoning`
   (`Map<subagentId, Map<entryId, bounds>>`) instead of the persisted `ReasoningStore` — a
   sub-session is `SessionManager.inMemory`, so its entry ids name nothing once the run ends and
-  must not be written to `reasoning.json`. The bounds ride the *inner* event of `subagent_event`,
+  must not be written to the table at all. The bounds ride the *inner* event of `subagent_event`,
   because the renderer re-applies that object (`applySubagentStream` unwraps `event.event`).
   Without this a subagent's thinking row fell back to the whole round-trip while it streamed and
   had no timing at all until that round-trip ended.
@@ -2878,7 +2971,8 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 
 - **正文命中由 Main 提供，标题与预览在渲染层匹配。** `conversations:search` →
   `engine/conversation-search.ts` 逐个读 `sessionFile`，只取 `type: "message"` 行里所有
-  `text` 字段（用户消息、回复正文、工具输出；thinking 与系统提示不在内），返回第一处命中
+  `text` 字段（用户消息、回复正文、工具输出；thinking、系统提示与记忆引用块不在内——读者从来没见过
+  那些 id，搜到它们只会出一条没来由的命中），返回第一处命中
   附近的摘要。标题/预览/项目名是渲染层拿 catalog 本地匹配的——刚发出的提示词只有 `preview`，
   转写搜索对它还没话说。两路取并集。
 - **命中要看得见，这就是 `lib/search-highlight.ts` 存在的理由。** 结果行把关键词画在标题里、
@@ -2901,9 +2995,12 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 上一轮已经改过的代码上重跑——第二次看到一个半应用的编辑，或者一个因为文件已有新内容
 而变成空操作的 `write`。两者都是静默的。
 
-- **捕获发生在写入之前。** 引擎在 `tool_execution_start`（工具真正执行**之前**）用
+- **捕获发生在写入之前，而且捕获时就落盘。** 引擎在 `tool_execution_start`（工具真正执行**之前**）用
   `readBefore` **同步**读一遍原文，每个文件每回合只读一次（第二次再读就是第一次编辑的
-  产物了），然后串行落盘（`captureCheckpoint` 里有 `git rev-parse`，并发会乱序覆盖）。
+  产物了），然后串行落盘（`CheckpointStore.capture` 里有 `git rev-parse`，并发会乱序覆盖）。
+  以前 `checkpoints.json` 只在 `stop()` 里整份写一次，崩溃或被杀就把所有检查点带走了——而那正是
+  这个功能存在的场合。现在一个检查点是一个事务里的「删旧 + 写新」，`clear` 靠 `ON DELETE CASCADE`
+  带走文件行，不给会话留下读到别人内容的孤儿行。
 - **回合边界由 `#beginTurn` 划，不由 `agent_start` 划。** 一个用户回合会发多次 `agent_start`：
   重试、压缩后继续、`agent_end` 排队的继续、goal 模式的下一轮。在那里清空累加器会把
   本回合写过的文件重新读成「原文」，并在一个只读回合后把上一回合的文件表当成本回合的。
@@ -3047,7 +3144,9 @@ FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在�
 - **依赖与输入分开。** `context_from` 是 `depends_on` 的子集；空数组表示只等执行顺序，不注入上游文字。
   上游摘要合计最多 16000 字符，每个最多 6000；启动前还按模型窗口、完整系统规则和工具 schema 估算可用预算，留出输出与运行空间。
   项目规则不会被自动删减；规则和必要任务说明本身放不下时，明确失败，不悄悄截掉约束。
-- **完整结果是产物。** `dag.json.results/<conversation>/<runId>.txt` 存完整输出，图内仅保留有界预览。
+- **完整结果是产物。** `dag.json.results/<conversation>/<runId>.txt` 存完整输出（大块产物一直是文件，
+  不在库里），图内仅保留有界预览。图与节点在 `fastvibe.db` 的 `dag_graphs` / `dag_nodes` 里，
+  编号计数器是 `dag_meta` 的一行，并且和它命名的节点在同一次事务里自增。
   `dag_result` 支持 `offset` / `limit`、`query` 和旧 `run_id`；UI 的 `dag:output` 同样分页读取。不能把图内预览称为全文。
   每个模型轮次结束保存当前执行过程和已有文字产出；结束后落盘的 DAG 转写从内存缓存释放，需要时读文件。
 - **显式结果与验收。** DAG 节点结束前必须 `dag_report`，给出 `completed` / `blocked` / `failed`、摘要、证据和产物路径。
@@ -3073,6 +3172,9 @@ FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在�
 
 ## 定时任务（`pi/scheduled-task-manager.ts`、`components/schedules/`）
 
+- 任务与运行记录在 `fastvibe.db`（`scheduled_tasks` / `scheduled_runs` / `schedule_meta`），取代
+  `scheduled-tasks.json`；运行的 `position` 是列，因为 `queued()` 反着读这个顺序。「应用退出时还在
+  running」的行在下一次打开时被标成 `interrupted`，这条规则读的是表，和读文件时一样。
 - `maxRunSeconds` 默认 3600（允许 1–86400 秒）；到期中止运行，等执行器真正结束才释放名额，不能让尚未停下的工具与下个任务重叠。
 - 忙碌时手动运行持久化为 `queued`，同一任务不会重复排队；已排队但未执行的任务可在重启后继续，已开始的仍标记中断、不自动重放。取消排队和暂停未来执行会清除对应待执行项。
 - 已有待执行项时新的触发会记录为 `missed`，注明排队冲突，并推进下一次触发时间；不重复入队、不静默丢失。

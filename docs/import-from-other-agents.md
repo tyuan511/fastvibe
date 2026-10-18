@@ -27,7 +27,7 @@
 
 ## 2. 目标契约：一份合法会话文件由什么构成
 
-导入的本质就是「写一个文件 + 在 `conversations.json` 注册一条记录」，之后 `SessionManager.open()` 就能把它当成普通会话打开、继续对话、计入使用统计。契约来自以下代码：
+导入的本质就是「写一个文件 + 在目录里注册一条记录」（`conversations.json` 时代；现在那条记录是 `fastvibe.db` 的 `conversations` 表里的一行，见 `docs/sqlite-storage.md`），之后 `SessionManager.open()` 就能把它当成普通会话打开、继续对话、计入使用统计。契约来自以下代码：
 
 - `node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js`（读取/写入/迁移）
 - `src/main/pi/process-manager.ts:986,1098`（路径推导与打开）
@@ -41,7 +41,7 @@
 <userData>/runtime/engine/agent/sessions/--<cwd 去掉前导 /、把 / 和 : 换成 ->--/<ISO-dashes>_<sessionId>.jsonl
 ```
 
-`--…--` 的编码规则与 SDK `getDefaultSessionDirPath`（session-manager.js:242）逐字一致：`--${cwd.replace(/^[/\\]/,"").replace(/[/\\:]/g,"-")}--`。**目录名不是契约**（`SessionManager.open` 接受任意路径，绝对路径存在 `conversations.json` 里），但请沿用，否则「按会话目录去找」的既有代码和 `usage-stats` 之外的人工排查会困惑。
+`--…--` 的编码规则与 SDK `getDefaultSessionDirPath`（session-manager.js:242）逐字一致：`--${cwd.replace(/^[/\\]/,"").replace(/[/\\:]/g,"-")}--`。**目录名不是契约**（`SessionManager.open` 接受任意路径，绝对路径存在会话目录的记录里——旧 `conversations.json`，现在是对应表的 `data`），但请沿用，否则「按会话目录去找」的既有代码和 `usage-stats` 之外的人工排查会困惑。
 
 ### 2.2 文件结构
 
@@ -98,7 +98,7 @@
 - **渲染**：`mapMessages` 认 `thinking` / `toolCall`(及 `tool_use` 等别名) / 独立 `toolResult`，thinking 时长缺失时只少一个「用时」标签（`applyThinkingTimings`，主进程计时补不回来）。
 - **继续对话**：它就是普通会话，`SessionManager` 已 `flushed=true`，下一轮按 append 追加，不会重写头部（`_persist` 只在「还没有 assistant」时才憋着不写，session-manager.js:740+）。
 - **使用统计**：`listSessionFiles` 递归扫整个 `sessionsDir`，`parseSessionTurns` 按 `message.role === "assistant"` + `usage` 聚合 → 导入即计入。代价重算不依赖存储价格，历史会被当前价目表重新定价。
-- **标题**：侧栏读 `conversations.json` 的 `title`；`session_info` 条目的 `name` 是引擎侧会话名（`session.sessionName`）。两者都写。
+- **标题**：侧栏读目录记录里的 `title`；`session_info` 条目的 `name` 是引擎侧会话名（`session.sessionName`）。两者都写。
 - **分支**：导入的线性链天然支持从任意点 edit/retry（`navigateTree`），无需额外工作。
 
 ---
@@ -150,7 +150,7 @@ interface ImportSource {
 8. 注册 `Conversation`：`{ id: randomUUID(), title, cwd, project?, sessionFile, sessionId, createdAt, updatedAt, preview: 首条用户消息前 200 字 }`；
 9. （可选）把该会话的回合 `capture()` 进 `usage-ledger.jsonl`，避免将来删会话时统计回退。
 
-**幂等**：`conversations.json` 记录里加 `importedFrom?: { source, sourceId }`，重复导入时提示「已导入」而不是制造重复副本（类似 `cc-switch.ts` 的 fingerprint 去重思路）。
+**幂等**：目录记录里加 `importedFrom?: { source, sourceId }`，重复导入时提示「已导入」而不是制造重复副本（类似 `cc-switch.ts` 的 fingerprint 去重思路）。
 
 ---
 
@@ -323,7 +323,7 @@ part(id, message_id, session_id, time_created, time_updated, data)  -- data 是 
 
 **边界**：
 - 导入是**新增会话**，不修改、不删除来源数据；不覆盖同名会话（id 为新 UUID）。
-- 幂等：用 `conversations.json` 里的 `importedFrom` 标记；再次导入提示「已导入（可强制重复）」。
+- 幂等：用目录记录里的 `importedFrom` 标记；再次导入提示「已导入（可强制重复）」。
 - 大语料：默认上限（如按体积/条数）避免一次拉入 GB 级数据；超出时引导按项目/时间筛选。
 - 导入的会话在侧栏可加「来源」徽标（如 `Claude Code`），并在转录中把原 cwd 与「缺失的工具输出」说明清楚——用户必须能分辨哪些内容是历史、哪些是 FastVibe 的推断。
 
@@ -407,7 +407,7 @@ append 一轮后: 54 entries; version 仍为 3; 末行仍可解析   ← 继续�
 
 `zcode` 后来按同一份契约加入（`src/main/engine/import/sources/zcode.ts`），本机语料 23 个候选、扫描 6ms、单会话读取 4ms、共 725 条消息，工具调用 / 工具结果 1:1 配对，零悬空调用，3 处模型切换能还原成分隔条。它同时暴露了四条只属于该源的规则，见 §4.5。
 
-每个导入都通过了 §7 的全部断言：header `version: 3`、id 唯一、`parentId` 线性链、`ctx` 消息数与写入数一致、0 悬空工具调用、0 签名、工具结果与其调用相邻、末行可解析、可继续对话（append 后仍为 v3）、计入使用统计、写出的文件全在 FastVibe 目录内、`conversations.json` 重载后 `importedFrom` 仍在、重复扫描会标记已导入。
+每个导入都通过了 §7 的全部断言：header `version: 3`、id 唯一、`parentId` 线性链、`ctx` 消息数与写入数一致、0 悬空工具调用、0 签名、工具结果与其调用相邻、末行可解析、可继续对话（append 后仍为 v3）、计入使用统计、写出的文件全在 FastVibe 目录内、目录重载后 `importedFrom` 仍在、重复扫描会标记已导入。
 
 新增两条当时未预料到的产品约束：
 

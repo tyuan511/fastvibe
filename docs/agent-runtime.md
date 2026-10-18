@@ -18,3 +18,14 @@ CI 先分别构建 `linux-x64` 和 `linux-arm64`，计算解包后 runtime 内�
 桌面包内只携带最终的 `agent-runtime.json`。远端 URL、远端安装目录和本地缓存都使用 runtime release id，而不是桌面版本。部署时仍会校验 manifest 的完整 hash 和目标架构，因此可读版本不会降低内容校验强度。
 
 旧桌面版本仍然通过原来的桌面 release URL 工作；新桌面第一次连接旧 Agent 时，会把它升级到新的独立 runtime release。
+
+## 远端 Node 的版本下限
+
+预检（`src/main/ssh/ssh-manager.ts` 的 `usable_node()`）要求 Node ≥ 22.5 **且** `require("node:sqlite")`
+能成功。后半个条件才是真正的下限：22.5 到 22.12 的 `node:sqlite` 需要 `--experimental-sqlite` 标志，
+不带标志 `require` 就抛，所以这些版本会被预检挡在外面。**Agent 机器上的实际下限是 Node 22.13**
+（22.13 起 `node:sqlite` 不再需要标志，24.x 同理）。
+
+`node:sqlite` 是 Node 内置模块，runtime 包里因此没有原生依赖要打（`scripts/build-agent-runtime.mjs`
+不需要为此改动）。数据状态在 Agent 自己的 `--data-dir/fastvibe.db` 里，桌面端与远端各自迁移各自的数据，
+两端不需要对 schema 版本达成一致；调用表没变，所以「Agent 新、桌面旧」和反过来都连得上。
