@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConversationCatalog } from "../src/main/engine/conversation-catalog.ts";
+import { openTestDb } from "./test-db.ts";
 import type { WorkspaceSnapshot } from "../src/shared/types.ts";
 
 /**
@@ -20,13 +21,13 @@ import type { WorkspaceSnapshot } from "../src/shared/types.ts";
  * older than the file.
  */
 
-function catalog(): { catalog: ConversationCatalog; file: string; seen: WorkspaceSnapshot[] } {
+function catalog(): { dir: string; catalog: ConversationCatalog; file: string; seen: WorkspaceSnapshot[] } {
   const dir = mkdtempSync(join(tmpdir(), "fastvibe-catalog-"));
-  const file = join(dir, "conversations.json");
-  const instance = new ConversationCatalog(file, join(dir, "scratch"));
+  const file = join(dir, "fastvibe.db");
+  const instance = new ConversationCatalog(openTestDb(dir), { scratchRoot: join(dir, "scratch") });
   const seen: WorkspaceSnapshot[] = [];
   instance.onChange = (snapshot) => seen.push(snapshot);
-  return { catalog: instance, file, seen };
+  return { dir, catalog: instance, file, seen };
 }
 
 /** Let the 40ms write debounce fire. */
@@ -94,19 +95,20 @@ test("switching the active conversation alone is announced", async () => {
   assert.notEqual(first.id, second.id);
 });
 
-test("the notice never describes a state older than the file", async () => {
-  const { catalog: cat, file, seen } = catalog();
-  let onDisk: string | null = null;
+test("the notice never describes a state older than what is stored", async () => {
+  const { dir, catalog: cat, file, seen } = catalog();
+  let stored: string | null = null;
   cat.onChange = (snapshot) => {
     seen.push(snapshot);
-    onDisk = readFileSync(file, "utf8");
+    // What a client would re-read in response to this push: the row, not the memory.
+    stored = openTestDb(dir).get<{ data: string }>("SELECT data FROM conversations WHERE id = ?", snapshot.activeId ?? "")?.data ?? null;
   };
   const created = cat.create(undefined, undefined, { title: "written first" });
   await settle();
-  // A client that re-reads anything from disk in response to this push must not be
+  // A client that re-reads anything from the database in response to this push must not be
   // handed the previous state; announcing before the write would do exactly that.
-  assert.match(onDisk ?? "", /written first/);
-  assert.match(onDisk ?? "", new RegExp(created.id));
+  assert.match(stored ?? "", /written first/);
+  assert.match(stored ?? "", new RegExp(created.id));
 });
 
 test("an empty conversation is reserved once per project", () => {

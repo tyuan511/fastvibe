@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DagStore } from "../src/main/engine/dag-store.ts";
+import { openDagStore } from "./test-db.ts";
 import { DagScheduler, type DagRunner } from "../src/main/pi/dag-scheduler.ts";
 import { runDagTool } from "../src/main/dag-tools.ts";
 
@@ -15,7 +16,7 @@ function setup(agents: Array<{ name: string; instructions: string; tools?: strin
   callAs: (nodeId: string, action: string, input?: Record<string, unknown>) => ReturnType<typeof runDagTool>;
   store: DagStore;
 } {
-  const store = new DagStore(join(mkdtempSync(join(tmpdir(), "fastvibe-dagtool-")), "dag.json"));
+  const store = openDagStore(mkdtempSync(join(tmpdir(), "fastvibe-dagtool-")));
   const waiting = new Map<string, (value: { status: "completed" | "failed" | "aborted"; output: string; error?: string }) => void>();
   const run: DagRunner = ({ node, signal }) =>
     new Promise((resolve) => {

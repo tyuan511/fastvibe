@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DagStore } from "../src/main/engine/dag-store.ts";
+import { openDagStore } from "./test-db.ts";
 import { DagScheduler, buildPrompt, type DagNodeRun } from "../src/main/pi/dag-scheduler.ts";
 import { runDagTool } from "../src/main/dag-tools.ts";
 import { resolveDrafts, dagGraphState, normalizeDagWritePath, type DagNodeDraft } from "../src/shared/dag.ts";
@@ -13,7 +14,7 @@ const draft = (title: string, extra: Partial<DagNodeDraft> = {}): DagNodeDraft =
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 function fixture(t: test.TestContext, options: ConstructorParameters<typeof DagScheduler>[2] = {}) {
   const dir = mkdtempSync(join(tmpdir(), "dag-orchestration-"));
-  const store = new DagStore(join(dir, "dag.json"));
+  const store = openDagStore(dir);
   const pending = new Map<string, (result: DagNodeRun) => void>();
   const started: string[] = [];
   const scheduler = new DagScheduler(store, ({ node, signal }) => new Promise((resolve) => {
@@ -34,7 +35,7 @@ test("cancelled history cannot suppress a later batch's completion receipt", asy
   f.finish(b.id); await tick();
   assert.deepEqual(notices, [[b.id]]);
   f.store.flush();
-  const reopened = new DagStore(join(f.dir, "dag.json"));
+  const reopened = openDagStore(f.dir);
   new DagScheduler(reopened, async () => { throw new Error("must not run"); }, { onSettled: () => { assert.fail("delivered result was replayed"); } }).start();
 });
 
@@ -52,7 +53,7 @@ test("a failed delivery remains unacknowledged across a restart", async (t) => {
   const f = fixture(t, { onSettled: () => false });
   const [a] = f.scheduler.add("c", [draft("a")]); f.finish(a.id); await tick(); f.store.flush();
   assert.equal(f.store.node("c", a.id)?.observedOutcome, undefined);
-  const reopened = new DagStore(join(f.dir, "dag.json"));
+  const reopened = openDagStore(f.dir);
   let notices = 0;
   new DagScheduler(reopened, async () => { throw new Error("must not run"); }, { onSettled: () => { notices++; } }).start();
   assert.equal(notices, 1); reopened.flush();
@@ -71,7 +72,7 @@ test("complete results remain readable, searchable and paged after restart", asy
   const [a] = f.scheduler.add("c", [draft("a")]);
   const output = "start" + "x".repeat(24000) + "important ending";
   f.finish(a.id, { output }); await tick(); f.store.flush();
-  const store = new DagStore(join(f.dir, "dag.json"));
+  const store = openDagStore(f.dir);
   assert.equal(store.output("c", store.node("c", a.id)!), output);
   const result = await runDagTool({ store, scheduler: f.scheduler }, { action: "result", input: { id: a.id, query: "important ending", limit: 100 } }, "c");
   assert.equal(result.ok, true);
@@ -158,7 +159,7 @@ test("a report cannot claim completion with unfinished children and is invalidat
 
 test("token usage is recorded on ancestors but never stops a task", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "dag-budget-"));
-  const store = new DagStore(join(dir, "dag.json"));
+  const store = openDagStore(dir);
   const charge = new Map<string, (usage: { tokens: number; turns: number }) => void>();
   const done = new Map<string, (result: DagNodeRun) => void>();
   const scheduler = new DagScheduler(store, ({ node, signal, onUsage }) => new Promise((resolve) => {
@@ -213,7 +214,7 @@ test("coordinator depth is bounded and cancellation wakes a wait parked for capa
 test("parent model choice survives a store restart", async (t) => {
   const f = fixture(t, { parentModel: () => "chosen/model", globalConcurrency: 1 });
   f.scheduler.add("c", [draft("a"), draft("b")]); f.store.flush();
-  const reopened = new DagStore(join(f.dir, "dag.json"));
+  const reopened = openDagStore(f.dir);
   assert.deepEqual(reopened.get("c")!.nodes.map((n) => n.fallbackModel), ["chosen/model", "chosen/model"]);
   reopened.flush();
 });

@@ -16,7 +16,7 @@ export type DagViewer = {
  * Every conversation's DAG of sub-agent tasks, as Main last said it, and the dialog that shows
  * one maximised.
  *
- * Main owns the graphs (`dag.json`) and sends the whole graph of a conversation after every
+ * Main owns the graphs (the `dag_*` tables in `fastvibe.db`) and sends the whole graph of a conversation after every
  * change, so this store never merges: what arrives replaces what is here.
  */
 type DagState = {

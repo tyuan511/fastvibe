@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DagStore } from "../src/main/engine/dag-store.ts";
+import { openDagStore } from "./test-db.ts";
 import { DagScheduler, type DagNodeRun } from "../src/main/pi/dag-scheduler.ts";
 
 // Exercise the real engine shutdown method with no Electron or provider, as in subagent-run.test.ts.
@@ -24,7 +25,7 @@ const compiled = ts.transpileModule(`class Harness { ${method.replaceAll("#", ""
 
 test("engine stop suspends DAG work before waiting on its operation queue or tearing down the runtime", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "dag-shutdown-"));
-  const store = new DagStore(join(dir, "dag.json"));
+  const store = openDagStore(dir);
   t.after(() => { store.flush(); rmSync(dir, { recursive: true, force: true }); });
   const Harness = new Function("uiText", `${compiled}; return Harness;`)((zh: string) => zh);
   const host = new Harness();

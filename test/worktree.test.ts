@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ConversationCatalog } from "../src/main/engine/conversation-catalog.ts";
+import { openTestDb } from "./test-db.ts";
 import {
   defaultWorktreeDir,
   defaultWorktreePath,
@@ -67,7 +68,7 @@ test("parseWorktreePorcelain reads path, branch and detached HEAD", () => {
 
 test("catalog setWorktree binds cwd to the checkout and keeps the project", async () => {
   const dir = mkdtempSync(join(tmpdir(), "fastvibe-wt-catalog-"));
-  const cat = new ConversationCatalog(join(dir, "conversations.json"), join(dir, "scratch"));
+  const cat = new ConversationCatalog(openTestDb(dir), { scratchRoot: join(dir, "scratch") });
   const created = cat.create("/tmp/demo");
   const updated = cat.setWorktree(created.id, { path: "/tmp/wt/demo", branch: "fastvibe/run" });
   assert.equal(updated?.project, "/tmp/demo");
@@ -81,7 +82,7 @@ test("catalog setWorktree binds cwd to the checkout and keeps the project", asyn
 
 test("catalog setProject clears a bound worktree and restores cwd", () => {
   const dir = mkdtempSync(join(tmpdir(), "fastvibe-wt-project-"));
-  const cat = new ConversationCatalog(join(dir, "conversations.json"), join(dir, "scratch"));
+  const cat = new ConversationCatalog(openTestDb(dir), { scratchRoot: join(dir, "scratch") });
   const created = cat.create("/tmp/demo");
   cat.setWorktree(created.id, { path: "/tmp/wt/demo", branch: "fastvibe/run" });
   const next = cat.setProject(created.id, "/tmp/other");

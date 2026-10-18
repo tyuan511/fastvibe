@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
 import { MessageQueueStore, SdkQueueClaims, findDeliveredClaims, normalizeQueueFile, reorderConversationItems } from "../src/main/engine/message-queue.ts";
+import { spyDb, openTestDb, testDir } from "./test-db.ts";
+import { openDatabase, type Db } from "../src/main/engine/db.ts";
 import { installSdkQueueAdapter, SUPPORTED_PI_AGENT_CORE_VERSION } from "../src/main/pi/sdk-queue-adapter.ts";
+
+/** One database per store, so two fixtures never share rows (`:memory:` is never cached). */
+const memory = (): Db => openDatabase(":memory:");
 
 const item = (id: string, conversationId = "a", claimed = false) => ({
   id,
@@ -67,7 +72,7 @@ test("transcript reconciliation matches each claimed row to one later user turn"
 });
 
 test("resolving claims removes delivered rows, re-queues the rest, and keeps a held pause", () => {
-  const store = new MessageQueueStore("unused", () => undefined);
+  const store = new MessageQueueStore(memory());
   const sent = store.add({ conversationId: "a", text: "sent", behavior: "steer", claimed: true, sending: true });
   const lost = store.add({ conversationId: "a", text: "lost", behavior: "steer", claimed: true, sending: true });
   store.pause("a", "error");
@@ -84,7 +89,7 @@ test("resolving claims removes delivered rows, re-queues the rest, and keeps a h
 });
 
 test("a pause is released only once it holds nothing", () => {
-  const store = new MessageQueueStore("unused", () => undefined);
+  const store = new MessageQueueStore(memory());
   // Stop over an empty queue: a leftover latch, released without touching others.
   store.pause("a", "stopped");
   store.pause("b", "stopped");
@@ -102,6 +107,65 @@ test("a pause is released only once it holds nothing", () => {
   assert.equal(store.releaseEmptyPause("b"), true);
 });
 
+test("the queue survives a restart, in order, with its pause and revision", () => {
+  const dir = testDir("fastvibe-queue-");
+  const store = new MessageQueueStore(openTestDb(dir));
+  const first = store.add({ conversationId: "a", text: "first", behavior: "followUp" });
+  const second = store.add({ conversationId: "a", text: "second", behavior: "steer" });
+  store.add({ conversationId: "b", text: "elsewhere", behavior: "followUp" });
+  store.pause("a", "stopped");
+  const revision = store.state("a").revision;
+
+  const reopened = new MessageQueueStore(openTestDb(dir));
+  assert.deepEqual(
+    reopened.all("a").map((entry) => entry.id),
+    [first.id, second.id],
+    "the drain order is the stored order",
+  );
+  assert.equal(reopened.state("a").pause, "stopped");
+  assert.equal(reopened.state("a").revision, revision);
+  assert.deepEqual(reopened.conversationIds().sort(), ["a", "b"]);
+
+  // A drag has to survive too, and it changes nothing but `position`.
+  reopened.reorder("a", [second.id, first.id]);
+  assert.deepEqual(
+    new MessageQueueStore(openTestDb(dir)).all("a").map((entry) => entry.id),
+    [second.id, first.id],
+  );
+});
+
+test("the old message-queue.json is imported and the crash rules still apply to it", () => {
+  const dir = testDir("fastvibe-queue-");
+  const file = join(dir, "message-queue.json");
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 2,
+      items: [item("claimed", "a", true), item("pending", "a")],
+      pauses: { a: "stopped" },
+      revisions: { a: 3 },
+    }),
+    "utf8",
+  );
+  const store = new MessageQueueStore(openTestDb(dir), { legacyFile: file });
+
+  // Exactly the recovery a reload of the file used to run: the claimed row stays claimed and
+  // the conversation is paused, so nothing replays a turn that may already be in the
+  // transcript, and the row that was never taken goes back to pending.
+  assert.deepEqual(
+    store.all("a").map(({ id, claimed, sending }) => ({ id, claimed, sending })),
+    [
+      { id: "claimed", claimed: true, sending: true },
+      { id: "pending", claimed: undefined, sending: undefined },
+    ],
+  );
+  assert.equal(store.state("a").pause, "error", "the stopped latch became an error: the process died with work outstanding");
+  assert.equal(store.state("a").revision, 3, "the revision carries over, so clients do not rewind");
+
+  assert.ok(!existsSync(file), "the legacy file is renamed aside");
+  assert.equal(readdirSync(dir).filter((name) => name.startsWith("message-queue.json.migrated-")).length, 1);
+});
+
 test("id reorder is conversation-scoped, keeps claimed positions, and cannot drop additions", () => {
   const items = [item("a1"), item("owned", "a", true), item("b1", "b"), item("a2"), item("a3")];
   const reordered = reorderConversationItems(items, "a", ["a3", "owned", "missing", "a1"]);
@@ -109,49 +173,59 @@ test("id reorder is conversation-scoped, keeps claimed positions, and cannot dro
 });
 
 test("a corrupt durable queue is not silently treated as empty", () => {
+  // The one store that refuses 「unreadable means nothing queued」: the next prompt would
+  // write an empty queue over the file that could not be read, and the rows would be gone
+  // with no trace. So the import throws and the file stays exactly where it is.
   const directory = mkdtempSync(join(tmpdir(), "fastvibe-queue-"));
   const file = join(directory, "message-queue.json");
   writeFileSync(file, "{not-json", "utf8");
   try {
-    assert.throws(() => new MessageQueueStore(file), /Unable to read durable message queue/);
+    assert.throws(
+      () => new MessageQueueStore(openDatabase(join(directory, "fastvibe.db")), { legacyFile: file }),
+      /无法读取 message-queue 的旧数据/,
+    );
+    assert.match(readFileSync(file, "utf8"), /not-json/, "the unreadable file is not renamed or replaced");
+    assert.equal(readdirSync(directory).filter((name) => name.includes("corrupt-")).length, 0);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
 test("a failed durable write does not mutate the in-memory queue", () => {
-  let fail = true;
-  const store = new MessageQueueStore("unused", () => {
-    if (fail) throw new Error("disk full");
-  });
-  assert.throws(() => store.add({
-    conversationId: "a",
-    text: "hello",
-    sentText: "hello",
-    behavior: "followUp",
-  }), /disk full/);
-  assert.deepEqual(store.state("a").items, []);
+  const seen = spyDb(memory());
+  const store = new MessageQueueStore(seen.proxy);
+  seen.failWith("disk full");
+  assert.throws(
+    () => store.add({ conversationId: "a", text: "hello", sentText: "hello", behavior: "followUp" }),
+    /disk full/,
+  );
+  assert.deepEqual(store.state("a").items, [], "the row is not visible from memory either");
   assert.equal(store.state("a").revision, 0);
 
-  fail = false;
+  seen.failWith(null);
   const added = store.add({ conversationId: "a", text: "ok", behavior: "followUp" });
   assert.deepEqual(store.state("a").items.map((entry) => entry.id), [added.id]);
 });
 
 test("failed updates retain the last committed claimed state", () => {
-  let writes = 0;
-  const store = new MessageQueueStore("unused", () => {
-    writes += 1;
-    if (writes === 2) throw new Error("rename failed");
-  });
+  const seen = spyDb(memory());
+  const store = new MessageQueueStore(seen.proxy);
   const added = store.add({ conversationId: "a", text: "one", behavior: "steer" });
-  assert.throws(() => store.update(added.id, { claimed: true, sending: true }), /rename failed/);
+  // The first `run()` of the next transaction is what the update would issue.
+  const failOnNext = () => {
+    seen.failWith("commit failed");
+  };
+  failOnNext();
+  assert.throws(() => store.update(added.id, { claimed: true, sending: true }), /commit failed/);
+  seen.failWith(null);
   assert.equal(store.get(added.id)?.claimed, undefined);
   assert.equal(store.get(added.id)?.sending, undefined);
+  // And the row is still what the last successful commit said.
+  assert.equal(store.all("a")[0]?.claimed, undefined);
 });
 
 test("stop restores only exact SDK-pending ids and retains claimed rows", () => {
-  const store = new MessageQueueStore("unused", () => undefined);
+  const store = new MessageQueueStore(memory());
   const pending = store.add({ conversationId: "a", text: "pending", behavior: "steer", sending: true });
   const claimed = store.add({ conversationId: "a", text: "claimed", behavior: "steer", sending: true, claimed: true });
   store.restorePending("a", new Set([pending.id]), "stopped");

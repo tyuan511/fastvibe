@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ConversationCatalog } from "../src/main/engine/conversation-catalog.ts";
+import { openTestDb } from "./test-db.ts";
 import {
   buildProjectFoldersPrompt,
   displayProjectPath,
@@ -39,7 +40,7 @@ test("extra folders drop the primary path and duplicates", () => {
 
 test("setting a primary folder rekeys conversations and follows an untouched name", () => {
   const dir = mkdtempSync(join(tmpdir(), "fastvibe-folders-"));
-  const catalog = new ConversationCatalog(join(dir, "conversations.json"), join(dir, "scratch"));
+  const catalog = new ConversationCatalog(openTestDb(dir), { scratchRoot: join(dir, "scratch") });
   const created = catalog.createProject(["/repo-a", "/repo-b"]);
   assert.equal(created?.cwd, "/repo-a");
   assert.equal(created?.name, "repo-a");
@@ -54,7 +55,7 @@ test("setting a primary folder rekeys conversations and follows an untouched nam
 
 test("a renamed project keeps its name when the primary folder changes", () => {
   const dir = mkdtempSync(join(tmpdir(), "fastvibe-folders-"));
-  const catalog = new ConversationCatalog(join(dir, "conversations.json"), join(dir, "scratch"));
+  const catalog = new ConversationCatalog(openTestDb(dir), { scratchRoot: join(dir, "scratch") });
   catalog.createProject(["/repo-a", "/repo-b"], "My app");
   const moved = catalog.setProjectPrimary("/repo-a", "/repo-b");
   assert.equal(moved?.project.name, "My app");

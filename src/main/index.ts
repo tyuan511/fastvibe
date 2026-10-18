@@ -18,6 +18,7 @@ import {
   writeAppSettings,
 } from "./engine/app-settings";
 import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
+import { closeDatabases, openDatabase } from "./engine/db";
 import { readDecisionConfig, writeDecisionConfig } from "./engine/decision/store";
 import { testJevConnection } from "./engine/decision/backends/jev";
 import { decisionModelConfigOf, JEV_KEY_ENV, type DecisionKeyState, type DecisionModelConfig, type DecisionTestResult } from "@shared/decision";
@@ -145,7 +146,9 @@ const paths = getFastVibePaths();
 // The SQLite index and the embedding model of the memory this one replaced; derived data, and
 // the model alone was 118 MB.
 removeLegacyMemory(paths.runtimeRoot);
-const memory = new MemoryManager(paths);
+// The memory bookkeeping lives in the same database as the rest of the state; the engine
+// opens the same cached connection.
+const memory = new MemoryManager(paths, openDatabase(paths.databaseFile));
 const engine = new PiProcessManager(paths, memory);
 const terminals = new TerminalSessions();
 /**
@@ -844,6 +847,13 @@ function requestShutdown(reason: string): void {
       engine.flush();
     } catch (error) {
       log.warn(`final engine flush failed: ${String(error)}`);
+    }
+    try {
+      // The stores above wrote through this connection; folding the WAL in and closing it
+      // is what leaves a single `fastvibe.db` on disk rather than a sidecar nobody reads.
+      closeDatabases();
+    } catch (error) {
+      log.warn(`database close failed: ${String(error)}`);
     }
     finishShutdown(false);
   });

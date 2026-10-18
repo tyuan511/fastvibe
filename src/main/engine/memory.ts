@@ -5,7 +5,9 @@ import type { ExtensionFactory, SessionEntry } from "@earendil-works/pi-coding-a
 import type { Conversation } from "@shared/types";
 import { DEFAULT_MEMORY_CONFIG, MEMORY_CONFIG_VERSION, memoryConfigOf, type MemoryConfig, type MemoryPhase, type MemoryState } from "../../shared/memory.ts";
 import { memoryCitationIds } from "../../shared/memory-citation.ts";
+import type { Db } from "./db.ts";
 import type { MemoryHost, MemoryRuntime } from "./memory-host.ts";
+import { MemoryStateStore } from "./memory-state.ts";
 import {
   EXTRACT_CONCURRENCY,
   MAX_PER_PASS,
@@ -62,16 +64,6 @@ export function readMemoryConfig(file: string): MemoryConfig {
   }
 }
 
-function readState(file: string): MemoryStateFile {
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<MemoryStateFile>;
-    if (parsed?.version !== 1 || typeof parsed.outputs !== "object" || parsed.outputs === null) return emptyState();
-    return { ...emptyState(), ...parsed, outputs: parsed.outputs, empty: parsed.empty ?? {}, failures: parsed.failures ?? {} };
-  } catch {
-    return emptyState();
-  }
-}
-
 async function readText(file: string): Promise<string> {
   try { return await readFile(file, "utf8"); } catch { return ""; }
 }
@@ -98,6 +90,8 @@ function hasSummary(folder: string): boolean {
 export class MemoryManager implements MemoryHost {
   readonly #files: MemoryFiles;
   #config: MemoryConfig;
+  /** The bookkeeping's home: rows in the shared database, was a 295 KB JSON file. */
+  #store: MemoryStateStore;
   #state: MemoryStateFile;
   #runtime: MemoryRuntime | null = null;
   #phase: MemoryPhase = "idle";
@@ -114,10 +108,11 @@ export class MemoryManager implements MemoryHost {
   #pending = 0;
   #ready: boolean;
 
-  constructor(files: MemoryFiles) {
+  constructor(files: MemoryFiles, db: Db) {
     this.#files = files;
     this.#config = readMemoryConfig(files.memoryFile);
-    this.#state = readState(files.memoryStateFile);
+    this.#store = new MemoryStateStore(db, { legacyFile: files.memoryStateFile });
+    this.#state = this.#store.load();
     this.#ready = hasSummary(files.memoriesDir);
     this.#schedule();
   }
@@ -187,7 +182,9 @@ export class MemoryManager implements MemoryHost {
     this.#state = emptyState();
     this.#pending = 0;
     this.#ready = false;
-    this.#saveNow();
+    // The tables, not just the memory of them: 「清除」 means the next pipeline starts from
+    // nothing read, and a leftover row would have the pass skip every conversation again.
+    this.#store.clear();
     await rm(this.#files.memoriesDir, { recursive: true, force: true });
     await rm(this.#files.memoriesBaselineDir, { recursive: true, force: true });
     this.#emit();
@@ -269,7 +266,7 @@ export class MemoryManager implements MemoryHost {
 
   #saveNow(): void {
     if (this.#saveTimer) { clearTimeout(this.#saveTimer); this.#saveTimer = null; }
-    try { writeFileAtomicSync(this.#files.memoryStateFile, `${JSON.stringify(this.#state)}\n`); } catch (error) {
+    try { this.#store.save(this.#state); } catch (error) {
       console.warn("[memory] could not save state", message(error));
     }
   }

@@ -2,6 +2,7 @@ import type {
   ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot,
 } from "@shared/schedules";
 import { ScheduledTaskStore } from "../engine/scheduled-tasks.ts";
+import type { Db } from "../engine/db.ts";
 import { uiText } from "../engine/ui-text.ts";
 
 type ActiveRun = { taskId: string; runId: string; abort: AbortController; stopRequested: boolean; timedOut: boolean; timer?: ReturnType<typeof setTimeout> };
@@ -30,8 +31,13 @@ export class ScheduledTaskManager {
   #started = false;
   #active: ActiveRun | null = null;
 
-  constructor(file: string, runner: ScheduledTaskRunner, onSettled?: ScheduledTaskSettled) {
-    this.#store = new ScheduledTaskStore(file);
+  constructor(
+    db: Db,
+    runner: ScheduledTaskRunner,
+    onSettled?: ScheduledTaskSettled,
+    options: { legacyFile?: string } = {},
+  ) {
+    this.#store = new ScheduledTaskStore(db, options);
     this.#runner = runner;
     this.#onSettled = onSettled;
     this.#store.onChange = () => {

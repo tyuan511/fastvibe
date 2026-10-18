@@ -6,6 +6,8 @@ import { join } from "node:path";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Conversation } from "../src/shared/types.ts";
 import { MemoryManager, readMemoryConfig, removeLegacyMemory } from "../src/main/engine/memory.ts";
+import { MemoryStateStore } from "../src/main/engine/memory-state.ts";
+import { openTestDb, testDir } from "./test-db.ts";
 import type { MemoryRuntime } from "../src/main/engine/memory-host.ts";
 import { MEMORY_CONFIG_VERSION } from "../src/shared/memory.ts";
 
@@ -26,7 +28,7 @@ type Harness = {
 };
 
 function harness(options: { enabled?: boolean; chats?: number } = {}): Harness {
-  const dir = mkdtempSync(join(tmpdir(), "fv-memory-"));
+  const dir = testDir("fv-memory-");
   const files = { memoryFile: join(dir, "memory.json"), memoriesDir: join(dir, "memories"), memoriesBaselineDir: join(dir, "memories-baseline"), memoryStateFile: join(dir, "memory-state.json") };
   if (options.enabled !== false) writeFileSync(files.memoryFile, JSON.stringify({ version: MEMORY_CONFIG_VERSION, enabled: true }));
   const chats: Conversation[] = [];
@@ -60,7 +62,7 @@ function harness(options: { enabled?: boolean; chats?: number } = {}): Harness {
       writeFileSync(join(cwd, "memory_summary.md"), "v1\n\n## User Profile\n偏好 pnpm。\n");
     },
   };
-  const manager = new MemoryManager(files);
+  const manager = new MemoryManager(files, openTestDb(dir));
   manager.attach(runtime);
   return { dir, manager, calls, chats, files, answer, agentWrites, agentSaw };
 }
@@ -237,7 +239,7 @@ test("a reply that cites a conversation counts as a use of it, and use decides w
     h.manager.noteReply("no citation here");
     h.manager.noteReply(block);
     h.manager.close(); // flushes the debounced state write
-    const saved = JSON.parse(readFileSync(h.files.memoryStateFile, "utf8"));
+    const saved = new MemoryStateStore(openTestDb(h.dir)).load();
     assert.equal(saved.outputs[cited].usageCount, 1);
     assert.equal(saved.outputs[ids(h)[0]].usageCount, 0);
     assert.ok(saved.outputs[cited].lastUsage > 0);

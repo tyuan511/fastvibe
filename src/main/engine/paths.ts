@@ -1,6 +1,15 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
+/**
+ * 数据目录里的路径。
+ *
+ * 除了 `databaseFile`，那些「状态」类文件名（`conversationsFile`、`dagFile`、`reasoningFile`……）
+ * 现在只是**旧文件的地址**：对应的 store 第一次打开时把它们导入数据库，然后改名成
+ * `<名字>.migrated-<时间戳>` 留在那里，之后不再读写。留着这些键是为了导入，而不是还有谁在写文件。
+ * 配置类（`settingsFile`、`providersFile`、`mcpFile`、`memoryFile`…）与凭据文件仍然是各自独立的
+ * JSON，理由见 `docs/sqlite-storage.md` 第 3 节。
+ */
 export type FastVibePaths = {
   userData: string;
   logs: string;
@@ -20,9 +29,16 @@ export type FastVibePaths = {
   agentEnv: string;
   /** Subscription (OAuth) tokens; the one credential that must outlive a restart. */
   oauthFile: string;
+  /**
+   * 数据类状态现在都在这里：会话目录、检查点、思考耗时、排队消息……
+   * 配置与凭据仍然是独立的 JSON 文件，见 `docs/sqlite-storage.md`。
+   */
+  databaseFile: string;
   conversationsFile: string;
   /** 每个会话的子 agent 任务 DAG，见 `dag-store.ts`。 */
   dagFile: string;
+  /** 每个节点运行的完整产出文本；一直是大文件，不进数据库。 */
+  dagResultsDir: string;
   /** 每次 DAG 节点运行的转写，`<会话>/<runId>.json`，重启后仍能查看执行过程。 */
   dagRunsDir: string;
   providersFile: string;
@@ -168,8 +184,10 @@ function buildFastVibePaths(): FastVibePaths {
     modelsJson: join(agentDir, "models.json"),
     agentEnv: join(agentDir, ".env"),
     oauthFile: join(agentDir, "oauth.json"),
+    databaseFile: join(userData, "fastvibe.db"),
     conversationsFile: join(userData, "conversations.json"),
     dagFile: join(userData, "dag.json"),
+    dagResultsDir: join(userData, "dag.json.results"),
     dagRunsDir: join(runtimeRoot, "dag-runs"),
     providersFile: join(userData, "providers.json"),
     /** Panel credentials for custom relays (new-api); never served, never in providers.json. */

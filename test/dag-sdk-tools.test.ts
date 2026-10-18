@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { CONFIG_DIR_NAME, createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension } from "../src/main/pi/dag-node-runtime.ts";
 import { DagStore } from "../src/main/engine/dag-store.ts";
+import { openDagStore } from "./test-db.ts";
 import { DagScheduler } from "../src/main/pi/dag-scheduler.ts";
 import { runDagTool } from "../src/main/dag-tools.ts";
 
@@ -26,7 +27,7 @@ test("real SDK tools reject independent DAG work and delegate it through subagen
   const { session, extensionsResult } = await createAgentSession({ cwd: dir, agentDir: dir, modelRuntime, settingsManager, resourceLoader, tools: ["subagent", "dag_add_tasks"], sessionManager: SessionManager.inMemory(dir) });
   t.after(() => session.dispose());
   assert.deepEqual(extensionsResult.errors, []);
-  const store = new DagStore(join(dir, "dag.json"));
+  const store = openDagStore(dir);
   const scheduler = new DagScheduler(store, async () => { assert.fail("independent work must not start a DAG runner"); });
   const requests: Array<{ agent: string; task: string }> = [];
   const ctx = {

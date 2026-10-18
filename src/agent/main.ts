@@ -13,6 +13,7 @@ import { RemoteServer } from "../main/server/server";
 import { broadcast, subscribe } from "../main/ipc/broadcast";
 import { dispatch } from "../main/ipc/registry";
 import { applyShellPath } from "../main/engine/shell-path";
+import { closeDatabases } from "../main/engine/db";
 import { applyShellLocale } from "../main/engine/shell-locale";
 import { applyOfficeCliEnv } from "../main/engine/office-cli";
 import { stopOfficeWatches } from "../main/engine/office-watch";
@@ -114,6 +115,7 @@ async function stop(): Promise<void> {
   terminals.dispose();
   await runtime.engine.stop();
   runtime.engine.flush();
+  closeDatabases();
 }
 
 process.once("SIGTERM", () => void stop().finally(() => process.exit(0)));

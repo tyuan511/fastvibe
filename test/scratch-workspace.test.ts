@@ -5,14 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConversationCatalog } from "../src/main/engine/conversation-catalog.ts";
 import { scratchWorkspace } from "../src/main/engine/paths.ts";
+import { openTestDb } from "./test-db.ts";
 import { writeImportedSession } from "../src/main/engine/import/writer.ts";
 import type { ImportedSession } from "../src/main/engine/import/types.ts";
 
-function setup(): { dir: string; scratch: string; file: string } {
+function setup(): { dir: string; scratch: string; file: string; open: (legacy?: string) => ConversationCatalog } {
   const dir = mkdtempSync(join(tmpdir(), "fastvibe-scratch-"));
   const scratch = join(dir, "scratch");
   mkdirSync(scratch);
-  return { dir, scratch, file: join(dir, "conversations.json") };
+  const file = join(dir, "conversations.json");
+  // `legacy` is the JSON this store used to own: passing it is what runs the one-time import,
+  // so a test that seeded a file gets the migration and one that did not gets an empty table.
+  return { dir, scratch, file, open: (legacy?: string) => new ConversationCatalog(openTestDb(dir), { scratchRoot: scratch, legacyFile: legacy }) };
 }
 
 function chat(id: string, cwd: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -26,8 +30,8 @@ test("scratchWorkspace stays inside the scratch root", () => {
 });
 
 test("two unbound chats do not share a directory", () => {
-  const { scratch, file } = setup();
-  const cat = new ConversationCatalog(file, scratch);
+  const { scratch, file, open } = setup();
+  const cat = open(existsSync(file) ? file : undefined);
   const first = cat.create(undefined);
   const second = cat.create(undefined);
   assert.equal(first.cwd, join(scratch, first.id));
@@ -38,16 +42,16 @@ test("two unbound chats do not share a directory", () => {
 });
 
 test("a side chat keeps its parent's scratch directory", () => {
-  const { scratch, file } = setup();
-  const cat = new ConversationCatalog(file, scratch);
+  const { scratch, file, open } = setup();
+  const cat = open(existsSync(file) ? file : undefined);
   const parent = cat.create(undefined);
   const side = cat.create(undefined, { cwd: parent.cwd }, { kind: "side-chat", parentId: parent.id, activate: false });
   assert.equal(side.cwd, parent.cwd);
 });
 
 test("unbinding a project restores that chat's own scratch directory", () => {
-  const { scratch, file } = setup();
-  const cat = new ConversationCatalog(file, scratch);
+  const { scratch, file, open } = setup();
+  const cat = open(existsSync(file) ? file : undefined);
   const created = cat.create("/tmp/demo");
   assert.equal(created.cwd, "/tmp/demo");
   const unbound = cat.setProject(created.id, undefined);
@@ -57,21 +61,21 @@ test("unbinding a project restores that chat's own scratch directory", () => {
 });
 
 test("passing the shared scratch root is rewritten to the per-chat directory", () => {
-  const { scratch, file } = setup();
-  const cat = new ConversationCatalog(file, scratch);
+  const { scratch, file, open } = setup();
+  const cat = open(existsSync(file) ? file : undefined);
   const created = cat.create(undefined, { cwd: scratch });
   assert.equal(created.cwd, join(scratch, created.id));
 });
 
 test("a catalog that still points every unbound chat at the scratch root is split on load", () => {
-  const { scratch, file } = setup();
+  const { scratch, file, open } = setup();
   writeFileSync(join(scratch, "shared.txt"), "both");
   writeFileSync(file, `${JSON.stringify({
     version: 2,
     conversations: [chat("a", scratch), chat("b", scratch)],
     projects: [],
   }, null, 2)}\n`);
-  const cat = new ConversationCatalog(file, scratch);
+  const cat = open(existsSync(file) ? file : undefined);
   const a = cat.get("a");
   const b = cat.get("b");
   assert.equal(a?.cwd, join(scratch, "a"));
@@ -83,7 +87,7 @@ test("a catalog that still points every unbound chat at the scratch root is spli
 });
 
 test("a single chat that owned the shared scratch keeps the files that were there", () => {
-  const { scratch, file } = setup();
+  const { scratch, file, open } = setup();
   writeFileSync(join(scratch, "notes.txt"), "mine");
   writeFileSync(file, `${JSON.stringify({
     version: 2,
@@ -93,7 +97,7 @@ test("a single chat that owned the shared scratch keeps the files that were ther
     ],
     projects: [],
   }, null, 2)}\n`);
-  const cat = new ConversationCatalog(file, scratch);
+  const cat = open(existsSync(file) ? file : undefined);
   const owner = cat.get("owner");
   const side = cat.get("side");
   assert.equal(owner?.cwd, join(scratch, "owner"));

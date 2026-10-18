@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { PromptImage, QueuePauseReason, QueuedPrompt } from "@shared/types";
+import { importLegacyJson, RowWriter, type Db } from "./db.ts";
 
 /**
  * `claimed` means the SDK agent loop has taken the object from its private queue.
@@ -22,9 +22,10 @@ type QueueFile = {
   revisions: Record<string, number>;
 };
 
-type QueueWriter = (file: string, state: QueueFile) => void;
-
 const EMPTY: QueueFile = { version: 2, items: [], pauses: {}, revisions: {} };
+
+/** A queue row: the prompt, and where it sits in the drain order. */
+type QueueRow = { item: StoredQueuedPrompt; position: number };
 
 function validItem(value: unknown): value is StoredQueuedPrompt {
   if (!value || typeof value !== "object") return false;
@@ -42,10 +43,34 @@ function cloneState(state: QueueFile): QueueFile {
   };
 }
 
+/**
+ * The shape, without the crash rules: what the rows (or the legacy file) say.
+ *
+ * Kept apart from {@link normalizeQueueFile} because the store now reads its state out of
+ * the database, which gives it the same shape the JSON file gave it — and the recovery below
+ * is business semantics, not file-format handling, so it runs on both inputs.
+ */
+export function readQueueShape(value: unknown): { items: StoredQueuedPrompt[]; pauses: Record<string, QueuePauseReason>; revisions: Record<string, number> } {
+  const source = (value && typeof value === "object" ? value : {}) as { items?: unknown; pauses?: unknown; revisions?: unknown };
+  const loaded = Array.isArray(source.items) ? source.items.filter(validItem) : [];
+  const pauses: Record<string, QueuePauseReason> = {};
+  if (source.pauses && typeof source.pauses === "object") {
+    for (const [id, reason] of Object.entries(source.pauses)) {
+      if (reason === "stopped" || reason === "error") pauses[id] = reason;
+    }
+  }
+  const revisions: Record<string, number> = {};
+  if (source.revisions && typeof source.revisions === "object") {
+    for (const [id, revision] of Object.entries(source.revisions)) {
+      if (typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0) revisions[id] = revision;
+    }
+  }
+  return { items: loaded, pauses, revisions };
+}
+
 export function normalizeQueueFile(value: unknown): QueueFile {
   if (!value || typeof value !== "object") return cloneState(EMPTY);
-  const source = value as { items?: unknown; pauses?: unknown; revisions?: unknown };
-  const loaded = Array.isArray(source.items) ? source.items.filter(validItem) : [];
+  const { items: loaded, pauses, revisions } = readQueueShape(value);
   // The process died before it could acknowledge these rows. A row the run never took
   // (`sending` alone) was never delivered and becomes pending. A claimed row may be in
   // the transcript, so it stays claimed until the session loads and is reconciled
@@ -57,19 +82,7 @@ export function normalizeQueueFile(value: unknown): QueueFile {
   const items = loaded.map((item) =>
     item.claimed === true ? { ...item, claimed: true, sending: true } : { ...item, claimed: undefined, sending: undefined },
   );
-  const pauses: Record<string, QueuePauseReason> = {};
-  if (source.pauses && typeof source.pauses === "object") {
-    for (const [id, reason] of Object.entries(source.pauses)) {
-      if (reason === "stopped" || reason === "error") pauses[id] = reason;
-    }
-  }
   for (const id of uncertainConversations) pauses[id] = "error";
-  const revisions: Record<string, number> = {};
-  if (source.revisions && typeof source.revisions === "object") {
-    for (const [id, revision] of Object.entries(source.revisions)) {
-      if (typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0) revisions[id] = revision;
-    }
-  }
   return { version: 2, items, pauses, revisions };
 }
 
@@ -118,13 +131,6 @@ export function findDeliveredClaims(
   return delivered;
 }
 
-function writeQueueFile(file: string, state: QueueFile): void {
-  const temporary = `${file}.tmp`;
-  writeFileSync(temporary, JSON.stringify(state, null, 2), { mode: 0o600 });
-  chmodSync(temporary, 0o600);
-  renameSync(temporary, file);
-}
-
 /** Exact-object acknowledgement; equal text or FIFO position is intentionally irrelevant. */
 export class SdkQueueClaims {
   readonly #ids = new WeakMap<object, string>();
@@ -145,27 +151,66 @@ export class SdkQueueClaims {
   }
 }
 
-/** Durable queue state. Every mutation commits to disk before becoming visible. */
+/** Durable queue state. Every mutation commits before it becomes visible. */
 export class MessageQueueStore {
   #state: QueueFile;
-  readonly #file: string;
-  readonly #writer: QueueWriter;
+  readonly #db: Db;
+  readonly #items: RowWriter<QueueRow>;
+  /** What `queue_state` holds, keyed by conversation, so a flush writes only what moved. */
+  #stored = new Map<string, string>();
 
-  constructor(file: string, writer: QueueWriter = writeQueueFile) {
-    this.#file = file;
-    this.#writer = writer;
-    try {
-      this.#state = normalizeQueueFile(JSON.parse(readFileSync(file, "utf8")));
-    } catch (error) {
-      // A first run has no queue file; every other failure must remain visible. Treating
-      // a corrupt or temporarily unreadable file as empty would overwrite durable prompts
-      // on the next mutation and silently lose work.
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        this.#state = cloneState(EMPTY);
-      } else {
-        throw new Error(`Unable to read durable message queue: ${file}`, { cause: error });
-      }
+  constructor(db: Db, options: { legacyFile?: string } = {}) {
+    this.#db = db;
+    this.#items = new RowWriter<QueueRow>(db, {
+      table: "queue_items",
+      identity: (row) => ({ id: row.item.id }),
+      columns: (row) => ({ conversation_id: row.item.conversationId, position: row.position }),
+      data: (row) => JSON.stringify(row.item),
+    });
+    if (options.legacyFile) {
+      importLegacyJson(db, {
+        name: "message-queue",
+        file: options.legacyFile,
+        // The crash rules are deliberately *not* applied to the legacy file here: the store
+        // reads the rows back through `normalizeQueueFile` either way, so a queue imported
+        // from JSON recovers exactly like one read from the table.
+        load: (value) => readQueueShape(value),
+        save: (shape) => {
+          // Runs inside the one-time load's transaction — `#writeRows`, not `#write`.
+          this.#writeRows({ version: 2, items: shape.items, pauses: shape.pauses, revisions: shape.revisions });
+          return shape.items.length + this.#stored.size;
+        },
+        count: () => db.countRows("queue_items") + db.countRows("queue_state"),
+        // An unreadable queue is the one file this store refused to treat as empty, because
+        // the very next mutation would have replaced it and dropped the prompts it held.
+        unreadable: "throw",
+      });
     }
+    try {
+      this.#state = normalizeQueueFile(this.#readShape());
+    } catch (error) {
+      // A database that cannot be read is the same case as a file that could not be parsed:
+      // saying so is the only safe answer, because an empty queue is written back on the
+      // next prompt.
+      throw new Error(`无法读取持久化消息队列：${db.file}`, { cause: error });
+    }
+  }
+
+  /** The rows as they stand, before the recovery rules: the JSON file's shape. */
+  #readShape(): ReturnType<typeof readQueueShape> {
+    const items = this.#db
+      .all<{ data: string }>("SELECT data FROM queue_items ORDER BY position, id")
+      .map((row) => JSON.parse(row.data) as StoredQueuedPrompt);
+    const pauses: Record<string, QueuePauseReason> = {};
+    const revisions: Record<string, number> = {};
+    for (const row of this.#db.all<{ conversation_id: string; revision: number; pause: string | null }>(
+      "SELECT conversation_id, revision, pause FROM queue_state",
+    )) {
+      revisions[row.conversation_id] = Number(row.revision);
+      this.#stored.set(row.conversation_id, `${row.revision}|${row.pause ?? ""}`);
+      if (row.pause === "stopped" || row.pause === "error") pauses[row.conversation_id] = row.pause;
+    }
+    return { items, pauses, revisions };
   }
 
   state(conversationId: string): ConversationQueueState {
@@ -349,10 +394,45 @@ export class MessageQueueStore {
     state.revisions[conversationId] = (state.revisions[conversationId] ?? 0) + 1;
   }
 
+  /**
+   * Commit, then make visible.
+   *
+   * The order is the whole contract: a mutation that failed to reach the database must not
+   * be readable from memory, because the next process to load would then be told the prompt
+   * was queued when nothing holds it.
+   */
   #mutate(change: (next: QueueFile) => false | void): void {
     const next = cloneState(this.#state);
     if (change(next) === false) return;
-    this.#writer(this.#file, next);
+    this.#write(next);
     this.#state = next;
+  }
+
+  #write(next: QueueFile): void {
+    this.#db.transaction(() => this.#writeRows(next));
+  }
+
+  /** The rows themselves; the caller owns the transaction. */
+  #writeRows(next: QueueFile): void {
+    this.#items.write(next.items.map((item, position) => ({ item, position })));
+    const conversations = new Set([...Object.keys(next.revisions), ...Object.keys(next.pauses)]);
+    for (const conversationId of conversations) {
+      const revision = next.revisions[conversationId] ?? 0;
+      const pause = next.pauses[conversationId] ?? null;
+      const fingerprint = `${revision}|${pause ?? ""}`;
+      if (this.#stored.get(conversationId) === fingerprint) continue;
+      this.#db.run(
+        "INSERT INTO queue_state (conversation_id, revision, pause) VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET revision = excluded.revision, pause = excluded.pause",
+        conversationId,
+        revision,
+        pause,
+      );
+      this.#stored.set(conversationId, fingerprint);
+    }
+    for (const conversationId of [...this.#stored.keys()]) {
+      if (conversations.has(conversationId)) continue;
+      this.#db.run("DELETE FROM queue_state WHERE conversation_id = ?", conversationId);
+      this.#stored.delete(conversationId);
+    }
   }
 }

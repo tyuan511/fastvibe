@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DagStore } from "../src/main/engine/dag-store.ts";
+import { openDagStore, openTestDb } from "./test-db.ts";
 import { buildPrompt, DagScheduler, nodeWritePaths, type DagNodeRun, type DagRunner } from "../src/main/pi/dag-scheduler.ts";
 import { canonicalDagId, dagGraphState, dagNodeTools, dagNodeWrites, dagRunStatus, dagSeq, formatDagId, isDagNodeId, resolveDrafts, type DagConfiguredAgent, type DagNode, type DagNodeDraft, type DagProfile } from "../src/shared/dag.ts";
 
@@ -22,10 +23,9 @@ const draft = (ref: string, dependsOn: string[] = [], extra: Partial<DagNodeDraf
   ...extra,
 });
 
-function fixture(): { store: DagStore; file: string } {
+function fixture(): { store: DagStore; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), "fastvibe-dag-"));
-  const file = join(dir, "dag.json");
-  return { store: new DagStore(file), file };
+  return { store: openDagStore(dir), dir };
 }
 
 const settle = (): Promise<void> => new Promise((done) => setTimeout(done, 90));
@@ -286,7 +286,7 @@ test("a runner that throws is a failed node, not a crashed scheduler", async () 
 });
 
 test("ids are global and never reused, and the graph survives a restart with running nodes marked interrupted", async () => {
-  const { store, file } = fixture();
+  const { store, dir } = fixture();
   const { run } = controlled();
   const scheduler = new DagScheduler(store, run);
   scheduler.add("c1", [draft("a")]);
@@ -297,12 +297,61 @@ test("ids are global and never reused, and the graph survives a restart with run
   assert.equal(new DagScheduler(store, run).add("c3", [draft("c")])[0].id, "T-0003", "a dropped graph's numbers are not reissued");
   await settle();
 
-  const reopened = new DagStore(file);
+  const reopened = openDagStore(dir);
   assert.equal(reopened.node("c1", "T-0001")?.status, "cancelled", "a node that was running when the app quit is not shown running forever");
   assert.match(reopened.node("c1", "T-0001")?.error ?? "", /中断/);
   assert.equal(reopened.append("c9", (next) => [{ id: next(), title: "t", instruction: "i", profile, dependsOn: [], status: "pending" }])[0].id, "T-0004");
-  writeFileSync(file, "{ nope");
-  assert.deepEqual(new DagStore(file).list(), []);
+  reopened.flush();
+  // A damaged legacy file is renamed aside and never parsed again — and it says nothing
+  // about the rows: the store already answered it. Under the file store, an unreadable
+  // `dag.json` meant an empty store and the next write replaced it.
+  const legacy = join(dir, "dag.json");
+  writeFileSync(legacy, "{ nope");
+  const after = new DagStore(openTestDb(dir), { resultsDir: join(dir, "dag.json.results"), legacyFile: legacy });
+  assert.deepEqual(after.list().map((graph) => graph.conversationId).sort(), ["c1", "c3", "c9"]);
+  assert.ok(readdirSync(dir).some((name) => name.startsWith("dag.json.corrupt-")), readdirSync(dir).join(","));
+});
+
+test("the old dag.json is imported once, and its counter continues from the file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fastvibe-dag-import-"));
+  const legacy = join(dir, "dag.json");
+  const node = (id: string, status: string, extra: Record<string, unknown> = {}) => ({
+    id, title: id, instruction: "i", profile, dependsOn: [], status, createdAt: 1, ...extra,
+  });
+  writeFileSync(
+    legacy,
+    JSON.stringify({
+      version: 1,
+      seq: 42,
+      graphs: [
+        { conversationId: "c1", createdAt: 1, updatedAt: 2, revision: 3, nodes: [node("T-0041", "completed", { endedAt: 5 })] },
+        { conversationId: "c2", createdAt: 1, updatedAt: 2, nodes: [node("T-0042", "running")] },
+        // 一个不合法的节点：老读取器把它过滤掉，图本身留下（同一条 `normalizeGraph` 规则）。
+        { conversationId: "c3", createdAt: 1, updatedAt: 2, nodes: [node("not-an-id", "pending")] },
+      ],
+    }),
+    "utf8",
+  );
+
+  const store = new DagStore(openTestDb(dir), { resultsDir: join(dir, "dag.json.results"), legacyFile: legacy });
+  assert.deepEqual(store.list().map((graph) => graph.conversationId).sort(), ["c1", "c2", "c3"]);
+  assert.deepEqual(store.get("c3")?.nodes, [], "the node whose id is not a task number is dropped");
+  assert.equal(store.node("c1", "T-0041")?.status, "completed");
+  // The exit rule runs on imported graphs too: a node that was running when the app died.
+  assert.equal(store.node("c2", "T-0042")?.status, "cancelled");
+  assert.equal(store.get("c2")?.paused, true);
+  assert.equal(store.append("c9", (next) => [{ id: next(), title: "t", instruction: "i", profile, dependsOn: [], status: "pending" }])[0].id, "T-0043", "the counter came from the file, not from the nodes");
+
+  const db = openTestDb(dir);
+  store.flush();
+  assert.equal(db.countRows("dag_graphs"), 4);
+  assert.equal(db.countRows("dag_nodes"), 3);
+  assert.equal(db.get<{ value: string }>("SELECT value FROM dag_meta WHERE key = 'seq'")?.value, "44");
+  assert.ok(!existsSync(legacy));
+  assert.equal(readdirSync(dir).filter((name) => name.startsWith("dag.json.migrated-")).length, 1);
+  // The import is recorded, so an old copy of the file cannot be taken in twice.
+  writeFileSync(legacy, JSON.stringify({ version: 1, seq: 999, graphs: [] }), "utf8");
+  assert.equal(new DagStore(openTestDb(dir), { resultsDir: join(dir, "dag.json.results"), legacyFile: legacy }).append("c8", (next) => [{ id: next(), title: "t", instruction: "i", profile, dependsOn: [], status: "pending" }])[0].id, "T-0044");
 });
 
 test("every change is announced with the whole graph, and a drop announces null", () => {
@@ -386,7 +435,7 @@ test("resume leaves failures alone: a failure is a result, retried node by node"
 });
 
 test("a graph that was running when the app quit comes back stopped and resumable", async () => {
-  const { store, file } = fixture();
+  const { store, dir } = fixture();
   const { run, started, finish } = controlled();
   const scheduler = new DagScheduler(store, run);
   scheduler.add("c1", [draft("a"), draft("b", ["a"])]);
@@ -394,7 +443,7 @@ test("a graph that was running when the app quit comes back stopped and resumabl
   await tick();
   await settle();
 
-  const reopened = new DagStore(file);
+  const reopened = openDagStore(dir);
   assert.deepEqual(reopened.get("c1")!.nodes.map((node) => node.status), ["completed", "cancelled"]);
   assert.equal(dagGraphState(reopened.get("c1")!.nodes), "stopped");
   const again = controlled();
@@ -497,7 +546,7 @@ test("Stop → resume → Stop while exiting honours the last Stop, and can resu
 });
 
 test("engine shutdown cancels every graph before a freed slot can start waiting work", async () => {
-  const { store, file } = fixture();
+  const { store, dir } = fixture();
   const { run, started } = controlled();
   let notifications = 0;
   const scheduler = new DagScheduler(store, run, { concurrency: 1, onSettled: () => { notifications++; } });
@@ -514,7 +563,7 @@ test("engine shutdown cancels every graph before a freed slot can start waiting 
   assert.ok(store.list().every((graph) => graph.nodes.every((node) => node.status === "cancelled")));
   assert.equal(notifications, 0);
   store.flush();
-  assert.ok(new DagStore(file).list().every((graph) => graph.nodes.every((node) => node.status === "cancelled")));
+  assert.ok(openDagStore(dir).list().every((graph) => graph.nodes.every((node) => node.status === "cancelled")));
   scheduler.start();
   assert.deepEqual(started, ["T-0001", "T-0004"], "engine restart must not auto-resume cancelled graphs");
   scheduler.resume("c1");

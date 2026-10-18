@@ -115,10 +115,11 @@ import { buildProjectFoldersPrompt, projectFolderPaths } from "../../shared/proj
 import { describeProjectFolders, resolveProjectRepos } from "../engine/project-repos";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
+import { openDatabase, type Db } from "../engine/db";
 import { canResumeRun } from "../engine/resume";
 import { ReasoningStore } from "../engine/reasoning-store";
 import { releaseOfficeResident } from "../engine/office-cli";
-import { captureCheckpoint, clearCheckpoint, readBefore, readBeforeBinary, readCheckpoint, restoreCheckpoint, saveCheckpoints, loadCheckpoints, checkpointFile, type CheckpointFile } from "../engine/checkpoint";
+import { CheckpointStore, readBefore, readBeforeBinary, restoreCheckpoint, checkpointFile, type CheckpointFile } from "../engine/checkpoint";
 import { bashCommand, officecliWriteTargets } from "../../shared/office-command.ts";
 import { officeFormatOf } from "../../shared/office.ts";
 import { usageLedgerFor, type UsageLedger } from "../engine/usage-ledger";
@@ -380,6 +381,8 @@ export type StreamWatch = {
 /** Host adapter backed by pi-coding-agent. It keeps one AgentSession per conversation in one Node process. */
 export class PiProcessManager {
   #paths: FastVibePaths;
+  /** One connection for every data-class store this process owns (`engine/db.ts`). */
+  #db: Db;
   #catalog: ConversationCatalog;
   #sessions = new Map<string, ManagedSession>();
   /** Last time each resident session was opened or asked for, for the idle sweep. */
@@ -513,6 +516,8 @@ export class PiProcessManager {
   #reasoningRun = new Map<string, ReasoningRun>();
   /** Bounds of finished blocks, so a reloaded transcript keeps showing them. */
   #reasoning: ReasoningStore;
+  /** A turn's pre-write file state, so 重试 is honest. Written at capture, not at quit. */
+  #checkpoints: CheckpointStore;
   /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
   #usage: UsageLedger;
   /** Durable queue state and short per-conversation mutation chains. */
@@ -635,22 +640,31 @@ export class PiProcessManager {
   constructor(paths: FastVibePaths = getFastVibePaths(), memory: MemoryHost = new DisabledMemoryHost()) {
     this.#paths = paths;
     this.#memory = memory;
-    this.#catalog = new ConversationCatalog(this.#paths.conversationsFile, this.#paths.scratchDir);
+    this.#db = openDatabase(paths.databaseFile);
+    this.#catalog = new ConversationCatalog(this.#db, {
+      scratchRoot: this.#paths.scratchDir,
+      legacyFile: this.#paths.conversationsFile,
+    });
     // Every catalog change, from one place. The alternative was announcing at each of
     // the dozen methods below that mutate it, which is how a new one silently stops
     // reaching the other clients — the same failure `ipc/broadcast.ts` exists to end.
     this.#catalog.onChange = (snapshot) => {
       for (const listener of this.#workspaceListeners) listener(snapshot);
     };
-    this.#reasoning = new ReasoningStore(this.#paths.reasoningFile);
+    this.#reasoning = new ReasoningStore(this.#db, { legacyFile: this.#paths.reasoningFile });
+    this.#checkpoints = new CheckpointStore(this.#db, { legacyFile: checkpointFile(this.#paths.runtimeRoot) });
     this.#usage = usageLedgerFor(this.#paths.usageLedgerFile);
-    this.#messageQueue = new MessageQueueStore(this.#paths.messageQueueFile);
+    this.#messageQueue = new MessageQueueStore(this.#db, { legacyFile: this.#paths.messageQueueFile });
     this.#mcp = new McpManager(this.#paths.mcpFile);
     this.#skills = new SkillManager(this.#paths.agentDir, this.#paths.skillsDir);
     this.#extensions = new ExtensionManager(this.#paths.agentDir, this.#paths.scratchDir);
     this.#subagentManager = new SubagentManager(this.#paths);
-    this.#scheduledTasks = new ScheduledTaskManager(this.#paths.schedulesFile, (task, signal, onConversation) =>
-      this.#runScheduledTask(task, signal, onConversation), (task, run) => void this.#announceScheduleResult(task, run));
+    this.#scheduledTasks = new ScheduledTaskManager(
+      this.#db,
+      (task, signal, onConversation) => this.#runScheduledTask(task, signal, onConversation),
+      (task, run) => void this.#announceScheduleResult(task, run),
+      { legacyFile: this.#paths.schedulesFile },
+    );
     this.#memory.attach({
       conversations: () => this.#catalog.list(),
       loadBranch: (file, cwd) => loadConversationTranscriptBranch(file, cwd),
@@ -658,7 +672,10 @@ export class PiProcessManager {
       inputBudgetChars: (model) => this.#memoryInputBudget(model),
       runAgent: (request) => this.#runMemoryAgent(request),
     });
-    this.#dagStore = new DagStore(this.#paths.dagFile);
+    this.#dagStore = new DagStore(this.#db, {
+      resultsDir: this.#paths.dagResultsDir,
+      legacyFile: this.#paths.dagFile,
+    });
     this.#dagStore.onChange = (conversationId, graph) => this.#emit({ type: "dag_changed", conversationId, graph });
     this.#dagScheduler = new DagScheduler(this.#dagStore, (args) => this.runDagNode(args), {
       onSettled: (conversationId, nodes) => this.#announceDagSettled(conversationId, nodes),
@@ -678,9 +695,6 @@ export class PiProcessManager {
     // the isolated directory programmatically to createAgentSession. Keep the role
     // discovery path on that same private root as well.
     process.env.PI_CODING_AGENT_DIR = this.#paths.agentDir;
-    // A retry prompt should survive a window reload, which is common in dev and possible
-    // after a crash. Best-effort: a missing file just means no checkpoint is offered.
-    void loadCheckpoints(checkpointFile(this.#paths.runtimeRoot)).catch(() => undefined);
     const active = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
     this.#cwd = active?.cwd || this.#paths.scratchDir;
   }
@@ -746,7 +760,6 @@ export class PiProcessManager {
         // A transcript that cannot be written is lost for that run; the quit must not be.
       }
     }
-    void saveCheckpoints(checkpointFile(this.#paths.runtimeRoot)).catch(() => undefined);
   }
   get status(): EngineStatus { return this.#status; }
   get cwd(): string { return this.#cwd; }
@@ -2032,17 +2045,17 @@ export class PiProcessManager {
    * must not grow an empty confirmation step.
    */
   getCheckpoint(conversationId: string): { paths: string[]; createdAt: number } | null {
-    const checkpoint = readCheckpoint(conversationId);
+    const checkpoint = this.#checkpoints.get(conversationId);
     if (!checkpoint || checkpoint.files.length === 0) return null;
     return { paths: checkpoint.files.map((file) => file.path), createdAt: checkpoint.createdAt };
   }
 
   /** Put the workspace back to a conversation's checkpoint. */
   async restoreCheckpoint(conversationId: string): Promise<{ restored: number; removed: number; skipped: number }> {
-    const checkpoint = readCheckpoint(conversationId);
+    const checkpoint = this.#checkpoints.get(conversationId);
     if (!checkpoint) return { restored: 0, removed: 0, skipped: 0 };
     const result = await restoreCheckpoint(checkpoint, { beforeRewrite: (path) => releaseOfficeResident(path) });
-    clearCheckpoint(conversationId);
+    this.#checkpoints.clear(conversationId);
     // Drop the accumulator too: the retry that follows is a new attempt at the same
     // turn and must capture the (now restored) originals again, not skip every path as
     // "already seen" and leave the checkpoint empty.
@@ -2230,7 +2243,7 @@ export class PiProcessManager {
     // no longer exists.
     this.#resolvePendingUi(id);
     this.#runTouchedFiles.delete(id);
-    clearCheckpoint(id);
+    this.#checkpoints.clear(id);
     await rm(join(this.#paths.toolImagesDir, toolImageFolder(id)), { recursive: true, force: true }).catch(() => undefined);
     return { ...this.#catalog.snapshot(), nextId: wasActive ? (this.#catalog.activeId ?? null) : null };
   }
@@ -4759,12 +4772,12 @@ export class PiProcessManager {
       added = true;
     }
     if (!added) return;
-    // Serialized per conversation: `captureCheckpoint` awaits `git rev-parse` before it
+    // Serialized per conversation: capture awaits `git rev-parse` before it
     // stores, so two overlapping calls could land out of order and leave the checkpoint
     // missing the file captured by the earlier one.
     const previous = touched.pending;
     const next = previous
-      .then(() => captureCheckpoint(conversationId, touched.cwd, [...touched.files.values()]))
+      .then(() => this.#checkpoints.capture(conversationId, touched.cwd, [...touched.files.values()]))
       .catch(() => undefined);
     touched.pending = next;
   }
@@ -4785,7 +4798,7 @@ export class PiProcessManager {
   #beginTurn(conversationId: string | undefined): void {
     if (!conversationId) return;
     this.#runTouchedFiles.delete(conversationId);
-    clearCheckpoint(conversationId);
+    this.#checkpoints.clear(conversationId);
   }
 
   /**
@@ -4876,7 +4889,7 @@ export class PiProcessManager {
    * File a delegated run's thinking bounds against the entry its message becomes.
    *
    * Kept in memory only: a sub-session is a throwaway in-memory session, so its entry
-   * ids name nothing after the run and must not be written to `reasoning.json`, whose
+   * ids name nothing after the run and must not reach the persisted bounds table, whose
    * keys are durable conversation entry ids.
    */
   #fileSubagentReasoning(subagentId: string, entryId: string, blocks: ThinkingTiming[]): void {

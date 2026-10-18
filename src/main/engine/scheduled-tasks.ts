@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { importLegacyJson, RowWriter, type Db } from "./db.ts";
 import type {
   ScheduleRule,
   ScheduledRunStatus,
@@ -11,6 +11,9 @@ import type {
 } from "@shared/schedules";
 
 type ScheduleFile = { version: 1; revision: number; tasks: ScheduledTask[]; runs: ScheduledTaskRun[] };
+
+/** A run row: the record, its place in the list, and the columns that carry meaning alone. */
+type RunRow = { run: ScheduledTaskRun; position: number };
 const MAX_RUNS = 500;
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const ABSOLUTE = /T\d\d:\d\d(?::\d\d(?:\.\d+)?)?(?:Z|[+-]\d\d:\d\d)$/i;
@@ -161,17 +164,51 @@ function validStoredRun(value: unknown): value is ScheduledTaskRun {
     && (run.manual === undefined || typeof run.manual === "boolean");
 }
 
-/** Every mutation is committed with an atomic rename *before* it is published. A
- * claimed occurrence must be durable before its Agent runs or a crash could run it twice. */
+/** Every mutation is committed *before* it is published. A claimed occurrence must be
+ * durable before its Agent runs or a crash could run it twice. */
 export class ScheduledTaskStore {
-  readonly #file: string;
+  readonly #db: Db;
   #tasks = new Map<string, ScheduledTask>();
   #runs: ScheduledTaskRun[] = [];
   #revision = 0;
+  #taskRows: RowWriter<ScheduledTask>;
+  #runRows: RowWriter<RunRow>;
+  /** What `schedule_meta` holds, so a flush that changes nothing writes nothing. */
+  #storedRevision: string | null = null;
   onChange: ((snapshot: ScheduledTaskSnapshot) => void) | null = null;
 
-  constructor(file: string) {
-    this.#file = file;
+  constructor(db: Db, options: { legacyFile?: string } = {}) {
+    this.#db = db;
+    this.#taskRows = new RowWriter<ScheduledTask>(db, {
+      table: "scheduled_tasks",
+      identity: (task) => ({ id: task.id }),
+      data: (task) => JSON.stringify(task),
+    });
+    this.#runRows = new RowWriter<RunRow>(db, {
+      table: "scheduled_runs",
+      identity: (row) => ({ id: row.run.id }),
+      columns: (row) => ({
+        task_id: row.run.taskId,
+        position: row.position,
+        started_at: row.run.startedAt,
+        status: row.run.status,
+      }),
+      data: (row) => JSON.stringify(row.run),
+    });
+    if (options.legacyFile) {
+      importLegacyJson(db, {
+        name: "scheduled-tasks",
+        file: options.legacyFile,
+        // The structural read only: what a `running` row means after a restart is decided by
+        // `#read`, which runs on the rows themselves, imported or not.
+        load: (value) => readScheduleShape(value),
+        save: (shape) => {
+          this.#writeRows(shape.tasks, shape.runs, shape.revision);
+          return shape.tasks.length + shape.runs.length + (shape.revision === null ? 0 : 1);
+        },
+        count: () => db.countRows("scheduled_tasks") + db.countRows("scheduled_runs") + db.countRows("schedule_meta"),
+      });
+    }
     this.#read();
   }
 
@@ -309,11 +346,22 @@ export class ScheduledTaskStore {
     return { ...run };
   }
 
+  /** The whole store, in one transaction: what changed, what is gone. */
   flush(): void {
-    const payload: ScheduleFile = { version: 1, revision: this.#revision, tasks: [...this.#tasks.values()], runs: this.#runs };
-    const tmp = `${this.#file}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(payload)}\n`, { mode: 0o600 });
-    renameSync(tmp, this.#file);
+    this.#db.transaction(() => this.#writeRows([...this.#tasks.values()], this.#runs, this.#revision));
+  }
+
+  #writeRows(tasks: ScheduledTask[], runs: ScheduledTaskRun[], revision: number | null): void {
+    this.#taskRows.write(tasks);
+    this.#runRows.write(runs.map((run, position) => ({ run, position })));
+    if (revision === null) return;
+    const text = String(revision);
+    if (this.#storedRevision === text) return;
+    this.#db.run(
+      "INSERT INTO schedule_meta (key, value) VALUES ('revision', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      text,
+    );
+    this.#storedRevision = text;
   }
 
   #change(fn: () => void): void {
@@ -333,19 +381,19 @@ export class ScheduledTaskStore {
     catch (error) { console.error("[schedules] change listener failed:", error); }
   }
 
+  /**
+   * The rows, into the shape the manager works with — then the restart rules.
+   *
+   * `validStoredTask` / `validStoredRun` are the same guards the file reader had: a row that
+   * does not describe a task is dropped rather than trusted, because these two writers are
+   * the installed app and a `pnpm dev` of the next version.
+   */
   #read(): void {
-    try {
-      const data = JSON.parse(readFileSync(this.#file, "utf8")) as Partial<ScheduleFile>;
-      if (data.version !== 1 || !Array.isArray(data.tasks)) return;
-      const now = Date.now();
-      for (const raw of data.tasks as unknown[]) {
-        const task = validStoredTask(raw, now);
-        if (task) this.#tasks.set(task.id, task);
-      }
-      this.#runs = Array.isArray(data.runs)
-        ? data.runs.filter((run): run is ScheduledTaskRun => validStoredRun(run) && this.#tasks.has(run.taskId)).filter((run, index) => index < MAX_RUNS || run.status === "queued" || run.status === "running")
-        : [];
-      this.#revision = Number.isSafeInteger(data.revision) && data.revision! >= 0 ? data.revision! : 0;
+    const shape = readScheduleShape(this.#rows());
+    for (const task of shape.tasks) this.#tasks.set(task.id, task);
+    this.#runs = shape.runs;
+    this.#revision = shape.revision ?? 0;
+    {
       let changed = false;
       for (const run of this.#runs) {
         if (run.status === "running") {
@@ -358,8 +406,57 @@ export class ScheduledTaskStore {
         }
       }
       if (changed) { this.#revision++; this.flush(); }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
+
+  /** The three tables, in the shape the JSON file had. */
+  #rows(): unknown {
+    const tasks = this.#db
+      .all<{ data: string }>("SELECT data FROM scheduled_tasks")
+      .map((row) => parse(row.data))
+      .filter((task) => task !== undefined);
+    const runs = this.#db
+      .all<{ data: string }>("SELECT data FROM scheduled_runs ORDER BY position, id")
+      .map((row) => parse(row.data))
+      .filter((run) => run !== undefined);
+    const revision = this.#db.get<{ value: string }>("SELECT value FROM schedule_meta WHERE key = 'revision'")?.value;
+    if (revision !== undefined) this.#storedRevision = revision;
+    const ids = new Set(tasks.map((task) => (task as { id?: unknown }).id));
+    return {
+      version: 1,
+      revision: revision === undefined ? 0 : Number(revision),
+      tasks,
+      // A run whose task is gone is history nobody can open: `remove()` deletes both, so an
+      // orphan means the other process deleted the task, and the same rule as the file reader
+      // drops it rather than showing a run under no task.
+      runs: runs.filter((run) => ids.has((run as { taskId?: unknown }).taskId)),
+    };
+  }
+}
+
+function parse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The file's shape, validated: the legacy import and the row reader both come through here,
+ * so the two cannot disagree about what a stored task is.
+ */
+function readScheduleShape(value: unknown): { tasks: ScheduledTask[]; runs: ScheduledTaskRun[]; revision: number | null } {
+  const data = value as { tasks?: unknown; runs?: unknown; revision?: unknown } | null;
+  const now = Date.now();
+  if (!data || !Array.isArray(data.tasks)) return { tasks: [], runs: [], revision: null };
+  const tasks = (data.tasks as unknown[])
+    .map((raw) => validStoredTask(raw, now))
+    .filter((task): task is ScheduledTask => task !== undefined);
+  const ids = new Set(tasks.map((task) => task.id));
+  const runs = ((data.runs as unknown[]) ?? [])
+    .filter((run): run is ScheduledTaskRun => validStoredRun(run) && ids.has(run.taskId))
+    .filter((run, index) => index < MAX_RUNS || run.status === "queued" || run.status === "running");
+  const revision = Number.isSafeInteger(data.revision as number) && (data.revision as number) >= 0 ? (data.revision as number) : null;
+  return { tasks, runs, revision };
 }

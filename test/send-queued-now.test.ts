@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { MessageQueueStore } from "../src/main/engine/message-queue.ts";
+import { openTestDb } from "./test-db.ts";
 import { verdictAfterEnd, verdictAfterStart, verdictContinuesQueue } from "../src/main/pi/run-verdict.ts";
 import { SendNowSpans } from "../src/main/pi/send-now.ts";
 
@@ -61,7 +62,7 @@ function harness(options: { stopFails?: boolean } = {}) {
     verdictContinuesQueue,
   );
   const host = new Harness();
-  const store = new MessageQueueStore(join(dir, "queue.json"));
+  const store = new MessageQueueStore(openTestDb(dir));
   const events: Event[] = [];
   const sent: string[] = [];
   const stopped: string[] = [];

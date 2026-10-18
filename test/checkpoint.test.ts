@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { captureCheckpoint, readBefore, readBeforeBinary, restoreCheckpoint, type TurnCheckpoint } from "../src/main/engine/checkpoint.ts";
+import { CheckpointStore, readBefore, readBeforeBinary, restoreCheckpoint, type TurnCheckpoint } from "../src/main/engine/checkpoint.ts";
+import { openTestDb } from "./test-db.ts";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -152,7 +153,7 @@ test("a turn that writes two repositories records a baseline for each", async ()
     };
     await commit(left, "a.txt");
     await commit(right, "b.txt");
-    const checkpoint = await captureCheckpoint("c-repos", left, [
+    const checkpoint = await new CheckpointStore(openTestDb(dir)).capture("c-repos", left, [
       { path: join(left, "a.txt"), content: "before\n" },
       { path: join(right, "b.txt"), content: "before\n" },
     ]);

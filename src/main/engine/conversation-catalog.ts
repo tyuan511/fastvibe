@@ -4,30 +4,44 @@ import { randomUUID } from "node:crypto";
 // conversation list rides on, and that deserves a test that loads the real module.
 import { uiText } from "./ui-text.ts";
 import { ensureScratchWorkspace, scratchWorkspace } from "./paths.ts";
-import { copyFileSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { readdirSync, renameSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { importLegacyJson, RowWriter, type Db } from "./db.ts";
 import { extraFolders } from "../../shared/project-folders.ts";
 import type { Conversation, Project, WorkspaceSnapshot } from "@shared/types";
 
+/**
+ * The shape of `conversations.json`, which is imported once (§4.4) and never written again.
+ * v0 was a bare array, v1 stored the project binding in `cwd`, and v2 splits `project` from
+ * the engine `cwd` — the reading code below still knows all three, because the import runs
+ * it rather than a second implementation that could drift.
+ */
 type CatalogFile = {
-  /** v1 stored the project binding in `cwd`; v2 splits `project` from the engine `cwd`. */
   version: 2;
   activeId?: string;
   projects: Project[];
   conversations: Conversation[];
 };
 
+/** A project row is the object plus where it sits in the sidebar's drag order. */
+type ProjectRow = { project: Project; position: number };
+
 export class ConversationCatalog {
-  #file: string;
+  #db: Db;
   #scratchRoot: string;
   #projects: Project[] = [];
   #items: Conversation[] = [];
   #activeId: string | undefined;
   #writeTimer: NodeJS.Timeout | null = null;
+  #conversations: RowWriter<Conversation>;
+  #projectRows: RowWriter<ProjectRow>;
+  /** What `catalog_meta` holds for `activeId`; `null` is the absence of a row. */
+  #activeIdStored: string | null = null;
   /**
-   * Every conversation id and project folder this process has held. A flush adopts what
-   * is on disk and not in here — someone else wrote it — and leaves out what is in here
-   * and no longer in memory, because that is a delete this process made.
+   * Every conversation id and project folder this process has held. A flush adopts rows
+   * another process added that are not in here, and must not adopt one that is in here and
+   * no longer in memory — that is a delete this process made, and adopting it back would
+   * resurrect a chat the user removed.
    */
   #knownIds = new Set<string>();
   #knownProjects = new Set<string>();
@@ -35,15 +49,58 @@ export class ConversationCatalog {
    * Told after every change, with the snapshot as it now stands.
    *
    * Set after construction rather than taken as a constructor argument, because
-   * `#read()` migrates older files and writes during construction — announcing a
-   * snapshot before the object exists is a push nothing could have subscribed to.
+   * it is assigned after construction rather than taken as a constructor argument,
+   * because announcing a snapshot before the object exists is a push nothing could have
+   * subscribed to — and because the one-time import of the old JSON can itself flush.
    */
   onChange: ((snapshot: WorkspaceSnapshot) => void) | null = null;
 
-  constructor(file: string, scratchRoot: string) {
-    this.#file = file;
-    this.#scratchRoot = scratchRoot;
-    this.#read();
+  constructor(db: Db, options: { scratchRoot: string; legacyFile?: string }) {
+    this.#db = db;
+    this.#scratchRoot = options.scratchRoot;
+    this.#conversations = new RowWriter<Conversation>(db, {
+      table: "conversations",
+      identity: (item) => ({ id: item.id }),
+      columns: (item) => ({
+        project: item.project,
+        kind: item.kind,
+        parent_id: item.parentId,
+        session_id: item.sessionId,
+        created_at: item.createdAt,
+        updated_at: item.updatedAt,
+      }),
+      data: (item) => JSON.stringify(item),
+    });
+    this.#projectRows = new RowWriter<ProjectRow>(db, {
+      table: "projects",
+      identity: (row) => ({ cwd: row.project.cwd }),
+      columns: (row) => ({ position: row.position }),
+      data: (row) => JSON.stringify(row.project),
+    });
+
+    // The old file, once, in this store's own reading code. Whether it was v0 or v1 or v2
+    // decides the project backfill and the scratch-directory isolation — work that has to
+    // happen before any row exists, and which must not be redone for a database that has
+    // already answered it.
+    let imported = false;
+    if (options.legacyFile) {
+      imported =
+        importLegacyJson(db, {
+          name: "catalog",
+          file: options.legacyFile,
+          load: (value) => {
+            this.#readLegacy(value);
+            return true;
+          },
+          save: () => {
+            this.#writeRows();
+            return this.#items.length + this.#projects.length + 1;
+          },
+          count: () =>
+            db.countRows("conversations") + db.countRows("projects") + db.countRows("catalog_meta"),
+        }) === "imported";
+    }
+    if (!imported) this.#readTables();
     this.#noteKnown();
   }
 
@@ -359,61 +416,53 @@ export class ConversationCatalog {
     return this.create(project, session);
   }
 
-  #read(): void {
-    try {
-      const parsed = JSON.parse(readFileSync(this.#file, "utf8")) as unknown;
-      if (Array.isArray(parsed)) {
-        // v0: a bare array; every non-empty cwd was a project.
-        this.#items = parsed.filter(isConversation).map((item) => this.#migrateLegacy(item));
-        this.#projects = projectsFromConversations(this.#items).sort(byProjectCreatedDesc);
-        this.#activeId = this.#items[0]?.id;
-        this.#isolateScratch();
-        this.#write();
-        return;
-      }
-      if (isRecord(parsed) && typeof parsed.version === "number") {
-        const legacy = parsed.version < 2;
-        const rawItems = (Array.isArray(parsed.conversations) ? parsed.conversations : []).filter(isConversation);
-        // Catalogs written before `createdAt` existed fall back to `updatedAt`,
-        // which is the best available proxy for creation order.
-        this.#items = legacy ? rawItems.map((item) => this.#migrateLegacy(item)) : rawItems.map(withCreatedAt);
-        // Projects written before `createdAt` existed were displayed by activity, not
-        // by add time, so their stored order is not the user's order: backfill the
-        // timestamp and restore newest-added-first once. A catalog that already
-        // carries `createdAt` keeps its stored order, which is the drag order.
-        const storedProjects = Array.isArray(parsed.projects) ? parsed.projects.filter(isProject) : null;
-        const needsProjectMigration = storedProjects ? storedProjects.some((item) => !hasCreatedAt(item)) : true;
-        this.#projects = (storedProjects ?? projectsFromConversations(this.#items)).map((item) =>
-          sanitizeProjectFolders(withProjectCreatedAt(item, this.#items)),
-        );
-        for (const item of this.#items) {
-          if (item.project && !this.#projects.some((project) => project.cwd === item.project)) {
-            this.#projects.push({
-              cwd: item.project,
-              name: basename(item.project) || item.project,
-              createdAt: item.createdAt,
-              updatedAt: item.updatedAt,
-            });
-          }
-        }
-        if (needsProjectMigration) this.#projects.sort(byProjectCreatedDesc);
-        this.#activeId = typeof parsed.activeId === "string" ? parsed.activeId : this.#items[0]?.id;
-        const scratchMigrated = this.#isolateScratch();
-        if (legacy || needsProjectMigration || scratchMigrated) this.#write();
-        return;
-      }
-    } catch (error) {
-      // A missing file is a first run. Anything else (a truncated write, a stray edit) is
-      // a catalog we are about to replace with an empty one on the next write, so keep
-      // what was there where a person can still find it.
-      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        try {
-          copyFileSync(this.#file, `${this.#file}.corrupt-${Date.now()}`);
-        } catch {
-          // best effort: failing to keep a copy must not stop the app from starting
-        }
+  /**
+   * The legacy `conversations.json`, read into memory. Everything below is the migration
+   * this file has always needed; it runs only inside the one-time import.
+   */
+  #readLegacy(parsed: unknown): void {
+    if (Array.isArray(parsed)) {
+      // v0: a bare array; every non-empty cwd was a project.
+      this.#items = parsed.filter(isConversation).map((item) => this.#migrateLegacy(item));
+      this.#projects = projectsFromConversations(this.#items).sort(byProjectCreatedDesc);
+      this.#activeId = this.#items[0]?.id;
+      this.#isolateScratch();
+      return;
+    }
+    if (!isRecord(parsed) || typeof parsed.version !== "number") {
+      // Not a catalog this file format ever wrote. The import counts it as answered and
+      // the store starts empty, which is what reading this file used to end up with.
+      return;
+    }
+    const legacy = parsed.version < 2;
+    const rawItems = (Array.isArray(parsed.conversations) ? parsed.conversations : []).filter(isConversation);
+    // Catalogs written before `createdAt` existed fall back to `updatedAt`,
+    // which is the best available proxy for creation order.
+    this.#items = legacy ? rawItems.map((item) => this.#migrateLegacy(item)) : rawItems.map(withCreatedAt);
+    // Projects written before `createdAt` existed were displayed by activity, not
+    // by add time, so their stored order is not the user's order: backfill the
+    // timestamp and restore newest-added-first once. A catalog that already
+    // carries `createdAt` keeps its stored order, which is the drag order.
+    const storedProjects = Array.isArray(parsed.projects) ? parsed.projects.filter(isProject) : null;
+    const needsProjectMigration = storedProjects ? storedProjects.some((item) => !hasCreatedAt(item)) : true;
+    this.#projects = (storedProjects ?? projectsFromConversations(this.#items)).map((item) =>
+      sanitizeProjectFolders(withProjectCreatedAt(item, this.#items)),
+    );
+    for (const item of this.#items) {
+      if (item.project && !this.#projects.some((project) => project.cwd === item.project)) {
+        this.#projects.push({
+          cwd: item.project,
+          name: basename(item.project) || item.project,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        });
       }
     }
+    if (needsProjectMigration) this.#projects.sort(byProjectCreatedDesc);
+    this.#activeId = typeof parsed.activeId === "string" ? parsed.activeId : this.#items[0]?.id;
+    // One chat per scratch directory: a filesystem migration, so it belongs to the file it
+    // came from and runs exactly once, inside this import.
+    this.#isolateScratch();
   }
 
   /** `scratch/<id>`, created on disk so the engine can use it as a cwd. */
@@ -509,9 +558,10 @@ export class ConversationCatalog {
   }
 
   /**
-   * Coalesce writes: a single user action (e.g. switching project) mutates the
-   * catalog several times, and each `writeFileSync` blocked the main process and
-   * the UI. Callers only read the in-memory state, so a short debounce is safe.
+   * Coalesce writes: a single user action (e.g. switching project) mutates the catalog
+   * several times, and each write blocked the main process and the UI. Callers only read
+   * the in-memory state, so a short debounce is safe — it costs a row-level diff instead
+   * of a whole-file serialize, but still one transaction per action, not per mutation.
    */
   #write(): void {
     if (this.#writeTimer) return;
@@ -532,67 +582,141 @@ export class ConversationCatalog {
   }
 
   /**
-   * Write, and say what changed.
+   * Write the rows, and say what changed.
    *
-   * The announcement rides the same funnel as the disk write, which is the point. Every
-   * mutation above calls `#write()`, so this is the one place that knows the catalog
-   * moved — and the 40ms debounce that exists to coalesce the `writeFileSync` coalesces
-   * the push for free: one notice per user action rather than one per mutation, of which
-   * a single "switch project" makes several.
+   * The announcement rides the same funnel as the write, which is the point. Every mutation
+   * above calls `#write()`, so this is the one place that knows the catalog moved — and the
+   * 40ms debounce that coalesces the write coalesces the push for free: one notice per user
+   * action rather than one per mutation, of which a single "switch project" makes several.
    *
-   * Announcing *after* the write means a client that re-reads in response cannot see a
-   * state older than the one on disk.
+   * Announcing *after* the write means a client that re-reads in response cannot see a state
+   * older than the one the database holds.
    */
   #flush(): void {
-    this.#adoptFromDisk();
-    const payload: CatalogFile = {
-      version: 2,
-      activeId: this.#activeId,
-      projects: this.#projects,
-      conversations: this.#items,
-    };
-    // Written beside and renamed: a plain `writeFileSync` truncates first, so a process
-    // reading at that instant (another instance, or one killed mid-write) sees a prefix.
-    const temp = `${this.#file}.${process.pid}.tmp`;
-    writeFileSync(temp, `${JSON.stringify(payload, null, 2)}\n`);
-    renameSync(temp, this.#file);
+    try {
+      this.#db.transaction(() => {
+        this.#adoptFromTable();
+        this.#writeRows();
+      });
+    } catch (error) {
+      // A busy or damaged database must not take a chat switch down with it; the in-memory
+      // catalog is what every client is being told about, and the next flush retries.
+      console.warn(`[catalog] flush failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     this.onChange?.(this.snapshot());
+  }
+
+  /** The rows themselves, in one transaction: what changed, and what is gone. */
+  #writeRows(): void {
+    this.#conversations.write(this.#items);
+    this.#projectRows.write(this.#projects.map((project, position) => ({ project, position })));
+    this.#writeActiveId();
+  }
+
+  /**
+   * Load the catalog out of the tables, and remember what is already stored.
+   *
+   * Priming the writers is what makes the next flush write nothing: a store that has just
+   * read every row has no reason to hand the same bytes back.
+   */
+  #readTables(): void {
+    this.#items = [];
+    this.#projects = [];
+    for (const row of this.#db.all<{ data: string }>(
+      "SELECT data FROM conversations ORDER BY created_at DESC, id",
+    )) {
+      const item = this.#parseConversation(row.data);
+      if (!item) continue;
+      this.#items.push(item);
+      this.#conversations.prime(item, row.data);
+    }
+    let position = 0;
+    for (const row of this.#db.all<{ data: string }>("SELECT data FROM projects ORDER BY position, cwd")) {
+      const project = this.#parseProject(row.data);
+      if (!project) continue;
+      this.#projects.push(project);
+      this.#projectRows.prime({ project, position }, row.data);
+      position += 1;
+    }
+    this.#activeIdStored = this.#db.get<{ value: string }>("SELECT value FROM catalog_meta WHERE key = 'activeId'")?.value ?? null;
+    // An absent row is a catalog that never recorded one — the same 「fall back to the newest
+    // chat」 the file reader did. An empty value is the opposite: 没有人打开任何会话.
+    this.#activeId = this.#activeIdStored === null ? this.#items[0]?.id : this.#activeIdStored || undefined;
   }
 
   /**
    * Take in conversations and projects another process wrote since this one last looked.
    *
-   * Every flush writes the whole file from memory, so two processes on one data directory
-   * (the installed app next to a `pnpm dev`, which is allowed to skip the single-instance
-   * lock) overwrite each other: whichever flushes last keeps only the chats it knew about,
-   * and the others vanish from the sidebar while their transcripts stay on disk. Merging
-   * on write turns that last-writer-wins into a union. Edits to a chat both processes hold
-   * still go to the later writer; this protects what would otherwise be dropped.
+   * This is what `#adoptFromDisk` used to be, and the reason it still exists: two processes
+   * on one data directory (the installed app next to a `pnpm dev`, which may skip the
+   * single-instance lock) each hold the catalog in memory. Reading the table is now a
+   * `SELECT` of the ids this process has never seen instead of a re-parse of the whole file,
+   * and — unlike the file — the rows are compared one by one on write, so a chat the other
+   * process deleted stays deleted rather than being rewritten from this one's memory.
+   *
+   * A chat both processes still hold is last-writer-wins on that row, as it was on the file.
    */
-  #adoptFromDisk(): void {
-    // Whatever is held right now is ours, whether or not the file has seen it yet: a chat
-    // deleted later must not come back from the copy this very process wrote earlier.
+  #adoptFromTable(): void {
     this.#noteKnown();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(this.#file, "utf8"));
-    } catch {
-      return; // nothing readable to merge; the write below replaces it
-    }
-    if (!isRecord(parsed)) return;
-    const items = (Array.isArray(parsed.conversations) ? parsed.conversations : []).filter(isConversation);
-    const projects = Array.isArray(parsed.projects) ? parsed.projects.filter(isProject) : [];
     const have = new Set(this.#items.map((item) => item.id));
-    for (const item of items) {
-      if (this.#knownIds.has(item.id) || have.has(item.id)) continue;
-      this.#items.push(withCreatedAt(item));
+    for (const row of this.#db.all<{ id: string; data: string }>(
+      "SELECT id, data FROM conversations ORDER BY created_at DESC, id",
+    )) {
+      if (this.#knownIds.has(row.id) || have.has(row.id)) continue;
+      const item = this.#parseConversation(row.data);
+      if (!item) continue;
+      this.#items.push(item);
+      have.add(row.id);
+      this.#conversations.prime(item, row.data);
     }
     const haveProjects = new Set(this.#projects.map((project) => project.cwd));
-    for (const project of projects) {
-      if (this.#knownProjects.has(project.cwd) || haveProjects.has(project.cwd)) continue;
-      this.#projects.push(sanitizeProjectFolders(withProjectCreatedAt(project, this.#items)));
+    let position = this.#projects.length;
+    for (const row of this.#db.all<{ cwd: string; data: string }>(
+      "SELECT cwd, data FROM projects ORDER BY position, cwd",
+    )) {
+      if (this.#knownProjects.has(row.cwd) || haveProjects.has(row.cwd)) continue;
+      const project = this.#parseProject(row.data);
+      if (!project) continue;
+      this.#projects.push(project);
+      haveProjects.add(row.cwd);
+      this.#projectRows.prime({ project, position }, row.data);
+      position += 1;
     }
     this.#noteKnown();
+  }
+
+  #writeActiveId(): void {
+    // `""` means "no conversation is open", which is a state worth storing: the row being
+    // absent instead would make the next read fall back to the newest chat.
+    const value = this.#activeId ?? "";
+    if (value === this.#activeIdStored) return;
+    this.#db.run(
+      "INSERT INTO catalog_meta (key, value) VALUES ('activeId', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      value,
+    );
+    this.#activeIdStored = value;
+  }
+
+  /** A row's JSON, with the same guards the file reader had: a bad row is not a chat. */
+  #parseConversation(data: string): Conversation | undefined {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return undefined;
+    }
+    return isConversation(parsed) ? withCreatedAt(parsed) : undefined;
+  }
+
+  #parseProject(data: string): Project | undefined {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return undefined;
+    }
+    if (!isProject(parsed)) return undefined;
+    return sanitizeProjectFolders(withProjectCreatedAt(parsed, this.#items));
   }
 
   #noteKnown(): void {

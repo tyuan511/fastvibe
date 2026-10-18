@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { readFileSync, statSync, type Stats } from "node:fs";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { importLegacyJson, type Db } from "./db.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -63,7 +64,7 @@ export type CheckpointFile = {
   /**
    * Byte length of `content`, measured when it was read.
    *
-   * Carried rather than re-derived because `captureCheckpoint` runs once per written
+   * Carried rather than re-derived because capture runs once per written
    * file and weighs *every* file it has collected so far: a turn that writes fifty
    * files re-measured up to 32 MB of text fifty times over, on Main's event loop.
    */
@@ -93,40 +94,201 @@ export type TurnCheckpoint = {
 
 const checkpoints = new Map<string, TurnCheckpoint>();
 
-/** Drop the checkpoint for a conversation (a new turn replaces it). */
-export function clearCheckpoint(conversationId: string): void {
-  checkpoints.delete(conversationId);
-}
+/**
+ * The turn's file checkpoint, in the shared database.
+ *
+ * §5.2: one row per conversation in `checkpoints` and one per captured file in
+ * `checkpoint_files`, which hangs off it with `ON DELETE CASCADE` — replacing a
+ * conversation's checkpoint is one delete of the parent, and no orphan file row can be
+ * left behind to be read back into a later checkpoint.
+ *
+ * **Behaviour change from the JSON store: a capture is written when it happens.** The old
+ * store kept everything in memory and serialized the whole `checkpoints.json` only in
+ * `stop()`, so a crash or a kill lost every「重试前回退文件」snapshot the session had
+ * collected — the one thing that makes a retry honest. Writing at capture costs a
+ * synchronous write of up to {@link MAX_TOTAL_BYTES} on Main's thread, which is what
+ * `docs/sqlite-storage.md` §8 asks to measure; the fallback if it ever proves too slow is
+ * to write once per turn instead, not to go back to quitting-time-only.
+ */
+export class CheckpointStore {
+  #db: Db;
+  #checkpoints = new Map<string, TurnCheckpoint>();
 
-export function readCheckpoint(conversationId: string): TurnCheckpoint | undefined {
-  return checkpoints.get(conversationId);
-}
-
-/** Persist the store so a checkpoint survives a reload within the same session. */
-export async function saveCheckpoints(file: string): Promise<void> {
-  try {
-    await mkdir(dirname(file), { recursive: true });
-    // Compact, not pretty: this holds whole file contents (up to 32 MB per
-    // conversation) and is written while the app is quitting. Nothing reads it by eye.
-    await writeFile(file, `${JSON.stringify([...checkpoints.values()])}\n`, "utf8");
-  } catch {
-    // A checkpoint is best-effort: losing it only means the retry prompt is not offered.
-  }
-}
-
-export async function loadCheckpoints(file: string): Promise<void> {
-  try {
-    const parsed = JSON.parse(await readFile(file, "utf8")) as unknown;
-    if (!Array.isArray(parsed)) return;
-    for (const item of parsed) {
-      if (!item || typeof item !== "object") continue;
-      const checkpoint = item as Partial<TurnCheckpoint>;
-      if (typeof checkpoint.conversationId !== "string" || !Array.isArray(checkpoint.files)) continue;
-      checkpoints.set(checkpoint.conversationId, checkpoint as TurnCheckpoint);
+  constructor(db: Db, options: { legacyFile?: string } = {}) {
+    this.#db = db;
+    if (options.legacyFile) {
+      importLegacyJson(db, {
+        name: "checkpoints",
+        file: options.legacyFile,
+        // The old file was a bare array of `TurnCheckpoint`; the same validation the loader
+        // applied (an entry without an id or without files is not a checkpoint) decides what
+        // a row is.
+        load: (value) => (Array.isArray(value) ? value.filter(isCheckpoint) : []),
+        // Runs inside the one-time load's own transaction, and deliberately not guarded: a
+        // write that fails here must roll the whole load back rather than be swallowed and
+        // reported as zero rows taken in.
+        save: (list) => {
+          let rows = 0;
+          for (const checkpoint of list) {
+            this.#writeRows(checkpoint);
+            rows += 1 + checkpoint.files.length;
+          }
+          return rows;
+        },
+        count: () => db.countRows("checkpoints") + db.countRows("checkpoint_files"),
+      });
     }
-  } catch {
-    // Absent or corrupt: nothing to restore from.
+    this.#load();
   }
+
+  get(conversationId: string): TurnCheckpoint | undefined {
+    return this.#checkpoints.get(conversationId);
+  }
+
+  /** The checkpoint for a conversation, dropping whatever it had before. */
+  async capture(conversationId: string, cwd: string, files: CheckpointFile[]): Promise<TurnCheckpoint> {
+    const trimmed = trimCheckpointFiles(files);
+    const head = await gitRevision(cwd);
+    const repos = await checkpointRepos(trimmed);
+    const checkpoint: TurnCheckpoint = {
+      conversationId,
+      cwd,
+      createdAt: Date.now(),
+      ...(head ? { head } : {}),
+      ...(repos.length > 0 ? { repos } : {}),
+      files: trimmed,
+    };
+    this.#checkpoints.set(conversationId, checkpoint);
+    this.#persist(checkpoint);
+    return checkpoint;
+  }
+
+  /** Drop the checkpoint for a conversation (a new turn replaces it, a restore consumes it). */
+  clear(conversationId: string): void {
+    this.#checkpoints.delete(conversationId);
+    try {
+      // The cascade is the point: the file rows go with the parent, and they hold source.
+      this.#db.run("DELETE FROM checkpoints WHERE conversation_id = ?", conversationId);
+    } catch (error) {
+      console.warn("[checkpoint] could not clear", message(error));
+    }
+  }
+
+  /**
+   * Persist now — this is the change from the JSON store, where nothing was written until
+   * `stop()`. One transaction: 删旧 + 写新, so no half checkpoint is ever readable.
+   */
+  #persist(checkpoint: TurnCheckpoint): void {
+    try {
+      this.#db.transaction(() => this.#writeRows(checkpoint));
+    } catch (error) {
+      // A checkpoint is best-effort: losing it only means the retry prompt is not offered.
+      console.warn("[checkpoint] could not save", message(error));
+    }
+  }
+
+  /** The rows themselves. The caller owns the transaction; the import already holds one. */
+  #writeRows(checkpoint: TurnCheckpoint): void {
+    // One conversation holds one checkpoint: the parent goes with its file rows (the
+    // cascade), and the pair is written again as a unit.
+    this.#db.run("DELETE FROM checkpoints WHERE conversation_id = ?", checkpoint.conversationId);
+    this.#db.run(
+      "INSERT INTO checkpoints (conversation_id, cwd, created_at, head, repos) VALUES (?, ?, ?, ?, ?)",
+      checkpoint.conversationId,
+      checkpoint.cwd,
+      checkpoint.createdAt,
+      checkpoint.head,
+      checkpoint.repos ? JSON.stringify(checkpoint.repos) : undefined,
+    );
+    for (const [index, file] of checkpoint.files.entries()) {
+      this.#db.run(
+        "INSERT INTO checkpoint_files (conversation_id, seq, path, data) VALUES (?, ?, ?, ?)",
+        checkpoint.conversationId,
+        index,
+        file.path,
+        JSON.stringify(file),
+      );
+    }
+  }
+
+  #load(): void {
+    this.#checkpoints.clear();
+    const parents = this.#db.all<{
+      conversation_id: string;
+      cwd: string;
+      created_at: number;
+      head: string | null;
+      repos: string | null;
+    }>("SELECT conversation_id, cwd, created_at, head, repos FROM checkpoints");
+    const files = this.#db.all<{ conversation_id: string; data: string }>(
+      "SELECT conversation_id, data FROM checkpoint_files ORDER BY conversation_id, seq",
+    );
+    const byConversation = new Map<string, CheckpointFile[]>();
+    for (const row of files) {
+      const list = byConversation.get(row.conversation_id) ?? [];
+      try {
+        list.push(JSON.parse(row.data) as CheckpointFile);
+      } catch {
+        // A row that is not the JSON we wrote cannot be restored; skip it.
+      }
+      byConversation.set(row.conversation_id, list);
+    }
+    for (const parent of parents) {
+      const checkpoint: TurnCheckpoint = {
+        conversationId: parent.conversation_id,
+        cwd: parent.cwd,
+        createdAt: Number(parent.created_at),
+        files: byConversation.get(parent.conversation_id) ?? [],
+      };
+      if (parent.head) checkpoint.head = parent.head;
+      if (parent.repos) {
+        try {
+          checkpoint.repos = JSON.parse(parent.repos) as CheckpointRepo[];
+        } catch {
+          // Without the per-repo baselines the restore falls back to `cwd` + `head`.
+        }
+      }
+      this.#checkpoints.set(checkpoint.conversationId, checkpoint);
+    }
+  }
+}
+
+function isCheckpoint(item: unknown): item is TurnCheckpoint {
+  const checkpoint = item as Partial<TurnCheckpoint> | null;
+  // The old loader's rule, plus one: it refused an entry with no id of type string, and an
+  // id that is empty can never be read back by any conversation, so it is not a checkpoint.
+  return typeof checkpoint?.conversationId === "string" && checkpoint.conversationId !== "" && Array.isArray(checkpoint.files);
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Keep the first {@link MAX_COPIED_FILES} files with their content, and the rest as pointers.
+ *
+ * Pure, because the bounds are what decides whether a retry can actually rewind: a turn
+ * that wrote 300 files restores 200 of them and says nothing about the other 100 unless
+ * this rule is right.
+ */
+export function trimCheckpointFiles(files: CheckpointFile[]): CheckpointFile[] {
+  const trimmed: CheckpointFile[] = [];
+  let total = 0;
+  let copied = 0;
+  for (const file of files) {
+    const bytes = storedBytes(file);
+    const kept = file.content !== undefined || file.binary !== undefined;
+    if (kept && (copied >= MAX_COPIED_FILES || total + bytes > MAX_TOTAL_BYTES)) {
+      trimmed.push({ path: file.path, opaque: true });
+      continue;
+    }
+    if (kept) {
+      copied += 1;
+      total += bytes;
+    }
+    trimmed.push(file);
+  }
+  return trimmed;
 }
 
 /**
@@ -246,44 +408,6 @@ function storedBytes(file: CheckpointFile): number {
   return 0;
 }
 
-export async function captureCheckpoint(
-  conversationId: string,
-  cwd: string,
-  files: CheckpointFile[],
-): Promise<TurnCheckpoint> {
-  // Keep the first `MAX_COPIED_FILES` with content; the rest are kept without it.
-  const trimmed: CheckpointFile[] = [];
-  let total = 0;
-  let copied = 0;
-  for (const file of files) {
-    const bytes = storedBytes(file);
-    const kept = file.content !== undefined || file.binary !== undefined;
-    if (kept && (copied >= MAX_COPIED_FILES || total + bytes > MAX_TOTAL_BYTES)) {
-      trimmed.push({ path: file.path, opaque: true });
-      continue;
-    }
-    if (kept) {
-      copied += 1;
-      total += bytes;
-    }
-    trimmed.push(file);
-  }
-
-  const head = await gitRevision(cwd);
-  const repos = await checkpointRepos(trimmed);
-
-  const checkpoint: TurnCheckpoint = {
-    conversationId,
-    cwd,
-    createdAt: Date.now(),
-    ...(head ? { head } : {}),
-    ...(repos.length > 0 ? { repos } : {}),
-    files: trimmed,
-  };
-  checkpoints.set(conversationId, checkpoint);
-  return checkpoint;
-}
-
 export type RestoreResult = { restored: string[]; removed: string[]; skipped: string[] };
 
 /**
@@ -378,7 +502,7 @@ export async function restoreCheckpoint(
   return result;
 }
 
-/** The store's directory, so a checkpoint can be written next to the other runtime data. */
+/** The legacy file's path: the import reads it once, and nothing writes it again. */
 export function checkpointFile(runtimeRoot: string): string {
   return join(runtimeRoot, "checkpoints.json");
 }
