@@ -477,6 +477,39 @@ void main() {
         await tester.pump(const Duration(seconds: 10));
       });
 
+      testWidgets('a long text file scrolls inside the bottom sheet (${p.dark})', (tester) async {
+        final text = [for (var i = 0; i < 120; i++) 'line number $i'].join('\n');
+        final machine = FakeMachine(Uint8List.fromList(utf8.encode(text)));
+        final transfer = _InstantDownload(machine, File('${Directory.systemTemp.path}/fv-scroll-not-written.txt'));
+        await pump(
+          tester,
+          Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showOutputFile(
+                context,
+                file: const OutputFile(path: 'long.txt', name: 'long.txt', kind: OutputFileKind.text, created: true),
+                transfer: transfer,
+              ),
+              child: const Text('open'),
+            ),
+          ),
+          p,
+        );
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+        final first = find.textContaining('line number 0');
+        expect(first, findsOneWidget);
+        final list = find.descendant(of: find.byType(FileViewer), matching: find.byType(Scrollable));
+        final position = tester.state<ScrollableState>(list.first).position;
+        expect(position.pixels, 0);
+        await tester.drag(list.first, const Offset(0, -300));
+        await tester.pumpAndSettle();
+        // The text moved with the finger and the sheet is still open.
+        expect(position.pixels, greaterThan(100));
+        expect(find.byType(FileViewer), findsOneWidget);
+        await tester.pump(const Duration(seconds: 10));
+      });
+
       testWidgets('closing an interrupted file viewer preserves its checkpoint (${p.dark})', (tester) async {
         final transfer = _InterruptedDownload();
         await pump(tester, FileViewer(
