@@ -14,6 +14,10 @@ dependencies:
   # The same icon set as the desktop client.
   hugeicons: ^1.2.0
 
+  # The iOS-style framework widgets (text selection handles, a switch) draw a few glyphs with
+  # it; without the font they render as blank boxes.
+  cupertino_icons: ^1.0.8
+
   # Markdown with tables, code fences and LaTeX (`$…$` / `$$…$$`).
   gpt_markdown: ^1.3.4
 

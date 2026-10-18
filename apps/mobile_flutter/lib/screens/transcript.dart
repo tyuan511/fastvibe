@@ -268,7 +268,7 @@ class _TranscriptViewState extends State<TranscriptView> {
           child: ListView.builder(
             controller: _controller,
             reverse: true,
-            padding: const EdgeInsets.fromLTRB(22, 16, 22, 16),
+            padding: const EdgeInsets.fromLTRB(10, 16, 10, 16),
             itemCount: rows.length + 1,
             itemBuilder: (context, index) {
               // Index 0 of the list is the visual bottom: the spacer.
@@ -614,7 +614,7 @@ class _UserRow extends StatelessWidget {
         onLongPress: () => onLongPress(message),
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxWidth: MediaQuery.sizeOf(context).width * 0.86,
+            maxWidth: MediaQuery.sizeOf(context).width * 0.9,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -706,58 +706,63 @@ class _AssistantRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final drawn = blocks ?? buildBlocks(message);
-    return GestureDetector(
-      onLongPress: () => onLongPress(message),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 680),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            if (turnStart) ...<Widget>[
-              Row(
-                children: <Widget>[
-                  const BrandLogo(size: 17),
-                  const SizedBox(width: 7),
-                  Text(
-                    'FastVibe',
+    // The list is as wide as the composer, so a user's bubble ends where the composer does;
+    // a reply's text is inset by the composer's own padding so the two start together.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: GestureDetector(
+        onLongPress: () => onLongPress(message),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 680),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              if (turnStart) ...<Widget>[
+                Row(
+                  children: <Widget>[
+                    const BrandLogo(size: 17),
+                    const SizedBox(width: 7),
+                    Text(
+                      'FastVibe',
+                      style: TextStyle(
+                        color: palette.muted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+              ],
+              for (var index = 0; index < drawn.length; index++) ...<Widget>[
+                if (index > 0) const SizedBox(height: _blockGap),
+                _block(drawn[index], index == drawn.length - 1),
+              ],
+              if (message.error != null) ...<Widget>[
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 9,
+                  ),
+                  decoration: BoxDecoration(
+                    color: palette.dangerSoft,
+                    borderRadius: BorderRadius.circular(Radii.md),
+                  ),
+                  child: Text(
+                    message.error!,
                     style: TextStyle(
-                      color: palette.muted,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                      color: palette.danger,
+                      fontSize: 14,
+                      height: 20 / 14,
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 12),
-            ],
-            for (var index = 0; index < drawn.length; index++) ...<Widget>[
-              if (index > 0) const SizedBox(height: _blockGap),
-              _block(drawn[index], index == drawn.length - 1),
-            ],
-            if (message.error != null) ...<Widget>[
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 9,
                 ),
-                decoration: BoxDecoration(
-                  color: palette.dangerSoft,
-                  borderRadius: BorderRadius.circular(Radii.md),
-                ),
-                child: Text(
-                  message.error!,
-                  style: TextStyle(
-                    color: palette.danger,
-                    fontSize: 14,
-                    height: 20 / 14,
-                  ),
-                ),
-              ),
+              ],
+              if (onOpenFile != null && !live) _outputFiles(),
+              if (meta != null) _TurnMetaLine(meta: meta!, palette: palette),
             ],
-            if (onOpenFile != null && !live) _outputFiles(),
-            if (meta != null) _TurnMetaLine(meta: meta!, palette: palette),
-          ],
+          ),
         ),
       ),
     );
