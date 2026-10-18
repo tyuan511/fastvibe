@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { Conversation, ConversationSearchHit } from "@shared/types";
+import { stripMemoryCitation } from "../../shared/memory-citation.ts";
 import { isToolImageRef } from "../../shared/tool-image-ref.ts";
 
 type Row = { id: string; parent: string | null; entryId?: string; role: string; text: string };
@@ -157,10 +158,14 @@ function branchHit(rows: Row[], needle: string, snippets?: Map<string, string>):
 }
 
 function messageText(content: unknown): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") return stripMemoryCitation(content);
   if (!Array.isArray(content)) return "";
-  // A picture's reference is a sentence naming its file, not something that was said.
-  return content.flatMap((part) => typeof part === "string" ? [part] : isRecord(part) && part.type === "text" && typeof part.text === "string" && !isToolImageRef(part) ? [part.text] : []).join("\n");
+  // A picture's reference is a sentence naming its file, not something that was said, and the
+  // citation block a memory reply ends with is machine bookkeeping: searching for a rollout id
+  // must not return a snippet from it, since the reader was never shown that id at all.
+  return stripMemoryCitation(content
+    .flatMap((part) => typeof part === "string" ? [part] : isRecord(part) && part.type === "text" && typeof part.text === "string" && !isToolImageRef(part) ? [part.text] : [])
+    .join("\n"));
 }
 
 function snippetAround(text: string, needle: string): string | undefined {

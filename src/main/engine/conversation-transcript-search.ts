@@ -7,6 +7,7 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { relinkDanglingEntries } from "./transcript-file.ts";
+import { stripMemoryCitation } from "../../shared/memory-citation.ts";
 import { isToolImageRef } from "../../shared/tool-image-ref.ts";
 
 export const CONVERSATION_TRANSCRIPT_MAX_FILE_BYTES = 8_000_000;
@@ -230,12 +231,12 @@ function line(
 }
 
 function messageContentText(content: unknown): string {
-  if (typeof content === "string") return cleanText(content);
+  if (typeof content === "string") return cleanText(stripMemoryCitation(content));
   if (!Array.isArray(content)) return "";
   const parts: string[] = [];
   for (const part of content) {
     if (typeof part === "string") {
-      const text = cleanText(part);
+      const text = cleanText(stripMemoryCitation(part));
       if (text) parts.push(text);
       continue;
     }
@@ -243,7 +244,9 @@ function messageContentText(content: unknown): string {
     if (part.type === "text" && typeof part.text === "string") {
       // A picture's reference names a file; it is not text anyone wrote.
       if (isToolImageRef(part)) continue;
-      const text = cleanText(part.text);
+      // The citation block a memory reply ends with is machine bookkeeping, never shown to the
+      // reader, so it must not surface as a hit for a rollout id or a `MEMORY.md:12-14` range.
+      const text = cleanText(stripMemoryCitation(part.text));
       if (text) parts.push(text);
       continue;
     }

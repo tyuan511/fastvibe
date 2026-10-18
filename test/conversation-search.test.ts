@@ -74,3 +74,28 @@ test("scanning a corpus larger than the cache does not evict every warm conversa
   assert.equal((await searchConversationContent("absent-longer", chats as never)).length, 0);
   assert.deepEqual(reads, []);
 });
+
+test("a reply's memory citation block is not searchable text", async (t) => {
+  const { file, conversation } = await fixture(t);
+  const reply = [
+    "Real answer about websocket recovery.",
+    "",
+    "```",
+    "<oai-mem-citation>",
+    "<citation_entries>",
+    "MEMORY.md:12-14|note=[websocket lab]",
+    "</citation_entries>",
+    "<rollout_ids>",
+    "019c6e27-e55b-73d1-87d8-4e01f1f75043",
+    "</rollout_ids>",
+    "</oai-mem-citation>",
+    "```",
+  ].join("\n");
+  await writeFile(file, [row("u", null, "start", "user"), row("a", "u", reply)].join("\n"));
+  // What the reader was shown is searchable …
+  assert.equal((await searchConversationContent("websocket recovery", [conversation as never]))[0]?.entryId, "a");
+  // … and the machine bookkeeping under it, which the reader never saw, is not.
+  assert.deepEqual(await searchConversationContent("rollout_ids", [conversation as never]), []);
+  assert.deepEqual(await searchConversationContent("019c6e27", [conversation as never]), []);
+  assert.deepEqual(await searchConversationContent("websocket lab", [conversation as never]), []);
+});

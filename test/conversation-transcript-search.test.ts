@@ -217,3 +217,32 @@ test("rejects oversized transcripts before parsing them", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a citation block is not searchable, its fenced wrapper neither", () => {
+  const branch = [
+    message("user", null, "user", [{ type: "text", text: "How did the websocket lab go?" }]),
+    message("assistant", "user", "assistant", [{
+      type: "text",
+      text: [
+        "It recovered after the epoch reset.",
+        "",
+        "```",
+        "<oai-mem-citation>",
+        "<citation_entries>",
+        "MEMORY.md:12-14|note=[citation-only-note]",
+        "</citation_entries>",
+        "<rollout_ids>",
+        "019c6e27-e55b-73d1-87d8-4e01f1f75043",
+        "</rollout_ids>",
+        "</oai-mem-citation>",
+        "```",
+      ].join("\n"),
+    }]),
+  ];
+
+  assert.equal(searchConversationTranscript(branch, { query: "epoch reset" }).totalMatches, 1);
+  assert.equal(searchConversationTranscript(branch, { query: "rollout_ids" }).totalMatches, 0);
+  assert.equal(searchConversationTranscript(branch, { query: "019c6e27" }).totalMatches, 0);
+  assert.equal(searchConversationTranscript(branch, { query: "citation-only-note" }).totalMatches, 0);
+  assert.doesNotMatch(JSON.stringify(searchConversationTranscript(branch, { query: "epoch reset", context: 1 })), /oai-mem-citation|MEMORY\.md/);
+});
