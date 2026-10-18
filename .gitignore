@@ -39,3 +39,11 @@ resources/cua-driver/
 # LICENSE and NOTICE stay: distributing the binary requires them (Apache-2.0 §4).
 resources/officecli/*/
 resources/officecli/manifest.json
+
+# The marketing-video workspace: ~700 MB of rendered frames, screen stills, phone
+# recordings and a Remotion project with its own node_modules (14k+ files, and one
+# 188 MB webpack cache pack that GitHub would refuse outright). Everything in it is
+# regenerable from promo/README.md, so it lives on disk and in release artifacts,
+# never in history. Ignore the whole directory: it is a scratch workspace for a
+# deliverable, not source the app builds.
+promo/
