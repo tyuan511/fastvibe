@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 // conversation list rides on, and that deserves a test that loads the real module.
 import { uiText } from "./ui-text.ts";
 import { ensureScratchWorkspace, scratchWorkspace } from "./paths.ts";
-import { readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { extraFolders } from "../../shared/project-folders.ts";
 import type { Conversation, Project, WorkspaceSnapshot } from "@shared/types";
@@ -25,6 +25,13 @@ export class ConversationCatalog {
   #activeId: string | undefined;
   #writeTimer: NodeJS.Timeout | null = null;
   /**
+   * Every conversation id and project folder this process has held. A flush adopts what
+   * is on disk and not in here — someone else wrote it — and leaves out what is in here
+   * and no longer in memory, because that is a delete this process made.
+   */
+  #knownIds = new Set<string>();
+  #knownProjects = new Set<string>();
+  /**
    * Told after every change, with the snapshot as it now stands.
    *
    * Set after construction rather than taken as a constructor argument, because
@@ -37,6 +44,7 @@ export class ConversationCatalog {
     this.#file = file;
     this.#scratchRoot = scratchRoot;
     this.#read();
+    this.#noteKnown();
   }
 
   snapshot(): WorkspaceSnapshot {
@@ -394,8 +402,17 @@ export class ConversationCatalog {
         if (legacy || needsProjectMigration || scratchMigrated) this.#write();
         return;
       }
-    } catch {
-      // empty catalog
+    } catch (error) {
+      // A missing file is a first run. Anything else (a truncated write, a stray edit) is
+      // a catalog we are about to replace with an empty one on the next write, so keep
+      // what was there where a person can still find it.
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        try {
+          copyFileSync(this.#file, `${this.#file}.corrupt-${Date.now()}`);
+        } catch {
+          // best effort: failing to keep a copy must not stop the app from starting
+        }
+      }
     }
   }
 
@@ -527,14 +544,60 @@ export class ConversationCatalog {
    * state older than the one on disk.
    */
   #flush(): void {
+    this.#adoptFromDisk();
     const payload: CatalogFile = {
       version: 2,
       activeId: this.#activeId,
       projects: this.#projects,
       conversations: this.#items,
     };
-    writeFileSync(this.#file, `${JSON.stringify(payload, null, 2)}\n`);
+    // Written beside and renamed: a plain `writeFileSync` truncates first, so a process
+    // reading at that instant (another instance, or one killed mid-write) sees a prefix.
+    const temp = `${this.#file}.${process.pid}.tmp`;
+    writeFileSync(temp, `${JSON.stringify(payload, null, 2)}\n`);
+    renameSync(temp, this.#file);
     this.onChange?.(this.snapshot());
+  }
+
+  /**
+   * Take in conversations and projects another process wrote since this one last looked.
+   *
+   * Every flush writes the whole file from memory, so two processes on one data directory
+   * (the installed app next to a `pnpm dev`, which is allowed to skip the single-instance
+   * lock) overwrite each other: whichever flushes last keeps only the chats it knew about,
+   * and the others vanish from the sidebar while their transcripts stay on disk. Merging
+   * on write turns that last-writer-wins into a union. Edits to a chat both processes hold
+   * still go to the later writer; this protects what would otherwise be dropped.
+   */
+  #adoptFromDisk(): void {
+    // Whatever is held right now is ours, whether or not the file has seen it yet: a chat
+    // deleted later must not come back from the copy this very process wrote earlier.
+    this.#noteKnown();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(this.#file, "utf8"));
+    } catch {
+      return; // nothing readable to merge; the write below replaces it
+    }
+    if (!isRecord(parsed)) return;
+    const items = (Array.isArray(parsed.conversations) ? parsed.conversations : []).filter(isConversation);
+    const projects = Array.isArray(parsed.projects) ? parsed.projects.filter(isProject) : [];
+    const have = new Set(this.#items.map((item) => item.id));
+    for (const item of items) {
+      if (this.#knownIds.has(item.id) || have.has(item.id)) continue;
+      this.#items.push(withCreatedAt(item));
+    }
+    const haveProjects = new Set(this.#projects.map((project) => project.cwd));
+    for (const project of projects) {
+      if (this.#knownProjects.has(project.cwd) || haveProjects.has(project.cwd)) continue;
+      this.#projects.push(sanitizeProjectFolders(withProjectCreatedAt(project, this.#items)));
+    }
+    this.#noteKnown();
+  }
+
+  #noteKnown(): void {
+    for (const item of this.#items) this.#knownIds.add(item.id);
+    for (const project of this.#projects) this.#knownProjects.add(project.cwd);
   }
 }
 

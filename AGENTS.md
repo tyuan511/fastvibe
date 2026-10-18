@@ -591,6 +591,19 @@ A client's own snapshot is not skipped (no `except: origin`): the originator alr
 the same state as its call's result, so applying it again changes nothing, and threading an
 origin down through the engine to the catalog would buy only that.
 
+### 目录落盘是合并，不是整份覆盖（`ConversationCatalog.#flush`）
+
+`conversations.json` 每次都从内存整份写出，而同一个数据目录上可以同时有两个进程：安装版旁边再开一个 `pnpm dev`
+（开发态跳过单实例锁）。整份覆盖意味着后写的一方只留下它自己认识的会话，另一方新建的会话从侧栏消失，
+转写文件却还在磁盘上——用户看到的是「正在运行的会话不见了」。
+
+- **落盘前先吸收磁盘上的新会话。** `#adoptFromDisk` 把文件里有、而本进程从未持有过的会话和项目并进内存再写；
+  「持有过」记在 `#knownIds` / `#knownProjects`，所以本进程自己删掉的会话不会被读回来。两边都有的会话仍是后写者赢。
+- **写入是临时文件 + rename**，另一个进程读到的不会是被截断的前缀。
+- **读不出来的目录先留一份副本**（`conversations.json.corrupt-<时间戳>`），再从空开始；以前是静默清空，下一次写入就把原文件盖掉了。
+- 这挡不住两个进程同时*运行*同一个会话（转写会被交错追加）；开发实例和安装版共用数据目录本身仍是风险。
+- 测试：`test/conversation-catalog-merge.test.ts`，用同一个文件上的第二个 `ConversationCatalog` 当作第二个进程。
+
 ### 多文件夹项目
 
 A project can own several local folders. `Project.cwd` stays the primary folder and the project's identity; `folders` holds the rest, in order. A missing `folders` is a single-folder project. Remote (`kind: "remote"`) projects cannot gain extra folders.
