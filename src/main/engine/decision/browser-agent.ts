@@ -37,8 +37,10 @@ export type ObservedPage = DecisionObservation & { fingerprint: string };
 export type BrowserControl = {
   observe(): Promise<ObservedPage>;
   /**
-   * Scoped freshness for click/select, full semantic freshness otherwise: `true` when
-   * the page is still the one decided on, otherwise `false` or a reason for the trace.
+   * Is this still the page the decision was made from? Scoped to what the decision depends
+   * on: with an `action`, the document and that one control; without one, the document — a
+   * DONE or a scroll is not invalidated by a live region elsewhere. `true` when the answer
+   * is yes, otherwise a reason for the trace.
    */
   fresh(page: ObservedPage, action?: ObservedAction): Promise<boolean | string>;
   act(action: ObservedAction, page: ObservedPage, text?: string): Promise<void>;
@@ -185,7 +187,8 @@ export async function runBrowserAgent(options: BrowserAgentOptions): Promise<Age
     let textMs: number | undefined;
     try {
       if (action.kind === "fill") {
-        const fresh = await control.fresh(page);
+        // The value is generated from the field and its context, so only those have to hold.
+        const fresh = await control.fresh(page, action);
         if (fresh !== true) throw new StalePage(typeof fresh === "string" ? fresh : "Page changed before text generation.");
         const context = fieldContext(goal, action, page, steps);
         const key = JSON.stringify(context);

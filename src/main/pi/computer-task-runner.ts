@@ -1,6 +1,6 @@
 import { StalePage, type BrowserControl, type ObservedPage } from "../engine/decision/browser-agent";
-import type { ObservedAction } from "../engine/decision/browser-snapshot";
-import { windowObservation, type WindowObservation, type WindowStateInfo } from "../engine/decision/computer-observation";
+import { freshnessScope, type ObservedAction } from "../engine/decision/browser-snapshot";
+import { windowFreshness, windowObservation, type WindowObservation, type WindowStateInfo } from "../engine/decision/computer-observation";
 import { uiText } from "../engine/ui-text";
 import type { ComputerRequest } from "@shared/types";
 import { requestComputer } from "./cua-bridge";
@@ -44,18 +44,17 @@ function computerControl(pid: number, windowId: string): BrowserControl {
       return (await read()).observation;
     },
     async fresh(page, action) {
+      const node = freshnessScope(action) === "target" && typeof action?.node === "number" ? action.node : undefined;
       try {
         const now = (await read()).observation;
-        if (action && action.node !== undefined && (action.kind === "click" || action.kind === "select")) {
-          return JSON.stringify(now.guards[String(action.node)] ?? null) === JSON.stringify(page.guards[String(action.node)] ?? null);
-        }
-        return JSON.stringify(now.marker) === JSON.stringify(page.marker);
+        return windowFreshness(page, now, node) ?? true;
       } catch {
-        return false;
+        return "window could not be read";
       }
     },
     async act(action: ObservedAction, page, text) {
-      if ((await control.fresh(page, action)) !== true || !latest) throw new StalePage(uiText("窗口内容已变化", "The window changed"));
+      const fresh = await control.fresh(page, action);
+      if (fresh !== true || !latest) throw new StalePage(typeof fresh === "string" ? fresh : "window changed");
       const current = latest;
       if (action.kind === "wait") {
         await new Promise((resolve) => setTimeout(resolve, 300));

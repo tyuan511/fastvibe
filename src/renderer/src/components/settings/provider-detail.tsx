@@ -40,7 +40,12 @@ import { OAuthExtraUsageNote } from "./oauth-extra-usage-note";
 import { GatewayBalance } from "./gateway-balance";
 import { EMPTY_ADD, PROVIDER_API_ITEMS, PROVIDER_API_SHORT, type AddMode, type AddState, type PickerState } from "./providers-settings-types";
 import { OpenAIQuota } from "./openai-quota";
-import { ProviderTest } from "./provider-test";
+import {
+  ModelCheckButton,
+  ModelCheckDetails,
+  useModelChecks,
+  type ModelCheckState,
+} from "./provider-test";
 import {
   orderProviderModels,
   providerModelLabel,
@@ -77,6 +82,9 @@ function ProviderModelRow({
   reorderLabel,
   handleProps,
   overlay = false,
+  check,
+  checkDisabled = false,
+  onCheck,
 }: {
   model: ProviderModel;
   onEdit: () => void;
@@ -84,6 +92,9 @@ function ProviderModelRow({
   reorderLabel: string;
   handleProps?: ButtonHTMLAttributes<HTMLButtonElement>;
   overlay?: boolean;
+  check?: ModelCheckState;
+  checkDisabled?: boolean;
+  onCheck?: () => void;
 }): JSX.Element {
   return (
     <div className={cn("flex items-center gap-2 px-2 py-2", overlay && "rounded-lg border border-border bg-card px-3 shadow-lg")}>
@@ -116,6 +127,8 @@ function ProviderModelRow({
           <Button size="icon-xs" variant="ghost" onClick={onRemove} aria-label={i18n.t("settings:providers.removeModel") as string}>
             <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
           </Button>
+          {/* Rightmost, because it is the one control that asks the provider a question. */}
+          {onCheck ? <ModelCheckButton state={check} disabled={checkDisabled} onRun={onCheck} /> : null}
         </>
       )}
     </div>
@@ -127,12 +140,18 @@ function SortableProviderModelRow({
   onEdit,
   onRemove,
   reorderLabel,
+  check,
+  checkDisabled,
+  onCheck,
 }: {
   model: ProviderModel;
   disabled: boolean;
   onEdit: () => void;
   onRemove: () => void;
   reorderLabel: string;
+  check?: ModelCheckState;
+  checkDisabled: boolean;
+  onCheck: () => void;
 }): JSX.Element {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: model.id,
@@ -157,7 +176,12 @@ function SortableProviderModelRow({
         onRemove={onRemove}
         reorderLabel={reorderLabel}
         handleProps={{ ...attributes, ...listeners }}
+        check={check}
+        checkDisabled={checkDisabled}
+        onCheck={onCheck}
       />
+      {/* The verdict stays with the row: a run that is still going has a spinner there. */}
+      {check?.result && !check.running ? <ModelCheckDetails result={check.result} onEdit={onEdit} /> : null}
     </div>
   );
 }
@@ -201,6 +225,7 @@ export function ProviderDetail({
   const [saving, setSaving] = useState(false);
   const [modelOrderOverride, setModelOrderOverride] = useState<string[] | null>(null);
   const [draggingModelId, setDraggingModelId] = useState<string | null>(null);
+  const { checks, run: runCheck } = useModelChecks(provider);
 
   const modelList = useMemo(
     () => orderProviderModels(provider.models, modelOrderOverride ?? provider.modelOrder),
@@ -454,7 +479,6 @@ export function ProviderDetail({
 
       <OpenAIQuota provider={provider} />
 
-      <ProviderTest provider={provider} onEditModel={onEditModel} />
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label className="text-xs font-normal text-muted-foreground">{t("providers.models")}</Label>
@@ -487,6 +511,9 @@ export function ProviderDetail({
                     onEdit={() => onEditModel(model)}
                     onRemove={() => void removeModel(model.id)}
                     reorderLabel={t("providers.reorderModel", { name: providerModelLabel(model) })}
+                    check={checks[model.id]}
+                    checkDisabled={saving || !connected}
+                    onCheck={() => runCheck(model)}
                   />
                 ))}
               </div>

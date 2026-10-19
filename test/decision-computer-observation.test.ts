@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildBrowserStep } from "../src/main/engine/decision/browser-questions.ts";
-import { normalRole, windowObservation } from "../src/main/engine/decision/computer-observation.ts";
+import { normalRole, windowFreshness, windowObservation } from "../src/main/engine/decision/computer-observation.ts";
 import { assertValidQuestions } from "../src/main/engine/decision/protocol.ts";
 
 /**
@@ -59,4 +59,41 @@ test("the observation builds a valid browser.step request, and a changed value c
   assert.doesNotThrow(() => assertValidQuestions(step.request.questions));
   const changed = windowObservation({ ...state, elements: state.elements.map((e) => (e.token === "t1" ? { ...e, value: "Buy milk" } : e)) });
   assert.notEqual(changed.observation.fingerprint, observation.fingerprint);
+});
+
+test("a window is fresh for what the decision depends on, and says what broke it", () => {
+  const { observation } = windowObservation(state);
+  const save = observation.actions.find((action) => action.label === "Save")!;
+  const node = save.node!;
+
+  // A clock, a progress line, terminal output: the window is alive, the controls are the
+  // same ones, and the action would still land where the decision meant it.
+  const chatty = windowObservation({ ...state, texts: [...state.texts, "12:01:33"] }).observation;
+  assert.equal(windowFreshness(observation, chatty, node), null);
+  assert.equal(windowFreshness(observation, chatty, undefined), null);
+
+  // Another field the app wrote into does not move the numbering either.
+  const typed = windowObservation({ ...state, elements: state.elements.map((e) => (e.token === "t1" ? { ...e, value: "Buy milk" } : e)) }).observation;
+  assert.equal(windowFreshness(observation, typed, node), null);
+
+  // A control inserted ahead of the target: node N addresses a different element that may
+  // look exactly alike, so the decision is about a window that is not this one.
+  const shifted = windowObservation({
+    ...state,
+    elements: [...state.elements.slice(0, 3), { token: "t8", role: "AXButton", label: "Add" }, ...state.elements.slice(3)],
+  }).observation;
+  assert.equal(windowFreshness(observation, shifted, node), "window controls 8→9, target name");
+  // A verdict about the window, not a control, does not care how the list is ordered.
+  assert.equal(windowFreshness(observation, shifted, undefined), null);
+
+  // The target itself changed, and the window became another window.
+  const renamed = windowObservation({ ...state, elements: state.elements.map((e) => (e.token === "t4" ? { ...e, label: "Send" } : e)) }).observation;
+  assert.equal(windowFreshness(observation, renamed, node), "window control 4 changed, target name");
+  const other = windowObservation({ ...state, windowTitle: "Reminder" }).observation;
+  assert.equal(windowFreshness(observation, other, node), "window title New Reminder→Reminder");
+  assert.equal(windowFreshness(observation, other, undefined), "window title New Reminder→Reminder");
+
+  // The control the decision chose is gone.
+  const removed = windowObservation({ ...state, elements: state.elements.filter((e) => e.token !== "t4") }).observation;
+  assert.match(windowFreshness(removed, observation, node) ?? "", /target no longer in the window|window controls/);
 });

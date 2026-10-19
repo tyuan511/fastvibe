@@ -984,11 +984,8 @@
   "noProfilesDesc": "支持 Chrome、Edge、Brave、Chromium、Arc 和 Opera。"
  },
  "providerTest": {
-  "title": "模型自检",
-  "model": "测试模型",
-  "description": "发送两个小请求检查回答和工具调用，按供应商计费。",
-  "running": "检测中…",
-  "run": "开始检测",
+  "check": "发送两个小请求检测回答与工具调用，按供应商计费。",
+  "checking": "检测中…",
   "passed": "回答与工具调用均正常",
   "partial": "回答正常，工具调用尚未通过",
   "failed": "模型检测失败",

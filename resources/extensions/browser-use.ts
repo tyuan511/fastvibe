@@ -220,7 +220,7 @@ export default function browserUse(pi: ExtensionAPI): void {
       name: "browser_task",
       label: "浏览器任务",
       description:
-        "快速浏览器执行器：在当前标签页里由决策模型逐步点击、输入、选择、滚动，直到完成目标或无法继续。把用户的完整目标原文一次交给它（例如“填写并提交这个表单：姓名 X、电话 Y……”），不要拆成小步，也不要写“然后报告……”——它只负责操作，不负责回答。返回执行过的每一步和最终屏幕（url、title、可见文字、元素）；由你读最终屏幕回答用户，信息不够时再用 browser_snapshot。它不会打开新网址：需要时先用 browser_open。",
+        "快速浏览器执行器：在当前标签页里由决策模型逐步点击、输入、选择、滚动，直到完成目标或无法继续。把用户的完整目标原文一次交给它（例如“填写并提交这个表单：姓名 X、电话 Y……”），不要拆成小步，也不要写“然后报告……”——它只负责操作，不负责回答。返回执行过的每一步和最终屏幕（url、title、可见文字、元素）；由你读最终屏幕回答用户，信息不够时再用 browser_snapshot。它不会打开新网址：需要时先用 browser_open。status 为 unstable 或 blocked 且 steps 为空时，把目标缩小成一步再调一次，不要原样重试。",
       promptSnippet: "让决策模型在浏览器里连续执行一个目标",
       parameters: Type.Object({
         goal: Type.String({ description: "用户的完整目标原文（或尚未完成的部分）" }),

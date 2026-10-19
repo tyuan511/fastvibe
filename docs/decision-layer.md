@@ -490,10 +490,17 @@ type DecisionBackend =
 2. **日期、时间类输入框**视为可输入字段：原版会忽略它们，导致表单的送达时间字段不可见，循环反复往相邻字段里输入。
 3. **附带离视口最近的 60 个屏幕外控件**，标记 `offscreen`，并补一条规则说明它们可以直接操作，执行前自动滚进视口。原版只观察屏幕内，目标在首屏以下时 Jev 会直接判 BLOCKED（试点中 8 次失败里有 6 次）。翻页类控件（`rel=next`、“More”“下一页”“下一章”等）不论距离远近都会提供；规则里也写明，需要的控件不在列表中且页面还能滚动时，应当滚动而不是判 BLOCKED。HN 翻两页的任务由此从“第一步 BLOCKED”变为 2 步完成，循环 2.9 s，全程 6.9 s（主模型直接操作为 16.3 s）。
 4. **循环不负责作答**：jev-ultrafast 只执行，结果由外部核验；我们由主模型读最终页面回答。
+5. **新鲜度只校验这个决策真正依赖的东西**（`freshnessScope`）。原版把整页语义状态（视口文字、全部控件、滚动偏移、所有字段值）当 gate，于是任何有活跃区域的页面（相对时间、票数、会自刷新的编辑器）永远“已过期”：决策被一次次丢弃，循环 0 步就结束并报 `unstable`（界面文案「页面一直在变化」）。实测 8 次这样结束的 `browser_task` 全部 0 步，其中 3 次发生在本应用自己的页面上，原因都是“说不出哪里变了”的两个兜底字符串。现在按决策依赖分级：
+   - **aim 到某个控件**（click / select / **fill**）→ 该文档 + 该控件的 guard（角色、名称、值、状态、href、周边文字）。滚动偏移与其他字段的值不再参与：目标脚本会把它滚回视口，相邻字段被自动填充或被刷新的 token 也不等于目标变了。
+   - **不 aim 控件**（DONE / BLOCKED / scroll / wait）→ 只比文档身份（同一文档、同一地址、同一视口尺寸），一段 `DOCUMENT_SCRIPT` 读取，不再整页重跑观察脚本。
+   - **判断即解释**：`describeParts` 说不出哪一处变了，就算还是同一页。字节级比较不能当 gate——两处值经过的序列化路径不同（`undefined` 与空洞在两边不完全对称），差在字节而不在页面状态时，循环只会带着一个没人能解释的失败结束。
+   页面到底变了没有仍照旧记录（`pageFingerprint` 供等待收敛与“无进展”判定用），只是不再拿它拦下动作。真正的兜底还是执行前的目标脚本（重算矩形、命中测试、遮挡则不动）与 `decision-replace` 的焦点检查。
+   承认的代价：目标控件自己的 guard 盖不住的那部分页面变化不再拦动作——例如“输入页面上显示的优惠码”而优惠码在表单区之外、刚被刷新。这类目标仍会被执行；相比之下，整页相等这道门在真实表单上几乎从不通过（实测 0 步失败），它挡住的坏动作少于它阻止的好动作。
 
 ### 7.3 控制层（Electron）
 
-`BrowserControl` 接口只有三个方法：`observe` / `fresh` / `act`，由侧边栏 webview 实现：
+`BrowserControl` 接口只有三个方法：`observe` / `fresh` / `act`，由侧边栏 webview 实现；`computer_task` 用同一接口驱动桌面窗口（§7.9）：
+- **`fresh(page, action?)` 只查这个决策依赖的部分**：带 `action` 时是文档 + 该控件，不带时是文档本身（见 §7.2 第 5 条）。返回 `true`，或一句能说清变了什么的原因。
 - 观察和校验通过 guest 的 `executeJavaScript` 执行上面的脚本。
 - 点击用 `sendInputEvent`（mouseDown/mouseUp）；输入先确认焦点已落在可编辑元素上，再 `selectAll` + `insertText`。焦点未到位时调用 `insertText` 会让渲染进程卡死。日期、时间字段插入无效时，改为直接设值并触发 input/change 事件。
 - 滚动用 mouseWheel。注意 Electron 的 deltaY 符号与 CDP 相反。
@@ -508,10 +515,13 @@ type DecisionBackend =
 
 // 结果
 {
-  status: "done" | "blocked" | "no_progress" | "handed_off" | "exhausted" | "cancelled" | "missing_value";
-  detail?: string;
+  status: "done" | "blocked" | "no_progress" | "unstable" | "handed_off" | "exhausted" | "cancelled" | "missing_value" | "error";
+  detail?: string;                     // unstable 时是新鲜度校验说不出哪里变了的那句话
   steps: Array<{ operation: string; action: string; text?: string; page_changed: boolean | null }>;
+  decisions: number;                   // 问了决策模型几次
+  staleDecisions: number;              // 其中几次因为页面过期被丢弃
   page: { url; title; text; elements };   // 最终屏幕，与读取工具同形
+  backend: string; ms: number;
 }
 ```
 
@@ -530,7 +540,7 @@ G1、G2 已修。G3–G8（严格 ref、pageKey、视口、select、滚动、等
 computer use 和 browser use 是同一类任务：每一步都从窗口里一组明确的控件中选一个。所以 `computer_task` 复用同一个循环（`runBrowserAgent`）和同一个执行器（`decision-task-runner.ts`：决策后端、文字模型、撤销、结果格式），只换控制层：
 
 - **观察**：`computer-observation.ts` 把 Cua Driver 的 `window_state` 映射成同一种观察格式。按钮、链接、复选框、菜单项，以及带 AXPress 的元素是可点击目标；文本框、搜索框是可输入目标；安全文本框（密码框）整体排除。复选框的状态取自 value 和 selected，静态文本作为“可见文字”，窗口里有滚动区域时提供滚动控制项。为此 `window_state` 的输出补上了 `actions`、`selected` 和无 token 的静态文本 `texts`。
-- **执行**：全部通过 `requestComputer`，所以“电脑操控”开关、macOS 授权和驱动自己的审批照常生效。token 只对一次读取有效，所以每个动作前都会重新读取窗口，内容确认没变后，用这次读取的 token 执行。输入的做法是先点击字段，再全选（cmd/ctrl+A），然后输入。
+- **执行**：全部通过 `requestComputer`，所以“电脑操控”开关、macOS 授权和驱动自己的审批照常生效。token 只对一次读取有效，所以每个动作前都会重新读取窗口，确认没变后，用这次读取的 token 执行。校验按决策依赖分级（同 §7.2 第 5 条）：aim 到控件时比**窗口标题 + 控件列表 + 该控件的 guard**，不 aim 控件时只比标题——控件编号是按列表位置数出来的，所以列表本身必须参与比较（一个元素插在前面就会把动作送到同名的另一个按钮上）；窗口的静态文本不参与，否则终端、时钟、进度条会让一个窗口永远“已变化”。输入的做法是先点击字段，再全选（cmd/ctrl+A），然后输入。
 - **现状**：映射逻辑有单测，控制层和工具只经过类型检查，**还没有在真实桌面上运行过**。开发会话没有 macOS 辅助功能和录屏授权，也没有下载驱动二进制；需要在已授权的 FastVibe 里实测。
 
 ### 7.10 批量决策：`batch_decide`

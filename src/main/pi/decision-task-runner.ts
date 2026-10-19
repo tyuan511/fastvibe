@@ -31,6 +31,11 @@ export type DecisionTaskResult = {
   status: AgentResult["status"] | "error";
   detail?: string;
   steps: Array<{ operation: string; action: string; text?: string | null; page_changed: boolean | null }>;
+  /** How many times the decision model was asked, and how many of those answers were
+   *  thrown away because the page had moved by the time the action was due. Without the
+   *  second number, 「页面一直在变化」 is a verdict with no evidence in it. */
+  decisions: number;
+  staleDecisions: number;
   page?: { url: string; title: string; text: string; elements: Array<{ index: string; label: string; role?: string; value?: string }> };
   backend: string;
   ms: number;
@@ -101,8 +106,8 @@ export async function runDecisionTask(request: DecisionTaskRequest, target: Deci
   const started = Date.now();
   const config = readDecisionConfig(getFastVibePaths().decisionFile);
   const backend = await backendFor(config);
-  if (typeof backend === "string") return { status: "error", detail: backend, steps: [], backend: config.kind, ms: 0 };
-  if (!dependencies) return { status: "error", detail: `${target.kind} is not installed`, steps: [], backend: backend.id, ms: 0 };
+  if (typeof backend === "string") return { status: "error", detail: backend, steps: [], decisions: 0, staleDecisions: 0, backend: config.kind, ms: 0 };
+  if (!dependencies) return { status: "error", detail: `${target.kind} is not installed`, steps: [], decisions: 0, staleDecisions: 0, backend: backend.id, ms: 0 };
   const deps = dependencies;
   const conversationId = request.conversationId;
 
@@ -115,7 +120,7 @@ export async function runDecisionTask(request: DecisionTaskRequest, target: Deci
 
   try {
     const first = await target.control.observe().catch(() => null);
-    if (!first) return { status: "error", detail: target.missing, steps: [], backend: backend.id, ms: Date.now() - started };
+    if (!first) return { status: "error", detail: target.missing, steps: [], decisions: 0, staleDecisions: 0, backend: backend.id, ms: Date.now() - started };
     const result = await runBrowserAgent({
       goal: request.goal,
       control: target.control,
@@ -126,7 +131,7 @@ export async function runDecisionTask(request: DecisionTaskRequest, target: Deci
     });
     return summarize(result, backend.id, started);
   } catch (error) {
-    return { status: "error", detail: error instanceof Error ? error.message : String(error), steps: [], backend: backend.id, ms: Date.now() - started };
+    return { status: "error", detail: error instanceof Error ? error.message : String(error), steps: [], decisions: 0, staleDecisions: 0, backend: backend.id, ms: Date.now() - started };
   } finally {
     run.finish();
     running.delete(stop);
@@ -140,6 +145,8 @@ function summarize(result: AgentResult, backend: string, started: number): Decis
     status: result.status,
     ...(result.detail ? { detail: result.detail } : {}),
     steps: result.steps.map((step) => ({ operation: step.operation, action: step.action, text: step.text ?? null, page_changed: step.page_changed })),
+    decisions: result.decisions,
+    staleDecisions: result.staleDecisions,
     page: {
       url: result.finalPage.url,
       title: result.finalPage.title,

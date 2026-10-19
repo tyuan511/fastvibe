@@ -1,5 +1,16 @@
 import { pageFingerprint, StalePage, type BrowserControl, type ObservedPage } from "../engine/decision/browser-agent";
-import { describeMarkerChange, describeScopedChange, guardScript, MARKER_SCRIPT, OBSERVE_SCRIPT, settleScript, targetScript, type ObservedAction } from "../engine/decision/browser-snapshot";
+import {
+  describeDocumentChange,
+  describeScopedChange,
+  DOCUMENT_SCRIPT,
+  freshnessScope,
+  guardScript,
+  OBSERVE_SCRIPT,
+  settleScript,
+  stablePageKey,
+  targetScript,
+  type ObservedAction,
+} from "../engine/decision/browser-snapshot";
 import { uiText } from "../engine/ui-text";
 import { requestBrowser } from "./browser-bridge";
 import { browserTasksEnabled, runDecisionTask, type DecisionTaskRequest, type DecisionTaskResult } from "./decision-task-runner";
@@ -38,16 +49,17 @@ function webviewControl(conversationId: string | undefined, tabId: string | unde
       throw new Error(uiText("页面一直没有稳定下来", "The page did not settle"));
     },
     async fresh(page, action) {
+      // Only what this decision depends on: the control it aims at and the document it is
+      // in. The whole page is not — see `freshnessScope`.
+      const scope = freshnessScope(action);
+      const target = scope === "target" && typeof action?.node === "number" ? action.node : undefined;
       try {
-        if (action && (action.kind === "click" || action.kind === "select") && typeof action.node === "number") {
-          const current = (await call("decision-eval", { script: guardScript(action.node) })) as [unknown, unknown] | null;
-          const expected: [unknown, unknown] = [page.page_key, page.guards[String(action.node)] ?? null];
-          if (JSON.stringify(current) === JSON.stringify(expected)) return true;
-          return describeScopedChange(expected, current) ?? "target context changed";
+        if (target !== undefined) {
+          const current = (await call("decision-eval", { script: guardScript(target) })) as [unknown, unknown] | null;
+          return describeScopedChange([stablePageKey(page.page_key), page.guards[String(target)] ?? null], current) ?? true;
         }
-        const marker = await call("decision-eval", { script: MARKER_SCRIPT });
-        if (JSON.stringify(marker) === JSON.stringify(page.marker)) return true;
-        return describeMarkerChange(page.marker, marker) ?? "page changed";
+        const current = await call("decision-eval", { script: DOCUMENT_SCRIPT });
+        return describeDocumentChange(stablePageKey(page.page_key), current) ?? true;
       } catch (error) {
         return `freshness check failed: ${error instanceof Error ? error.message : String(error)}`;
       }

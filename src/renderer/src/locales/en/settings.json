@@ -986,11 +986,8 @@
   "noProfilesDesc": "Supports Chrome, Edge, Brave, Chromium, Arc and Opera."
  },
  "providerTest": {
-  "title": "Model check",
-  "model": "Model",
-  "description": "Sends two small requests to check replies and tool calls. Provider charges apply.",
-  "running": "Checking…",
-  "run": "Run check",
+  "check": "Sends two small requests to check replies and tool calls. Provider charges apply.",
+  "checking": "Checking…",
   "passed": "Replies and tool calls passed",
   "partial": "Reply passed; tool calls not yet verified",
   "failed": "Model check failed",

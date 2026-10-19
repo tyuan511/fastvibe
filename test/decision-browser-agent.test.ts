@@ -26,12 +26,16 @@ function fakeControl(options: { staleOnce?: boolean; changes?: boolean } = {}) {
   let onResults = false;
   let staleOnce = options.staleOnce ?? false;
   const acted: string[] = [];
+  // Which page the loop asked about, and whether it asked about a control too: the graded
+  // freshness contract the control layer implements (see `freshnessScope`).
+  const asked: Array<string | null> = [];
   const control: BrowserControl = {
     async observe() {
       if (onResults) return page("https://x.test/results", [], "Results for " + typed);
       return page("https://x.test/", [{ ...search, value: typed }, go]);
     },
-    async fresh() {
+    async fresh(_page, action) {
+      asked.push(action ? action.id : null);
       return true;
     },
     async act(action, _page, text) {
@@ -45,7 +49,7 @@ function fakeControl(options: { staleOnce?: boolean; changes?: boolean } = {}) {
       if (action.id === "e2") onResults = true;
     },
   };
-  return { control, acted };
+  return { control, acted, asked };
 }
 
 /** Answers `operation` (and the matching target) from a script of [operation, target] pairs. */
@@ -70,7 +74,7 @@ const FAST = { intervalMs: 1, stableMs: 2, quietMs: 3, maxMs: 20 };
 const run = (backend: DecisionBackend) => new DecisionRuntime({ backend }).startRun({ budgetKey: "t", deadlineAt: Date.now() + 60_000 });
 
 test("type, click, done: each step executes once and the value comes from the helper", async () => {
-  const { control, acted } = fakeControl();
+  const { control, acted, asked } = fakeControl();
   const backend = scripted([["TYPE_TEXT", "1"], ["CLICK", "2"], ["DONE"]]);
   const texts: unknown[] = [];
   const result = await runBrowserAgent({
@@ -89,6 +93,9 @@ test("type, click, done: each step executes once and the value comes from the he
   assert.deepEqual(texts, ["Search"]);
   assert.deepEqual(result.steps.map((s) => [s.operation, s.page_changed]), [["TYPE_TEXT", true], ["CLICK", true]]);
   assert.equal(result.finalPage.url, "https://x.test/results");
+  // The fill asks after the field it types into; every other check asks about the page
+  // alone. Requiring a whole live page to hold still is what ended runs having done nothing.
+  assert.deepEqual(asked, [null, "e1", null, null, null], "freshness is graded by what the decision depends on");
 });
 
 test("a stale page is re-observed and re-decided, and the generated value is reused", async () => {
@@ -193,11 +200,11 @@ test("after a click, the next decision waits for a single-page app to finish swa
 });
 
 test("a page that never holds still stops after five stale decisions, with the reason", async () => {
-  const { control, acted } = fakeControl();
+  const { control } = fakeControl();
   const unstable: BrowserControl = {
     ...control,
     async fresh() {
-      return "page scrollY 0→3";
+      return "url";
     },
     async act(action, page) {
       const fresh = await unstable.fresh(page, action);
@@ -207,7 +214,6 @@ test("a page that never holds still stops after five stale decisions, with the r
   const backend = scripted([["CLICK", "2"]]);
   const result = await runBrowserAgent({ goal: "g", control: unstable, run: run(backend), policy: acceptValid("t"), settle: FAST, fieldText: async () => "x" });
   assert.equal(result.status, "unstable");
-  assert.equal(result.detail, "page scrollY 0→3");
+  assert.equal(result.detail, "url");
   assert.equal(result.decisions, 5, "not the whole 120-decision budget");
-  assert.deepEqual(acted, []);
 });

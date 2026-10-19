@@ -52,9 +52,13 @@ export type DecisionObservation = {
   text: string;
   scroll: { y: number; height: number };
   actions: ObservedAction[];
-  /** Full semantic state; any change means the page is not the one decided on. */
-  marker: unknown;
-  /** Document, URL, viewport and safe form state. */
+  /**
+   * A window's full semantic state, for its fingerprint. A web page does not report one:
+   * nothing gates on it any more (see `freshnessScope`), and re-serialising every control
+   * on the page per observation was pure overhead.
+   */
+  marker?: unknown;
+  /** Document, URL, scroll offsets, viewport and every field's value. */
   page_key: unknown;
   /** Per node: identity, role, name, value, state and nearby context. */
   guards: Record<string, unknown>;
@@ -112,6 +116,11 @@ export const OBSERVE_SCRIPT = String.raw`(() => {
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
     [...document.querySelectorAll('input,textarea,select')].filter(safe)
       .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly])];
+  // What an action is aimed at: this document, at this address, at this size. The scroll
+  // offsets are not part of it (the target script scrolls the control back into view), and
+  // neither is another field's value — a form that refreshes a token or autofills a
+  // neighbouring input has not moved the control the decision chose.
+  cache.docKey=()=>[performance.timeOrigin,location.href,innerWidth,innerHeight];
   cache.guard=e=>{
     if (!e?.isConnected || !visible(e)) return null;
     const scope=e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
@@ -173,9 +182,6 @@ export const OBSERVE_SCRIPT = String.raw`(() => {
   const text=words.join('\n').slice(0,6000), height=document.documentElement.scrollHeight;
   const page_key=cache.pageKey(), guards={};
   for (const a of actions) if (!(a.node in guards)) guards[a.node]=cache.guard(cache.nodes.get(a.node));
-  const semantics=actions.map(({rect,...action})=>action);
-  const marker=[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
-    document.title,text,semantics,page_key[6]];
   const omitted_actions=Math.max(0,actions.length-250);
   actions.splice(250);
   actions.forEach((a,i)=>a.id='e'+(i+1));
@@ -183,15 +189,46 @@ export const OBSERVE_SCRIPT = String.raw`(() => {
   if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
   actions.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
   return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
-    scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
+    scroll:{y:scrollY,height},actions,page_key,guards,omitted_actions};
 })()`;
 
-/** The observe script's `marker` only, for the full semantic freshness comparison. */
-export const MARKER_SCRIPT = `(() => { const state=${OBSERVE_SCRIPT}; return state?.marker ?? null; })()`;
+/**
+ * What the document itself still is: the same one, at the same address, at the same size.
+ *
+ * This is the whole of what a decision that does not aim at a control depends on — a
+ * terminal DONE/BLOCKED, a relative scroll, a wait. It is a four-field read, not a second
+ * observation, because re-running the observe script to answer "did we navigate?" both
+ * costs a full page walk and mints element ids for whatever transient node (a tooltip, a
+ * spinner) happened to be on screen at that instant.
+ */
+export const DOCUMENT_SCRIPT = `(() => [performance.timeOrigin,location.href,innerWidth,innerHeight])()`;
 
-/** `[pageKey, guard(node)]` for a scoped click/select freshness check. */
+/** `[docKey, guard(node)]` for the scoped freshness check. */
 export function guardScript(node: number): string {
-  return `(() => { const c=window.__fastvibeDecision; return c ? [c.pageKey(),c.guard(c.nodes.get(${Math.trunc(node)}))] : null; })()`;
+  return `(() => { const c=window.__fastvibeDecision; return c ? [c.docKey(),c.guard(c.nodes.get(${Math.trunc(node)}))] : null; })()`;
+}
+
+/**
+ * Whether a decision still describes the page it was made from.
+ *
+ * `target` when the decision aims at one control — click, select, or the field a fill
+ * types into — so the check is that document plus that control; `document` otherwise, in
+ * which case only the document is checked. Nothing compares the whole page any more: the
+ * marker holds the viewport's text and every control on the page, so a live region — a
+ * relative timestamp, a vote count, an editor that re-renders itself — makes it differ
+ * forever, and a loop that gates on it throws away every decision and ends having done
+ * nothing. Whether the page changed is still measured — by `pageFingerprint`, for the
+ * settling wait and the no-progress stop. It simply is not a gate on acting.
+ */
+export type FreshScope = "document" | "target";
+
+export function freshnessScope(action?: ObservedAction): FreshScope {
+  return action && typeof action.node === "number" && ["click", "select", "fill"].includes(action.kind) ? "target" : "document";
+}
+
+/** The observation's `page_key` reduced to what `docKey()` reports. */
+export function stablePageKey(pageKey: unknown): unknown {
+  return Array.isArray(pageKey) ? [pageKey[0], pageKey[1], pageKey[4], pageKey[5]] : pageKey;
 }
 
 /**
@@ -252,26 +289,46 @@ export function settleScript(action: ObservedAction): string {
 
 /**
  * Why a freshness check failed, in words — so a run that keeps re-deciding can say which
- * part of the page would not hold still (a ticking scroll offset, a resizing viewport, a
- * live region next to the target) instead of only "stale".
+ * part of the page would not hold still (a new address, a resizing viewport, a live region
+ * next to the target) instead of only "stale".
  *
- * The positions follow the observe script: `pageKey` is [document, url, scrollX, scrollY,
- * width, height, form values], a guard is [node, role, name, value, checked, selectedIndex,
- * readOnly, disabled, aria-disabled, aria-expanded, aria-checked, aria-selected, href,
- * nearby text], and the marker is [document, url, scrollX, scrollY, width, height, title,
- * text, actions, form values].
+ * These are also the verdict: `fresh` calls the page stale only when one of them can say
+ * what moved. A second, byte-exact comparison cannot be the gate on top of them, because it
+ * can fail on values every named part of the page reports as the same state — an `undefined`
+ * where the other read left a hole, a trailing slot one serialization keeps and another
+ * drops. The run then gives up having done nothing, with nothing about the page to point at:
+ * eight recorded runs ended 「页面一直在变化」 on zero steps, each on one of the two
+ * fallbacks these functions produce when nothing can be named, three of them on this app's
+ * own page.
+ *
+ * The positions follow the observe script: `docKey` is [document, url, width, height], a
+ * guard is [node, role, name, value, checked, selectedIndex, readOnly, disabled,
+ * aria-disabled, aria-expanded, aria-checked, aria-selected, href, nearby text].
  */
-const PAGE_KEY_PARTS = ["document", "url", "scrollX", "scrollY", "viewport width", "viewport height", "form values"];
+const DOC_KEY_PARTS = ["document", "url", "viewport width", "viewport height"];
 const GUARD_PARTS = ["node", "role", "name", "value", "checked", "selected option", "read-only", "disabled", "aria-disabled", "aria-expanded", "aria-checked", "aria-selected", "href", "nearby text"];
-const MARKER_PARTS = ["document", "url", "scrollX", "scrollY", "viewport width", "viewport height", "title", "visible text", "actions", "form values"];
 
-function describeParts(names: string[], before: unknown, after: unknown): string[] {
-  if (!Array.isArray(before) || !Array.isArray(after)) return JSON.stringify(before) === JSON.stringify(after) ? [] : ["whole state"];
+/** One page state said two ways: absent, `null`, or empty. */
+function isEmptySlot(value: unknown): boolean {
+  return value === undefined || value === null || value === "";
+}
+
+function sameSlot(before: unknown, after: unknown): boolean {
+  return JSON.stringify(before) === JSON.stringify(after) || (isEmptySlot(before) && isEmptySlot(after));
+}
+
+/**
+ * Why two snapshots of one shape differ, named by their parts — or nothing, when no part
+ * can account for it. Callers use that as the verdict, not just as its explanation: a
+ * difference nothing can name is a serialization artifact, not a page that moved.
+ */
+export function describeParts(names: string[], before: unknown, after: unknown): string[] {
+  if (!Array.isArray(before) || !Array.isArray(after)) return sameSlot(before, after) ? [] : ["whole state"];
   const changed: string[] = [];
   for (let index = 0; index < Math.max(before.length, after.length, names.length); index++) {
     const a = before[index];
     const b = after[index];
-    if (JSON.stringify(a) === JSON.stringify(b)) continue;
+    if (sameSlot(a, b)) continue;
     const name = names[index] ?? `part ${index}`;
     const short = (value: unknown) => {
       const text = typeof value === "string" ? value : JSON.stringify(value);
@@ -282,19 +339,22 @@ function describeParts(names: string[], before: unknown, after: unknown): string
   return changed;
 }
 
-/** What differs between a click/select target's page key and guard then and now. */
-export function describeScopedChange(before: [unknown, unknown], after: [unknown, unknown] | null): string | null {
-  if (!after) return "target no longer on the page";
-  const changes = [
-    ...describeParts(PAGE_KEY_PARTS, before[0], after[0]).map((part) => `page ${part}`),
-    ...(after[1] === null ? ["target hidden or detached"] : describeParts(GUARD_PARTS, before[1], after[1]).map((part) => `target ${part}`)),
-  ];
+/** What differs between the document a decision was made from and the one on screen now. */
+export function describeDocumentChange(before: unknown, after: unknown): string | null {
+  const changes = describeParts(DOC_KEY_PARTS, before, after);
   return changes.length ? changes.join(", ") : null;
 }
 
-/** What differs between two full semantic markers. */
-export function describeMarkerChange(before: unknown, after: unknown): string | null {
-  if (after === null || after === undefined) return "page is navigating";
-  const changes = describeParts(MARKER_PARTS, before, after);
+/**
+ * What differs between the snapshot a click/select/fill was decided from and the page now.
+ * `null` means the control is still the same one in the same document — which is also the
+ * verdict, not just its explanation (see `describeParts`).
+ */
+export function describeScopedChange(before: [unknown, unknown], after: [unknown, unknown] | null): string | null {
+  if (!after) return "target no longer on the page";
+  const changes = [
+    ...describeParts(DOC_KEY_PARTS, before[0], after[0]).map((part) => `page ${part}`),
+    ...(after[1] === null ? ["target hidden or detached"] : describeParts(GUARD_PARTS, before[1], after[1]).map((part) => `target ${part}`)),
+  ];
   return changes.length ? changes.join(", ") : null;
 }
