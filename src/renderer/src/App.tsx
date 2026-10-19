@@ -27,7 +27,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { CommandPalette } from "@/components/layout/command-palette";
 import { TitleBar } from "@/components/layout/title-bar";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
-import { isRemoteRef, shouldFollowCatalogActive } from "@/lib/remote-project";
+import { isRemoteRef } from "@/lib/remote-project";
 import { PluginsPage } from "@/components/plugins/plugins-page";
 import { TasksPage } from "@/components/schedules/tasks-page";
 import { createConversationRefresh } from "@/lib/conversation-refresh";
@@ -44,31 +44,24 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
-import { attachmentPromptSuffix, attachmentsToImages, pastedTextAttachmentName } from "@/lib/attachments";
+import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
 import {
   engine,
   getModels,
   getStatus,
-  newSession,
-  onConversationReady,
-  onEvent,
-  onStatus,
   respondPermission,
   start,
 } from "@/lib/engine-client";
 import { dismissBootLoader } from "@/lib/boot-loader";
 import { i18n } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
-import { resolvePath } from "@/lib/workspace-path";
 import { shouldQueueSubmission } from "@/lib/composer-race";
-import { readDrafts, useDraftPersistence } from "@/lib/draft-persistence";
+import { readDrafts } from "@/lib/draft-persistence";
 
 import { SETTINGS_SECTIONS, type SectionId } from "@/components/settings/settings-sections";
 import { isNarrowViewport, setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
 import type { DeleteConversationsResult } from "@/components/settings/archived-settings";
-import { useConversationWorking, useSessionStore, visibleQueue, working } from "@/stores/session";
+import { useConversationWorking, useSessionStore, visibleQueue } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useTranscriptNavigation } from "@/stores/transcript-navigation";
 import { useDagStore, useDagSync } from "@/stores/dag";
@@ -82,17 +75,13 @@ import type {
   ChatMessage,
   ConversationDeleteResult,
   ConversationOpenResult,
-  EngineModel,
-  FastVibeModel,
-  PermissionRequest,
-  QueuedPrompt,
   QueuedPromptPreview,
   SkillInfo,
   SlashCommand,
   WorkspaceSnapshot,
 } from "@shared/types";
 import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
-import { TASKS_PATH, conversationIdFromHash, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
+import { TASKS_PATH, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
 import { archiveConversations, archivedIdList, restoreConversations, useArchivedIds } from "@/stores/archive";
@@ -326,6 +315,8 @@ export function App(): JSX.Element {
   const togglePane = useSidePaneStore((state) => state.toggle);
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
+  const suggestions = useSessionStore((state) => state.suggestions);
+  const replySuggestionsOn = settings.replySuggestions !== false;
   const sidebarCollapsed = useSidebarCollapsed();
   // A phone has no width to give the sidebar or the right pane; the first overlays
   // (`CollapsiblePanel overlay`) and the second is simply not there.
@@ -1708,6 +1699,7 @@ export function App(): JSX.Element {
           disabled={!canChat}
           streaming={streaming}
           working={conversationWorking}
+          suggestion={canChat && replySuggestionsOn && activeId ? suggestions[activeId] : undefined}
           placeholder={canChat ? t("composer.ready") : modelsLoaded && !hasModel ? t("composer.needModel") : t("composer.preparing")}
           conversationId={activeId ?? undefined}
           models={models}

@@ -1,81 +1,12 @@
 import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { CheckmarkCircle02Icon, Copy01Icon, LinkSquare02Icon, QrCode01Icon } from "@hugeicons/core-free-icons";
+import { CheckmarkCircle02Icon, Copy01Icon, QrCode01Icon } from "@hugeicons/core-free-icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { QrCode } from "@/components/ui/qr-code";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { isReachableFromAnotherDevice } from "@/lib/address-reachability";
 import { cn } from "@/lib/utils";
 import { remoteQrValue } from "@shared/remote-address";
-
-/**
- * The ways an address gets onto another device: copied, opened, or scanned.
- *
- * Every settings row that shows an address draws these — the one under 允许远程连接 and
- * 内网穿透's public URL — so they live here rather than twice. Three icons and no words:
- * the address is already on screen beside them, and a row of one-line settings has no
- * space for two labelled buttons meaning 复制 and 打开. The two that are not self-evident
- * name themselves on hover.
- *
- * `value` is the connection address for all three. Only the QR adds optional name
- * metadata, so the phone can fill its connection label as well as its address.
- */
-export function AddressActions({
-  value,
-  name,
-  className,
-}: {
-  value: string;
-  name?: string;
-  className?: string;
-}): JSX.Element {
-  const { t } = useTranslation("settings");
-
-  return (
-    <span className={cn("inline-flex items-center gap-1.5", className)}>
-      <CopyAction value={value} />
-      {/*
-       * A code is only offered when another device could actually open the address.
-       *
-       * The row under 允许远程连接 shows whatever the server is listening on — with
-       * 局域网访问 off that is the reported loopback address, which is where the server is,
-       * not where a client goes. A code for it scans perfectly and then fails with
-       * 连接被拒绝 on the phone, so offering one would be worse than offering nothing. The
-       * address itself is still worth copying and still opens on this machine, so those
-       * two stay.
-       *
-       * Derived from the address rather than passed in by each caller (`lib/
-       * address-reachability.ts`): a flag would be one more place to be wrong, and the
-       * first version of this component had two of them and drew two icons.
-       */}
-      {isReachableFromAnotherDevice(value) ? <QrAction value={value} name={name} /> : null}
-      {/*
-       * `nativeButton={false}` because the rendered element is an anchor, not a button:
-       * Base UI otherwise keeps the native button semantics it assumes and warns, and the
-       * element ends up claiming to be something it is not. An anchor is what this has to
-       * be — the desktop turns a real link into `shell.openExternal` through
-       * `setWindowOpenHandler`, and the browser client navigates in a new tab.
-       */}
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <a
-              href={value}
-              target="_blank"
-              rel="noreferrer"
-              className={ICON_CLASS}
-              aria-label={t("remote.openAddress")}
-            />
-          }
-        >
-          <HugeiconsIcon strokeWidth={2} icon={LinkSquare02Icon} className="size-3.5" />
-        </TooltipTrigger>
-        <TooltipContent>{t("remote.openAddress")}</TooltipContent>
-      </Tooltip>
-    </span>
-  );
-}
 
 const ICON_CLASS = "text-muted-foreground/70 hover:text-foreground";
 

@@ -158,8 +158,11 @@ if (resourcePersistenceKey) {
   } catch { /* preview storage is optional */ }
 }
 
+// `?folders=2` gives the preview project a second folder, which is what turns the file
+// tree's root into a card per project folder — the state `?pane=files` cannot otherwise
+// show, and where the card's chevron has to be accounted for by the child indent.
 const fixtureProjects = (websiteData?.projects ?? PROJECTS).map((project) =>
-  params.get("resources") === "sample" && project.cwd === PREVIEW_CWD
+  (params.has("folders") || params.get("resources") === "sample") && project.cwd === PREVIEW_CWD
     ? { ...project, folders: [PREVIEW_CWD + "-services"] } : project,
 );
 // `?new=1` opens on an empty draft in the preview project, so the new-conversation hero
@@ -185,7 +188,13 @@ const fixtureStats = websiteData?.stats ?? STATS;
 /** The model / thinking chips' picks, so a switch in the preview reads back like the engine's. */
 const mockSessionOverrides: { model?: { provider: string; id: string }; thinkingLevel?: string } = {};
 function mockSession(conversationId?: string): EngineSessionState {
-  return { ...fixtureSession, ...mockSessionOverrides, conversationId: conversationId ?? fixtureActiveId } as EngineSessionState;
+  return {
+    ...fixtureSession,
+    // `?suggest=1`: a 回复推荐 is on offer, so the composer's placeholder and its Tab hint can be seen.
+    ...(params.get("suggest") === "1" ? { suggestion: "帮我把这次改动补上单元测试" } : {}),
+    ...mockSessionOverrides,
+    conversationId: conversationId ?? fixtureActiveId,
+  } as EngineSessionState;
 }
 const fixtureCwd = websiteData?.cwd ?? PREVIEW_CWD;
 const fixtureActiveId = websiteData?.activeId ?? newDraft?.id ?? "conv-theme";
@@ -354,7 +363,7 @@ const status: EngineStatus = { state: "ready", cwd: fixtureCwd };
 
 const APP_INFO: AppInfo = {
   version: "0.1.0",
-  engineVersion: "1.2.0",
+  engineVersion: "1.3.0",
   officeVersion: "v1.0.157",
   userData: "/Users/dev/Library/Application Support/FastVibe",
   runtimeRoot: "/Users/dev/Library/Application Support/FastVibe/runtime/engine",

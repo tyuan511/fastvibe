@@ -115,6 +115,8 @@
  },
  "chat": {
   "title": "Chat",
+  "replySuggestions": "Reply suggestions",
+  "replySuggestionsDesc": "After a reply, guess your next message and show it in the input; press Tab to use it",
   "codemode": "Code mode",
   "codemodeDesc": "Let the model write one script that calls many tools and gets only its output back",
   "toolSearch": "Tool search",
@@ -161,7 +163,7 @@
   "syncFailed": "Sync failed: {{error}}"
  },
  "defaultModel": {
-  "title": "Default model for new chats",
+  "title": "Chat model",
   "desc": "New conversations start on this model and reasoning level; a single chat can still be switched.",
   "emptyHint": "No models yet — add or connect a provider below first.",
   "followLast": "Follow last used",
@@ -438,7 +440,6 @@
   "enable": "Enable",
   "delete": "Delete provider",
   "apiFormat": "API format",
-  "apiFormatHint": "Default protocol for this provider; a single model can override it.",
   "apiKey": "API key",
   "keySaved": "Saved — enter a new key to update",
   "pasteKey": "Paste API key",
@@ -450,7 +451,7 @@
   "modelDetail": "Model details",
   "reorderModel": "Reorder {{name}}",
   "removeModel": "Remove model",
-  "noModelsAdd": "No models yet",
+  "noModelsAdd": "No models yet — add some above",
   "noModelsConnect": "Connect to choose models",
   "addModel": "Add models",
   "ccSwitchTitle": "Import from CC Switch",
@@ -458,6 +459,7 @@
   "ccSwitchReading": "Reading CC Switch…",
   "ccSwitchMissing": "CC Switch database not found ({{path}}).",
   "ccSwitchEmpty": "Nothing to import; only custom providers with API keys are taken.",
+  "notConnected": "Not connected",
   "modelCount": "{{count}} models",
   "cancel": "Cancel",
   "importCount": "Import {{count}} providers",
@@ -958,12 +960,8 @@
   "noProfilesDesc": "Supports Chrome, Edge, Brave, Chromium, Arc and Opera."
  },
  "providerTest": {
-  "runModel": "Test {{name}}",
-  "title": "Model check",
-  "model": "Model",
-  "description": "Sends two small requests to check replies and tool calls. Provider charges apply.",
-  "running": "Checking…",
-  "run": "Run check",
+  "check": "Sends two small requests to check replies and tool calls. Provider charges apply.",
+  "checking": "Checking…",
   "passed": "Replies and tool calls passed",
   "partial": "Reply passed; tool calls not yet verified",
   "failed": "Model check failed",

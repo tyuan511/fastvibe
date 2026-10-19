@@ -195,6 +195,12 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
         useSessionStore.getState().setQueueState(event.queue as import("@shared/types").ConversationQueueState);
         return;
       }
+      // 回复推荐 is per conversation and independent of which chat is on screen: a guess for
+      // a background chat is kept so it is there when that chat is opened.
+      if (event.type === "reply_suggestion" && conversationId) {
+        useSessionStore.getState().setSuggestion(conversationId, typeof event.text === "string" && event.text ? event.text : null);
+        return;
+      }
       if (event.type === "queue_delivered") {
         useSessionStore.getState().applyEvent(event);
         return;

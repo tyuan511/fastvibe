@@ -92,8 +92,6 @@ export type TurnCheckpoint = {
   files: CheckpointFile[];
 };
 
-const checkpoints = new Map<string, TurnCheckpoint>();
-
 /**
  * The turn's file checkpoint, in the shared database.
  *

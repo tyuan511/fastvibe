@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,
-  Cancel01Icon,
   Copy01Icon,
   FileNotFoundIcon,
   Folder01Icon,
@@ -11,7 +10,6 @@ import {
   LockIcon,
   RefreshIcon,
 } from "@hugeicons/core-free-icons";
-import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
@@ -26,39 +24,6 @@ import { DiffView } from "./diff-view";
 import { OfficeFrame, UnsupportedFile } from "./office-frame";
 import { isRemoteRef } from "@/lib/remote-project";
 import { SelectionActionBar } from "./selection-action-bar";
-
-export function PreviewPanel({
-  preview,
-  onClose,
-}: {
-  preview: FilePreview;
-  onClose: () => void;
-}): JSX.Element {
-  const { t } = useTranslation("chat");
-  return (
-    <aside className="flex w-[min(28rem,42%)] shrink-0 flex-col border-l border-border bg-background">
-      <div className="flex h-12 items-center gap-2 border-b border-border px-3">
-        <div className="min-w-0 flex-1 truncate text-sm font-medium">{preview.name}</div>
-        {preview.kind !== "error" && !isRemoteRef(preview.path) ? (
-          <IconButton
-            size="icon-xs"
-            variant="ghost"
-            label={t("preview.reveal")}
-            onClick={() => {
-              void window.fastvibe.workspace.reveal(preview.path);
-            }}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
-          </IconButton>
-        ) : null}
-        <IconButton size="icon-xs" variant="ghost" label={t("preview.close")} onClick={onClose}>
-          <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} />
-        </IconButton>
-      </div>
-      <PreviewSurface preview={preview} />
-    </aside>
-  );
-}
 
 export function previewText(preview: FilePreview): string | undefined {
   switch (preview.kind) {

@@ -1,5 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, protocol, safeStorage, screen, session, shell } from "electron";
-import type { WebContents } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, safeStorage, shell } from "electron";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
@@ -12,12 +11,10 @@ import { startModelsDevRefresh } from "./engine/models-dev-refresh";
 import { updateModelsDevSnapshot } from "./engine/models-dev-update";
 import {
   applyNativeTheme,
-  clearAppSettings,
   paintWindows,
   readAppSettings,
-  writeAppSettings,
 } from "./engine/app-settings";
-import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
+import { configureFastVibeUserData, getFastVibePaths } from "./engine/paths";
 import { closeDatabases, openDatabase } from "./engine/db";
 import { presentNotification, readNotificationSettings } from "./engine/notifications";
 import { readAgentConfig } from "./engine/runtime-config";
@@ -34,11 +31,10 @@ import { applyShellPathAsync } from "./engine/shell-path";
 import { applyShellLocale } from "./engine/shell-locale";
 import { applyOfficeCliEnv } from "./engine/office-cli";
 import { stopOfficeWatches } from "./engine/office-watch";
-import { exportLogs, initLogger, log, writeRendererLog } from "./engine/logger";
+import { initLogger, log } from "./engine/logger";
 import { applyKeepAwake, clearRunningConversations, setConversationRunning } from "./engine/keep-awake";
 import { createNetworkProxy } from "./engine/network-proxy";
 import {
-  getFileIconMapping,
   registerFileIconProtocol,
   registerFileIconScheme,
 } from "./engine/file-icons";
@@ -46,7 +42,7 @@ import { registerMediaProtocol } from "./engine/media-protocol";
 import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./updater";
 import { registerAccount } from "./account";
 import { PiProcessManager } from "./pi/process-manager";
-import { applyAppIcon, createDesktopWindow, windowOrigin } from "./desktop-window";
+import { applyAppIcon, createDesktopWindow } from "./desktop-window";
 import { registerDesktopIpc } from "./ipc/desktop-handlers";
 import { registerDagIpc } from "./ipc/dag-handlers";
 import { registerScheduleIpc } from "./ipc/schedule-handlers";
@@ -62,16 +58,11 @@ import { APP_CAPABILITIES, conversationScope } from "@shared/app-protocol";
 import { wireElectronAppTransport } from "./transport/electron";
 import type { RemoteHostConnectionActivity, RemoteHostProfile, RemoteHostConnectionState, RemoteTransferProgress, SshErrorCode } from "@shared/remote-host";
 import { stopBrowserCdp } from "./engine/browser-cdp";
-import { attachBrowserRenderer, guardGuestPopups, installBrowserGlobal, respondBrowserRequest } from "./pi/browser-bridge";
+import { guardGuestPopups, installBrowserGlobal } from "./pi/browser-bridge";
 import {
-  computerPermissions,
   installComputerGlobal,
-  listComputerApps,
-  openComputerSettings,
-  requestComputerPermissions,
-  startComputerDrag,
 } from "./pi/cua-bridge";
-import { cancelGrantFlow, grantFlowState, startGrantFlow } from "./pi/computer-grant-flow";
+import { cancelGrantFlow } from "./pi/computer-grant-flow";
 import { syncScheduleTray, disposeScheduleTray } from "./schedule-tray";
 
 app.setName("FastVibe");
@@ -416,38 +407,6 @@ function refreshModelsDev(): Promise<AppModelsDevInfo> {
     modelsDevInflight = null;
   });
   return modelsDevInflight;
-}
-
-
-
-/**
- * Channels the renderer *sends* rather than *invokes*: no reply, so they are wired
- * with `ipcMain.on`. They are in the same table as everything else because the remote
- * transport has no such distinction — it is an Electron detail, not a method's nature.
- */
-const SEND_ONLY = new Set<string>([Ipc.browserResponse, Ipc.appLog]);
-
-/** The window that asked, in the shape a handler reads (`ipc/registry.ts`). */
-function contextFor(event: { sender: WebContents }): CallerContext {
-  return {
-    kind: "window",
-    window: BrowserWindow.fromWebContents(event.sender),
-    origin: windowOrigin(event.sender.id),
-  };
-}
-
-/**
- * Route a renderer call by the remote ids it already carries. There is intentionally no
- * "currently connected SSH host": a local payload stays in the local registry, while a
- * namespaced conversation/project resolves one exact App Server. The response is put
- * back into the same opaque namespace before it reaches the renderer.
- */
-async function dispatchForWindow(
-  channel: string,
-  payload: unknown,
-  context: CallerContext,
-): Promise<unknown> {
-  return gateway.dispatch(channel, payload, context);
 }
 
 /**

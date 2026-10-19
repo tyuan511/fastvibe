@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { formatDownloads, packageName, PluginCard, typeLabel } from "@/components/plugins/plugin-card";
+import { packageName, PluginCard, typeLabel } from "@/components/plugins/plugin-card";
 import { PluginDialog, type PluginDialogTarget } from "@/components/plugins/plugin-dialog";
 import { cn } from "@/lib/utils";
 import type { ExtensionInfo, ExtensionPackage, MarketPackage, MarketPackagePage, MarketPackageQuery } from "@shared/types";

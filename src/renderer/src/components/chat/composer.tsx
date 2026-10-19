@@ -7,6 +7,7 @@ import { FileIcon } from "@/components/file-icon";
 import { IconButton } from "@/components/icon-button";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { isTouchOnly } from "@/lib/platform";
 import { engine } from "@/lib/engine-client";
@@ -257,6 +258,7 @@ export function Composer({
   streaming,
   working,
   placeholder,
+  suggestion,
   conversationId,
   models,
   model,
@@ -313,6 +315,12 @@ export function Composer({
    */
   working: boolean;
   placeholder?: string;
+  /**
+   * 回复推荐: a guess at the next message. Shown as the placeholder while the box is empty
+   * and idle, and Tab writes it in — never sent on its own, and never competing with a
+   * draft: anything typed or attached hides it.
+   */
+  suggestion?: string;
   models: FastVibeModel[];
   model?: { provider: string; id: string };
   thinkingLevel?: string;
@@ -409,6 +417,8 @@ export function Composer({
   const handoff = useExtensionStatusValue(conversationId, "handoff");
   const notice = readOnly ? undefined : handoff;
   const locked = disabled || Boolean(notice);
+  const suggested =
+    suggestion && !value && !streaming && !readOnly && !locked && attachments.length === 0 ? suggestion : undefined;
   const [histIndex, setHistIndex] = useState<number | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
@@ -579,6 +589,15 @@ export function Composer({
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     if (event.nativeEvent.isComposing || event.key === "Process") return;
+
+    // Tab takes the offered suggestion. Only on an empty box with no modifier: Shift+Tab
+    // and Ctrl+Tab keep moving focus, and the palettes below own Tab while they are open.
+    if (event.key === "Tab" && suggested && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      event.preventDefault();
+      handleChange(suggested, suggested.length);
+      requestAnimationFrame(() => textareaRef.current?.setSelectionRange(suggested.length, suggested.length));
+      return;
+    }
 
     if (slash.length > 0) {
       if (event.key === "ArrowDown") {
@@ -1027,22 +1046,32 @@ export function Composer({
           </div>
         ) : null}
 
-        <Textarea
-          ref={textareaRef}
-          rows={1}
-          value={value}
-          disabled={locked || readOnly}
-          placeholder={notice ?? (!readOnly && streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder"))}
-          className={cn(
-            "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent dark:disabled:bg-transparent",
-            attachments.length > 0 ? "pt-2" : "pt-3.5",
-          )}
-          onChange={(event) => handleChange(event.target.value, event.target.selectionStart)}
-          onKeyDown={handleKeyDown}
-          onKeyUp={(event) => setCaret(event.currentTarget.selectionStart)}
-          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
-          onPaste={handlePaste}
-        />
+        <div className="relative">
+          <Textarea
+            ref={textareaRef}
+            rows={1}
+            value={value}
+            disabled={locked || readOnly}
+            placeholder={suggested ?? notice ?? (!readOnly && streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder"))}
+            className={cn(
+              "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent dark:disabled:bg-transparent",
+              attachments.length > 0 ? "pt-2" : "pt-3.5",
+              // Room for the Tab hint, which leads the line.
+              suggested && "pl-14",
+            )}
+            onChange={(event) => handleChange(event.target.value, event.target.selectionStart)}
+            onKeyDown={handleKeyDown}
+            onKeyUp={(event) => setCaret(event.currentTarget.selectionStart)}
+            onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
+            onPaste={handlePaste}
+          />
+          {suggested ? (
+            // Pointer-transparent: it names the key, it is not a button (touch has no Tab).
+            <Kbd className="pointer-events-none absolute top-4 left-4" aria-hidden="true">
+              Tab
+            </Kbd>
+          ) : null}
+        </div>
 
         <div className="flex items-center gap-1 px-2.5 pb-2.5">
           {readOnly ? null : (

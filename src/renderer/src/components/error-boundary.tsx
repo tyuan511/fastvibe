@@ -1,4 +1,4 @@
-import { Component, type ErrorInfo, type JSX, type ReactNode } from "react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
 import { i18n } from "@/lib/i18n";
 import { logError } from "@/lib/logger";
 import { dismissBootLoader } from "@/lib/boot-loader";

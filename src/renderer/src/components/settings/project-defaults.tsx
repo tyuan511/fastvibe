@@ -1,19 +1,19 @@
-import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type EngineModel, type FastVibeModel, type GatewayKind, type Project, type ProjectModelDefault, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
+import { type EngineModel, type FastVibeModel, type Project, type ProjectModelDefault } from "@shared/types";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import { useSettingsStore } from "@/stores/settings";
 import { useSessionStore } from "@/stores/session";
+import { SettingsRow } from "./settings-group";
 
 /**
  * What an install with no per-project default reads. One object, not a `{}` per render:
@@ -71,17 +71,20 @@ export function ProjectDefaultsSection({ models }: { models: FastVibeModel[] }):
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium">{t("projectDefaults.title")}</p>
-          <p className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">{t("projectDefaults.desc")}</p>
-        </div>
-        <Button type="button" variant="ghost" size="sm" className="shrink-0" onClick={() => setOpen(true)}>
-          {t("projectDefaults.configuredCount", { count: configured.length })}
-          <span className="text-muted-foreground">·</span>
-          {t("projectDefaults.manage")}
-        </Button>
-      </div>
+      <SettingsRow
+        title={t("projectDefaults.title")}
+        description={t("projectDefaults.desc")}
+        control={
+          <div className="flex items-center gap-2.5">
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {t("projectDefaults.configuredCount", { count: configured.length })}
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
+              {t("projectDefaults.manage")}
+            </Button>
+          </div>
+        }
+      />
 
       <DialogContent className="grid-rows-[auto_minmax(0,1fr)] w-[min(88vw,40rem)] max-w-[calc(100%-2rem)] h-[36rem] max-h-[calc(100vh-2rem)] overflow-hidden sm:max-w-[min(88vw,40rem)]">
         <DialogHeader>

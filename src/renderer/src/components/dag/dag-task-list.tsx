@@ -1,9 +1,8 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { dagProgress, dagTaskRows } from "@shared/dag-view";
+import { dagTaskRows } from "@shared/dag-view";
 import type { DagNode } from "@shared/dag";
 import { DagStatusIcon } from "@/components/dag-status-icon";
-import { useDagStore } from "@/stores/dag";
 
 /** Narrow screens read an ownership tree; dependencies are links in the node detail. */
 export function DagTaskList({ nodes, onSelect, limit }: { nodes: DagNode[]; onSelect: (node: DagNode) => void; limit?: number }) {
@@ -19,17 +18,4 @@ export function DagTaskList({ nodes, onSelect, limit }: { nodes: DagNode[]; onSe
       </span>
     </button>)}
   </div>;
-}
-
-export function DagMobileSummary({ conversationId }: { conversationId: string | null }) {
-  const { t } = useTranslation("sidepane");
-  const graph = useDagStore((state) => conversationId ? state.graphs[conversationId] : undefined);
-  if (!conversationId || !graph?.nodes.length) return null;
-  const progress = dagProgress(graph.nodes);
-  return <button type="button" onClick={() => useDagStore.getState().openViewer(conversationId)} aria-label={t("dag.openTasks")}
-    className="flex min-h-11 shrink-0 items-center gap-2 border-b border-border/60 bg-card px-4 py-2 text-left text-xs">
-    <span className="font-medium">{t("dag.title")}</span>
-    <span className="flex-1 text-muted-foreground">{t("dag.progress", { done: progress.completed, total: progress.total })}</span>
-    {progress.attention ? <span className="text-warning">{t("dag.attention", { count: progress.attention })}</span> : null}
-  </button>;
 }

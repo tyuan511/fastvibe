@@ -485,7 +485,7 @@ export function SidePaneFiles({
                         else next.add(root);
                         return next;
                       });
-                    }} className="mx-1 mt-1 first:mt-0">
+                    }} className="chat-tree-card mx-1 mt-1 first:mt-0">
                       <CollapsibleTrigger title={root} render={<Button variant="ghost" className="h-8 w-full justify-start gap-2 bg-muted/60 px-2 text-sm font-medium text-foreground" />}>
                         <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className={cn("size-3 shrink-0 text-muted-foreground", open && "rotate-90")} />
                         <FileIcon name={folderName(root)} kind="folder" expanded={open} />

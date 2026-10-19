@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import { MessageGroup } from "@/components/ui/message";
@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import { transcriptDisplay } from "@/lib/transcript-display";
 import { useTranscriptNavigation } from "@/stores/transcript-navigation";
-import type { ChatAttachment, ChatMessage } from "@shared/types";
+import type { ChatMessage } from "@shared/types";
 import { SelectionActionBar } from "./selection-action-bar";
 import { NewSessionHero } from "./new-session";
 import { TurnRail, type TurnMarker } from "./turn-rail";

@@ -2,7 +2,6 @@ import {
   app,
   BrowserWindow,
   dialog,
-  screen,
   session,
   shell,
 } from "electron";
