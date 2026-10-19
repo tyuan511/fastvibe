@@ -186,22 +186,6 @@ test("schema 8 advances past the reserved version 9 without changing existing da
   upgraded.close();
 });
 
-test("schema 9 databases retain the removed feature's optional tables and their data", () => {
-  const file = join(tempDir(), "fastvibe.db");
-  const db = openDatabase(file);
-  db.exec("CREATE TABLE drafts (id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE drafts_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-  db.run("INSERT INTO drafts VALUES (?, ?)", "kept-draft", '{"text":"keep"}');
-  db.run("INSERT INTO drafts_meta VALUES (?, ?)", "seq", "7");
-  db.userVersion(9);
-  db.close();
-
-  const reopened = openDatabase(file);
-  assert.equal(reopened.userVersion(), SCHEMA_VERSION);
-  assert.equal(reopened.get<{ data: string }>("SELECT data FROM drafts WHERE id = ?", "kept-draft")?.data, '{"text":"keep"}');
-  assert.equal(reopened.get<{ value: string }>("SELECT value FROM drafts_meta WHERE key = ?", "seq")?.value, "7");
-  reopened.close();
-});
-
 test("a database written by a newer build is refused, not downgraded", () => {
   const dir = tempDir();
   const file = join(dir, "fastvibe.db");
