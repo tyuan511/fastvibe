@@ -10,7 +10,7 @@
     "turnTokens": "Turn tokens",
     "sessionTokens": "Session tokens",
     "turnScope": "This turn, since your latest input",
-    "turnSpeedScope": "This turn's output tokens ÷ its model time; tool waits excluded",
+    "requestSpeedScope": "Latest completed model request: output tokens ÷ request duration (including first-token wait); updates after each request",
     "sessionScope": "Whole conversation total",
     "cacheHit": "Cache hit rate",
     "cost": "Cost",

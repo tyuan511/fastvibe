@@ -77,7 +77,7 @@ import { TranscriptReader } from "../engine/transcript-reader";
 import { ToolDeltaThrottle } from "./tool-delta-throttle";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { installNativeCompactionGuard } from "../engine/native-compaction";
-import { turnTokens } from "../engine/turn-usage";
+import { lastRequestUsage, turnTokens } from "../engine/turn-usage";
 import { promptPreview } from "../engine/prompt-preview";
 import { searchConversationContent } from "../engine/conversation-search";
 import { prepareTranscriptForOpen, readTranscriptPrompt, transcriptPrompt, writeTranscriptEntries } from "../engine/transcript-file";
@@ -1883,6 +1883,7 @@ export class PiProcessManager {
     const now = Date.now();
     const totalMs = (timing?.totalMs ?? 0) + (timing?.runStartedAt !== undefined ? now - timing.runStartedAt : 0);
     const toolMs = (timing?.toolMs ?? 0) + (timing?.toolStartedAt !== undefined ? now - timing.toolStartedAt : 0);
+    const branch = session.sessionManager.getBranch();
     return {
       tokens: {
         input: stats.tokens.input,
@@ -1893,7 +1894,8 @@ export class PiProcessManager {
       },
       // The whole conversation above, this turn alone here: the popover shows both, so the
       // reader can tell "what did I just ask for" from "what has this chat cost".
-      turn: turnTokens(session.sessionManager.getBranch()),
+      turn: turnTokens(branch),
+      lastRequest: lastRequestUsage(branch),
       cost: this.#sessionCost(session),
       toolCalls: stats.toolCalls,
       steps: stats.assistantMessages,

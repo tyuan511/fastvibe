@@ -138,10 +138,10 @@ function tokenPair(input: number | undefined, output: number | undefined): strin
  * The context ring's popover: context-window usage on top, then the conversation's
  * usage statistics (tokens, output speed, steps, cache hit, cost).
  *
- * Two scopes share this block and the rows say which is which. 本轮 Token and 输出速度 come
- * from `SessionStats.turn`, cut out of the transcript by `src/main/engine/turn-usage.ts` —
- * everything after the last user message on the current branch, and that turn's own round
- * trips for the speed. The rest is the whole conversation: `getSessionStats()` adds up every
+ * 本轮 Token comes from `SessionStats.turn`: everything after the last user message on the
+ * current branch. 输出速度 uses `SessionStats.lastRequest`, pairing the latest completed
+ * assistant request's output with its own duration. The rest is the whole conversation:
+ * `getSessionStats()` adds up every
  * session entry (compacted history and abandoned retry branches included), and the heading
  * over this block used to read 「轮次统计 / Turn stats」, which promised neither.
  */
@@ -234,8 +234,8 @@ function ContextUsagePanel({
             <StatRow label={t("composer.sessionTokens")} value={tokenPair(input, output)} hint={sessionScope} />
             <StatRow
               label={t("composer.outputSpeed")}
-              value={formatSpeed(turnTokens?.output, turn?.modelMs)}
-              hint={t("composer.turnSpeedScope")}
+              value={formatSpeed(stats.lastRequest?.outputTokens, stats.lastRequest?.durationMs)}
+              hint={t("composer.requestSpeedScope")}
             />
             <StatRow label={t("composer.steps")} value={stats.steps != null ? String(stats.steps) : "—"} hint={sessionScope} />
             <StatRow

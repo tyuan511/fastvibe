@@ -313,6 +313,12 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
       // for the length of a long task. Switching away and back appeared to "fix" it
       // because `conversations.open` returns a fresh state.
       if (event.type === "turn_end") reloadActiveState();
+      if (event.type === "message_end" && event.message && typeof event.message === "object" &&
+          "role" in event.message && event.message.role === "assistant") {
+        // The completed request already has output usage and timing. Refresh its speed
+        // before a potentially long tool run; the coalesced read follows persistence.
+        refreshStats();
+      }
       if (event.type === "available_commands_update") {
         const raw = Array.isArray(event.commands) ? event.commands : [];
         setCommands(

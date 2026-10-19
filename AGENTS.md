@@ -3069,26 +3069,30 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
   defeating `ToolGroupRow`'s memo, so a group is reused while it holds the very same tool blocks, in order,
   under the same language (`builtGroups` in `lib/group-parts.tsx`; finished tool blocks keep their identity
   because `applyEngineEvent` clones only the block being written).
-- **Not `message_end`.** An assistant message that only requested a tool call has no usage
-  yet, and the tool result that follows does not move the window on its own; refreshing per
-  message would re-read the whole transcript several times a turn for a value that cannot
-  change. `turn_end` is the first point where the turn's usage (and its tool results) are in.
+- **Context waits for `turn_end`; request speed refreshes on assistant `message_end`.**
+  The completed assistant message carries its own output usage and duration, so stats refresh
+  then, before a potentially long tool execution. The coalesced read follows persistence.
+  This does not reload state or the transcript: the context window is re-read at `turn_end`,
+  once the tool results are in too.
 - **The ring's own number is the provider's, not a guess.** `getContextUsage()` takes the last
   valid assistant `usage.totalTokens` — the real size of that request, system prompt and tool
   schemas included — and only estimates the messages that arrived after it. So the ring's 已用
   and the Token row are not the same measurement: one is a single request's context, the other
   the cumulative *uncached* input, and a high cache hit rate makes the two look alike.
-- **Two scopes share the rows under the ring, and the rows name themselves.** 本轮 Token and
-  输出速度 come from `SessionStats.turn`, cut out of the transcript by `engine/turn-usage.ts`:
+- **The rows under the ring have explicit scopes.** 本轮 Token comes from `SessionStats.turn`,
+  cut out of the transcript by `engine/turn-usage.ts`:
   everything after the last user message on the current branch — so a steer re-baselines it,
   each `/goal` round is its own turn, and a failed request that was retried still counts
   because it was billed. Cache-warm `usage` entries and a compaction's own usage fall inside
-  the window and belong to it. The speed divides that turn's output by `turn.modelMs`, which
-  sums each assistant message's own `durationMs` — the engine's measurement of its request —
-  falling back to that message's request stamp → entry-persist span for transcripts that carry
-  no `durationMs` (an import from Claude Code or Codex). Either way **tool waits are not in
-  it**: a wall-clock denominator would blame the model for a slow `bash`, and that is what
-  made the old session-wide number read as half the real speed. Everything else (会话 Token,
+  the window and belong to it. 输出速度 uses `SessionStats.lastRequest`: the latest persisted
+  assistant request's output divided by that same request's `durationMs`, including first-token
+  wait. It updates after each request and keeps the previous sample while the next streams.
+  `lastRequestUsage` reads the current branch, including tool-call replies, and falls back to
+  that message's request stamp → entry-persist span for transcripts without `durationMs`.
+  Without timing or positive output the UI shows `—`, never an earlier timed request's speed.
+  Compaction/usage entries and tool waits cannot enter this request's numerator or denominator.
+  `turn.modelMs` remains for protocol compatibility; output speed does not use it.
+  Everything else (会话 Token,
   步骤, 缓存命中率, 费用) is the whole conversation: `getSessionStats()` adds up
   `getEntries()` — every entry, including history a
   compaction replaced and attempts an in-place retry abandoned. The heading used to read

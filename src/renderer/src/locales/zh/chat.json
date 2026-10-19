@@ -10,7 +10,7 @@
     "turnTokens": "本轮 Token",
     "sessionTokens": "会话 Token",
     "turnScope": "本轮：自你最近一次输入起",
-    "turnSpeedScope": "本轮输出 token ÷ 本轮模型耗时，工具等待不计入",
+    "requestSpeedScope": "最近一次已完成的模型请求：输出 token ÷ 请求耗时（含首 token 等待）；每次请求完成后更新",
     "sessionScope": "整个会话累计",
     "cacheHit": "缓存命中率",
     "cost": "费用",

@@ -1,11 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { turnTokens } from "../src/main/engine/turn-usage.ts";
+import { lastRequestUsage, turnTokens } from "../src/main/engine/turn-usage.ts";
 
 /**
- * The composer's 本轮 Token and 输出速度 rows are the two numbers the engine does not
- * provide: its `getSessionStats()` is whole-file, and its `contextUsage` is one request's
- * window. So the turn is cut out of the transcript here, and the cut has to mean the same
+ * The composer's 本轮 Token and 输出速度 rows use different scopes: the turn's token total
+ * and the latest completed request's speed. Both come from the transcript, so they mean the same
  * thing after a restart as it did while the run was going — which is only true if the rule
  * lives in one pure function enumerated here rather than in whatever Main happened to be
  * holding in memory.
@@ -30,6 +29,53 @@ function assistant(
 
 const u = (input: number, output = 0, cacheRead = 0, cacheWrite = 0) => ({ input, output, cacheRead, cacheWrite });
 const iso = (ms: number) => new Date(ms).toISOString();
+
+test("request speed pairs only the latest assistant's output and duration", () => {
+  const branch = [
+    user(),
+    assistant(u(1_000, 9_000), { durationMs: 60_000 }),
+    toolResult(),
+    assistant(u(100, 300), { durationMs: 2_000 }),
+    toolResult(),
+    compaction(u(500, 4_000)),
+    usageEntry(u(100, 2_000)),
+    { type: "branch_summary", usage: u(100, 1_000) },
+  ];
+  const request = lastRequestUsage(branch);
+  assert.deepEqual(request, { outputTokens: 300, durationMs: 2_000 });
+  assert.equal(request!.outputTokens / (request!.durationMs / 1_000), 150);
+  assert.equal(turnTokens(branch).tokens.output, 16_300, "turn usage still counts all billed output");
+});
+
+test("request speed survives a new prompt while the next request has not been persisted", () => {
+  const branch = [user(), assistant(u(100, 200), { durationMs: 4_000 }), user()];
+  assert.deepEqual(lastRequestUsage(branch), { outputTokens: 200, durationMs: 4_000 });
+  assert.deepEqual(lastRequestUsage([...branch, assistant(u(100, 90), { durationMs: 1_000 })]), {
+    outputTokens: 90, durationMs: 1_000,
+  });
+});
+
+test("an untimed latest request does not borrow earlier timing or speed", () => {
+  const branch = [user(), assistant(u(100, 200), { durationMs: 4_000 }), assistant(u(100, 300))];
+  assert.deepEqual(lastRequestUsage(branch), { outputTokens: 300, durationMs: 0 });
+});
+
+test("latest request uses its own measured duration or its transcript bounds", () => {
+  assert.deepEqual(lastRequestUsage([assistant(u(10, 50), { startedAt: 1_000, endedAt: 20_000, durationMs: 2_000 })]), {
+    outputTokens: 50, durationMs: 2_000,
+  });
+  assert.deepEqual(lastRequestUsage([assistant(u(10, 50), { startedAt: 1_000, endedAt: iso(3_000) })]), {
+    outputTokens: 50, durationMs: 2_000,
+  });
+});
+
+test("request speed has no sample before an assistant reply, and invalid output stays zero", () => {
+  assert.equal(lastRequestUsage([]), undefined);
+  assert.equal(lastRequestUsage([user(), compaction(u(100, 20)), usageEntry(u(100, 20))]), undefined);
+  assert.deepEqual(lastRequestUsage([assistant(u(10, Number.NaN), { durationMs: 2_000 })]), {
+    outputTokens: 0, durationMs: 2_000,
+  });
+});
 
 test("only what came after the last user message counts", () => {
   const branch = [
@@ -121,9 +167,9 @@ test("a junk durationMs falls back to the span instead of poisoning it", () => {
   assert.equal(turnTokens(nan).modelMs, 1_500);
 });
 
-test("speed's model time is the round trips, not the wall clock around them", () => {
+test("turn model time is the round trips, not the wall clock around them", () => {
   // 2s of generation, then 5s waiting on a tool, then 1.5s more. The 5s is the tool's, and
-  // the row is a generation speed — the same rule ZCode's bar documents ("段间工具等待不计入").
+  // the turn model time excludes that wait even though speed now uses a single request.
   const branch = [
     user(),
     assistant(u(1_000, 200), { startedAt: 1_000, endedAt: iso(3_000) }),

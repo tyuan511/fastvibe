@@ -607,6 +607,7 @@ export const SESSION: EngineSessionState = {
 export const STATS: SessionStats = {
   tokens: { input: 48_210, output: 3_180, cacheRead: 12_400, cacheWrite: 2_048, total: 65_838 },
   turn: { tokens: { input: 12_940, output: 620, cacheRead: 34_100, cacheWrite: 512, total: 48_172 }, modelMs: 18_400 },
+  lastRequest: { outputTokens: 320, durationMs: 4_000 },
   cost: 0.184,
   toolCalls: 7,
   steps: 4,

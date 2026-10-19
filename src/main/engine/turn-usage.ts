@@ -57,8 +57,8 @@ export type TurnUsage = {
   /**
    * Sum of this turn's round trips, in milliseconds. Measured per assistant message (its
    * request start to the moment it was persisted), so the gaps **between** messages — tool
-   * execution, the wait for a tool result — are not in it. That is what makes the number a
-   * generation speed and not a wall clock.
+   * execution, the wait for a tool result — are not in it. Kept for protocol compatibility;
+   * output speed uses `lastRequestUsage` instead of this turn-wide total.
    */
   modelMs: number;
 };
@@ -100,6 +100,22 @@ function roundTripMs(entry: UsageBearingEntry): number {
   const ended = typeof entry.timestamp === "number" ? entry.timestamp : Date.parse(String(entry.timestamp ?? ""));
   if (!Number.isFinite(ended)) return 0;
   return Math.max(0, ended - started);
+}
+
+/**
+ * The latest persisted assistant request on this branch, including tool-call replies.
+ * Keep its output and time paired: compaction/usage entries and earlier requests must not
+ * inflate its speed. An untimed latest request stays untimed rather than showing an older
+ * request's speed. While a request is in flight, the branch still holds the previous one.
+ */
+export function lastRequestUsage(branch: readonly UsageBearingEntry[]): { outputTokens: number; durationMs: number } | undefined {
+  for (let i = branch.length - 1; i >= 0; i -= 1) {
+    const entry = branch[i];
+    if (entry?.type === "message" && entry.message?.role === "assistant") {
+      return { outputTokens: count(entry.message.usage?.output), durationMs: roundTripMs(entry) };
+    }
+  }
+  return undefined;
 }
 
 /**

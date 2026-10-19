@@ -44,6 +44,12 @@ export type SessionStats = {
     /** This turn's round trips, tool execution between them excluded. */
     modelMs: number;
   };
+  /** Latest persisted assistant request on the current branch; retained while the next streams. */
+  lastRequest?: {
+    outputTokens: number;
+    /** Request start to completion, including first-token wait, excluding tool execution. */
+    durationMs: number;
+  };
   cost?: number;
   toolCalls?: number;
   /** Number of model steps (assistant turns) taken in this conversation. */
