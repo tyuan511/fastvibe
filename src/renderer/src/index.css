@@ -303,7 +303,10 @@ html[data-glass="true"] :is(.glass-rim, .overlay-surface, .resource-surface)::af
   pointer-events: none;
 }
 /* The rim is laid out against the nearest positioned box; a dialog is already
-   `fixed`, and the rest must not fall through to some larger ancestor. */
+   `fixed`, and the rest must not fall through to some larger ancestor. The
+   exclusion is the only way a surface positioned by someone else's stylesheet —
+   a sonner toast, which is `absolute` by rule rather than by class — keeps that
+   position: this rule outranks a library's single attribute selector. */
 html[data-glass="true"] .overlay-surface:not(.fixed, .absolute) {
   position: relative;
 }

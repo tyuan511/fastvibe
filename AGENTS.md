@@ -1150,6 +1150,16 @@ is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glas
   under `:focus-within` so the focus ring drawn on that border stays whole), and
   `.overlay-surface` layers become translucent, rounder glass — so a floating layer drawn by
   hand (the selection toolbar was one) has to carry that class or it stays a solid card.
+- **The rim rule rewrites `position`, so a library-positioned surface must opt out by class.**
+  `html[data-glass="true"] .overlay-surface:not(.fixed, .absolute) { position: relative }` gives
+  the rim something to lay out against, and it is unlayered CSS with three conditions — it
+  outranks a vendor stylesheet's single attribute selector. The toast is the one surface whose
+  position comes from a rule rather than a class or an inline style, so under glass sonner's
+  `position: absolute` lost, every toast fell back into normal flow, and the deck became a
+  column of blank cards (the ones behind the front toast hide their content on purpose). The
+  toast therefore carries `absolute` in `classNames.toast` purely to be excluded; a `fixed`
+  dialog and an `absolute` popover already do the same. `test/toast-stacking.test.ts` pins both
+  halves, because either side alone fixes nothing and neither side fails loudly.
 - **A pinned prompt cuts the reply, it does not cover it.** Elsewhere the sticky prompt's
   solid `bg-background` hides what scrolls under it while matching the page; a see-through
   page has no colour that does both (a tinted band was tried and is an ugly block). Under

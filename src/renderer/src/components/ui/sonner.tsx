@@ -82,8 +82,11 @@ function Toaster({ ...props }: ToasterProps): JSX.Element {
       toastOptions={{
         unstyled: true,
         classNames: {
+          // `absolute` is not a layout choice here — sonner already positions the toast
+          // from its own stylesheet — it is the marker the glass rim rule excludes, so the
+          // rule cannot turn the toast back into a box in normal flow.
           toast:
-            "overlay-surface group/toast flex w-(--width) items-start gap-2.5 rounded-lg bg-popover/95 p-3 pr-9 font-sans text-sm text-popover-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring/50 *:transition-opacity data-[expanded=false]:data-[front=false]:*:opacity-0",
+            "overlay-surface absolute group/toast flex w-(--width) items-start gap-2.5 rounded-lg bg-popover/95 p-3 pr-9 font-sans text-sm text-popover-foreground outline-hidden focus-visible:ring-2 focus-visible:ring-ring/50 *:transition-opacity data-[expanded=false]:data-[front=false]:*:opacity-0",
           icon: "relative mt-0.5 flex size-4 shrink-0 items-center justify-center",
           content: "flex min-w-0 flex-1 flex-col gap-0.5",
           title: "leading-5 font-medium",
