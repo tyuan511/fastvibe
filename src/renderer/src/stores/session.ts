@@ -6,17 +6,13 @@ import type {
   ChatMessage,
   Conversation,
   ConversationQueueState,
-  EngineModel,
   FastVibeModel,
   EngineSessionState,
   EngineStatus,
   EngineEvent,
   ExtensionNotice,
-  ExtensionNoticeLevel,
   ExtensionWidget,
-  PermissionQuestion,
   PermissionRequest,
-  TuiRun,
   Project,
   QueuePauseReason,
   QueuedPrompt,
@@ -38,6 +34,7 @@ import {
   activePermission,
   applyExtensionUi,
   dropPending,
+  resolvePendingById,
   extensionScope,
   parsePermission,
   activeRunning,
@@ -246,6 +243,12 @@ export type SessionStore = {
    * what `EngineSessionState.canResume` is, held per the conversation it belongs to.
    */
   canResume: boolean;
+  /**
+   * 回复推荐 per conversation, from `reply_suggestion` events and from the `suggestion` a state
+   * reply carries. Held per chat so one that was on offer is still there when the user comes back.
+   */
+  suggestions: Record<string, string>;
+  setSuggestion: (conversationId: string, text: string | null) => void;
   preview: FilePreview | null;
   /** Keyed by subagentKey(runId, conversationId), never by the engine-local run id alone. */
   subagentStreams: Record<string, ChatMessage[]>;
@@ -632,6 +635,16 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   queuePause: null,
   runInterrupted: null,
   canResume: false,
+  suggestions: {},
+  setSuggestion: (conversationId, text) =>
+    set((state) => {
+      if (text === null) {
+        if (!(conversationId in state.suggestions)) return state;
+        const { [conversationId]: _gone, ...rest } = state.suggestions;
+        return { suggestions: rest };
+      }
+      return state.suggestions[conversationId] === text ? state : { suggestions: { ...state.suggestions, [conversationId]: text } };
+    }),
   preview: null,
   subagentStreams: {},
   setStatus: (status) => set({ status, error: status.state === "error" ? status.message ?? null : null }),
@@ -653,6 +666,11 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         session,
         streaming: session?.running ?? false,
         canResume: session?.canResume === true,
+        // Only ever adopted, never cleared from here: a state read that raced the guess
+        // would otherwise wipe one that had already arrived. `reply_suggestion` takes it down.
+        ...(conversationId && session?.suggestion && state.suggestions[conversationId] !== session.suggestion
+          ? { suggestions: { ...state.suggestions, [conversationId]: session.suggestion } }
+          : {}),
         queuePauseByConversation: resumedQueuePause,
         queuePause:
           conversationId
@@ -816,13 +834,16 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     }),
   resolvePermission: (id) =>
     set((state) => {
-      const conversationId = state.activeId;
-      if (!conversationId) return {};
-      const list = state.pendingPermissions[conversationId] ?? [];
-      const remaining = list.filter((item) => item.id !== id);
-      const pendingPermissions = { ...state.pendingPermissions };
-      if (remaining.length > 0) pendingPermissions[conversationId] = remaining;
-      else delete pendingPermissions[conversationId];
+      // Search every conversation, not just the one on screen.
+      //
+      // This used to look in `activeId`'s queue alone, which was fine while the only caller
+      // was the composer panel — the one surface that draws a prompt of the chat it is in.
+      // The 看板 answers a *background* chat's question from a card, and there the id simply
+      // was not in the active bucket: the click resolved nothing, the prompt stayed parked,
+      // and the card sat in 等你 looking unanswered after being answered. The id is globally
+      // unique (Main keys its pending map by it), so the search is exact, not a guess.
+      const pendingPermissions = resolvePendingById(state.pendingPermissions, id);
+      if (pendingPermissions === state.pendingPermissions) return {};
       return {
         pendingPermissions,
         permission: activePermission(pendingPermissions, state.activeId),

@@ -865,8 +865,13 @@ per-turn change chips and the inline preview strip.
   且每个调用被它自己声明的项目根限住；`server-policy.test.ts` 的覆盖检查仍会漏分类时报错。
   网关的 `scopePathField` 也认这两个返回 `{ path }` 的方法，所以远程新建/重命名回来的路径带着
   `remote:<server>:` 前缀，和列表里其他行一样可用。
+- **第一层缩进要多走一步。** 多文件夹项目的根是一行带底色和展开箭头的卡片，它的图标被箭头顶右；
+  子行没有箭头，于是整棵树会挂在父图标的左边（看起来像缩进坏了）。`.chat-tree-card` 因此把
+  `--tree-root-indent` 设成 1.125rem（普通一步 0.75rem），只加在 `guides` 的**第一个** slot 上，
+  更深各层照旧一步 0.75rem；单文件夹项目没有这张卡片，`var()` 回退到普通步长，缩进不变。
+  两个数按**图标中心**对齐（卡片画 1rem，行画 0.875rem），不是按左边缘。
 - 预览：`mock.html?pane=files`（`mock/preview.ts` 里那三个 stub 把改动记在内存的树覆盖层上，
-  重命名会真的移动一行）。
+  重命名会真的移动一行）；`&folders=2` 给预览项目加第二个文件夹，才会画出上面那张根卡片。
 
 ### 预览失败要说人话
 
@@ -1599,6 +1604,48 @@ one reverted before the next prompt). The divider is therefore tied to the reply
 
 Only `models.json` is written; the `models.yml` / `config.yml` pair from the old RPC
 engine is gone because the SDK never read them.
+
+## 回复推荐（`engine/reply-suggestion.ts`，`PiProcessManager.#suggestNext`）
+
+一轮回复结束后，用该对话自己的模型猜用户下一句，画成 composer 的 placeholder，输入框为空时按 Tab 填入。
+设置 → 偏好设置 → 对话 → 回复推荐（`settings.replySuggestions`，默认开；Main 只在 `=== false` 时关）。
+
+- **只在「正常收尾的文字回复」后生成**：`agent_settled` 且结论不是 error/stopped/handoff，不是辅助对话、不是定时任务，
+  且最后一条是 `stopReason: "stop"` 的助手文字（`suggestionMaterial`）。停在工具调用、失败、被截断都不猜。
+  只给模型最后一轮的用户消息和回复的**尾部**（回复被截去前面，因为下一句是接着结尾说的）。
+- **没有单独的「小模型」设置**：试过（标题、提交信息、回复推荐各自可指定一个更快的模型）又移除了——实测回复推荐的延迟取决于
+  所选路线是否让模型思考，而不是模型大小（同一个 deepseek，FastVibe 中转站 0/12 思考、custom-qwen 12/12 思考），一个只让用户多做一次选择
+  却不保证更快的设置不值得留。所有旁路请求都用该对话自己的模型；`settings.smallModel` 在加载时被当作已移除的键丢掉。
+- **旁路，不能影响运行**：fire-and-forget，15s 超时，异常全吞（composer 照常显示原 placeholder）。
+- **从那条回复结束的那一刻开始，不等整轮 settle**（`message_end` 且 `stopReason: "stop"`，仅 `fresh` 模式）：settle 可能还要等压缩或重试。
+  起得早意味着此时运行还开着，所以结果照常发布，由 composer 的「没在运行」条件在 settle 前不画它；运行继续（续跑、排队消息）则
+  `agent_start` 收回。`agent_settled` 时：已经早起过就不再问一遍（`#suggestionEarly`，哪怕那次什么都没得到），没起过才起，
+  被用户停止或失败的运行则收回。`message_end` 先于 `session.messages` 一定含有这条消息，所以材料用 `withFinalMessage` 补上它。
+- **流式、一行就停**（`readSuggestionStream`）：建议是一行，第一行写完（后面跟了换行）就取消请求，不为后面的解释付费。实测一行回复
+  模型自己就结束，所以这一步主要防的是话多的模型，延迟 ≈ 首 token + 几百毫秒（FastVibe 中转站首 token 1.4–1.8s，Qwen 0.5–1.2s）。
+- **输出上限：不推理的模型和不发 thinking 的 Anthropic 给 80，其余一律 1024**（`suggestionMaxTokens`）。`maxTokens` 只是天花板，
+  短答案在 80 和 1024 下一样快，小上限唯一的效果是在模型先思考时把回复截成空。曾经给过「带关思考字段就 80、落空再用 1024 重问」，
+  实测反而更慢（8s：失败的一次加重问）：**FastVibe 中转站上的 deepseek 时而思考时而不思考，加不加关思考字段都一样**
+  （同一份真实对话，一轮探测带字段 3/3 思考，隔几分钟全部变体 0 思考，含不带字段的）。Qwen 的 `enable_thinking:false` 则每次都有效。
+- **输出要像一条消息**：`cleanSuggestion` 取第一行、剥引号/项目符号/「Next message:」标签，`NONE` 或超过 120 字符
+  都当作没有（超长说明模型在回答而不是在猜）。规则在 `test/reply-suggestion.test.ts`。
+- **两条通路到界面**：活动会话走 `reply_suggestion` 事件（`text: null` = 撤回）；`EngineSessionState.suggestion`
+  让之后打开的会话/窗口也能读到。渲染层 `suggestions[conversationId]` 只从 state **采纳**、从不被 state 清除——
+  一次与生成赛跑的状态读取不该抹掉刚到的推荐，撤回只认事件。后台会话不推窗口，只推观察者（手机）。
+- **composer 里**：`suggested` 要求输入为空、无附件、没在运行、没被锁；Tab（无修饰键、没在输入法组合中）写入并把光标
+  放到末尾，`Kbd` 画在 placeholder 的**最前面**（输入框左侧，文字让出 `pl-14`），它只是提示不是按钮（触屏没有 Tab，手机的推荐入口另说）。斜杠/@ 面板打开时输入非空，所以不会抢 Tab。
+- **慢在哪，以及现在怎么办（真实供应商实测，2026-10-19，~11K token 的对话）**：延迟几乎全是模型的思考时间，不是网络，也不是缺缓存。
+  思考开着，FastVibe 中转站上的 deepseek 新请求 4.7–6.0s，主模型（Qwen）新请求 6–27s、带缓存前缀 3.0–4.3s（命中 11264/11772）。
+  **关掉思考才是量级变化**：FastVibe 中转站的 deepseek 2.0–2.7s（中转站自己的底噪约 2s），Qwen 新请求 0.3–0.9s、带缓存前缀 0.9–1.2s。
+  所以回复推荐的请求走 `#completeQuick`（`engine/thinking-off.ts`）：对 OpenAI 兼容的接口（chat completions 和 Responses——FastVibe 中转站上的 deepseek 就是 /responses 模型，量过同样有效）**额外**带上三个关思考字段
+  （`enable_thinking:false`、`chat_template_kwargs.enable_thinking:false`、`thinking:{type:"disabled"}`，SDK 已经设了的不覆盖）。
+  SDK 本来会按 `thinkingFormat` 在不传 reasoning 时关思考，但自定义中转站的格式靠 URL 推断、认不出就什么都不发，所以这里补一层。
+  严格的端点会把未知字段当 400：`withThinkingOffFallback` 在失败信息像「参数被拒」时**原样不带补丁重试一次**并记住这个模型
+  （`#thinkingOffRefused`，之后直接走普通请求）；超时、限流、密钥错误不重试。Anthropic、Google 不加补丁（不传 reasoning 本来就是关）；OpenAI 官方的 Responses 会拒绝这些字段，走上面的重试一次。
+  **`FASTVIBE_SUGGEST_MODE=cache`**（同一前缀 + 追加一轮，`buildCacheContext`，必须是对话自己的模型）保留作实验：关思考后它没有比
+  精简的新请求更快（Qwen 0.9–1.2s 对 0.3–0.9s），但它看得到整段对话，建议更贴题。默认仍是 `fresh`（精简的新请求）。
+  每次请求在 `logs/main.log` 里有一行 `[suggest] mode=… model=… ms=… in=… cacheRead=… -> shown|stop=length|…`。
+- 预览：`mock.html?suggest=1`。手机端（Flutter）还不认 `reply_suggestion`，会忽略它。
 
 ## 账号登录（FastVibe 账号，`engine/account.ts`）
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { DECISION_SCENARIOS, DEFAULT_DECISION_MODEL, decisionModelConfigOf, type DecisionModelConfig, type DecisionModelRef, type DecisionScenario } from "@shared/decision";

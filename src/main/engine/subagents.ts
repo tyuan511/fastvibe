@@ -67,12 +67,6 @@ function renderMarkdown(draft: SubagentDraft): string {
   return `${lines.join("\n")}\n`;
 }
 
-function safeModel(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const model = value.trim();
-  return model && MODEL_PATTERN.test(model) ? model : undefined;
-}
-
 function safeThinkingLevel(value: unknown): ThinkingLevel | undefined {
   return typeof value === "string" && THINKING_EFFORT_LEVELS.includes(value as ThinkingLevel)
     ? value as ThinkingLevel

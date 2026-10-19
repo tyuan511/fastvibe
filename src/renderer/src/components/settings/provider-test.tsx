@@ -1,29 +1,22 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
-import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Activity02Icon, Loading03Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { i18n } from "@/lib/i18n";
 import type { ProviderConfig, ProviderModel } from "@shared/types";
 import type { ProviderTestResult } from "@shared/provider-test";
 
 /**
- * The model check used to be its own 模型自检 group with a model picker in it. The picker
- * was a second copy of the list right below the list, and it could only ever ask about one
- * model at a time — so comparing two models on one gateway meant check, read, re-pick,
- * check again, with the previous answer gone before the next one arrived. The verdict
- * belongs on the row it describes, next to the protocol chip and the context size that
- * already say what this model is configured as.
+ * The check used to be its own 模型自检 group with a model picker in it; it then lived on the
+ * row it describes, with the verdict written under that row. Both are gone: a verdict under
+ * the row pushed everything below it down and stayed on screen long after it mattered, and
+ * what it had to say is news — it belongs in a notice that shows up and leaves again. So the
+ * row keeps only the control (visible while the pointer is on the row), and the answer is
+ * reported as a toast.
  */
 
-export type ModelCheckState = { running: boolean; result: ProviderTestResult | null };
-
-const STATUS_CLASS: Record<ProviderTestResult["status"], string> = {
-  passed: "text-success",
-  partial: "text-warning",
-  failed: "text-destructive",
-};
+export type ModelCheckState = { running: boolean };
 
 /**
  * One check per model, kept while the pane shows the same provider.
@@ -32,7 +25,10 @@ const STATUS_CLASS: Record<ProviderTestResult["status"], string> = {
  * has moved on. `epoch` invalidates everything in flight when the provider or its endpoint
  * changes; the per-model ticket invalidates only the model that was asked again.
  */
-export function useModelChecks(provider: ProviderConfig): {
+export function useModelChecks(
+  provider: ProviderConfig,
+  onEdit?: (model: ProviderModel) => void,
+): {
   checks: Record<string, ModelCheckState>;
   run: (model: ProviderModel) => void;
 } {
@@ -40,7 +36,7 @@ export function useModelChecks(provider: ProviderConfig): {
   const epoch = useRef(0);
   const tickets = useRef(new Map<string, number>());
   // A new object identity for the same configuration is a settings refresh, not a change,
-  // and must not throw away verdicts the user just paid for.
+  // and must not clear a run that is still in flight.
   const config = `${provider.id}|${provider.baseUrl}|${provider.api}|${provider.hasKey}|${provider.hasOAuth}`;
   useEffect(() => {
     epoch.current += 1;
@@ -61,32 +57,73 @@ export function useModelChecks(provider: ProviderConfig): {
       const ticket = (tickets.current.get(model.id) ?? 0) + 1;
       tickets.current.set(model.id, ticket);
       const startedIn = epoch.current;
-      write(model.id, { running: true, result: null }, ticket, startedIn);
+      write(model.id, { running: true }, ticket, startedIn);
       window.fastvibe.providers
         .test(provider.id, model.id)
         .then(
-          (result) => write(model.id, { running: false, result }, ticket, startedIn),
-          // The call itself never reached the engine — no answer to report, so the row says
+          (result) => {
+            write(model.id, { running: false }, ticket, startedIn);
+            notifyCheck(model, result, onEdit);
+          },
+          // The call itself never reached the engine — no answer to report, so the toast says
           // what the user can act on: the network, not a model that failed to reply.
-          () =>
-            write(
-              model.id,
-              {
-                running: false,
-                result: { model: model.id, api: "", status: "failed", tools: "not-tested", elapsedMs: 0, errorCode: "network" },
-              },
-              ticket,
-              startedIn,
-            ),
+          () => {
+            write(model.id, { running: false }, ticket, startedIn);
+            notifyCheck(
+              model,
+              { model: model.id, api: "", status: "failed", tools: "not-tested", elapsedMs: 0, errorCode: "network" },
+              onEdit,
+            );
+          },
         );
     },
-    [provider.id, write],
+    [provider.id, write, onEdit],
   );
 
   return { checks, run };
 }
 
-/** The row's rightmost control: run the check, and see the last verdict's colour. */
+/** What the check said, as a notice that shows up once and leaves again. */
+function notifyCheck(
+  model: ProviderModel,
+  result: ProviderTestResult,
+  onEdit?: (model: ProviderModel) => void,
+): void {
+  const t = i18n.t.bind(i18n);
+  // 「回答与工具调用均正常」 already says the tools passed, so the numbers are the only extra
+  // facts worth a line. A run that did *not* pass has something to tell the user to do, and
+  // that goes on its own line rather than joined into the numbers with a separator.
+  const facts = [
+    result.api ? t("settings:providerTest.protocol", { api: result.api }) : "",
+    result.firstTokenMs !== undefined ? t("settings:providerTest.firstToken", { ms: result.firstTokenMs }) : "",
+  ].filter(Boolean) as string[];
+  const advice = result.errorCode
+    ? (t(`settings:providerTest.errors.${result.errorCode}`) as string)
+    : result.tools === "unconfirmed"
+      ? (t("settings:providerTest.tools.unconfirmed") as string)
+      : "";
+  const options = {
+    // A verdict worth acting on stays up long enough to be read; a pass can leave sooner.
+    duration: result.status === "passed" ? 4000 : 7000,
+    description: facts.length || advice ? (
+      <span className="flex flex-col gap-0.5">
+        {facts.length ? <span>{facts.join(" · ")}</span> : null}
+        {advice ? <span>{advice}</span> : null}
+      </span>
+    ) : undefined,
+    // The dialog the removed inline button used to open, kept one step away.
+    action:
+      onEdit && result.status !== "passed"
+        ? { label: t("settings:providerTest.edit") as string, onClick: () => onEdit(model) }
+        : undefined,
+  };
+  const title = `${model.name || model.id} · ${t(`settings:providerTest.${result.status}`)}`;
+  if (result.status === "passed") toast.success(title, options);
+  else if (result.status === "partial") toast.warning(title, options);
+  else toast.error(title, options);
+}
+
+/** The row's control: run the check, and spin while it is in flight. */
 export function ModelCheckButton({
   state,
   disabled,
@@ -97,7 +134,6 @@ export function ModelCheckButton({
   onRun: () => void;
 }): JSX.Element {
   const running = state?.running === true;
-  const result = state?.result ?? null;
   const label = i18n.t(running ? "settings:providerTest.checking" : "settings:providerTest.check");
   return (
     <Button
@@ -107,46 +143,9 @@ export function ModelCheckButton({
       onClick={onRun}
       aria-label={label}
       title={label}
-      className={cn(!running && result ? STATUS_CLASS[result.status] : "text-muted-foreground")}
+      className="text-muted-foreground"
     >
       <HugeiconsIcon strokeWidth={2} icon={running ? Loading03Icon : Activity02Icon} className={running ? "size-3.5 animate-spin" : "size-3.5"} />
     </Button>
-  );
-}
-
-/** What the check actually said, tucked under the row it belongs to. */
-export function ModelCheckDetails({
-  result,
-  onEdit,
-}: {
-  result: ProviderTestResult;
-  onEdit: () => void;
-}): JSX.Element {
-  const { t } = useTranslation("settings");
-  // 「回答与工具调用均正常」 already says the tools passed, so the numbers are the only
-  // extra facts worth a line. A run that did *not* pass has something to tell the user to
-  // do, and that goes below rather than joined into the numbers with a separator.
-  const facts = [
-    result.api ? t("providerTest.protocol", { api: result.api }) : "",
-    result.firstTokenMs !== undefined ? t("providerTest.firstToken", { ms: result.firstTokenMs }) : "",
-  ].filter(Boolean);
-  const advice = result.errorCode
-    ? t(`providerTest.errors.${result.errorCode}`)
-    : result.tools === "unconfirmed"
-      ? t("providerTest.tools.unconfirmed")
-      : "";
-  return (
-    <div role="status" className="space-y-1 border-t border-dashed border-border/70 bg-muted/30 px-2 py-1.5 text-xs">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className={STATUS_CLASS[result.status]}>{t(`providerTest.${result.status}`)}</span>
-        {facts.length ? <span className="text-muted-foreground">{facts.join(" · ")}</span> : null}
-        {result.status !== "passed" ? (
-          <Button size="xs" variant="outline" onClick={onEdit}>
-            {t("providerTest.edit")}
-          </Button>
-        ) : null}
-      </div>
-      {advice ? <p className="text-muted-foreground">{advice}</p> : null}
-    </div>
   );
 }

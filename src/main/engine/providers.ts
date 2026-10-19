@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, readFile, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier, type FastVibeModel, type ModelCost, type ModelPrice, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel, type ThinkingLevel } from "@shared/types";
 import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
 import { findNativeProvider, listNativeProviders, mergeNativeModels, selectedNativeModels } from "./native-providers";

@@ -4,7 +4,6 @@ import { useNavigate } from "react-router";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowLeft01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -18,7 +17,6 @@ import type { FastVibeModel, ImportRunResult, WorkspaceSnapshot } from "@shared/
 import { notificationsEnabled } from "@shared/notifications";
 import { useSettingsStore } from "@/stores/settings";
 import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
-import { i18n } from "@/lib/i18n";
 import { UI_LANGUAGES, UI_LANGUAGE_LABELS, type UiLanguage } from "@/lib/language";
 import type { ThemeMode } from "@/lib/themes";
 import { UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, UI_FONT_SIZE_STEP } from "@/lib/themes";
@@ -208,7 +206,13 @@ export function SettingsDialog({
         </div>
       ) : null}
       <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto w-full max-w-200 px-4 py-5 md:px-8 md:py-8">
+        {/*
+         * One window tall, so a pane can stretch its last region to exactly the height the
+         * window has left instead of guessing it (`flex-1` inside a column whose height is
+         * `auto` gets nothing to grow into). A pane taller than this overflows and the
+         * viewport scrolls it, as before. Only 供应商's model list uses the stretch.
+         */}
+        <div className="mx-auto flex h-full w-full max-w-200 flex-col px-4 py-5 md:px-8 md:py-8">
           <h2 className={cn("mb-5 text-xl font-medium tracking-tight max-md:hidden", section === "usage" && "hidden")}>
             {settingsSectionLabel(section)}
           </h2>
@@ -373,6 +377,16 @@ export function SettingsDialog({
                 />
               </Group>
               <Group title={t("chat.title")}>
+                <Row
+                  title={t("chat.replySuggestions")}
+                  description={t("chat.replySuggestionsDesc")}
+                  control={
+                    <Switch
+                      checked={settings.replySuggestions}
+                      onCheckedChange={(checked) => update({ replySuggestions: checked })}
+                    />
+                  }
+                />
                 <Row
                   title={t("chat.codemode")}
                   description={t("chat.codemodeDesc")}

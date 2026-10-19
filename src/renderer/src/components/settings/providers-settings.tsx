@@ -1,22 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
-  ArrowDown01Icon,
   ArrowLeft01Icon,
   BoxesIcon,
-  Delete02Icon,
   Download01Icon,
   Loading03Icon,
-  PencilEdit02Icon,
-  CircleQuestionMarkIcon,
-  DragDropVerticalIcon,
-  RefreshIcon,
-  Search01Icon,
-  Tick02Icon,
-  ViewIcon,
-  ViewOffSlashIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -24,15 +14,16 @@ import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
 import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
 import { ProviderIcon } from "@/components/provider-icon";
-import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type EngineModel, type FastVibeModel, type GatewayKind, type Project, type ProjectModelDefault, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
+import { type FastVibeModel, type NativeProviderConfig, type ProviderConfig, type ProviderModel } from "@shared/types";
 import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import { OAuthLoginDialog, type OAuthTarget } from "./oauth-login-dialog";
 import { GatewayCredentialDialog } from "./gateway-credential-dialog";
-import { EMPTY_ADD, PROVIDER_API_ITEMS, PROVIDER_API_SHORT, type AddMode, type AddState, type PickerState } from "./providers-settings-types";
+import { EMPTY_ADD, type AddState, type PickerState } from "./providers-settings-types";
 import { fetchAddCandidates, logout, saveAdd, savePicker, startAddModels } from "./providers-settings-actions";
 import { useSettingsStore } from "@/stores/settings";
 import { ProjectDefaultsSection } from "./project-defaults";
+import { SettingsGroup, SettingsRow } from "./settings-group";
 import { ProviderDetail } from "./provider-detail";
 import { CcSwitchImportDialog } from "./cc-switch-import-dialog";
 import { AddProviderDialog, ModelPickDialog } from "./add-provider-dialog";
@@ -121,44 +112,44 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
   }
 
   return (
-    <div className="space-y-5">
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-          <div className="min-w-0">
-            <h3 className="text-sm font-medium">{t("defaultModel.title")}</h3>
-            <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{t("defaultModel.desc")}</p>
-          </div>
-          <ModelThinkingSelect
-            models={models}
-            model={settings.defaultModel}
-            thinkingLevel={settings.thinkingLevel}
-            allowAuto
-            onModelChange={(model) => updateSettings({ defaultModel: model })}
-            onThinkingChange={(thinkingLevel) => updateSettings({ thinkingLevel })}
-            surface="settings"
-            ariaLabel={t("defaultModel.title")}
-            emptyModelLabel={t("defaultModel.followLast")}
-            inheritModelLabel={t("defaultModel.followLast")}
-          />
-        </div>
-        {models.length === 0 ? (
-          <p className="px-4 pb-3 text-xs text-muted-foreground">
-            {t("defaultModel.emptyHint")}
-          </p>
-        ) : null}
-        <div className="border-t border-border px-4 py-3">
-          <ProjectDefaultsSection models={models} />
-        </div>
-      </section>
+    // The pane is a column so the provider area below can take the height left over by the
+    // rows above it — see the model list in `provider-detail.tsx`.
+    <div className="flex min-h-0 flex-1 flex-col gap-5">
+      <SettingsGroup>
+        <SettingsRow
+          title={t("defaultModel.title")}
+          description={
+            <>
+              {t("defaultModel.desc")}
+              {models.length === 0 ? <span className="mt-1 block">{t("defaultModel.emptyHint")}</span> : null}
+            </>
+          }
+          control={
+            <ModelThinkingSelect
+              models={models}
+              model={settings.defaultModel}
+              thinkingLevel={settings.thinkingLevel}
+              allowAuto
+              onModelChange={(model) => updateSettings({ defaultModel: model })}
+              onThinkingChange={(thinkingLevel) => updateSettings({ thinkingLevel })}
+              surface="settings"
+              ariaLabel={t("defaultModel.title")}
+              emptyModelLabel={t("defaultModel.followLast")}
+              inheritModelLabel={t("defaultModel.followLast")}
+            />
+          }
+        />
+        <ProjectDefaultsSection models={models} />
+      </SettingsGroup>
 
-      <div className="flex min-h-80 overflow-hidden rounded-xl border border-border bg-card">
+      <div className="flex min-h-0 flex-1 items-start gap-4">
         <aside
           className={cn(
-            "flex w-52 shrink-0 flex-col border-r border-border",
-            narrow && (detailOpen ? "hidden" : "w-full border-r-0"),
+            "flex w-52 shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card",
+            narrow && (detailOpen ? "hidden" : "w-full"),
           )}
         >
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea className="max-h-[28rem] min-h-0 flex-1">
           <div className="p-2">
             {nativeProviders.length ? (
               <div className="mb-3">
@@ -192,18 +183,18 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
             ) : null}
           </div>
         </ScrollArea>
-        <div className="shrink-0 space-y-0.5 border-t border-border p-2">
+        <div className="shrink-0 space-y-0.5 border-t border-border bg-muted/30 p-2">
           <button
             type="button"
-            className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted/60"
+            className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-foreground hover:bg-muted"
             onClick={() => setAdd({ ...EMPTY_ADD, selected: new Set() })}
           >
-            <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5" />
+            <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5 text-muted-foreground" />
             {t("providers.add")}
           </button>
           <button
             type="button"
-            className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted/60"
+            className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
             onClick={() => setCcSwitchOpen(true)}
           >
             <HugeiconsIcon strokeWidth={2} icon={Download01Icon} className="size-3.5" />
@@ -212,7 +203,9 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         </div>
         </aside>
 
-        <div className={cn("min-w-0 flex-1 p-5", narrow && (detailOpen ? "p-4" : "hidden"))}>
+        {/* `self-stretch` rather than `items-stretch` on the row: the provider list is as tall
+            as its own rows, while the detail beside it fills the column. */}
+        <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col self-stretch", narrow && !detailOpen && "hidden")}>
         {narrow ? (
           <Button
             variant="ghost"
@@ -362,30 +355,36 @@ function ProviderNavItem({
   selected: boolean;
   onSelect: () => void;
 }): JSX.Element {
+  const { t } = useTranslation("settings");
+  const connected = provider.hasKey || provider.hasOAuth;
   return (
     <button
       type="button"
       className={cn(
-        "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm",
-        selected ? "bg-muted font-medium" : "hover:bg-muted/60",
+        "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm transition-colors",
+        selected ? "bg-muted" : "hover:bg-muted/60",
         !provider.enabled && "opacity-60",
       )}
       onClick={onSelect}
     >
-      {provider.kind === "native" ? (
-        // The built-in's own brand mark, else a neutral glyph — the SDK catalog is what
-        // decides which, see `provider-icon.tsx`.
-        <ProviderIcon provider={provider.id} />
-      ) : (
-        <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} className="size-4 shrink-0 text-muted-foreground" />
-      )}
-      <span className="min-w-0 flex-1 truncate text-left">{providerLabel(provider.name || provider.id)}</span>
-      <span
-        className={cn(
-          "size-1.5 shrink-0 rounded-full",
-          provider.hasKey || provider.hasOAuth ? "bg-success" : "bg-muted-foreground/35",
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background">
+        {provider.kind === "native" ? (
+          // The built-in's own brand mark, else a neutral glyph — the SDK catalog is what
+          // decides which, see `provider-icon.tsx`.
+          <ProviderIcon provider={provider.id} />
+        ) : (
+          <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} className="size-3.5 text-muted-foreground" />
         )}
-      />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className={cn("block truncate", selected && "font-medium")}>{providerLabel(provider.name || provider.id)}</span>
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className={cn("size-1.5 shrink-0 rounded-full", connected ? "bg-success" : "bg-muted-foreground/35")} />
+          <span className="truncate">
+            {connected ? t("providers.modelCount", { count: provider.models.length }) : t("providers.notConnected")}
+          </span>
+        </span>
+      </span>
     </button>
   );
 }

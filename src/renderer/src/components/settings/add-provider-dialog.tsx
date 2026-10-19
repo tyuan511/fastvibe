@@ -1,22 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Add01Icon,
   ArrowDown01Icon,
   ArrowLeft01Icon,
-  BoxesIcon,
-  Delete02Icon,
-  Download01Icon,
   Loading03Icon,
-  PencilEdit02Icon,
-  CircleQuestionMarkIcon,
-  DragDropVerticalIcon,
-  RefreshIcon,
   Search01Icon,
   Tick02Icon,
-  ViewIcon,
-  ViewOffSlashIcon,
 } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,9 +29,9 @@ import {
 import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
 import { ProviderIcon } from "@/components/provider-icon";
-import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type EngineModel, type FastVibeModel, type GatewayKind, type Project, type ProjectModelDefault, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
+import { PROVIDER_APIS, type NativeProviderConfig, type ProviderApi, type ProviderConfig } from "@shared/types";
 import { ModelPicker } from "./model-picker";
-import { EMPTY_ADD, PROVIDER_API_ITEMS, PROVIDER_API_SHORT, type AddMode, type AddState, type PickerState } from "./providers-settings-types";
+import { PROVIDER_API_ITEMS, type AddMode, type AddState, type PickerState } from "./providers-settings-types";
 import { Field } from "./provider-field";
 
 export function AddProviderDialog({

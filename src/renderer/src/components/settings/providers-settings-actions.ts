@@ -1,7 +1,7 @@
 import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { cleanError } from "@/lib/ipc-error";
-import type { NativeProviderConfig, ProviderConfig, ProviderModel } from "@shared/types";
+import type { NativeProviderConfig, ProviderConfig } from "@shared/types";
 import type { AddState, PickerState } from "./providers-settings-types";
 
 type SetPicker = (value: PickerState | null | ((current: PickerState | null) => PickerState | null)) => void;

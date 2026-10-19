@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -196,25 +196,39 @@ test("a save that replaces the file by rename is still noticed", async () => {
   assert.equal(changes, before);
 });
 
-test("a watch that ignores SIGTERM is killed anyway", { skip: process.platform === "win32" }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "office-watch-bin-"));
+test("a watch that ignores SIGTERM is killed anyway", { skip: process.platform === "win32" }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "office-watch bin-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const binary = join(dir, "officecli");
+  const script = join(dir, "watch.cjs");
   const ready = join(dir, "ready");
   // A shell `trap` does not hold on every platform's /bin/sh; a Node handler does.
-  writeFileSync(binary, `#!${process.execPath}\nprocess.on("SIGTERM", () => undefined);\nrequire("node:fs").writeFileSync(${JSON.stringify(ready)}, "up");\nsetInterval(() => undefined, 1000);\n`);
+  writeFileSync(script, `process.on("SIGTERM", () => undefined);\nrequire("node:fs").writeFileSync(${JSON.stringify(ready)}, "up");\nsetInterval(() => undefined, 1000);\n`);
+  // A shebang cannot quote an interpreter path containing spaces (e.g. fnm under
+  // Application Support). Let sh quote both paths, then exec Node so it receives signals.
+  const quote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+  writeFileSync(binary, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} "$@"\n`);
   chmodSync(binary, 0o755);
   const watch = spawnOfficeCliWatch({ binary, file: join(dir, "demo.docx"), port: 1 });
+  t.after(async () => {
+    watch.kill();
+    await watch.exited;
+  });
+  let exited: Awaited<typeof watch.exited> | undefined;
+  void watch.exited.then((result) => { exited = result; });
   // Wait for the handler to be installed: a cold Node start can take longer than any fixed sleep.
   for (let waited = 0; !existsSync(ready) && waited < 10_000; waited += 50) {
+    assert.equal(exited, undefined, `the fake watch exited before startup: ${JSON.stringify(exited)}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.ok(existsSync(ready), "the fake watch never started");
   watch.kill();
   const started = Date.now();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   const result = await Promise.race([
     watch.exited,
-    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 4_000)),
-  ]);
+    new Promise<"timeout">((resolve) => { timeout = setTimeout(() => resolve("timeout"), 4_000); }),
+  ]).finally(() => clearTimeout(timeout));
   assert.notEqual(result, "timeout");
   // It ignored SIGTERM, so only the SIGKILL fallback a second later can have ended it.
   assert.ok(Date.now() - started >= 800, "the process should have survived SIGTERM");

@@ -902,197 +902,6 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
   border-color: var(--border);
 }
 
-/*
- * The file pane's document view ---------------------------------------------------
- * A reply fills its column; a document is a fixed measure with the page around it, so
- * a README stays readable in a pane dragged from 260px to the whole window. The rail
- * sits outside the column and the column stays centred on the space left over.
- */
-.chat-document {
-  position: relative;
-  min-height: 0;
-  flex: 1;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-  container-type: inline-size;
-}
-
-.chat-document-column {
-  box-sizing: content-box;
-  max-width: 36em;
-  margin-inline: auto;
-  padding-inline: clamp(1.25rem, 6cqi, 4rem);
-  padding-block: clamp(1.5rem, 6cqi, 2.5rem) 4rem;
-}
-
-/* A heading is a jump target, so a scroll from the rail lands it below the header
- * instead of flush against the top edge. */
-.chat-document :is(h1, h2, h3, h4, h5, h6) {
-  scroll-margin-top: 0.5rem;
-}
-
-.chat-document-frontmatter {
-  display: grid;
-  grid-template-columns: minmax(0, max-content) 1fr;
-  align-items: baseline;
-  gap: 0.5rem 2rem;
-  margin-block-end: 2rem;
-  padding-block-end: 1.25rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
-}
-
-.chat-document-frontmatter dt {
-  font-size: 0.75rem;
-  color: var(--muted-foreground);
-}
-
-.chat-document-frontmatter dd {
-  min-width: 0;
-  overflow-wrap: break-word;
-  white-space: pre-wrap;
-}
-
-.chat-document-frontmatter ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.chat-document-frontmatter li {
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
-  padding-inline: 0.25rem;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-}
-
-/* The contents rail: a column of marks beside the text, one per heading, widening
- * into a labelled list on hover.
- *
- * It is the scroller's first child and has no size of its own, so it takes no layout
- * space and sticks to the top of the visible area; the marks then sit in the gutter
- * beside the column. Below the width that leaves a gutter it is not drawn at all — a
- * rail over the text it indexes is worse than no rail. */
-.chat-document-rail {
-  display: none;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  width: 0;
-  height: 0;
-}
-
-@container (min-width: 44rem) {
-  .chat-document-rail {
-    display: block;
-  }
-}
-
-.chat-document-rail-nav {
-  position: absolute;
-  inset-block-start: 0.75rem;
-  inset-inline-start: 0.5rem;
-  width: 3rem;
-  font-family: var(--font-sans);
-}
-
-.chat-document-rail-nav > ol {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.chat-document-rail-nav > ol > li {
-  display: flex;
-  height: 8px;
-  align-items: center;
-}
-
-.chat-document-rail-mark {
-  display: block;
-  width: 14px;
-  height: 2px;
-  border-radius: 9999px;
-  background: color-mix(in srgb, var(--foreground) 20%, transparent);
-  transform-origin: left;
-  transition: transform 200ms ease, background-color 200ms ease;
-}
-
-.chat-document-rail-mark[data-depth="1"] { width: 11px; }
-.chat-document-rail-mark[data-depth="2"] { width: 8px; }
-
-.chat-document-rail-mark[data-active] {
-  background: var(--foreground);
-  transform: scaleX(calc(14 / 9));
-}
-
-/* The contents rail's hover panel. Drawn by hand rather than with `PopoverContent` —
- * it is anchored to a rail that is itself sticky — so it carries `overlay-surface`
- * for the border and the glass treatment, and owns its own fill and radius. */
-.chat-document-rail-panel {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-start: 0;
-  max-height: 70vh;
-  overflow-y: auto;
-  width: min(15rem, calc(100cqi - 3rem));
-  border-radius: 0.5rem;
-  background: var(--popover);
-  color: var(--popover-foreground);
-  padding: 0.375rem 0.25rem;
-}
-
-.chat-document-rail-panel ol {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1875rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.chat-document-rail-panel button {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 0.5rem;
-  border-radius: 5px;
-  padding: 0.25rem;
-  text-align: left;
-  color: var(--muted-foreground);
-}
-
-.chat-document-rail-panel button:hover {
-  background: var(--muted);
-  color: var(--foreground);
-}
-
-.chat-document-rail-panel button[aria-current="true"] {
-  color: var(--foreground);
-}
-
-.chat-document-rail-panel button > span:first-child {
-  display: grid;
-  width: 14px;
-  flex: none;
-  place-items: center;
-}
-
-.chat-document-rail-label {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.8125rem;
-}
-
 /* The path breadcrumb above the viewer. */
 .chat-crumbs {
   display: flex;
@@ -1247,6 +1056,21 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
 .chat-tree-guides > span {
   position: relative;
   width: var(--tree-indent);
+}
+
+/* The project root's own row is a filled card, and its folder icon is pushed right by
+ * the disclosure chevron in front of it. Without this the whole tree hangs 5px to the
+ * left of the folder it is inside — a column that starts left of its own parent reads
+ * as broken indentation. The first slot absorbs the distance so the child icons sit
+ * under the parent's: the card draws a 1rem glyph against a row's 0.875rem, so the two
+ * columns are matched on their centers, not their edges. A row outside such a card (a
+ * single-folder project, whose root is not drawn) keeps the ordinary step. */
+.chat-tree-card {
+  --tree-root-indent: 1.125rem;
+}
+
+.chat-tree-guides > span:first-child {
+  width: var(--tree-root-indent, var(--tree-indent));
 }
 
 /* The slot ends one gap before the child icon. The parent icon's center is half an

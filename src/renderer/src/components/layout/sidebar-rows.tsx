@@ -1,23 +1,13 @@
-import { memo, useCallback, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { useCallback, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, Loading03Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowRight01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, Loading03Icon, MoreHorizontalIcon, PencilEdit02Icon, PinIcon } from "@hugeicons/core-free-icons";
 import {
-  DndContext,
-  DragOverlay,
-  PointerSensor,
-  closestCenter,
   defaultDropAnimationSideEffects,
   useDraggable,
   useDroppable,
-  useSensor,
-  useSensors,
-  type CollisionDetection,
-  type DragEndEvent,
-  type DragMoveEvent,
-  type DragStartEvent,
   type DropAnimation,
 } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";

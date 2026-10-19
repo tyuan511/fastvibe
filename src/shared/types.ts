@@ -124,6 +124,12 @@ export type EngineSessionState = {
    * which is what the composer does.
    */
   canResume?: boolean;
+  /**
+   * 回复推荐: a guess at the user's next message, generated after the last reply finished and
+   * gone as soon as a new run starts. It rides the state so a chat opened later (or in another
+   * window) shows what was already on offer; the live `reply_suggestion` event covers the rest.
+   */
+  suggestion?: string;
   sessionFile?: string;
   sessionId?: string;
   sessionName?: string;

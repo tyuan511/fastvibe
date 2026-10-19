@@ -10,7 +10,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import type { PermissionRequest } from "@shared/types";
 
 export type PermissionResponse = {

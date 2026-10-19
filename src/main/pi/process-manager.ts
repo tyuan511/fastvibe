@@ -1,10 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, rm, unlink } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { promisify } from "node:util";
+import { dirname, join, resolve } from "node:path";
 import { InMemoryModelsStore, type AssistantMessage, type AuthPrompt } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
@@ -98,6 +96,8 @@ import {
   scanImportSources,
 } from "../engine/import/runner";
 import { readAppSettings, readDefaultModel, readPreferredModelSettings } from "../engine/runtime-settings";
+import { canTurnThinkingOff, suggestionMaxTokens, withThinkingOff, withThinkingOffFallback } from "../engine/thinking-off";
+import { SUGGESTION_SYSTEM, buildCacheContext, buildSuggestionPrompt, cleanSuggestion, readSuggestionStream, suggestionMaterial, suggestionModeOf, withFinalMessage } from "../engine/reply-suggestion";
 import { submitPrompt } from "../engine/prompt-submission";
 import type { SubmitPromptRequest } from "../../shared/prompt-submission";
 import { toolImagesExtension } from "../engine/tool-images-extension";
@@ -110,7 +110,6 @@ import {
   type ImageResizer,
 } from "../engine/tool-images";
 import { applyToolModes, toolModes } from "../engine/tool-modes";
-import { currentAiLanguageDirective, currentCustomSystemPrompt } from "../engine/ai-language";
 import { buildProjectFoldersPrompt, projectFolderPaths } from "../../shared/project-folders.ts";
 import { describeProjectFolders, resolveProjectRepos } from "../engine/project-repos";
 import { uiText } from "../engine/ui-text";
@@ -125,11 +124,8 @@ import { officeFormatOf } from "../../shared/office.ts";
 import { usageLedgerFor, type UsageLedger } from "../engine/usage-ledger";
 import { cwdUsesWorktree, forkPreview, selectForkEntries, SessionForkError, writeForkSession } from "../engine/session-fork";
 import {
-  defaultWorktreePath,
   expandUserPath,
   isManagedWorktreePath,
-  parseWorktreePorcelain,
-  sanitizeSegment,
   type GitWorktreeInfo,
 } from "../engine/worktree";
 import { findDeliveredClaims, MessageQueueStore, SdkQueueClaims, type StoredQueuedPrompt } from "../engine/message-queue";
@@ -186,8 +182,6 @@ import {
   sessionEntryIds,
   sessionUserTurns,
   slimStreamEvent,
-  summarizeSubagentMessages,
-  type SubagentHostUsage,
 } from "./process-manager-events";
 import { projectSessionMessages } from "./process-manager-transcript";
 import { SkillManager } from "./skill-manager";
@@ -205,8 +199,8 @@ import { DagStore } from "../engine/dag-store";
 import { ScheduledTaskManager } from "./scheduled-task-manager";
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot } from "@shared/schedules";
 import { runDagTool } from "../dag-tools";
-import { builtinExtensionFile, builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
-import { branchExists, createGitWorktree, gitBranch, gitCommonRoot, gitToplevel, listGitWorktrees, removeGitWorktree } from "./git-worktree";
+import { builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
+import { createGitWorktree, gitBranch, gitCommonRoot, gitToplevel, listGitWorktrees, removeGitWorktree } from "./git-worktree";
 import { bindBrowserConversation, bindComputerConversation } from "./conversation-binding";
 import { createTuiWidget, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 import { ActivationTicket } from "./activation-ticket";
@@ -315,7 +309,6 @@ type OAuthLogin = {
 };
 /** Thinking blocks of the message currently streaming, per conversation. */
 type ReasoningRun = { blocks: ThinkingTiming[] };
-const execFileAsync = promisify(execFile);
 
 /** How long a permission confirmation waits before Main answers it 未批准. */
 const CONFIRM_TIMEOUT_MS = 5 * 60_000;
@@ -485,6 +478,13 @@ export class PiProcessManager {
    * second client may be looking at another one.
    */
   #turnEvents = new Map<string, { events: Record<string, unknown>[]; overflowed: boolean }>();
+  /** 回复推荐 per conversation: the text on offer, and the request still producing one. */
+  #suggestions = new Map<string, string>();
+  #suggestionRuns = new Map<string, AbortController>();
+  /** Conversations whose current reply already had its guess started from its own end, so the settle does not ask again. */
+  #suggestionEarly = new Set<string>();
+  /** Models whose endpoint refused the thinking-off fields, so the next request does not try them again. */
+  #thinkingOffRefused = new Set<string>();
   /** Conversations whose session must be re-pointed at the reloaded model registry once its run lands. */
   #modelDirty = new Set<string>();
   /**
@@ -769,6 +769,7 @@ export class PiProcessManager {
   onEvent(listener: (event: Record<string, unknown>) => void): () => void { this.#eventListeners.add(listener); return () => this.#eventListeners.delete(listener); }
   onSchedulesChanged(listener: (snapshot: ScheduledTaskSnapshot) => void): () => void { return this.#scheduledTasks.onChange(listener); }
   listSchedules(): ScheduledTaskSnapshot { return this.#scheduledTasks.list(); }
+
   scheduleHistory(id: string): ScheduledTaskRun[] { return this.#scheduledTasks.history(id); }
   hasEnabledSchedules(): boolean { return this.#scheduledTasks.hasEnabledTasks(); }
   createSchedule(draft: ScheduledTaskDraft): ScheduledTask {
@@ -2670,6 +2671,130 @@ export class PiProcessManager {
     ) ?? registry.getAvailable()[0];
   }
 
+  /**
+   * 回复推荐: guess the user's next message once a reply has finished, on the conversation's model.
+   * the conversation's own model. Fire-and-forget — nothing here may fail the run that just ended, and a
+   * guess that arrives late (the user already sent something, the chat was deleted) is
+   * dropped rather than shown.
+   */
+  #suggestNext(conversationId: string, final?: unknown): void {
+    if (readAppSettings(this.#paths).replySuggestions === false) return;
+    const session = this.#sessions.get(conversationId)?.session;
+    const registry = this.#models;
+    if (!session || !registry) return;
+    const material = suggestionMaterial(final ? withFinalMessage(session.messages, final) : session.messages);
+    if (!material) return;
+    const mode = suggestionModeOf(process.env.FASTVIBE_SUGGEST_MODE);
+    const model = session.model;
+    if (!model || !registry.hasConfiguredAuth(model)) return;
+    this.#dropSuggestion(conversationId);
+    if (final) this.#suggestionEarly.add(conversationId);
+    const controller = new AbortController();
+    this.#suggestionRuns.set(conversationId, controller);
+    const startedAt = Date.now();
+    void (async () => {
+      let outcome = "failed";
+      let usage = "";
+      try {
+        const signal = controller.signal;
+        const maxTokens = suggestionMaxTokens(model);
+        let context: Parameters<ModelRegistry["complete"]>[1];
+        let options: Parameters<ModelRegistry["complete"]>[2];
+        if (mode === "cache") {
+          // The agent's own next request plus one more user turn (see `buildCacheContext`).
+          const agent = session.agent;
+          context = (await buildCacheContext(agent, signal)) as typeof context;
+          options = { timeoutMs: 20_000, signal, ...(agent.sessionId ? { sessionId: agent.sessionId } : {}) };
+        } else {
+          context = { systemPrompt: SUGGESTION_SYSTEM, messages: [{ role: "user", content: buildSuggestionPrompt(material), timestamp: Date.now() }] };
+          options = { cacheRetention: "none", timeoutMs: 15_000, signal };
+        }
+        const response = await this.#completeQuick(registry, model, context, { ...options, maxTokens });
+        const u = response.usage;
+        usage = u ? ` in=${u.input} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} out=${u.output}` : "";
+        if (signal.aborted) { outcome = "aborted"; return; }
+        if (response.stopReason !== "stop") { outcome = `stop=${response.stopReason}`; return; }
+        const text = cleanSuggestion(response.content.map((block) => (block.type === "text" ? block.text : "")).join(""));
+        if (!text) { outcome = "unusable"; return; }
+        // From the reply's own end the run is still open on purpose (see the listener); only a guess
+        // made after the settle can be stale by a message the user has since sent.
+        if (!final && this.#busy(conversationId)) { outcome = "stale"; return; }
+        this.#suggestions.set(conversationId, text);
+        this.#announceSuggestion(conversationId, text);
+        outcome = "shown";
+      } catch (error) {
+        // A suggestion is a convenience; the composer simply keeps its usual placeholder.
+        outcome = `error: ${error instanceof Error ? error.message : String(error)}`.slice(0, 160);
+      } finally {
+        // Where the time went, per request: which path, which model, how long, and how much of the
+        // prompt the provider served from cache.
+        console.info(`[suggest] mode=${mode} from=${final ? "message_end" : "settled"} model=${model.provider}/${model.id} ms=${Date.now() - startedAt}${usage} -> ${outcome}`);
+        if (this.#suggestionRuns.get(conversationId) === controller) this.#suggestionRuns.delete(conversationId);
+      }
+    })();
+  }
+
+  /**
+   * A short side request with thinking switched off where that is possible (`thinking-off.ts`).
+   * If the endpoint refuses the extra fields the request is made again as it was, once, and the
+   * model is remembered so only the first request ever pays for the refusal.
+   */
+  async #completeQuick(
+    registry: ModelRegistry,
+    model: NonNullable<ReturnType<ModelRegistry["find"]>>,
+    context: Parameters<ModelRegistry["complete"]>[1],
+    options: NonNullable<Parameters<ModelRegistry["complete"]>[2]>,
+  ): Promise<Awaited<ReturnType<ModelRegistry["complete"]>>> {
+    const key = `${model.provider}/${model.id}`;
+    return withThinkingOffFallback(
+      (patched) => this.#streamSuggestion(registry, model, context, patched ? { ...options, onPayload: (payload: unknown) => withThinkingOff(payload) } : options),
+      {
+        eligible: canTurnThinkingOff(model),
+        key,
+        refused: this.#thinkingOffRefused,
+        aborted: () => options.signal?.aborted === true,
+        onRefused: (failure) => console.info(`[suggest] ${key} refused the thinking-off fields (${failure.slice(0, 100)}); asking again without them`),
+      },
+    );
+  }
+
+  /**
+   * The request as a stream, cancelled once the suggestion's line is complete
+   * (`readSuggestionStream`). The caller's own signal still cancels it too.
+   */
+  #streamSuggestion(
+    registry: ModelRegistry,
+    model: NonNullable<ReturnType<ModelRegistry["find"]>>,
+    context: Parameters<ModelRegistry["complete"]>[1],
+    options: NonNullable<Parameters<ModelRegistry["complete"]>[2]>,
+  ): ReturnType<ModelRegistry["complete"]> {
+    const inner = new AbortController();
+    const outer = options.signal;
+    if (outer?.aborted) inner.abort();
+    else outer?.addEventListener("abort", () => inner.abort(), { once: true });
+    const stream = registry.streamSimple(model, context, { ...options, signal: inner.signal } as Parameters<ModelRegistry["streamSimple"]>[2]);
+    return readSuggestionStream(stream as never, () => inner.abort()) as never;
+  }
+
+  /** Take the offer back: a new run started, or a newer guess is about to replace it. */
+  #dropSuggestion(conversationId: string): void {
+    this.#suggestionEarly.delete(conversationId);
+    this.#suggestionRuns.get(conversationId)?.abort();
+    this.#suggestionRuns.delete(conversationId);
+    if (this.#suggestions.delete(conversationId)) this.#announceSuggestion(conversationId, null);
+  }
+
+  /**
+   * Only the chat on screen is pushed to the windows. Any other is read from its state the
+   * moment it is opened (`EngineSessionState.suggestion`), so a background chat needs no push
+   * — only the watchers (a phone following it) get one.
+   */
+  #announceSuggestion(conversationId: string, text: string | null): void {
+    const event = { type: "reply_suggestion", conversationId, text };
+    if (this.#activeId === conversationId) this.#emit(event);
+    else this.#publishWatched(conversationId, event);
+  }
+
   /** Codex gives one extraction 70% of the model's window; three characters a token is a safe floor for mixed CJK text. */
   #memoryInputBudget(pinned?: EngineModel): number {
     const window = this.#backgroundModel(pinned)?.contextWindow;
@@ -3028,6 +3153,10 @@ export class PiProcessManager {
     this.#sendNow.end(id);
     this.#busyBroadcast.delete(id);
     this.#turnEvents.delete(id);
+    this.#suggestionRuns.get(id)?.abort();
+    this.#suggestionRuns.delete(id);
+    this.#suggestionEarly.delete(id);
+    this.#suggestions.delete(id);
     // A session torn down mid-call must not deliver its last held tool delta afterwards.
     this.#toolDeltas.drop(id);
     if (wasBusy) this.#emit({ type: "conversation_running", conversationId: id, running: false });
@@ -3448,10 +3577,6 @@ export class PiProcessManager {
 
   async #gitBranch(cwd: string): Promise<string> {
     return gitBranch(cwd);
-  }
-
-  async #branchExists(root: string, branch: string): Promise<boolean> {
-    return branchExists(root, branch);
   }
 
   async #createGitWorktree(project: string, id: string, options?: { path?: string; branch?: string; label?: string }): Promise<{ path: string; branch: string }> {
@@ -3977,6 +4102,33 @@ export class PiProcessManager {
       // Read once: the verdict is cleared below, and the background notification at
       // the end of this handler needs the same answer.
       const settledVerdict = event.type === "agent_settled" ? this.#interruptedRuns.get(conversation.id) : undefined;
+      // The offer was for the reply before this one; a new run makes it stale.
+      if (event.type === "agent_start") this.#dropSuggestion(conversation.id);
+      const suggestible = conversation.kind !== "side-chat" && !conversation.scheduledTaskId;
+      // Start guessing the moment the reply that ends the turn is complete, not when the whole run
+      // has settled — settling can wait on a compaction or a retry. Only the `fresh` path can: it
+      // needs nothing but the reply itself, where `cache` reads the agent's state. A run that goes
+      // on (a continuation, a queued message) starts again and `agent_start` takes the guess back;
+      // the composer does not draw it until the run is over.
+      if (
+        event.type === "message_end" &&
+        suggestible &&
+        isAssistantEngineMessage(event.message) &&
+        (event.message as { stopReason?: unknown }).stopReason === "stop" &&
+        suggestionModeOf(process.env.FASTVIBE_SUGGEST_MODE) === "fresh"
+      ) {
+        this.#suggestNext(conversation.id, event.message);
+      }
+      if (event.type === "agent_settled") {
+        if (suggestible && verdictAnnouncesActivity(settledVerdict) && settledVerdict !== "error") {
+          // Started from the reply's own end (and perhaps already answered, or answered with nothing):
+          // asking again would only repeat it. Otherwise this is the first and only ask.
+          if (!this.#suggestionEarly.delete(conversation.id)) this.#suggestNext(conversation.id);
+        } else {
+          // A run the user stopped (or that failed) is not one to offer a next message for.
+          this.#dropSuggestion(conversation.id);
+        }
+      }
       if (event.type === "agent_settled") {
         this.#interruptedRuns.delete(conversation.id);
         this.#repetitionWatches.delete(conversation.id);
@@ -5562,7 +5714,7 @@ export class PiProcessManager {
     // composer's chip; reporting nothing makes the chip ask for one instead.
     const picked = model && model.provider !== "unknown" ? { provider: model.provider, id: model.id } : undefined;
     const usage = session.getContextUsage();
-    return { conversationId, running: conversationId ? this.#running.get(conversationId) === true || this.#sendNow.has(conversationId) : false, model: picked, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, canResume: canResumeRun(session.messages), interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined };
+    return { conversationId, running: conversationId ? this.#running.get(conversationId) === true || this.#sendNow.has(conversationId) : false, model: picked, thinkingLevel: session.thinkingLevel, isStreaming: session.isStreaming, isCompacting: session.isCompacting, canResume: canResumeRun(session.messages), suggestion: conversationId ? this.#suggestions.get(conversationId) : undefined, interruptMode: this.#interruptMode, sessionFile: session.sessionFile, sessionId: session.sessionId, sessionName: session.sessionName, messageCount: session.messages.length, queuedMessageCount: session.pendingMessageCount, autoCompactionEnabled: session.autoCompactionEnabled, steeringMode: session.steeringMode, followUpMode: session.followUpMode, contextUsage: usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : undefined };
   }
   /** State for the empty hero: no session exists, so only the composer's own picks are known. */
   #draftState(): EngineSessionState { return { model: this.#pendingModel, thinkingLevel: this.#pendingThinking, isStreaming: false, running: false, interruptMode: this.#interruptMode }; }

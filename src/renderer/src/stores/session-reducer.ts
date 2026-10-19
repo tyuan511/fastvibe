@@ -400,6 +400,33 @@ export function reconcileMessages(previous: ChatMessage[], next: ChatMessage[]):
 }
 
 /**
+ * Take one prompt off the queue, by id, wherever it lives.
+ *
+ * The search is across conversations rather than within the active one because the id is
+ * globally unique (Main keys its pending map by it) and the caller is not always the chat on
+ * screen: a background run's question can be answered while another chat is on screen. Scoping the lookup to
+ * `activeId` made that click resolve nothing — the prompt stayed parked and the card kept
+ * saying 等你 after being answered.
+ *
+ * Returns the same object when nothing matched, so a caller can tell "answered" from "this id
+ * is not mine to settle" without comparing maps.
+ */
+export function resolvePendingById(
+  pending: Record<string, PermissionRequest[]>,
+  id: string,
+): Record<string, PermissionRequest[]> {
+  let next: Record<string, PermissionRequest[]> | null = null;
+  for (const [conversationId, list] of Object.entries(pending)) {
+    const remaining = list.filter((item) => item.id !== id);
+    if (remaining.length === list.length) continue;
+    next ??= { ...pending };
+    if (remaining.length > 0) next[conversationId] = remaining;
+    else delete next[conversationId];
+  }
+  return next ?? pending;
+}
+
+/**
  * Recompute the sidebar's 等你 set from the prompt queue.
  *
  * Returns `previous` unchanged when the set is the same. This runs on every store

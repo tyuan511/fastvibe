@@ -10,19 +10,6 @@ import { importLegacyJson, RowWriter, type Db } from "./db.ts";
 import { extraFolders } from "../../shared/project-folders.ts";
 import type { Conversation, Project, WorkspaceSnapshot } from "@shared/types";
 
-/**
- * The shape of `conversations.json`, which is imported once (§4.4) and never written again.
- * v0 was a bare array, v1 stored the project binding in `cwd`, and v2 splits `project` from
- * the engine `cwd` — the reading code below still knows all three, because the import runs
- * it rather than a second implementation that could drift.
- */
-type CatalogFile = {
-  version: 2;
-  activeId?: string;
-  projects: Project[];
-  conversations: Conversation[];
-};
-
 /** A project row is the object plus where it sits in the sidebar's drag order. */
 type ProjectRow = { project: Project; position: number };
 

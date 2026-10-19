@@ -23,6 +23,8 @@ export type AppSettings = ProxySettings & {
   thinkingLevel: ThinkingLevel | "auto";
   /** When true, an agent run holds the machine awake (`powerSaveBlocker`). */
   keepAwake: boolean;
+  /** 回复推荐: after a reply, guess the next message and offer it as the composer's placeholder. */
+  replySuggestions: boolean;
   /** Offer the model `codemode`: one script that calls many tools and returns only its output. */
   codemode: boolean;
   /** Offer the model `tool_search`, which finds and loads tools that are not declared up front. */
@@ -170,6 +172,7 @@ const DEFAULTS: AppSettings = {
   ...DEFAULT_PROXY_SETTINGS,
   thinkingLevel: "auto",
   keepAwake: true,
+  replySuggestions: true,
   codemode: true,
   toolSearch: true,
   dynamicDag: true,
@@ -205,7 +208,7 @@ const DEFAULTS: AppSettings = {
  * rules they remembered, and the retired interface-font pick). Dropped on load, so the
  * next save no longer carries them.
  */
-const REMOVED_KEYS = ["permissionMode", "defaultPermissionMode", "fullAccessConfirmed", "permissionAlways", "computerAllowedApps", "uiFont"] as const;
+const REMOVED_KEYS = ["permissionMode", "defaultPermissionMode", "fullAccessConfirmed", "permissionAlways", "computerAllowedApps", "uiFont", "smallModel"] as const;
 
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
 function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
@@ -248,6 +251,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   delete (next as Record<string, unknown>).fullDiskAccessDismissed;
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
   if (typeof next.glass !== "boolean") delete next.glass;
+  if (typeof next.replySuggestions !== "boolean") delete next.replySuggestions;
   if (typeof next.codemode !== "boolean") delete next.codemode;
   if (typeof next.toolSearch !== "boolean") delete next.toolSearch;
   if (typeof next.dynamicDag !== "boolean") delete next.dynamicDag;

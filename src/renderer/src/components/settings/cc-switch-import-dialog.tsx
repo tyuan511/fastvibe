@@ -1,23 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Add01Icon,
-  ArrowDown01Icon,
-  ArrowLeft01Icon,
-  BoxesIcon,
-  Delete02Icon,
-  Download01Icon,
   Loading03Icon,
-  PencilEdit02Icon,
-  CircleQuestionMarkIcon,
-  DragDropVerticalIcon,
-  RefreshIcon,
-  Search01Icon,
   Tick02Icon,
-  ViewIcon,
-  ViewOffSlashIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { cleanError } from "@/lib/ipc-error";
 import { cn } from "@/lib/utils";
-import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type EngineModel, type FastVibeModel, type GatewayKind, type Project, type ProjectModelDefault, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
+import { type CcSwitchCandidate, type CcSwitchScan, type ProviderConfig } from "@shared/types";
 
 export function CcSwitchImportDialog({
   open,

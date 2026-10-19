@@ -1,23 +1,19 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ScrollArea as ScrollAreaPrimitive } from "@base-ui/react/scroll-area";
-import { Add01Icon, Alert02Icon, AlertCircleIcon, Archive04Icon, ArrowLeft01Icon, ArrowRight01Icon, Clock01Icon, Delete02Icon, Folder01Icon, Folder02Icon, FolderRootIcon, Link01Icon, MessageSquarePlusIcon, MoreHorizontalIcon, PanelLeftCloseIcon, PencilEdit02Icon, PinIcon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, Clock01Icon, MessageSquarePlusIcon, PanelLeftCloseIcon, PencilEdit02Icon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
   DragOverlay,
   PointerSensor,
   closestCenter,
-  defaultDropAnimationSideEffects,
-  useDraggable,
-  useDroppable,
   useSensor,
   useSensors,
   type CollisionDetection,
   type DragEndEvent,
   type DragMoveEvent,
   type DragStartEvent,
-  type DropAnimation,
 } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { arrayMove } from "@dnd-kit/sortable";
@@ -37,7 +33,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";

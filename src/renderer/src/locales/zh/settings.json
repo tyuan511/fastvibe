@@ -154,6 +154,8 @@
  },
  "chat": {
   "title": "对话",
+  "replySuggestions": "回复推荐",
+  "replySuggestionsDesc": "回复完成后，猜你下一句想说的话，显示在输入框里，按 Tab 填入",
   "codemode": "代码模式",
   "codemodeDesc": "让模型写一段脚本，一次调用多个工具，只把结果交回给它",
   "toolSearch": "工具搜索",
@@ -200,7 +202,7 @@
   "syncFailed": "同步失败：{{error}}"
  },
  "defaultModel": {
-  "title": "新对话默认模型",
+  "title": "会话模型",
   "desc": "新建对话使用这个模型和推理强度，单个对话仍可临时切换。",
   "emptyHint": "还没有可用模型，先在下方添加或连接一个供应商。",
   "followLast": "跟随上次使用",
@@ -464,7 +466,6 @@
   "enable": "启用",
   "delete": "删除供应商",
   "apiFormat": "API 格式",
-  "apiFormatHint": "供应商的默认协议，单个模型可在详情里覆盖。",
   "apiKey": "API 密钥",
   "keySaved": "已保存，输入新密钥可更新",
   "pasteKey": "粘贴 API 密钥",
@@ -476,7 +477,7 @@
   "modelDetail": "模型详情",
   "reorderModel": "调整 {{name}} 顺序",
   "removeModel": "移除模型",
-  "noModelsAdd": "还没有模型，点击下方添加",
+  "noModelsAdd": "还没有模型，点击右上角添加",
   "noModelsConnect": "连接后即可选择模型",
   "addModel": "添加模型",
   "ccSwitchTitle": "从 CC Switch 导入",
@@ -484,6 +485,7 @@
   "ccSwitchReading": "正在读取 CC Switch…",
   "ccSwitchMissing": "未找到 CC Switch 数据库（{{path}}）。",
   "ccSwitchEmpty": "没有可导入的供应商；只有带 API 密钥的自定义供应商会导入。",
+  "notConnected": "未连接",
   "modelCount": "{{count}} 个模型",
   "cancel": "取消",
   "importCount": "导入 {{count}} 个供应商",

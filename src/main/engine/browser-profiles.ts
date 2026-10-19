@@ -1,7 +1,7 @@
 import { copyFile, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { BrowserImportResult, BrowserProfileInfo } from "@shared/types";

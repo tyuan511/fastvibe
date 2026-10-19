@@ -10,14 +10,11 @@ import type {
   ScheduledTaskSnapshot,
 } from "@shared/schedules";
 
-type ScheduleFile = { version: 1; revision: number; tasks: ScheduledTask[]; runs: ScheduledTaskRun[] };
-
 /** A run row: the record, its place in the list, and the columns that carry meaning alone. */
 type RunRow = { run: ScheduledTaskRun; position: number };
 const MAX_RUNS = 500;
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const ABSOLUTE = /T\d\d:\d\d(?::\d\d(?:\.\d+)?)?(?:Z|[+-]\d\d:\d\d)$/i;
-const DAY_MS = 86_400_000;
 const DAY_SET = new Set([0, 1, 2, 3, 4, 5, 6]);
 
 type Wall = { year: number; month: number; day: number; hour: number; minute: number; second: number };
