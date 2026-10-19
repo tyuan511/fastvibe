@@ -2797,6 +2797,10 @@ Without the re-serve, switching away and back mid-compaction lost it until the s
   文件夹的标记读起来是一根对齐的柱子。
 - **预览**：`mock.html?unread=1`（未读圆点）、`mock.html?unread=1&running=1`（同一个文件夹两种标记）。
 - 手机端的行还没画这个字段（它随 catalog 已经到那边了，只是 Dart 侧不认识）。
+- **macOS Dock 角标**：`main/dock-badge.ts` 在 app ready 后读取 gateway 的聚合快照，并观察
+  `workspace:changed` 广播，按 `unread === true` 的普通会话去重计数（本地与已绑定远程项目都包含）。
+  打开、删除、移除远程绑定后随 catalog 自动减少，零用 `app.dock.setBadge("")` 清除；重启从持久化
+  catalog 恢复，不依赖通知事件或系统通知开关，也不因窗口获得焦点就清空。退出时移除观察者。
 
 ## 排队消息的「立即发送」
 

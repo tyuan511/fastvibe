@@ -43,6 +43,7 @@ import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./upd
 import { registerAccount } from "./account";
 import { PiProcessManager } from "./pi/process-manager";
 import { applyAppIcon, createDesktopWindow } from "./desktop-window";
+import { watchUnreadBadge } from "./dock-badge";
 import { registerDesktopIpc } from "./ipc/desktop-handlers";
 import { registerDagIpc } from "./ipc/dag-handlers";
 import { registerScheduleIpc } from "./ipc/schedule-handlers";
@@ -477,6 +478,10 @@ app.whenReady().then(async () => {
   // inside the bridge — which would make the bridge and the flow import each other.
   app.once("will-quit", () => cancelGrantFlow());
   applyAppIcon();
+  if (process.platform === "darwin") {
+    const stopBadge = watchUnreadBadge(gateway.aggregate(engine.listWorkspace()), (text) => app.dock?.setBadge(text));
+    app.once("will-quit", stopBadge);
+  }
   const startupSettings = readAppSettings(getFastVibePaths());
   networkProxy = await createNetworkProxy(startupSettings);
   applyNativeTheme(startupSettings);
