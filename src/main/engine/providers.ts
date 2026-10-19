@@ -5,14 +5,12 @@ import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier,
 import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
 import { findNativeProvider, listNativeProviders, mergeNativeModels, selectedNativeModels } from "./native-providers";
 import { piProviderModelsEntry } from "./pi-global-sync.ts";
-import { engineModelBaseUrl, trimBaseUrl } from "./provider-url";
+import { engineModelBaseUrl } from "./provider-url";
 import { automaticModelApi } from "./model-api";
 import { isGatewayKind, probeGateway, readGatewayCredentials, type GatewayKind } from "./gateway-probe";
-import { JEV_KEY_ENV } from "@shared/decision";
-import { readDecisionConfig, writeDecisionConfig } from "./decision/store";
 import { deleteOAuthCredential, readOAuthProviderIds } from "./oauth-store";
 import type { FastVibePaths } from "./paths";
-import { orderProviderModels } from "@shared/model-order";
+import { orderProviderModels, orderProviders } from "@shared/model-order";
 
 /**
  * What the retired built-in FastVibe provider was, for carrying it over (see `migrateBuiltin`).
@@ -21,6 +19,13 @@ import { orderProviderModels } from "@shared/model-order";
  */
 const LEGACY_FASTVIBE_API_KEY_ENV = "FASTVIBE_API_KEY";
 const LEGACY_FASTVIBE_API: ProviderApi = "openai-responses";
+
+/**
+ * The protocol the removed 决策引擎 spoke. It is no longer a selectable API format, but a
+ * stored entry can still carry it, so `readProviders` recognises it and drops the entry.
+ * Kept as a string rather than a `ProviderApi` so the type stays a closed set.
+ */
+const RETIRED_SYSTEMONE_API = "systemone";
 
 /**
  * `native` entries point at a pi-coding-agent built-in provider: the id is the SDK
@@ -51,8 +56,6 @@ type StoredProvider = {
 type ProvidersFile = {
   version: number;
   providers: StoredProvider[];
-  /** Migration is one-shot: deleting its provider must not recreate it from the old key. */
-  legacyJevMigrated?: boolean;
 };
 
 /**
@@ -89,6 +92,10 @@ export function readProviders(paths: FastVibePaths): StoredProvider[] {
     const protocolWasPinned = !(typeof parsed.version === "number" && parsed.version >= 2);
     return parsed.providers
       .filter(isStoredProvider)
+      // A System One provider spoke the decision engine's protocol, which is gone: it is
+      // not a chat endpoint, so reading it as one would surface a provider whose every
+      // model fails. Drop the entry rather than repair it into a wrong shape.
+      .filter((entry) => (entry as { api?: unknown }).api !== RETIRED_SYSTEMONE_API)
       .map((entry) => migrateBuiltin(entry, protocolWasPinned))
       .filter((entry): entry is StoredProviderInput => entry !== null)
       .map(hydrateProvider)
@@ -132,12 +139,10 @@ function isLiveProvider(provider: StoredProvider): boolean {
 function writeProviders(
   paths: FastVibePaths,
   providers: StoredProvider[],
-  legacyJevMigrated = readProvidersFile(paths)?.legacyJevMigrated === true,
 ): void {
   const payload: ProvidersFile = {
     version: PROVIDERS_VERSION,
     providers: providers.map((provider) => ({ ...provider, models: hydrateModels(provider.models) })),
-    ...(legacyJevMigrated ? { legacyJevMigrated: true } : {}),
   };
   writeFileSync(paths.providersFile, `${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -346,7 +351,7 @@ function listedFromUnknown(payload: unknown): ListedModel[] {
   const raw = extractModelList(payload);
   const out: ListedModel[] = [];
   for (const entry of raw) {
-    // Jev's catalog is `{ models: [{ name }] }` with no `id`. The name is the id.
+    // Some relays list models as `{ models: [{ name }] }` with no `id`. The name is the id.
     const id = typeof entry === "string" ? entry : isRecord(entry) ? String(entry.id ?? entry.model ?? entry.name ?? "") : "";
     if (!id) continue;
     const name = isRecord(entry) ? String(entry.display_name ?? entry.name ?? "") : "";
@@ -387,16 +392,15 @@ export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
     (provider) => connected.has(provider.id) &&
       (provider.kind !== "native" || provider.models.some((model) => model.edited === true)),
   );
-  writeFileSync(paths.modelsJson, renderModelsJson(writable.map(chatProvider)), "utf8");
+  writeFileSync(paths.modelsJson, renderModelsJson(writable), "utf8");
 
   // Only connected providers: returning a keyless provider's models here would put
   // them in the composer's menu even though models.json omits them, and selecting
-  // one would then fail with "模型不存在". System One models are not chat models —
-  // 决策引擎 is the only caller — so they stay out of this list and out of models.json.
+  // one would then fail with "模型不存在".
   return providers
     .filter((provider) => connected.has(provider.id))
     .flatMap((provider) =>
-      orderProviderModels(chatProvider(provider).models, provider.modelOrder).map((model) => ({
+      orderProviderModels(provider.models, provider.modelOrder).map((model) => ({
         provider: provider.id,
         providerName: provider.name,
         id: model.id,
@@ -416,15 +420,6 @@ function renderModelsJson(providers: StoredProvider[]): string {
     if (entry) output[provider.id] = entry;
   }
   return `${JSON.stringify(result, null, 2)}\n`;
-}
-
-/** System One is a decision protocol, not a chat API, so those models never reach the engine. */
-function chatProvider(provider: StoredProvider): StoredProvider {
-  if (provider.kind === "native") return provider;
-  return {
-    ...provider,
-    models: provider.models.filter((model) => (model.api ?? provider.api) !== "systemone"),
-  };
 }
 
 /**
@@ -501,129 +496,6 @@ export async function addProvider(
   return id;
 }
 
-const JEV_OFFICIAL_BASE = "https://api.typesafe.ai/v1";
-const legacyJevMigrations = new Map<string, Promise<void>>();
-
-/** The one model the old decision engine called when the user never picked one. */
-function fallbackJevModel(): ProviderModel {
-  return {
-    id: "jev-latest",
-    name: "jev-latest",
-    contextWindow: 128000,
-    maxTokens: 8192,
-    reasoning: false,
-    input: ["text"],
-  };
-}
-
-/** A provider whose own protocol is System One — not a chat provider that merely pins one model. */
-function officialSystemOneProvider(providers: StoredProvider[]): StoredProvider | undefined {
-  return providers.find((provider) => provider.api === "systemone");
-}
-
-/**
- * A Jev key saved by 决策引擎 before System One was a provider protocol.
- *
- * Adds the official Jev endpoint as its own provider, moves that key onto it, and
- * fills the model list from the endpoint when it answers. If 决策引擎 was already on,
- * its selection moves to this provider (`jev-latest` when the list has it). A provider
- * the user already set to System One is left as it is. One System One model pinned on
- * a chat provider does not count — that is not the official endpoint.
- * Concurrent engine/settings callers share one run per file. Completion is persisted
- * so the old key cannot resurrect a provider the user subsequently deletes.
- */
-export function adoptLegacyJevProvider(paths: FastVibePaths): Promise<void> {
-  const pending = legacyJevMigrations.get(paths.providersFile);
-  if (pending) return pending;
-  const migration = migrateLegacyJevProvider(paths).finally(() => {
-    legacyJevMigrations.delete(paths.providersFile);
-  });
-  legacyJevMigrations.set(paths.providersFile, migration);
-  return migration;
-}
-
-async function migrateLegacyJevProvider(paths: FastVibePaths): Promise<void> {
-  if (readProvidersFile(paths)?.legacyJevMigrated) {
-    await retireLegacyJevKey(paths);
-    return;
-  }
-  const existing = officialSystemOneProvider(readProviders(paths));
-  if (existing) {
-    retargetDecisionModel(paths, existing, false);
-    await retireLegacyJevKey(paths, existing);
-    writeProviders(paths, readProviders(paths), true);
-    return;
-  }
-  const key = (await loadProviderKeys(paths))[JEV_KEY_ENV];
-  if (!key) return;
-  let models: ProviderModel[];
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    models = await Promise.race([
-      fetchProviderModels(JEV_OFFICIAL_BASE, key, "systemone"),
-      new Promise<ProviderModel[]>((_, reject) => { timeout = setTimeout(() => reject(new Error("timeout")), 8000); }),
-    ]);
-  } catch {
-    models = [];
-  } finally {
-    clearTimeout(timeout);
-  }
-  // Settings may have added or removed a provider while the catalog was in flight.
-  if (readProvidersFile(paths)?.legacyJevMigrated) return;
-  const added = officialSystemOneProvider(readProviders(paths));
-  if (added) {
-    retargetDecisionModel(paths, added, false);
-    await retireLegacyJevKey(paths, added);
-    writeProviders(paths, readProviders(paths), true);
-    return;
-  }
-  if (models.length === 0) models = [fallbackJevModel()];
-  const id = await addProvider(paths, { name: "Jev", baseUrl: JEV_OFFICIAL_BASE, apiKey: key, api: "systemone" }, models);
-  const created = readProviders(paths).find((provider) => provider.id === id);
-  if (created) {
-    retargetDecisionModel(paths, created, true);
-    await retireLegacyJevKey(paths, created);
-    writeProviders(paths, readProviders(paths), true);
-  }
-}
-
-/** Retire the old credential only together with a durable key for the official provider. */
-async function retireLegacyJevKey(paths: FastVibePaths, provider?: StoredProvider): Promise<void> {
-  const keys = await loadProviderKeys(paths);
-  const legacyKey = keys[JEV_KEY_ENV];
-  if (!legacyKey) return;
-  if (provider && trimBaseUrl(provider.baseUrl) === JEV_OFFICIAL_BASE && !keys[provider.apiKeyEnv]) {
-    // Recover a migration interrupted between writing providers.json and saving its key.
-    // A user-configured relay keeps its own credentials; never copy an official key there.
-    keys[provider.apiKeyEnv] = legacyKey;
-  }
-  delete keys[JEV_KEY_ENV];
-  await writeProviderKeys(paths, keys);
-}
-
-/**
- * Point an enabled Jev decision at a System One model of `provider`.
- * `force` is the migration that just created the official provider: the old selection
- * is replaced even when some other provider happens to list a System One model.
- */
-function retargetDecisionModel(paths: FastVibePaths, provider: StoredProvider, force: boolean): void {
-  const config = readDecisionConfig(paths.decisionFile);
-  if (config.kind !== "jev") return;
-  const models = provider.models.filter((model) => (model.api ?? provider.api) === "systemone");
-  const current = config.model;
-  if (!force && current && systemOneSelection(paths, current)) return;
-  if (current?.provider === provider.id && models.some((model) => model.id === current.id)) return;
-  const pick = models.find((model) => model.id === "jev-latest") ?? models[0];
-  if (!pick) return;
-  writeDecisionConfig(paths.decisionFile, { ...config, model: { provider: provider.id, id: pick.id } });
-}
-
-function systemOneSelection(paths: FastVibePaths, selected: { provider: string; id: string }): boolean {
-  const provider = readProviders(paths).find((item) => item.id === selected.provider);
-  const model = provider?.models.find((item) => item.id === selected.id);
-  return Boolean(provider && model && (model.api ?? provider.api) === "systemone");
-}
-
 /**
  * Enable a pi-coding-agent built-in provider with a pasted key or a subscription login.
  *
@@ -675,6 +547,11 @@ export async function addNativeProvider(
   return id;
 }
 
+/** Only the array order changes; credentials and model selections stay in place. */
+export function reorderProviders(paths: FastVibePaths, ids: string[]): void {
+  writeProviders(paths, orderProviders(readProviders(paths), ids));
+}
+
 export function updateProvider(
   paths: FastVibePaths,
   id: string,
@@ -715,13 +592,10 @@ export async function removeProvider(paths: FastVibePaths, id: string): Promise<
   const providers = readProviders(paths);
   const removed = providers.find((provider) => provider.id === id);
   if (!removed) return;
-  const removedOfficialJev = removed.api === "systemone" && trimBaseUrl(removed.baseUrl) === JEV_OFFICIAL_BASE;
-  writeProviders(paths, providers.filter((provider) => provider.id !== id),
-    removedOfficialJev || readProvidersFile(paths)?.legacyJevMigrated === true);
+  writeProviders(paths, providers.filter((provider) => provider.id !== id));
   // Both credentials live outside `providers.json`, so dropping the entry would
   // otherwise strand a `FASTVIBE_KEY_…` line and a live refresh token behind it.
   await setProviderKey(paths, removed.apiKeyEnv, "");
-  if (removedOfficialJev) await retireLegacyJevKey(paths);
   deleteOAuthCredential(paths.oauthFile, id);
 }
 

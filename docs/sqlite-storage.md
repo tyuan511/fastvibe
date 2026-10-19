@@ -2,8 +2,8 @@
 
 状态：**阶段 0–3 已实施**（2026-10-18）：`db.ts` + `db-schema.ts`（schema 到 v8），档 A（思考耗时、记忆
 账本、检查点）、档 B（会话目录）、档 C（排队消息、定时任务、DAG）都已落在 `<userData>/fastvibe.db` 上，
-各自的旧 JSON 由对应 store 在第一次打开时导入并改名保留。档 D（用量账本、决策轨迹）**未做**，见第 11 节
-的实施记录。配置类文件不动，第 10 节记录了已确认的决定。
+各自的旧 JSON 由对应 store 在第一次打开时导入并改名保留。档 D（用量账本）**未做**，见第 11 节
+的实施记录（原本的决策轨迹随决策引擎一起移除，不再存在于数据目录）。配置类文件不动，第 10 节记录了已确认的决定。
 
 ## 1. 为什么做，以及不为什么
 
@@ -36,7 +36,6 @@
 | `dag.json` | 34 B（用过会涨） | 每会话一张任务图 | 40ms 去抖，整份写 | 图越大每次写越多 |
 | `runtime/engine/scheduled-tasks.json` | 48 B | 定时任务 + 最近 500 次运行 | 整份写 | 同上 |
 | `runtime/engine/usage-ledger.jsonl` | 4.7 MB / 18,772 行 | 每轮用量 | 追加，进程内 Map 去重 | 统计页全量读取再过滤 |
-| `runtime/engine/decision-trace.jsonl` | 10.9 MB / 2,314 行 | 决策轨迹，保留最新 2000 行 | 追加，超 3000 行整份重写 | 每 1000 次追加重写一次 10 MB |
 
 ## 3. 范围
 
@@ -49,13 +48,13 @@
 | A | 检查点、思考耗时、记忆状态 | 高 | 体积大、整份重写；检查点还能顺带解决崩溃丢失。与其他代码耦合少 |
 | B | 会话目录（项目 + 会话 + activeId） | 中 | 并发正确性；可以删掉合并写。**所有人都依赖它**，风险最高 |
 | C | 排队消息、DAG 图、定时任务 | 中低 | 事务性和行级更新；体积小 |
-| D | 用量账本、决策轨迹 | 低 | 见 3.3，做不做可以到最后再定 |
+| D | 用量账本 | 低 | 见 3.3，做不做可以到最后再定 |
 
 ### 3.2 不迁
 
 | 不迁 | 原因 |
 |---|---|
-| `settings.json`、`providers.json`、`mcp.json`、`decision.json`、`browser-library.json`、`project-bindings.json`、`window-state.json`、`ssh-hosts.json`、`subagents.json`、`memory.json` | 配置，≤ 12 KB，没有收益。`settings.json` 是整份发给每个渲染窗口的，改成行存储反而要拼回整份 |
+| `settings.json`、`providers.json`、`mcp.json`、`browser-library.json`、`project-bindings.json`、`window-state.json`、`ssh-hosts.json`、`subagents.json`、`memory.json` | 配置，≤ 12 KB，没有收益。`settings.json` 是整份发给每个渲染窗口的，改成行存储反而要拼回整份 |
 | `account.json`、`remote-access.json`、`agent/oauth.json`、`gateway-credentials.json`、`rtc-device.json`、`server-identity.json`、`agent/.env` | 凭据：保持各自独立的 0600 文件。放进共享数据库会让「一个文件读写权限」变成「所有凭据的读写权限」，也打破「凭据从不经任何方法返回」的隔离 |
 | `agent/sessions/*.jsonl`（会话转写） | 格式归 pi SDK 所有（v3 的 `parentId` 链），我们只是读写方；追加写本来就适合 JSONL |
 | `models-dev.json`、`memories/`、`dag.json.results/`、`tool-images/`、`office-preview/` | 下载的快照或大块产物，文件就是合适的形态 |
@@ -66,7 +65,6 @@
 - **用量账本**：进程内 `Map` 已经按 `sessionId + entryId` 去重，首次使用时读一遍。18,772 行的解析是
   几十毫秒量级。SQLite 的好处是 `WHERE at >= ?` 可以只取统计窗口，但统计页还要把转写里的轮次合并进来，
   不是纯 SQL 能表达的，收益有限。
-- **决策轨迹**：写多读少，保留 2000 条。好处只有「裁剪不再整份重写 10 MB」和能按 `request_id` 查。
 
 两者都放最后，到时候看前三档的实际效果再决定。
 
@@ -104,7 +102,7 @@ closeDatabases()                  // 退出时 wal_checkpoint(TRUNCATE) 后关�
 | `auto_vacuum` | `INCREMENTAL`，**只能在建表前设置** | 检查点会存源码内容，删掉之后要能把文件缩回来；启动时跑一次 `incremental_vacuum` |
 
 数据库文件创建后 `chmod 0600`。`-wal` / `-shm` 应当继承主文件权限，但**不假设**，测试里直接断言三个文件
-的权限（理由：检查点含工作区源码，决策轨迹原本就是 0600，因为它记录了用户浏览过什么）。
+的权限（理由：检查点含工作区源码）。
 
 ### 4.3 表的约定：列为查询而存在，其余整体 JSON
 
@@ -281,7 +279,7 @@ CREATE TABLE dag_meta (key TEXT PRIMARY KEY, value INTEGER);   -- 全局编号�
 `schedule_meta(key, value)`（`revision`）。最近 500 次运行的裁剪（`MAX_RUNS`，保留 `queued` / `running`）
 变成一条 `DELETE`。
 
-### 5.8 用量账本与决策轨迹（档 D）
+### 5.8 用量账本（档 D）
 
 ```sql
 CREATE TABLE usage_turns (
@@ -295,17 +293,9 @@ CREATE TABLE usage_turns (
   PRIMARY KEY (session_id, entry_id)
 ) WITHOUT ROWID;
 CREATE INDEX usage_at ON usage_turns(at);
-
-CREATE TABLE decision_trace (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts         TEXT NOT NULL,
-  request_id TEXT,
-  data       TEXT NOT NULL
-);
 ```
 
 - 账本**仍然只存原始用量，不存价格**；统计时按当前价格表重新计价，这条约束不变。
-- 决策轨迹保留最新 2000 条：`DELETE … WHERE id <= MAX(id) - 2000`，不再重写整个文件。
 
 ## 6. SSH Agent
 
@@ -332,7 +322,7 @@ Agent 和桌面端跑同一份引擎代码，数据目录是它自己的（`--da
 | 1 | 档 A：思考耗时 → 记忆状态 → 检查点 | 三个 store 的现有测试改成用 `:memory:` 库后全过；检查点崩溃恢复测试 |
 | 2 | 档 B：会话目录 | `conversation-catalog-merge.test.ts` 的场景（第二个连接当作第二个进程）改写后全过；用真实数据副本演练 |
 | 3 | 档 C：排队消息 → 定时任务 → DAG | 现有 `message-queue` / `send-queued-now` / `scheduled-tasks` / `dag*` 测试全过 |
-| 4 | 档 D：用量账本、决策轨迹（**可选**） | 阶段 3 之后再评估是否值得做 |
+| 4 | 档 D：用量账本（**可选**） | 阶段 3 之后再评估是否值得做 |
 
 顺序理由：先做耦合最少、收益最清楚的档 A，把 DB 层在真实使用里磨一遍；会话目录风险最大，放在
 DB 层已经被验证之后；档 C 的 store 体积小，主要价值是事务，最后做。
@@ -385,7 +375,7 @@ store 的**公开方法签名不变**，所以只动构造和夹具，不动断�
 
 **仍待确认：**
 
-- **是否做档 D**（用量账本、决策轨迹）：阶段 3 之后再定。
+- **是否做档 D**（用量账本）：阶段 3 之后再定。
 
 ## 11. 实施记录（2026-10-18，阶段 0–3）
 
@@ -450,7 +440,7 @@ store 的**公开方法签名不变**，所以只动构造和夹具，不动断�
   `fastvibe.db`（0600，含 -wal / -shm），schema 到 v8。`electron-builder --dir` 产物里还没跑过一次
   （§9 的那条缓解项），发版前补。
 
-档 D 没做的理由仍然是 §3.3；如果之后要做，`usage_turns` / `decision_trace` 两张表已经在这份设计里，
+档 D 没做的理由仍然是 §3.3；如果之后要做，`usage_turns` 表已经在这份设计里，
 账本的「只存原始用量、按当前价格重新计价」那条约束不变。
 
 ## 12. 完成之后要同步的文档

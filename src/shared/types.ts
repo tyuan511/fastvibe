@@ -600,11 +600,6 @@ export type BrowserRequest = {
   newTab?: boolean;
   timeoutMs?: number;
   conversationId?: string;
-  /** `decision-click`: point in the guest's viewport, from the decision loop's target script. */
-  x?: number;
-  y?: number;
-  /** `decision-wheel`: pixels to scroll down (negative scrolls up). */
-  delta?: number;
 };
 
 /**
@@ -926,7 +921,7 @@ export type ProviderModel = {
 };
 
 /** Streaming APIs offered in settings; values match pi-coding-agent's `api` field. */
-export const PROVIDER_APIS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai", "systemone"] as const;
+export const PROVIDER_APIS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"] as const;
 
 export type ProviderApi = (typeof PROVIDER_APIS)[number];
 

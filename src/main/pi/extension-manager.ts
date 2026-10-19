@@ -24,7 +24,6 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
   { source: "fastvibe:conversation-search", file: "conversation-search.ts" },
   { source: "fastvibe:worktree", file: "worktree.ts" },
   { source: "fastvibe:present", file: "present.ts" },
-  { source: "fastvibe:batch-decide", file: "batch-decide.ts" },
   { source: "fastvibe:app-config", file: "app-config.ts" },
   { source: "fastvibe:dag", file: "dag.ts" },
   { source: "fastvibe:schedules", file: "schedules.ts" },

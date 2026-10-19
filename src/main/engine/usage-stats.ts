@@ -15,7 +15,7 @@ import { catalogPrice } from "./models-dev";
 import type { FastVibePaths } from "./paths";
 import { priceUsage } from "./pricing";
 import { modelPriceIndex, readProviders } from "./providers";
-import { parseSessionTurns, turnKey, usageLedgerFor, type UsageTurn } from "./usage-ledger";
+import { parseSessionTurns, settleParseCache, turnKey, usePersistentParseCache, usageLedgerFor, type UsageTurn } from "./usage-ledger";
 
 /**
  * Usage statistics are derived from the engine's append-only session transcripts (one
@@ -46,6 +46,7 @@ export async function collectUsageStats(
   conversations: Conversation[] = [],
 ): Promise<UsageStats> {
   const files = await listSessionFiles(paths.sessionsDir);
+  usePersistentParseCache(paths.usageParseCacheFile);
   const prices = modelPriceIndex(paths);
   // A turn records only its provider *id* (`fastvibe`, or the internal
   // `custom-<slug>` of a user-added provider), which is not a name a user should ever
@@ -57,6 +58,8 @@ export async function collectUsageStats(
   const parsed = await mapLimited(files, PARSE_CONCURRENCY, (file) =>
     parseSessionTurns(file, { since: parseFloor(range) }).catch(() => null),
   );
+
+  await settleParseCache(files);
 
   // A transcript on disk wins over the ledger for the same turn; either way the key is
   // `sessionId` + entry id, so a session deleted and reimported cannot double-count.

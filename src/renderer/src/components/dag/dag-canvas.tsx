@@ -160,12 +160,55 @@ export function DagCanvas({
   );
 }
 
+/**
+ * What can be done to the whole graph right now: stop a run in flight, carry on from one that
+ * was stopped. Split out of `DagSummary` because the inline card's header is a fold trigger and
+ * a button cannot contain a button — the actions sit beside the trigger, not inside it.
+ */
+export function DagGraphActions({
+  nodes,
+  conversationId,
+}: {
+  nodes: DagNode[];
+  conversationId: string;
+}): JSX.Element | null {
+  const state = dagGraphState(nodes);
+  const { t } = useTranslation("sidepane");
+  const failure = (error: unknown): void => void toast.error(error instanceof Error ? error.message : String(error));
+
+  if (state === "running") {
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        className="text-muted-foreground"
+        onClick={() => void window.fastvibe.dag.cancel(conversationId).catch(failure)}
+      >
+        <HugeiconsIcon strokeWidth={2} icon={StopIcon} data-icon="inline-start" />
+        {t("dag.cancelAll")}
+      </Button>
+    );
+  }
+  if (state === "stopped") {
+    // Stopped, not lost: what finished stays finished, and this carries on from there.
+    return (
+      <Button type="button" size="xs" onClick={() => void window.fastvibe.dag.resume(conversationId).catch(failure)}>
+        <HugeiconsIcon strokeWidth={2} icon={PlayIcon} data-icon="inline-start" />
+        {t("dag.resume")}
+      </Button>
+    );
+  }
+  return null;
+}
+
 /** Where the whole graph stands: a state, a bar split by node state, the count, and what can be done. */
 export function DagSummary({
   nodes,
   conversationId,
   compact = false,
   trailing,
+  hideActions = false,
 }: {
   nodes: DagNode[];
   conversationId: string;
@@ -173,6 +216,8 @@ export function DagSummary({
   compact?: boolean;
   /** Placed after the actions — the inline card's 最大化. */
   trailing?: ReactNode;
+  /** Draw only the reading part (state, count, bar): the caller owns `DagGraphActions`. */
+  hideActions?: boolean;
 }): JSX.Element {
   const state = dagGraphState(nodes);
   const { t } = useTranslation("sidepane");
@@ -180,7 +225,6 @@ export function DagSummary({
   for (const node of nodes) counts.set(node.status, (counts.get(node.status) ?? 0) + 1);
   const order: DagNodeStatus[] = ["completed", "running", "blocked", "failed", "cancelled", "skipped", "pending"];
   const completed = counts.get("completed") ?? 0;
-  const failure = (error: unknown): void => void toast.error(error instanceof Error ? error.message : String(error));
 
   return (
     <div className={cn("flex shrink-0 flex-col gap-2", !compact && "px-4 pt-3 pb-3")}>
@@ -191,28 +235,12 @@ export function DagSummary({
         </span>
         <span className="text-xs text-muted-foreground tabular-nums">{t("dag.progress", { done: completed, total: nodes.length })}</span>
         {compact ? <Bar nodes={nodes} counts={counts} order={order} className="mx-1 min-w-12 flex-1" label={t("dag.progress", { done: completed, total: nodes.length })} /> : null}
-        <span className={cn("flex shrink-0 items-center gap-1", !compact && "ml-auto")}>
-          {state === "running" ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              className="text-muted-foreground"
-              onClick={() => void window.fastvibe.dag.cancel(conversationId).catch(failure)}
-            >
-              <HugeiconsIcon strokeWidth={2} icon={StopIcon} data-icon="inline-start" />
-              {t("dag.cancelAll")}
-            </Button>
-          ) : null}
-          {state === "stopped" ? (
-            // Stopped, not lost: what finished stays finished, and this carries on from there.
-            <Button type="button" size="xs" onClick={() => void window.fastvibe.dag.resume(conversationId).catch(failure)}>
-              <HugeiconsIcon strokeWidth={2} icon={PlayIcon} data-icon="inline-start" />
-              {t("dag.resume")}
-            </Button>
-          ) : null}
-          {trailing}
-        </span>
+        {!hideActions || trailing ? (
+          <span className={cn("flex shrink-0 items-center gap-1", !compact && "ml-auto")}>
+            {hideActions ? null : <DagGraphActions nodes={nodes} conversationId={conversationId} />}
+            {trailing}
+          </span>
+        ) : null}
       </div>
       {compact ? null : <Bar nodes={nodes} counts={counts} order={order} className="w-full" label={t("dag.progress", { done: completed, total: nodes.length })} />}
       {compact ? null : (

@@ -19,16 +19,6 @@ import {
 } from "./engine/app-settings";
 import { configureFastVibeUserData, getFastVibePaths, type FastVibePaths } from "./engine/paths";
 import { closeDatabases, openDatabase } from "./engine/db";
-import { readDecisionConfig, writeDecisionConfig } from "./engine/decision/store";
-import { testJevConnection } from "./engine/decision/backends/jev";
-import { decisionModelConfigOf, JEV_KEY_ENV, type DecisionKeyState, type DecisionModelConfig, type DecisionTestResult } from "@shared/decision";
-import { adoptLegacyJevProvider } from "./engine/providers";
-import { resolveSystemOne } from "./engine/decision/systemone";
-import { installBrowserTaskGlobal } from "./pi/browser-task-runner";
-import { installComputerTaskGlobal } from "./pi/computer-task-runner";
-import { installDecisionScenarioGlobals } from "./pi/decision-scenarios";
-import { installDecisionTaskDependencies, revokeDecisionTasks } from "./pi/decision-task-runner";
-import { loadProviderKeys, setProviderKey } from "./engine/providers";
 import { presentNotification, readNotificationSettings } from "./engine/notifications";
 import { readAgentConfig } from "./engine/runtime-config";
 import {
@@ -319,55 +309,6 @@ function modelsDevInfo(stats: ModelsDevStats): AppModelsDevInfo {
   };
 }
 
-/**
- * The decision engine's UI-facing methods (docs/decision-layer.md §5): which decision
- * model browser use runs on, the Jev key, and reachability. `browser_task` reads the
- * config per run; sessions pick up whether to offer the tool when their tools load.
- */
-function registerDecisionIpc(): void {
-  const paths = () => getFastVibePaths();
-  const keyState = async (): Promise<DecisionKeyState> => {
-    await adoptLegacyJevProvider(paths());
-    return { jev: Boolean(await resolveSystemOne(paths())) };
-  };
-  handle(Ipc.decisionGetConfig, async () => {
-    await adoptLegacyJevProvider(paths());
-    return readDecisionConfig(paths().decisionFile);
-  });
-  handle(Ipc.decisionSaveConfig, (payload: unknown, ctx) => {
-    const config = decisionModelConfigOf(payload);
-    const previous = readDecisionConfig(paths().decisionFile);
-    writeDecisionConfig(paths().decisionFile, config);
-    // Switching the model withdraws the old one's authority: running tasks stop at their next decision.
-    if (JSON.stringify(previous) !== JSON.stringify(config)) revokeDecisionTasks();
-    // Each window holds its own copy, loaded once — same rule as `settings:changed`.
-    broadcast(Ipc.decisionChanged, config, { except: ctx.origin });
-    return config;
-  });
-  handle(Ipc.decisionKeyState, keyState);
-  handle(Ipc.decisionSetKey, async (payload: { key?: unknown }): Promise<DecisionKeyState> => {
-    const key = typeof payload?.key === "string" ? payload.key.trim() : "";
-    // A new key is checked before it is stored. A failed check leaves the previous key in place.
-    if (key) {
-      const result = await testJevConnection(key);
-      if (!result.ok) throw new Error(uiText(`API key 验证失败：${result.message}`, `API key check failed: ${result.message}`));
-    }
-    await setProviderKey(paths(), JEV_KEY_ENV, key);
-    if (!key) revokeDecisionTasks();
-    return keyState();
-  });
-  handle(Ipc.decisionTest, async (payload: unknown): Promise<DecisionTestResult> => {
-    await adoptLegacyJevProvider(paths());
-    const config: DecisionModelConfig = decisionModelConfigOf(payload);
-    if (config.kind !== "jev") return { ok: false, error: uiText("未选择决策模型", "No decision model is selected") };
-    const resolved = await resolveSystemOne(paths());
-    if (!resolved) return { ok: false, error: uiText("还没有可用的 System One 模型", "No System One model is available") };
-    const modelsUrl = resolved.endpoint.replace(/\/systemone$/, "/models");
-    const result = await testJevConnection(resolved.apiKey, { url: modelsUrl });
-    return result.ok ? { ok: true, model: resolved.model } : { ok: false, error: result.message };
-  });
-}
-
 function registerSshIpc(): void {
   handle(Ipc.sshState, () => ({ hostId: null, status: "disconnected" } satisfies RemoteHostConnectionState));
   handle(Ipc.sshStates, () => [...sshUiStates.values()]);
@@ -569,12 +510,6 @@ app.whenReady().then(async () => {
   if (shutdownPhase !== "running") return;
   log.info("app ready");
   installBrowserGlobal();
-  installDecisionTaskDependencies({
-    completeText: (conversationId, system, user, signal) => engine.completeDecisionText(conversationId, system, user, signal),
-  });
-  installBrowserTaskGlobal();
-  installComputerTaskGlobal();
-  installDecisionScenarioGlobals();
   // Registers the bridge global and an at-quit driver shutdown. The native library is
   // still not loaded here. A saved enabled preference must not start a driver
   // download or update at launch; wait for an explicit action.
@@ -634,7 +569,6 @@ app.whenReady().then(async () => {
   );
   registerRemoteIpc(queueSettingsWrite, account);
   registerSshIpc();
-  registerDecisionIpc();
   createAppServer({
     identity: loadOrCreateServerIdentity(getFastVibePaths().serverIdentityFile, {
       version: app.getVersion(),

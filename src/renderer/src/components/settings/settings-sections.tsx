@@ -5,7 +5,6 @@ import {
   Archive04Icon,
   BotIcon,
   BoxesIcon,
-  BrainCircuitIcon,
   ComputerIcon,
   Globe02Icon,
   ImportIcon,
@@ -38,7 +37,6 @@ export type SectionId =
   | "usage"
   | "providers"
   | "subagents"
-  | "decision"
   | "memory"
   | "mcp"
   | "skills"
@@ -84,7 +82,6 @@ export const SETTINGS_SECTIONS: Array<{
     items: [
       { id: "providers", icon: <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} /> },
       { id: "subagents", icon: <HugeiconsIcon strokeWidth={2} icon={BotIcon} /> },
-      { id: "decision", icon: <HugeiconsIcon strokeWidth={2} icon={BrainCircuitIcon} /> },
       { id: "memory", icon: <HugeiconsIcon strokeWidth={2} icon={StickyNote01Icon} /> },
       { id: "mcp", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
       { id: "skills", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },

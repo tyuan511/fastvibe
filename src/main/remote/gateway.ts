@@ -136,6 +136,7 @@ const CONFIG_SYNC_METHODS: ReadonlySet<string> = new Set([
   Ipc.providersRefresh,
   Ipc.providersRemove,
   Ipc.providersUpdate,
+  Ipc.providersReorder,
   Ipc.providersOAuthLogin,
   Ipc.engineSaveMcpServers,
   Ipc.engineSaveAgentConfig,

@@ -44,10 +44,6 @@ export type FastVibePaths = {
   providersFile: string;
   gatewayCredentialsFile: string;
   mcpFile: string;
-  /** Which decision model browser use runs on (off / Jev); see `src/main/engine/decision/`. */
-  decisionFile: string;
-  /** Append-only record of decision-layer calls: hashes and summaries, never page text. */
-  decisionTraceFile: string;
   /** Renderer UI preferences (theme, chat behaviour, …). */
   settingsFile: string;
   /** Main-owned normal window size and maximized state. */
@@ -58,6 +54,8 @@ export type FastVibePaths = {
   reasoningFile: string;
   /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
   usageLedgerFile: string;
+  /** Derived: transcript parses for 使用统计, safe to delete (`usage-ledger.ts`). */
+  usageParseCacheFile: string;
   /** Durable memory configuration, separate from renderer settings. */
   memoryFile: string;
   /** What the memory pipeline has distilled per conversation (its bookkeeping, not the files the agent reads). */
@@ -193,13 +191,12 @@ function buildFastVibePaths(): FastVibePaths {
     /** Panel credentials for custom relays (new-api); never served, never in providers.json. */
     gatewayCredentialsFile: join(userData, "gateway-credentials.json"),
     mcpFile: join(userData, "mcp.json"),
-    decisionFile: join(userData, "decision.json"),
-    decisionTraceFile: join(runtimeRoot, "decision-trace.jsonl"),
     settingsFile: join(userData, "settings.json"),
     windowStateFile: join(userData, "window-state.json"),
     subagentsFile: join(agentDir, "subagents.json"),
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),
+    usageParseCacheFile: join(runtimeRoot, "usage-parse-cache.json"),
     memoryFile: join(runtimeRoot, "memory.json"),
     memoryStateFile: join(runtimeRoot, "memory-state.json"),
     memoriesDir: join(runtimeRoot, "memories"),

@@ -34,7 +34,6 @@ Runtime data lives under the app userData directory:
     agent/oauth.json     subscription (OAuth) tokens — the one credential written to disk
     agent/models.json    the only provider config the SDK reads (custom + builtin providers)
     usage-ledger.jsonl   append-only record of finalized turns, so 使用统计 survives deletion
-    decision-trace.jsonl 决策轨迹（写多读少，仍是 JSONL）
     memory.json          长期记忆开关（`{ version: 2, enabled }`，配置不迁）
     memories/            智能体读取的记忆文件夹：memory_summary.md、MEMORY.md、rollout_summaries/…
     wt                   git worktrees for isolated conversations
@@ -543,8 +542,9 @@ The same two rules reach past the sidebar. **Touch** is `pointer-coarse:` in cla
 - Narrow drops the header's project prefix (it is `shrink-0` and ate the title) and the
   side-pane toggle (there is no side pane to open).
 - **Settings is master/detail when narrow**: the section list is a page, a section is a
-  page with 〈 设置 to go back (`listOpen`), and 模型管理 does the same one level down
-  (`detailOpen`). Opening at `/settings/general` — what the sidebar does — lands on the
+  page with 〈 设置 to go back (`listOpen`). 模型管理 uses the same single-column provider
+  accordion on every viewport; expanding a row shows its configuration and models in place.
+  Opening at `/settings/general` — what the sidebar does — lands on the
   list; any other deep link lands on that pane. `SettingsRow` wraps (label `basis-48`), so
   a wide select drops under its label instead of squeezing it.
 
@@ -632,6 +632,8 @@ origin down through the engine to the catalog would buy only that.
 - **schema 版本用 `PRAGMA user_version`**，迁移是 `db-schema.ts` 里有序的函数数组，一步一个事务，
   并且在事务*内*重读版本号：两个进程同时第一次建库时，后进的那个要跳过而不是撞上
   `CREATE TABLE … already exists`。库版本高于本应用已知版本时**拒绝打开**并给出可读错误，不猜怎么降级。
+  已使用的迁移编号不能删除或复用：第 9 步对应已移除的草稿功能，保留空迁移兼容已有 schema 9，
+  不删除旧表，也不回写较低的 `user_version`。
 - **旧 JSON 由每个 store 在自己第一次打开时导入**（`importLegacyJson`），用该 store 现有的读取/规范化代码，
   所以会话目录的 v0/v1 迁移不必重写第二遍。导入与写行在同一个事务里，提交前比对「写入方声明的行数」与
   `SELECT COUNT(*)`，对不上就整笔回滚、旧文件原样不动。提交后把旧文件**改名**成 `.migrated-<时间戳>`
@@ -1361,7 +1363,11 @@ must not slide under them.
 
 ## Providers
 
-已保存的模型可在供应商详情里自检。`providers:test` 仅接受供应商与模型 id，通过当前 `ModelRegistry.streamSimple` 的协议和鉴权发两个有界小请求：普通回复和一个不执行的测试工具。结果只包含状态、首字耗时和错误分类，不把提供方原始响应或凭据传给渲染层。桌面与 SSH Agent 注册同一调用。
+供应商列表与其他设置共用 `SettingsGroup` 外框，各供应商作为无间距的折叠行，内部使用细分隔线。供应商名称右侧的重命名图标在 hover / 键盘聚焦时显示，点击后直接原位编辑左侧名称，Enter / 失焦保存、Escape 取消；删除和启用开关位于标题栏右侧，收起时也能操作。整行标题栏可展开或收起，编辑控件独立于展开与拖动触发区。余额作为展开区内独立的一项，承接金额刷新、上游识别和面板凭据配置，不在标题栏重复显示。
+
+供应商标题行和模型行直接拖动排序，不展示拖动手柄；hover 显示抓手光标，轻点仍展开或编辑，操作按钮不启动拖动。触屏长按 250ms 才激活，键盘用 Alt + ↑ / ↓ 移动。供应商顺序通过 `providers:reorder` 保存到原供应商数组；排序只提交 ID，遗漏的新供应商保留在末尾，桌面和 SSH 共用同一调用。
+
+已保存的模型可点供应商详情中模型行右侧的小图标自检，结果通过图标状态和轻提示显示。`providers:test` 仅接受供应商与模型 id，通过当前 `ModelRegistry.streamSimple` 的协议和鉴权发两个有界小请求：普通回复和一个不执行的测试工具。结果只包含状态、首字耗时和错误分类，不把提供方原始响应或凭据传给渲染层。桌面与 SSH Agent 注册同一调用。
 
 There is **no built-in provider**: the app ships with none, and there is no connect wall
 and no separate 「not configured」 engine state. An install with no provider boots an
@@ -1434,6 +1440,17 @@ in place (`migrateBuiltin`): the id stays `fastvibe` and the key stays in
 other. A v1 entry's `api` was the code's default rather than a choice, so it is read as
 `openai-responses`; an entry with no models was never connected and is dropped instead of
 left as an empty row. Nothing is written until the next ordinary provider edit.
+
+**The 决策引擎 (Jev) is gone, and so is the `systemone` API format it existed for.** It was a
+second model that decided each browser/desktop click and the `batch_decide` tool; removing it
+took `src/main/engine/decision/`, the `browser_task` / `computer_task` / `batch_decide` tools,
+the 设置 → 决策引擎 pane, the `decision:*` methods and `decision.json` with it. Browser and
+computer use are the atomic `browser_*` / `computer_*` tools the main model steps through —
+nothing else. A `providers.json` written by those builds can still hold a provider whose own
+protocol was `systemone`: `readProviders` **drops that entry** rather than repairing it, because
+hydrating it would silently turn a decision endpoint into an OpenAI-shaped chat provider whose
+models fail on every request (the same reason `chatProvider` used to keep those models out of
+`models.json`). Its key stays in `agent/.env`, unreferenced and inert.
 
 **A built-in can also be configured by a subscription login (OAuth).** Claude
 Pro/Max and ChatGPT Plus/Pro are the two people actually want, but nothing names
@@ -1646,7 +1663,7 @@ main column — not a settings pane. FastVibe hosts pi extensions (the SDK's plu
 terminal-only surface onto the GUI. **Built-in** extensions ship with the app
 (`resources/extensions/goal.ts`, `handoff.ts`, `todo.ts`, `question.ts`, `folder-consent.ts`, `session-title.ts`,
 `browser-use.ts`, `computer-use.ts`, `web-search.ts`, `conversation-search.ts`, `worktree.ts`,
-`output-language.ts`, `batch-decide.ts`, `app-config.ts`, `dag.ts`, `subagent/index.ts`); anything else
+`output-language.ts`, `app-config.ts`, `dag.ts`, `subagent/index.ts`); anything else
 the user installs at runtime via 设置 → 插件, which writes to the isolated `agentDir`
 (`ExtensionManager` → SDK `DefaultPackageManager`), never `~/.pi`.
 
@@ -2019,11 +2036,6 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   or rewrite the transcript. System prompts, thinking blocks, images and hidden custom messages
   are excluded. It is available to main sessions only;
   throwaway subagents still load just `folder-consent`.
-- **Batch decide** — `batch-decide.ts` registers `batch_decide`, the decision engine as a tool
-  for the main agent: one closed question (choice / score / yes_no) answered per item for 5–500
-  items. Offered only while 设置 → 决策引擎 › 批量决策 is on (re-read every turn); the scope
-  rules live in the shape (`engine/decision/batch.ts`) and the prompt guidelines, and
-  low-confidence items come back as `review` for the agent to judge itself. See docs/decision-layer.md §7.10.
 - **App config** — `app-config.ts` registers `fastvibe_config_get` / `fastvibe_config_apply`, the
   agent's hands on FastVibe's *own* settings panes; the built-in skill `resources/skills/fastvibe-setup`
   is the playbook (how remote access, MCP servers and the UI settings are filled in for the user).
@@ -2105,6 +2117,9 @@ Word / Excel / PowerPoint 的预览和智能体编辑都走随安装包发布的
 - **引用选中。** docx / pptx 的实时预览标题栏有「引用选中内容」，走 `office:selection`（`officecli get <file> selected --json`），把文件名、稳定的 `@id=` 路径和一小段文字放进输入框。xlsx 没有元素路径，不显示这个按钮。技能里写明：文件没在侧栏实时预览里打开时不要用 `watch goto` / `watch mark`。
 - **写命令。** `tool_execution_start` 认出 bash 里的 `officecli set/add/remove/batch/merge…`，在命令跑之前对目标文件做二进制快照（zip 含 NUL，文本快照会把它当成不可回退）。重试按这份字节写回。转写里的「已修改 N 个文件」也列出这些文件，没有逐行 diff。
 - **远程。** `scripts/build-agent-runtime.mjs` 把对应 linux 架构的二进制打进 `resources/officecli/`（缺了就拒绝打包）。`office:render` 已按路径路由到那台主机，HTML 经媒体代理回来。实时 watch 仍只在本机侧栏。
+- **实时预览不让人干等。** `officecli watch` 起来要 1–3 s，期间窗格是空的。`OfficeFrame` 同时要静态渲染（有缓存，
+  约 0.5 s 或更快），先显示它，live 页面就绪后替换；watch 一直起不来时静态页就留着，只有两者都没有才报错。
+  iframe 的 sandbox 跟着**实际加载的页面**走（`liveReady`），不是跟着「要求了 live」——静态页不该拿到 `allow-same-origin`。
 - **手机。** 打开 docx / xlsx / pptx 时调用 `office:render`，把主机渲染的 HTML 放进 WebView。见 `docs/office-officecli.md`。
 
 ### 会话内联预览（图片 / 视频 / HTML / Office，`shared/inline-media.ts`）
@@ -2570,6 +2585,11 @@ Settings → 使用统计 (`components/settings/usage-settings.tsx`) is fed by
   edit re-prices the ledger and the transcripts alike; storing a price would freeze it.
 - **The ledger is a supplement, not the source of truth.** Tokens and cost are always
   recomputed from raw fields, and `parseSessionTurns` is memoised on `mtimeMs` + `size`.
+  **Parses are kept between launches** in `runtime/engine/usage-parse-cache.json` (`ParseCacheFile`, keyed by
+  path and valid for exactly the `mtimeMs` + `size` it was made at; 294 MB: first read ~1 s, afterwards 8 ms, and
+  only a transcript that grew is parsed again). It is a file of its own rather than a table in `fastvibe.db`
+  on purpose: it is derived and deletable, and a new table is a schema step, which makes every older build refuse
+  to open the shared database. A missing, torn or foreign-version file is an empty cache.
   Tool results and prompts — nearly all of a transcript's bytes — are skipped by their
   envelope without being parsed (`carriesNoUsage`: the entry's *first* `"message":` key, never
   a match further in, where a tool call's arguments can hold the same words).
@@ -2577,6 +2597,16 @@ Settings → 使用统计 (`components/settings/usage-settings.tsx`) is fed by
   they are never *less* correct than before, only less complete after a deletion.
 - Appends are synchronous (one line per turn) so a capture that precedes an `unlink` is
   durable before the file disappears; `flush()` is a no-op kept for the shutdown path.
+
+## Git 状态轮询（`lib/use-git-status.ts`）
+
+输入框的分支标签、资源面板、文件树和 Git 面板读的是同一份状态。它们以前各有一个定时器，而且每个定时器都
+`force` 绕过缓存——同一个工作区上 N 个界面就是每拍 N 轮 `git status` + `git diff --numstat`，慢调用日志里
+`workspace:git-status` 成对出现（78 次、平均 714 ms，同样的命令在本仓库 50 ms、在 1.6 万文件的仓库 150–230 ms，
+多出来的是并发）。现在**每个工作区一个轮询**（`subscribeGitStatus`）：第一个订阅者起拍，后来者加入，
+最后一个离开就停；退避（相同结果翻倍到 60 s）、隐藏窗口暂停、窗口聚焦/可见时立即读一次，都只有一份。
+`useGitStatus` 的 `refreshKey` 翻转（一轮结束）走 `refreshGitStatus` 强制读；Git 面板只在**签名变了**
+才 `setEpoch`（那会重读选中的 diff 和历史），其余时候收到同样的状态什么也不做。
 
 ## 会话是否在运行（`conversation_running`）
 
@@ -2871,7 +2901,7 @@ A thought is its own block and
 splits the batch, the same way prose does; it is not folded into the row. Expanding
 the row shows the calls.
 
-Questions, todos, sub-agents, presented files, decision tasks and the task graph stay on
+Questions, todos, sub-agents, presented files and the task graph stay on
 their own line and break the run — the row is the status. A single tool is never folded;
 it already is its own description. The two folds are separate: this one is while the run is
 going; once it settles, the outer 「用时」 fold takes the whole run — thoughts, calls, and these
@@ -2913,6 +2943,26 @@ row then reports that whole request's time, an upper bound rather than the thoug
 of a bare 「思考」. Measured bounds always win. The owner lookup is a `Map<MessagePart, ChatMessage>`
 built from the row's messages, which works because `mergeAssistantRun` passes thinking parts
 through by reference.
+
+## 空的思考不占一行（`lib/thinking-row.ts`）
+
+供应商确实会结束一个**没有内容**的思考块：本机 400 份转写里扫出 355 条，正文常常就是一个空格。
+`map-messages` 只丢得掉空字符串，空格是 truthy，于是它一路走到界面，画成一行「思考 · 3 秒」，点开是空框——
+一句关于从未发生的思考的陈述，夹在真正的思考与工具调用之间。
+
+- **判定只有一处。** `thinkingTakesRow(text, live)` 是纯函数（`test/thinking-row.test.ts` 钉住），
+  `message-row.tsx` 的 `partTakesRow` 把它同时用在转写、折叠运行过程的切点与 `processOverflow` 的收集上，
+  三处不会各说各话。`text.trim()` 为空即算空（NBSP 也在 `trim` 之内）。
+- **还在写的空思考照旧显示。** 它是回复最后一个 part 且本轮仍在跑时，「正在思考」是**在飞的工作**的真报告——
+  思考的第一个 token 到来之前，那行闪光的字是读者唯一的信号。`liveTail` 的判定没跟着改，正是因为这一点：
+  藏掉活着的空块，WorkingStatus 会补上第二行标记，那段等待反而更吵。
+- **顺带修掉折叠的一个哑 bug。** 空思考落在回复**末尾**时，旧切点把它算作过程，`cut` 推到 `parts.length`，
+  `parts.slice(cut)` 里再没有 text——那一轮**根本没有「用时」折叠行**，整段过程摊在屏幕上。
+  切点现在只跳过真正占一行的 part，`fold` 里「body 会不会是空的」那条检查也被同一个条件包含了。
+- **不在 Main 过滤。** `applyThinkingTimings` 按**内容顺序**把测到的时长配对给各个思考块，先在投影里丢掉空块
+  会让后面每一块各拿错一份时长。手机（Flutter）自己解析事件，这一行仍然会画——要一起收掉得去
+  `apps/mobile_flutter` 那边做同一条判断。
+- 预览：`mock.html?thinking=blank`（在真实思考前塞一个空格块，最后一轮末尾再塞一个）。
 
 ## 原生压缩的窗口保护（`engine/native-compaction.ts`）
 
@@ -2958,6 +3008,16 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
   is now one read (16 ms for state and transcript, 250 ms for stats), and a read asked for
   while one is in flight still runs once more after it. `createConversationRefresh` itself
   stays immediate — App's own reads on open go through it directly.
+- **A long turn costs the same per token as a short one.** Three things grew with the number of
+  tool calls in the reply being streamed (measured by replaying 5 → 400 calls and then 300 text
+  deltas in an offscreen window: main-thread busy 0.6 s → 2.4 s, long tasks from 400 calls on;
+  now 0.8 s → 1.0 s, none). `TurnRail` re-measured every tick with `getBoundingClientRect` after
+  *every* render — and it renders on every scroll tick, which a following reader produces
+  continuously — so it measures only when the tick count changes (`useLayoutEffect` deps).
+  `groupParts` rebuilt every settled tool run's `ToolGroup` per flush, writing its summary line again and
+  defeating `ToolGroupRow`'s memo, so a group is reused while it holds the very same tool blocks, in order,
+  under the same language (`builtGroups` in `lib/group-parts.tsx`; finished tool blocks keep their identity
+  because `applyEngineEvent` clones only the block being written).
 - **Not `message_end`.** An assistant message that only requested a tool call has no usage
   yet, and the tool result that follows does not move the window on its own; refreshing per
   message would re-read the whole transcript several times a turn for a value that cannot
@@ -3205,6 +3265,15 @@ FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在�
 - **展示。** `dag_add_tasks` 原位画本批内联图，留在运行过程折叠之外；最大化显示整张图。
   节点详情展示父子任务、验收、结论、证据和分页结果。执行页复用 `SidePaneSubagent`，用 `dagRunStatus` 映射终态。
   DAG 运行不自动打开标签页；侧栏子任务行按需打开所属会话里的执行页。
+  - **内联图默认收起成一行**（`dag/dag-inline.tsx`），点标题行才展开画布：三个任务就是一屏的点阵和卡片，
+    比产生它的那条回复还占地方。收起时标题行仍是完整的一行——状态、进度条、`取消全部`、最大化都在，
+    所以不打开也能停掉在跑的一批；和 composer 上方那个任务清单同一个「一行 / 点开」的形状。
+    折叠状态**不落盘也不跨会话记**：「默认收起」才是重点，一次运行里点开过的那张图对下一轮没有话说。
+    - **`取消全部` 与最大化必须是触发器的兄弟，不是它的孩子。** Base UI 的 `CollapsibleTrigger` 画的是
+      `<button>`，而 button 不能嵌 button：套进去要么整条被丢弃，要么一次「展开」点击把整图取消了。
+      所以 `DagSummary` 多一个 `hideActions`，内联卡自己画 `DagGraphActions`；最大化对话框两个都不传，
+      照旧拿到那排按钮。`test/dag-inline-fold.test.ts` 钉住这三件事（默认收起、图在 panel 里、按钮不嵌套）。
+    - 预览：`mock.html?dag=1`（`DAG_MESSAGES` 里那条 `dag_add_tasks` 指向 DAG fixture 的 T-0001…T-0003）。
 
 
 ## 定时任务（`pi/scheduled-task-manager.ts`、`components/schedules/`）

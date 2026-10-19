@@ -15,6 +15,7 @@ import { stripAttachmentBlock } from "@/lib/attachments";
 import { activeLanguage, i18n } from "@/lib/i18n";
 import { localeTag } from "@/lib/language";
 import { groupParts, mergeAssistantRun, resolveParts, type RenderPart } from "@/lib/group-parts";
+import { isProcessKind, thinkingTakesRow } from "@/lib/thinking-row";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatMessage, MessagePart } from "@shared/types";
 import { collectInlinePreviews, type InlinePreview } from "@shared/inline-media";
@@ -535,6 +536,17 @@ function ChatMessageRowImpl({
     return split > 0 ? split : runMs;
   }, [messages, runMs, runStart]);
 
+  // One rule decides whether a part is on screen, so the reply, 折叠运行过程 and the overflow row
+  // cannot disagree about it: a thinking block with nothing to read takes no row once it has
+  // ended. It keeps one while it is the reply's live tail — 「正在思考」 is true news even before
+  // the first token of the thought, and it is the reader's sign that the run has not stalled.
+  const partTakesRow = useCallback(
+    (part: RenderPart, index: number): boolean =>
+      part.kind !== "thinking" ||
+      (showThinking && thinkingTakesRow(part.text, streaming && index === parts.length - 1)),
+    [parts.length, showThinking, streaming],
+  );
+
   // A thinking block's measured bounds are the only record of how long it thought, and they can
   // legitimately be missing — a transcript from a build that did not time them, a delegated
   // run's, an imported one. Fall back to the span of the round-trip the block came from, so the
@@ -556,20 +568,23 @@ function ChatMessageRowImpl({
     if (workMs === undefined) return null;
     let cut = 0;
     for (let index = 0; index < parts.length; index += 1) {
-      const kind = parts[index].kind;
+      const part = parts[index];
       // A folded batch of consecutive tools (`group`) is process like any single call: once
-      // the run settles, everything before the final answer goes behind 「用时」.
-      if (kind === "thinking" || kind === "tool" || kind === "group") cut = index + 1;
+      // the run settles, everything before the final answer goes behind 「用时」. A part that
+      // takes no row is not process either — otherwise a blank thought at the end of a reply
+      // moved the cut past its own answer and left the run with no fold at all.
+      if (isProcessKind(part.kind) && partTakesRow(part, index)) cut = index + 1;
     }
-    // Nothing to put in the block (a reply that never thought or called a tool).
+    // Nothing to put in the block: a reply that never thought or called a tool, or one whose
+    // only thoughts were blank. The cut moves only past a part that takes a row, so a non-zero
+    // cut already promises a body with something in it — that is the same condition the old
+    // 「a body that would render nothing」 check was spelling out by hand.
     if (cut === 0) return null;
-    // A body that would render nothing (only hidden thinking) is an empty box.
-    if (!parts.slice(0, cut).some((part) => part.kind !== "thinking" || showThinking)) return null;
     // No prose after the last tool call: the run wrote no answer, so there is nothing to
     // leave on screen and folding would hide its only output.
     if (!parts.slice(cut).some((part) => part.kind === "text")) return null;
     return { cut, durationMs: workMs };
-  }, [collapseRuns, message.error, message.role, parts, showThinking, streaming, workMs]);
+  }, [collapseRuns, message.error, message.role, partTakesRow, parts, streaming, workMs]);
 
   // A leading 「模型已切换至 …」 divider stays outside the fold. It says which model the
   // reply came from — the one fact about the run that is not process — and burying it
@@ -604,9 +619,9 @@ function ChatMessageRowImpl({
     const cutoff = Math.max(0, parts.length - MAX_VISIBLE_PROCESS_PARTS);
     const hidden = parts
       .map((part, index) => ({ part, index }))
-      .filter(({ part, index }) => index < cutoff && (part.kind === "tool" || part.kind === "group" || (part.kind === "thinking" && showThinking)));
+      .filter(({ part, index }) => index < cutoff && isProcessKind(part.kind) && partTakesRow(part, index));
     return hidden.length > 0 ? { hidden, firstIndex: hidden[0].index } : null;
-  }, [fold, isUser, parts, showThinking]);
+  }, [fold, isUser, partTakesRow, parts]);
 
   const plainPartEntries = useMemo(() => {
     if (!processOverflow) return parts.map((part, index) => ({ kind: "part" as const, part, index }));
@@ -706,7 +721,7 @@ function ChatMessageRowImpl({
   const renderPart = (part: RenderPart, index: number, withPreviews = true): JSX.Element | null => {
     const isTail = index === parts.length - 1;
     if (part.kind === "thinking") {
-      if (!showThinking) return null;
+      if (!partTakesRow(part, index)) return null;
       const owner = thinkingOwner.get(part);
       const fallback =
         owner && owner.completedAt !== undefined

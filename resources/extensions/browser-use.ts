@@ -17,57 +17,6 @@ type BrowserRequest = {
 
 type BrowserBridge = (request: BrowserRequest, signal?: AbortSignal) => Promise<unknown>;
 
-/** The decision-model loop Main installs (src/main/pi/browser-task-runner.ts). */
-type BrowserTaskRunner = (request: {
-  conversationId?: string;
-  goal: string;
-  tabId?: string;
-  signal?: AbortSignal;
-  mode?: string;
-  confirm?: (message: string) => Promise<boolean>;
-  onStep?: (line: string) => void;
-}) => Promise<{ status: string; detail?: string; steps: unknown[]; page?: unknown; backend: string; ms: number }>;
-
-/** The in-page interaction tools browser_task replaces while 浏览器控制 is on. */
-const BROWSER_STEP_TOOLS = ["browser_click", "browser_type", "browser_press"];
-
-/** Main's decision-model loop and its switch, when this host provides them (not headless). */
-function browserTaskRunner(): { run: BrowserTaskRunner; enabled: () => boolean } | undefined {
-  const scope = globalThis as Record<string, unknown>;
-  const enabled = scope.__fastvibeBrowserTaskEnabled;
-  const runner = scope.__fastvibeBrowserTask;
-  if (typeof enabled !== "function" || typeof runner !== "function") return undefined;
-  return {
-    run: runner as BrowserTaskRunner,
-    enabled: () => {
-      try {
-        return Boolean(enabled());
-      } catch {
-        return false;
-      }
-    },
-  };
-}
-
-/**
- * Make either the task tool or the step tools active, never both, by swapping one group
- * for the other: tools some other extension deactivated stay as that extension left them.
- */
-function syncDecisionTools(pi: ExtensionAPI, task: string, steps: string[], on: boolean): void {
-  const active = pi.getActiveTools();
-  // A group comes in only in place of the other one: with neither active (a
-  // read-only tool set), nothing is added.
-  const next = on
-    ? active.some((name) => steps.includes(name))
-      ? [...active.filter((name) => !steps.includes(name)), ...(active.includes(task) ? [] : [task])]
-      : active
-    : active.includes(task)
-      ? [...active.filter((name) => name !== task), ...steps.filter((name) => !active.includes(name))]
-      : active;
-  if (next === active) return;
-  pi.setActiveTools(next);
-}
-
 function bridge(): BrowserBridge {
   const handler = (globalThis as Record<string, unknown>).__fastvibeBrowserRequest;
   if (typeof handler !== "function") throw new Error("内置浏览器桥接尚未就绪");
@@ -158,18 +107,6 @@ export default function browserUse(pi: ExtensionAPI): void {
     },
   });
 
-  // browser_task and the in-page step tools are both registered, and which of them is
-  // *active* follows 设置 → 决策引擎 › 浏览器控制, re-read at the start of every turn: on,
-  // page interaction goes through browser_task only (offered side by side, the main model
-  // kept clicking itself and Jev never ran); off, browser_task is not offered at all. A
-  // switch flipped mid-conversation therefore applies from the next turn.
-  const runTask = browserTaskRunner();
-  if (runTask) {
-    const sync = () => syncDecisionTools(pi, "browser_task", BROWSER_STEP_TOOLS, runTask.enabled());
-    pi.on("session_start", sync);
-    pi.on("before_agent_start", sync);
-  }
-
   pi.registerTool({
     name: "browser_click",
     label: "浏览器点击",
@@ -214,38 +151,6 @@ export default function browserUse(pi: ExtensionAPI): void {
       return call("press", { tabId: params.tabId, key: params.key }, signal);
     },
   });
-
-  if (runTask) {
-    pi.registerTool({
-      name: "browser_task",
-      label: "浏览器任务",
-      description:
-        "快速浏览器执行器：在当前标签页里由决策模型逐步点击、输入、选择、滚动，直到完成目标或无法继续。把用户的完整目标原文一次交给它（例如“填写并提交这个表单：姓名 X、电话 Y……”），不要拆成小步，也不要写“然后报告……”——它只负责操作，不负责回答。返回执行过的每一步和最终屏幕（url、title、可见文字、元素）；由你读最终屏幕回答用户，信息不够时再用 browser_snapshot。它不会打开新网址：需要时先用 browser_open。",
-      promptSnippet: "让决策模型在浏览器里连续执行一个目标",
-      parameters: Type.Object({
-        goal: Type.String({ description: "用户的完整目标原文（或尚未完成的部分）" }),
-        tabId: TAB_ID(false),
-      }),
-      async execute(_id, params, signal, onUpdate) {
-        // Switched off since this turn began: refuse rather than drive the page anyway.
-        if (!runTask.enabled()) {
-          return { content: [{ type: "text", text: "浏览器控制已在设置中关闭，browser_task 从下一轮起不可用；请改用 browser_click / browser_type / browser_press。" }], details: undefined };
-        }
-        const lines: string[] = [];
-        const result = await runTask.run({
-          conversationId,
-          goal: params.goal,
-          tabId: params.tabId,
-          signal,
-          onStep: (line) => {
-            lines.push(line);
-            onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }], details: undefined });
-          },
-        });
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
-      },
-    });
-  }
 
   pi.registerTool({
     name: "browser_history",

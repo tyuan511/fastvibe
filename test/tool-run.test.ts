@@ -80,11 +80,16 @@ test("a file change stays in the batch so the summary can name it", () => {
 });
 
 test("questions, todos, sub-agents and task graphs stay out", () => {
-  for (const name of ["question", "todo", "subagent", "present", "dag_add_tasks", "browser_task", "computer_task"]) {
+  for (const name of ["question", "todo", "subagent", "present", "dag_add_tasks"]) {
     assert.equal(foldsIntoRun(name), false, name);
   }
   assert.equal(foldsIntoRun("bash"), true);
   assert.equal(foldsIntoRun("read"), true);
+  // The browser and computer step tools are ordinary calls: the whole batch is the
+  // model stepping itself, so the summary row names it. (The removed decision engine had
+  // its own `browser_task` / `computer_task` cards; nothing by those names exists now.)
+  assert.equal(foldsIntoRun("browser_click"), true);
+  assert.equal(foldsIntoRun("computer_window_state"), true);
 });
 
 test("commands are counted, and a single read or write is named", () => {

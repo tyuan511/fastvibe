@@ -30,7 +30,6 @@ import { ProvidersSettings } from "./providers-settings";
 import { ArchivedSettings, type DeleteConversationsResult } from "./archived-settings";
 import { ImportSettings } from "./import-settings";
 import { McpSettings } from "./mcp-settings";
-import { DecisionSettings } from "./decision-settings";
 import { MemorySettings } from "./memory-settings";
 import { RemoteSettings } from "./remote-settings";
 import { RemoteHostsSettings } from "./remote-hosts-settings";
@@ -409,7 +408,6 @@ export function SettingsDialog({
           {section === "browser" ? <BrowserSettings /> : null}
 
           {section === "subagents" ? <SubagentsSettings models={models} /> : null}
-          {section === "decision" ? <DecisionSettings /> : null}
           {section === "memory" ? <MemorySettings models={models} /> : null}
           {section === "mcp" ? <McpSettings /> : null}
           {section === "skills" ? <SkillsSettings /> : null}

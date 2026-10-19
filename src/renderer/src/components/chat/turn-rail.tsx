@@ -226,9 +226,13 @@ export const TurnRail = memo(function TurnRail({
     });
   }, []);
 
+  // Only a change in how many ticks there are (or their density) moves them. This used to run
+  // after every render, and the rail renders on every scroll tick — which a streaming reply
+  // causes continuously — so each one forced a layout for every tick.
+  const tickCount = markers.length;
   useLayoutEffect(() => {
     measure();
-  });
+  }, [measure, tickCount]);
 
   useEffect(() => {
     const node = navRef.current;

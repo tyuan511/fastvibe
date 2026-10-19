@@ -1,29 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type JSX } from "react";
+import { useEffect, useMemo, useState, type HTMLAttributes, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
-  ArrowDown01Icon,
-  ArrowLeft01Icon,
-  BoxesIcon,
   Delete02Icon,
-  Download01Icon,
-  Loading03Icon,
-  PencilEdit02Icon,
-  DragDropVerticalIcon,
   RefreshIcon,
-  Search01Icon,
-  Tick02Icon,
   ViewIcon,
   ViewOffSlashIcon,
 } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { IconButton } from "@/components/icon-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -32,13 +23,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cleanError } from "@/lib/ipc-error";
-import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
-import { ProviderIcon } from "@/components/provider-icon";
-import { PROVIDER_APIS, type CcSwitchCandidate, type CcSwitchScan, type EngineModel, type FastVibeModel, type GatewayKind, type Project, type ProjectModelDefault, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
+import { PROVIDER_APIS, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
 import { OAuthExtraUsageNote } from "./oauth-extra-usage-note";
-import { GatewayBalance } from "./gateway-balance";
-import { EMPTY_ADD, PROVIDER_API_ITEMS, PROVIDER_API_SHORT, type AddMode, type AddState, type PickerState } from "./providers-settings-types";
+import { PROVIDER_API_ITEMS, PROVIDER_API_SHORT } from "./providers-settings-types";
 import { OpenAIQuota } from "./openai-quota";
 import { ProviderTest } from "./provider-test";
 import {
@@ -48,7 +36,6 @@ import {
 import {
   DndContext,
   DragOverlay,
-  KeyboardSensor,
   MouseSensor,
   TouchSensor,
   closestCenter,
@@ -63,40 +50,39 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import {
   SortableContext,
   arrayMove,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Field } from "./provider-field";
+import { GatewayBalance } from "./gateway-balance";
+import { gatewayRowState } from "@/lib/gateway-row";
 
 function ProviderModelRow({
   model,
   onEdit,
   onRemove,
   reorderLabel,
-  handleProps,
+  dragProps,
+  testControl,
   overlay = false,
 }: {
   model: ProviderModel;
   onEdit: () => void;
   onRemove: () => void;
   reorderLabel: string;
-  handleProps?: ButtonHTMLAttributes<HTMLButtonElement>;
+  dragProps?: HTMLAttributes<HTMLDivElement>;
+  testControl?: ReactNode;
   overlay?: boolean;
 }): JSX.Element {
   return (
-    <div className={cn("flex items-center gap-2 px-2 py-2", overlay && "rounded-lg border border-border bg-card px-3 shadow-lg")}>
-      <button
-        type="button"
-        {...handleProps}
-        className="flex size-6 shrink-0 cursor-grab items-center justify-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground active:cursor-grabbing"
-        aria-label={reorderLabel}
-        title={reorderLabel}
-      >
-        <HugeiconsIcon strokeWidth={2} icon={DragDropVerticalIcon} className="size-3.5" />
-      </button>
-      <button type="button" className="min-w-0 flex-1 truncate text-left text-sm" onClick={onEdit}>
+    <div
+      {...dragProps}
+      aria-label={reorderLabel}
+      title={i18n.t("settings:providers.dragHint") as string}
+      className={cn("flex cursor-grab select-none items-center gap-2 rounded-md py-1.5 hover:bg-muted/40 active:cursor-grabbing", overlay && "rounded-lg border border-border bg-card px-3 shadow-lg")}
+    >
+      <button type="button" className="min-w-0 flex-1 cursor-grab truncate text-left text-sm active:cursor-grabbing" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" onClick={onEdit}>
         {model.name || model.id}
       </button>
       {/* Only a pinned protocol is worth a chip; the inherited one is the norm. */}
@@ -109,32 +95,34 @@ function ProviderModelRow({
         {contextLabel(model.contextWindow)}
       </span>
       {overlay ? null : (
-        <>
-          <Button size="icon-xs" variant="ghost" onClick={onEdit} aria-label={i18n.t("settings:providers.modelDetail") as string}>
-            <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
-          </Button>
+        <div className="flex cursor-default items-center gap-2 [&_button]:cursor-pointer" title="" onMouseDown={(event) => event.stopPropagation()} onTouchStart={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+          {testControl}
           <Button size="icon-xs" variant="ghost" onClick={onRemove} aria-label={i18n.t("settings:providers.removeModel") as string}>
             <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
           </Button>
-        </>
+        </div>
       )}
     </div>
   );
 }
 function SortableProviderModelRow({
+  provider,
   model,
   disabled,
   onEdit,
   onRemove,
+  onMove,
   reorderLabel,
 }: {
+  provider: ProviderConfig;
   model: ProviderModel;
   disabled: boolean;
   onEdit: () => void;
   onRemove: () => void;
+  onMove: (direction: -1 | 1) => void;
   reorderLabel: string;
 }): JSX.Element {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: model.id,
     disabled,
     transition: { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" },
@@ -156,7 +144,17 @@ function SortableProviderModelRow({
         onEdit={onEdit}
         onRemove={onRemove}
         reorderLabel={reorderLabel}
-        handleProps={{ ...attributes, ...listeners }}
+        dragProps={{
+          ...listeners,
+          onKeyDown: (event) => {
+            if (!disabled && event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+              event.preventDefault();
+              event.stopPropagation();
+              onMove(event.key === "ArrowUp" ? -1 : 1);
+            }
+          },
+        }}
+        testControl={<ProviderTest provider={provider} model={model} disabled={disabled} onEditModel={onEdit} />}
       />
     </div>
   );
@@ -168,7 +166,6 @@ export function ProviderDetail({
   onOAuth,
   onLogout,
   onChanged,
-  onRemoved,
   onConfigureGateway,
   onIdentified,
 }: {
@@ -180,10 +177,7 @@ export function ProviderDetail({
   onOAuth: () => void;
   onLogout: () => void;
   onChanged: (next: ProviderConfig[]) => Promise<void>;
-  onRemoved: (next: ProviderConfig[]) => Promise<void>;
-  /** Opens the panel-credential dialog for a new-api provider's balance. */
   onConfigureGateway: () => void;
-  /** The gateway probe just identified this provider, so the pane re-reads the list. */
   onIdentified: () => void;
 }): JSX.Element {
   const { t } = useTranslation("settings");
@@ -193,8 +187,7 @@ export function ProviderDetail({
   /** A native provider's model list is offline, so it needs no key to manage. */
   const connected = provider.hasKey || provider.hasOAuth;
   const canManageModels = native || connected;
-  const [name, setName] = useState(provider.name);
-  const [editingName, setEditingName] = useState(false);
+  const balance = gatewayRowState(provider);
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -209,12 +202,9 @@ export function ProviderDetail({
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
   useEffect(() => {
-    setName(provider.name);
-    setEditingName(false);
     setBaseUrl(provider.baseUrl);
     setApiKey("");
     setShowKey(false);
@@ -222,10 +212,8 @@ export function ProviderDetail({
   }, [provider.id, provider.name, provider.baseUrl, provider.modelOrder]);
 
   async function save(patch: {
-    name?: string;
     baseUrl?: string;
     api?: ProviderApi;
-    enabled?: boolean;
     apiKey?: string;
     models?: ProviderModel[];
     modelOrder?: string[];
@@ -240,14 +228,6 @@ export function ProviderDetail({
       return false;
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function remove(): Promise<void> {
-    try {
-      await onRemoved(await window.fastvibe.providers.remove(provider.id));
-    } catch (err) {
-      toast.error(cleanError(err));
     }
   }
 
@@ -279,58 +259,7 @@ export function ProviderDetail({
   const activeModel = draggingModelId ? modelList.find((model) => model.id === draggingModelId) ?? null : null;
 
   return (
-    <div className="space-y-5">
-      {/* Wraps rather than truncating the name: on a phone the actions on the right
-          left the provider's own name as a single letter and an ellipsis. */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <div className="flex min-w-0 items-center gap-2">
-          {provider.kind === "native" ? <ProviderIcon provider={provider.id} /> : null}
-          {editingName && editable ? (
-            <Input
-              autoFocus
-              value={name}
-              className="h-8 max-w-56 text-sm font-medium"
-              onChange={(event) => setName(event.target.value)}
-              onBlur={() => {
-                setEditingName(false);
-                if (name.trim() && name.trim() !== provider.name) void save({ name: name.trim() });
-                else setName(provider.name);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") (event.target as HTMLInputElement).blur();
-                if (event.key === "Escape") {
-                  setName(provider.name);
-                  setEditingName(false);
-                }
-              }}
-            />
-          ) : (
-            <h3 className="truncate text-base font-medium">{providerLabel(provider.name || provider.id)}</h3>
-          )}
-          {editable && !editingName ? (
-            <Button size="icon-xs" variant="ghost" onClick={() => setEditingName(true)} aria-label={t("providers.rename")}>
-              <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} />
-            </Button>
-          ) : null}
-          {provider.enabled ? (
-            <Badge variant="secondary" className="text-success">
-              {t("providers.enabled")}
-            </Badge>
-          ) : (
-            <Badge variant="outline">{t("providers.disabled")}</Badge>
-          )}
-          <Button size="xs" variant="outline" disabled={saving} onClick={() => void save({ enabled: !provider.enabled })}>
-            {provider.enabled ? t("providers.disable") : t("providers.enable")}
-          </Button>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <GatewayBalance provider={provider} onConfigure={onConfigureGateway} onIdentified={onIdentified} />
-          <Button size="icon-xs" variant="ghost" onClick={() => void remove()} aria-label={t("providers.delete")}>
-            <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
-          </Button>
-        </div>
-      </div>
-
+    <div className="space-y-4">
       {editable ? (
         <Field label="Base URL">
           <Input
@@ -348,7 +277,7 @@ export function ProviderDetail({
 
       {native ? (
         <Field label="Base URL">
-          <p className="flex h-8 items-center rounded-lg border border-dashed border-border px-3 text-sm text-muted-foreground">
+          <p className="truncate text-sm text-muted-foreground">
             {provider.baseUrl}
           </p>
         </Field>
@@ -356,7 +285,7 @@ export function ProviderDetail({
 
       {native ? (
         <Field label={t("providers.apiFormat")}>
-          <p className="flex h-8 items-center rounded-lg border border-dashed border-border px-3 text-sm text-muted-foreground">
+          <p className="truncate text-sm text-muted-foreground">
             {provider.api}
           </p>
         </Field>
@@ -372,7 +301,7 @@ export function ProviderDetail({
                 if (value) void save({ api: value as ProviderApi });
               }}
             >
-              <SelectTrigger className="w-full max-w-md">
+              <SelectTrigger className="w-full" title={t("providers.apiFormatHint")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -383,9 +312,6 @@ export function ProviderDetail({
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              {t("providers.apiFormatHint")}
-            </p>
           </div>
         </Field>
       )}
@@ -452,13 +378,21 @@ export function ProviderDetail({
         </Field>
       ) : null}
 
+      {balance.readable || balance.offerIdentify ? (
+        <Field label={t("providers.balance")}>
+          <GatewayBalance provider={provider} onConfigure={onConfigureGateway} onIdentified={onIdentified} />
+        </Field>
+      ) : null}
+
       <OpenAIQuota provider={provider} />
 
-      <ProviderTest provider={provider} onEditModel={onEditModel} />
-      <div className="space-y-2">
+      <div className="space-y-2 border-t border-border pt-3">
         <div className="flex items-center justify-between">
-          <Label className="text-xs font-normal text-muted-foreground">{t("providers.models")}</Label>
+          <Label className="text-sm font-medium">{t("providers.models")} <span className="ml-1 font-normal text-muted-foreground">{modelList.length}</span></Label>
           <div className="flex items-center gap-1">
+            <IconButton size="icon-xs" variant="ghost" label={t("providers.addModel")} disabled={!canManageModels} onClick={onAddModels}>
+              <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
+            </IconButton>
             {canManageModels ? (
               <Button size="icon-xs" variant="ghost" onClick={onAddModels} aria-label={t("providers.syncModels")}>
                 <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />
@@ -478,14 +412,20 @@ export function ProviderDetail({
             onDragCancel={() => setDraggingModelId(null)}
           >
             <SortableContext items={modelList.map((model) => model.id)} strategy={verticalListSortingStrategy}>
-              <div className="max-h-96 divide-y divide-border overflow-y-auto rounded-lg border border-border">
+              <div className="max-h-96 overflow-y-auto">
                 {modelList.map((model) => (
                   <SortableProviderModelRow
                     key={model.id}
+                    provider={provider}
                     model={model}
                     disabled={saving}
                     onEdit={() => onEditModel(model)}
                     onRemove={() => void removeModel(model.id)}
+                    onMove={(direction) => {
+                      const from = modelList.findIndex((item) => item.id === model.id);
+                      const to = from + direction;
+                      if (to >= 0 && to < modelList.length) void reorderModels(arrayMove(modelList, from, to));
+                    }}
                     reorderLabel={t("providers.reorderModel", { name: providerModelLabel(model) })}
                   />
                 ))}
@@ -514,15 +454,7 @@ export function ProviderDetail({
             {canManageModels ? t("providers.noModelsAdd") : t("providers.noModelsConnect")}
           </p>
         )}
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={!canManageModels}
-          onClick={onAddModels}
-        >
-          <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
-          {t("providers.addModel")}
-        </Button>
+
       </div>
     </div>
   );

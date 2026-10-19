@@ -19,6 +19,7 @@ import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
 import type { ChatMessage, ProjectRepo } from "@shared/types";
+import { gitStatusSignature, subscribeGitStatus } from "@/lib/use-git-status";
 import type { GitComparison, GitDiffSource, GitHistoryEntry, GitHistoryScope, GitStatus } from "@shared/ipc";
 import { folderName } from "@shared/project-folders";
 import { isRemoteRef } from "@/lib/remote-project";
@@ -119,11 +120,21 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
   reloadRef.current = reload;
   useEffect(() => {
     alive.current = true;
-    const refresh = (): void => { if (!document.hidden) void reloadRef.current(); };
-    const timer = window.setInterval(refresh, 15_000);
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => { alive.current = false; request.current++; clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+    // The shared poller (`lib/use-git-status.ts`) beats for every surface on this workspace;
+    // this pane only reacts when the answer changed, because a new status here also reloads the
+    // selected diff and the history (`epoch`).
+    let seen = "";
+    const stop = subscribeGitStatus(cwd, (next) => {
+      if (busyRef.current || !alive.current) return;
+      const sig = gitStatusSignature(next);
+      if (sig === seen) return;
+      const first = seen === "";
+      seen = sig;
+      if (first) return;
+      setStatus(next);
+      setEpoch((n) => n + 1);
+    });
+    return () => { alive.current = false; request.current++; stop(); };
   }, [cwd]);
   useEffect(() => { void reloadRef.current(); }, [streaming]);
 

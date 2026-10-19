@@ -845,8 +845,8 @@ async function dispatch(
           label: element.label,
           value: element.value,
           enabled: element.enabled,
-          // What the element can do and whether it is on: the decision loop reads a
-          // checkbox's state and an element's AXPress off these (computer_task).
+          // What the element can do and whether it is on: a checkbox's state and its
+          // available actions are what makes a token safe to click (computer_window_state).
           ...(element.selected !== undefined ? { selected: element.selected } : {}),
           ...(element.actions?.length ? { actions: element.actions } : {}),
           frame: element.frame,

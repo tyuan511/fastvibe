@@ -158,6 +158,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   handle(Ipc.providersList, async () => {
     return engine.listProviders();
   });
+  handle(Ipc.providersReorder, (payload: { ids: string[] }) => engine.reorderProviders(payload.ids));
   handle(Ipc.providersNative, async () => {
     return engine.listNativeProviders();
   });

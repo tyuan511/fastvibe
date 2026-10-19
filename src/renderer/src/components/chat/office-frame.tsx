@@ -54,14 +54,20 @@ export function OfficeFrame({
   const [message, setMessage] = useState("");
   const watching = livePreview && !fallback && !isRemoteRef(path) && !isDirectUrl(path);
 
+  // The page on screen is the live one only once the watch server has answered. Until then (and
+  // when it never does) the static render stands in for it, so the sandbox follows what is
+  // actually loaded rather than what was asked for.
+  const [liveReady, setLiveReady] = useState(false);
+
   useEffect(() => {
-    onLive?.(phase === "ready" && watching);
-  }, [phase, watching, onLive]);
+    onLive?.(phase === "ready" && watching && liveReady);
+  }, [phase, watching, liveReady, onLive]);
 
   useEffect(() => {
     let cancelled = false;
     setPhase("loading");
     setSrc("");
+    setLiveReady(false);
     // A relative path belongs to the conversation on screen. An absolute one, and a remote
     // ref, already say which machine they live on — adding the active chat would route the
     // call to a different server than the path names.
@@ -71,7 +77,24 @@ export function OfficeFrame({
       setMessage(cleanError(error));
       setPhase("error");
     };
+    const renderStatic = (): Promise<string> =>
+      window.fastvibe.office
+        .render({ path, conversationId })
+        .then((result) => (isDirectUrl(result.path) ? result.path : mediaPreviewUrl(result.path)));
     if (watching) {
+      // The watch server takes 1–3 s to start, and nothing is on screen until it does. The
+      // static render (cached, ~0.5 s, or instant on a repeat) is asked for beside it and shown
+      // as soon as it lands; the live page replaces it when ready. If the server never starts
+      // the static page simply stays — the error only appears when there is nothing to show.
+      let shownStatic = false;
+      void renderStatic()
+        .then((url) => {
+          if (cancelled) return;
+          shownStatic = true;
+          setSrc((current) => current || url);
+          setPhase("ready");
+        })
+        .catch(() => undefined);
       void window.fastvibe.office
         .watchStart({ path, conversationId })
         .then((result) => {
@@ -80,19 +103,21 @@ export function OfficeFrame({
           // away from the effect that replaced this one.
           if (cancelled) return;
           setSrc(result.url);
+          setLiveReady(true);
           setPhase("ready");
         })
-        .catch(fail);
+        .catch((error: unknown) => {
+          if (!shownStatic) fail(error);
+        });
       return () => {
         cancelled = true;
         void window.fastvibe.office.watchStop(path);
       };
     }
-    void window.fastvibe.office
-      .render({ path, conversationId })
-      .then((result) => {
+    void renderStatic()
+      .then((url) => {
         if (cancelled) return;
-        setSrc(isDirectUrl(result.path) ? result.path : mediaPreviewUrl(result.path));
+        setSrc(url);
         setPhase("ready");
       })
       .catch(fail);
@@ -138,7 +163,7 @@ export function OfficeFrame({
       // allow-same-origin is required for the live server only: without it the page's Origin
       // is null, and the watch process refuses selection reports and writes. The page is still
       // a different origin from the app (127.0.0.1 versus the window), so it cannot reach in.
-      sandbox={watching ? "allow-scripts allow-same-origin" : "allow-scripts"}
+      sandbox={liveReady ? "allow-scripts allow-same-origin" : "allow-scripts"}
       referrerPolicy="no-referrer"
       src={src}
       className={cn("h-full min-h-[70vh] w-full border-0 bg-white", className)}

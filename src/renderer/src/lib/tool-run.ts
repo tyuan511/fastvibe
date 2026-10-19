@@ -9,7 +9,7 @@ import { familyOf, type ToolFamily } from "./tool-family.ts";
  *
  * A few calls stay on their own line and break the run, because the row is the
  * thing to see: a question waits on the reader, and a todo / sub-agent / presented
- * file / decision task / task graph is its own card. Reads and writes stay in the
+ * file / task graph is its own card. Reads and writes stay in the
  * batch — the summary names them, it does not hide them behind 「已运行」.
  */
 const STANDALONE_FAMILIES = new Set<ToolFamily>(["question", "todo", "agent", "present"]);
@@ -17,7 +17,6 @@ const STANDALONE_FAMILIES = new Set<ToolFamily>(["question", "todo", "agent", "p
 export function foldsIntoRun(name: string): boolean {
   const key = name.trim().toLowerCase();
   if (!key || key.startsWith("dag_")) return false;
-  if (key === "browser_task" || key === "computer_task") return false;
   return !STANDALONE_FAMILIES.has(familyOf(key));
 }
 

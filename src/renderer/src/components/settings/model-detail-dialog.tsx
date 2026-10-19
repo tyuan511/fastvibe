@@ -43,7 +43,6 @@ const API_LABELS: Record<ProviderApi, string> = {
   "openai-responses": "Responses",
   "anthropic-messages": "Messages",
   "google-generative-ai": "Gemini",
-  systemone: "System One",
 };
 
 function sourceLabel(source: string): string {

@@ -555,6 +555,45 @@ export const MATH_MESSAGES: ChatMessage[] = [
   },
 ];
 
+/**
+ * `?dag=1` — the 「创建子任务」 call whose batch the harness's DAG fixture already holds (T-0001 to
+ * T-0003), so the card the transcript draws for it can be looked at without a real run: one header
+ * line by default, the graph one click away.
+ */
+const DAG_ADD_TOOL: ToolCallBlock = {
+  id: "tool-dag-add",
+  name: "dag_add_tasks",
+  args: { tasks: [{ title: "梳理主题加载" }, { title: "梳理设置页入口" }, { title: "检查快捷键冲突" }] },
+  status: "done",
+  result: JSON.stringify({ added: [{ id: "T-0001" }, { id: "T-0002" }, { id: "T-0003" }] }),
+};
+
+export const DAG_MESSAGES: ChatMessage[] = [
+  {
+    id: "msg-dag-u",
+    role: "user",
+    text: "把主题这块的实现梳理清楚，再核对一遍快捷键和暗色样式。",
+    tools: [],
+    parts: [{ kind: "text", text: "把主题这块的实现梳理清楚，再核对一遍快捷键和暗色样式。" }],
+    createdAt: NOW - 6 * MINUTE,
+  },
+  {
+    id: "msg-dag-a",
+    role: "assistant",
+    text: "三件事有依赖关系，我排一张任务图交给子 agent 并行跑，结论汇总后告诉你。",
+    tools: [DAG_ADD_TOOL],
+    parts: [
+      { kind: "tool", toolId: "tool-dag-add" },
+      {
+        kind: "text",
+        text: "三件事有依赖关系，我排一张任务图交给子 agent 并行跑，结论汇总后告诉你。",
+      },
+    ],
+    createdAt: NOW - 5 * MINUTE,
+    completedAt: NOW - 4 * MINUTE,
+  },
+];
+
 export const SESSION: EngineSessionState = {
   // The model the divider's last switch landed on, so the chip and the transcript agree.
   model: { provider: "deepseek", id: "deepseek-v4-pro" },

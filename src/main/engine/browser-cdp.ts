@@ -291,74 +291,6 @@ async function liveSession(id: string | undefined, profileDir: string, fresh: bo
   return connect(await newTarget("about:blank"));
 }
 
-/** A raw expression, as the decision loop's scripts are written (no `pageProgram` wrapper). */
-async function evaluateRaw(session: Session, expression: string): Promise<unknown> {
-  const result = await send(session, "Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
-  if (result.exceptionDetails) throw new Error(uiText("页面脚本执行失败", "Page script failed"));
-  return (result.result as { value?: unknown } | undefined)?.value ?? null;
-}
-
-async function mouse(session: Session, type: string, x: number, y: number, extra: Record<string, unknown> = {}): Promise<void> {
-  await send(session, "Input.dispatchMouseEvent", { type, x, y, ...extra });
-}
-
-/**
- * The decision loop's control layer over CDP (docs/decision-layer.md §7.3) — the calls
- * jev-ultrafast's `browser.py` makes: raw evaluation, native mouse input, select-all plus
- * `Input.insertText`, a mouse wheel. The webview side pane has the Electron equivalent.
- */
-async function decisionCdp(session: Session, request: BrowserRequest): Promise<unknown> {
-  switch (request.action) {
-    case "decision-eval":
-      if (!request.script) throw fail("decision-eval 需要 script", "decision-eval requires script");
-      return evaluateRaw(session, request.script);
-    case "decision-click": {
-      const x = request.x ?? -1;
-      const y = request.y ?? -1;
-      if (x < 0 || y < 0) throw fail("decision-click 需要坐标", "decision-click needs a point");
-      await mouse(session, "mouseMoved", x, y);
-      await mouse(session, "mousePressed", x, y, { button: "left", clickCount: 1 });
-      await mouse(session, "mouseReleased", x, y, { button: "left", clickCount: 1 });
-      return true;
-    }
-    case "decision-replace": {
-      const editable = "(() => { const e = document.activeElement; return !!e && (e.isContentEditable || ((e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') && !e.readOnly)); })()";
-      let focused = false;
-      for (let attempt = 0; attempt < 20 && !(focused = Boolean(await evaluateRaw(session, editable))); attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      if (!focused) throw fail("输入框没有获得焦点", "The field did not take focus");
-      const modifiers = process.platform === "darwin" ? 4 : 2;
-      await send(session, "Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers, commands: ["selectAll"] });
-      await send(session, "Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers });
-      const text = request.text ?? "";
-      await send(session, "Input.insertText", { text });
-      // Date/time inputs ignore inserted text; set their value the way a framework expects.
-      return evaluateRaw(session, `(() => { const e = document.activeElement, text = ${JSON.stringify(text)};
-        if (e && /^(date|time|datetime-local|month|week)$/.test(e.type) && e.value !== text) {
-          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(e, text);
-          e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        return e && 'value' in e ? e.value : e ? e.innerText : null; })()`);
-    }
-    case "decision-wheel": {
-      const size = (await evaluateRaw(session, "({ w: innerWidth, h: innerHeight })")) as { w: number; h: number } | null;
-      await mouse(session, "mouseWheel", Math.round((size?.w ?? 800) / 2), Math.round((size?.h ?? 600) / 2), { deltaX: 0, deltaY: request.delta ?? 560 });
-      return true;
-    }
-    case "decision-wait-load": {
-      const deadline = Date.now() + Math.min(request.timeoutMs ?? 10_000, 20_000);
-      while (Date.now() < deadline && (await evaluateRaw(session, "document.readyState").catch(() => "loading")) !== "complete") {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      session.url = String((await evaluateRaw(session, "location.href").catch(() => session.url)) ?? session.url);
-      return { url: session.url, title: await evaluateRaw(session, "document.title").catch(() => "") };
-    }
-    default:
-      throw fail(`未知浏览器操作：${request.action}`, `Unknown browser action: ${request.action}`);
-  }
-}
-
 /** One browser-use request, answered by the system browser instead of the webview. */
 export async function runBrowserCdp(request: BrowserRequest, profileDir: string): Promise<unknown> {
   if (request.action === "list") {
@@ -369,21 +301,6 @@ export async function runBrowserCdp(request: BrowserRequest, profileDir: string)
   const session = await liveSession(request.tabId, profileDir, request.action === "open" && request.newTab === true);
   await send(session, "Runtime.enable").catch(() => undefined);
   await send(session, "Page.enable").catch(() => undefined);
-  if (request.action.startsWith("decision-")) {
-    // A script on a document that navigates away may never answer: bound every call.
-    const limit = Math.max(500, Math.min(request.timeoutMs ?? 15_000, 60_000));
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      return await Promise.race([
-        decisionCdp(session, request),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(fail(`浏览器操作超时（${limit}ms）`, `Browser action timed out (${limit}ms)`)), limit);
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
   switch (request.action) {
     case "open":
     case "navigate": {

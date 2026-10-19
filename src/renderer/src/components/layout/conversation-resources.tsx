@@ -21,7 +21,7 @@ import { conversationAgents, resourceAgentFinished, type ResourceAgent } from "@
 import { subagentStatusText } from "@/lib/subagent-status";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { displayRemotePath, isRemoteProject } from "@/lib/remote-project";
-import { readGitStatus, useGitStatus } from "@/lib/use-git-status";
+import { subscribeGitStatus, useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
 import { useSessionStore, useConversationWorking } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
@@ -93,17 +93,15 @@ function Repositories({ roots, working, onClose }: { roots: string[]; working: b
   const [statuses, setStatuses] = useState<GitStatus[]>([]);
   const rootsKey = roots.join("\0");
   useEffect(() => {
-    let cancelled = false;
-    const refresh = () => {
-      if (document.hidden) return;
-      void Promise.all(roots.map((root) => readGitStatus(root))).then((next) => {
-        if (!cancelled) setStatuses(next.filter((status) => status.isRepository));
-      });
-    };
-    refresh();
-    const timer = window.setInterval(refresh, 10_000);
-    window.addEventListener("focus", refresh);
-    return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+    // The shared poller (`lib/use-git-status.ts`): the same read the branch chip and the file
+    // tree already make, instead of a timer of this panel's own.
+    const latest = new Map<string, GitStatus>();
+    const publish = () => setStatuses(roots.flatMap((root) => {
+      const status = latest.get(root);
+      return status?.isRepository ? [status] : [];
+    }));
+    const stops = roots.map((root) => subscribeGitStatus(root, (status) => { latest.set(root, status); publish(); }));
+    return () => { for (const stop of stops) stop(); };
   }, [rootsKey, working]);
   const visible = statuses.filter((status) => roots.includes(status.cwd));
   if (!visible.length) return null;

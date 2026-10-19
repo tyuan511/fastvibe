@@ -99,9 +99,6 @@ const DENIED = new Map<string, string>([
   // Sanitized config is readable remotely (see ALLOWED below); saving or probing a local
   // HTTP endpoint from Main is a lever a remote caller should not have, and there is no
   // benefit to letting a phone configure which model runs on this desktop.
-  [Ipc.decisionSaveConfig, "决策模型只能在本机配置"],
-  [Ipc.decisionTest, "决策模型只能在本机配置"],
-  [Ipc.decisionSetKey, "决策模型只能在本机配置"],
   [Ipc.sshHosts, "SSH 主机只能在本机管理"],
   [Ipc.sshHostSave, "SSH 主机只能在本机管理"],
   [Ipc.sshHostRemove, "SSH 主机只能在本机管理"],
@@ -164,10 +161,6 @@ const ALLOWED = new Set<string>([
   Ipc.conversationsBindWorktree,
   Ipc.conversationsUnbindWorktree,
   Ipc.conversationsListWorktrees,
-  // No secret in either — the Jev key never leaves Main — so a remote client reading
-  // which decision model is selected, and whether a key exists, costs nothing.
-  Ipc.decisionGetConfig,
-  Ipc.decisionKeyState,
   // Memory is local to this FastVibe instance; remote clients may switch it, run a pass
   // and clear it, exactly as the desktop can.
   Ipc.memoryGetState,
@@ -280,6 +273,7 @@ const ALLOWED = new Set<string>([
   Ipc.providersTest,
   Ipc.providersRemove,
   Ipc.providersUpdate,
+  Ipc.providersReorder,
   Ipc.settingsClear,
   Ipc.settingsGet,
   Ipc.settingsSet,

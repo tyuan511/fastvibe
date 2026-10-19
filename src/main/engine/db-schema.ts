@@ -221,7 +221,17 @@ function v8(db: Db): void {
   `);
 }
 
+/**
+ * Step 9: intentionally empty.
+ *
+ * A development build created `drafts` / `drafts_meta` here for a feature that was then
+ * removed. Databases that already ran the step are at version 9 and a build that does not
+ * know it refuses to open them, so the number stays taken. Those tables are unused and may be
+ * left where they are.
+ */
+function v9(_db: Db): void {}
+
 /** The whole schema, in order. Its length is the version this build of the app knows. */
-export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8];
+export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8, v9];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

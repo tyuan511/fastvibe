@@ -34,3 +34,16 @@ export function orderProviderModels(models: ProviderModel[], modelOrder?: string
     return compareProviderModels(a, b);
   });
 }
+
+/** A partial or stale order must never discard newly added providers. */
+export function orderProviders<T extends { id: string }>(providers: readonly T[], ids: readonly string[]): T[] {
+  const remaining = new Map(providers.map((provider) => [provider.id, provider]));
+  const ordered: T[] = [];
+  for (const id of ids) {
+    const provider = remaining.get(id);
+    if (!provider) continue;
+    ordered.push(provider);
+    remaining.delete(id);
+  }
+  return [...ordered, ...remaining.values()];
+}

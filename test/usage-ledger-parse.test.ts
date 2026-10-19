@@ -30,3 +30,44 @@ test("tool results and prompts are skipped by their envelope, never an assistant
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a parse survives a restart in the cache file and is redone only for a file that changed", async () => {
+  const { readFile, stat, utimes } = await import("node:fs/promises");
+  const { clearSessionUsageCache, settleParseCache, usePersistentParseCache } = await import("../src/main/engine/usage-ledger.ts");
+  const dir = await mkdtemp(join(tmpdir(), "usage-cache-"));
+  try {
+    const file = join(dir, "s.jsonl");
+    const cache = join(dir, "cache.json");
+    const turn = (id: string, parent: string | null) => ({ type: "message", id, parentId: parent, timestamp, message: { role: "assistant", content: [{ type: "text", text: "x" }], provider: "p", model: "m", usage, stopReason: "stop", timestamp: 2 } });
+    await writeFile(file, `${[{ type: "session", version: 3, id: "s1", timestamp, cwd: dir }, turn("a1", null)].map((line) => JSON.stringify(line)).join("\n")}\n`);
+    clearSessionUsageCache();
+    usePersistentParseCache(cache);
+    assert.equal((await parseSessionTurns(file)).turns.length, 1);
+    await settleParseCache([file]);
+    assert.equal(JSON.parse(await readFile(cache, "utf8")).files[file].turns.length, 1);
+
+    // "Restart": no memo, a cache file that now disagrees with the transcript's content but
+    // not its identity. Only a hit can return what the file says, so this proves no re-parse.
+    const stored = JSON.parse(await readFile(cache, "utf8"));
+    stored.files[file].turns[0].model = "from-cache";
+    await writeFile(cache, JSON.stringify(stored));
+    clearSessionUsageCache();
+    usePersistentParseCache(cache);
+    assert.equal((await parseSessionTurns(file)).turns[0].model, "from-cache");
+
+    // The transcript grows: its size and mtime move, so it is parsed again.
+    clearSessionUsageCache();
+    usePersistentParseCache(cache);
+    await writeFile(file, `${[{ type: "session", version: 3, id: "s1", timestamp, cwd: dir }, turn("a1", null), turn("a2", "a1")].map((line) => JSON.stringify(line)).join("\n")}\n`);
+    const grown = await parseSessionTurns(file);
+    assert.deepEqual(grown.turns.map((item) => [item.entryId, item.model]), [["a1", "m"], ["a2", "m"]]);
+
+    // A transcript that is gone leaves the cache.
+    await settleParseCache([]);
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(cache, "utf8")).files), []);
+    void stat; void utimes;
+  } finally {
+    clearSessionUsageCache();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

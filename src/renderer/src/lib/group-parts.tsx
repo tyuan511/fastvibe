@@ -198,9 +198,34 @@ export function resolveParts(message: ChatMessage): MessagePart[] {
   return parts;
 }
 
-function buildGroup(run: { id: string; items: RunItem[]; tools: ToolCallBlock[] }): ToolGroup {
+/**
+ * A settled run of quiet tools keeps the same group object while a reply streams on.
+ *
+ * `mergeAssistantRun` and `groupParts` are rebuilt for the streaming row on every flush, and
+ * building a group walks its tools to write the summary line. A turn with hundreds of calls
+ * therefore re-summarised every one of them per token and handed `ToolGroupRow` a new object
+ * each time, which defeated its memo. Tool blocks keep their identity once they are done
+ * (`applyEngineEvent` clones only the one being written), so a group is reused while it still
+ * holds the very same blocks in the same order, under the same language.
+ */
+const builtGroups = new WeakMap<ToolCallBlock, { language: string; id: string; items: RunItem[]; tools: ToolCallBlock[]; group: ToolGroup }>();
+
+const itemTools = (item: RunItem): ToolCallBlock[] => [item.tool];
+
+function sameTools(a: readonly ToolCallBlock[], b: readonly ToolCallBlock[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) return false;
+  return true;
+}
+
+function buildGroup(run: { id: string; items: RunItem[]; tools: ToolCallBlock[] }, language: string): ToolGroup {
+  const first = run.tools[0];
+  const cached = first ? builtGroups.get(first) : undefined;
+  if (cached && cached.language === language && cached.id === run.id && sameTools(cached.tools, run.tools) && sameTools(cached.items.flatMap(itemTools), run.items.flatMap(itemTools))) {
+    return cached.group;
+  }
   const summary = runSummary(run.tools, (key, options) => i18n.t(key, options) as string);
-  return {
+  const group: ToolGroup = {
     id: run.id,
     summary: summary.line,
     pieces: summary.pieces,
@@ -208,6 +233,8 @@ function buildGroup(run: { id: string; items: RunItem[]; tools: ToolCallBlock[] 
     tools: run.tools,
     running: run.tools.some((tool) => tool.status === "running"),
   };
+  if (first) builtGroups.set(first, { language, id: run.id, items: run.items, tools: run.tools, group });
+  return group;
 }
 
 /**
@@ -223,7 +250,7 @@ export function groupParts(message: ChatMessage, language: string = i18n.languag
 
   const byId = new Map(message.tools.map((tool) => [tool.id, tool]));
   const parts: RenderPart[] = collapseToolRuns(resolveParts(message), byId).map((part) =>
-    part.kind === "run" ? { kind: "group", group: buildGroup(part) } : part,
+    part.kind === "run" ? { kind: "group", group: buildGroup(part, language) } : part,
   );
   groupedParts.set(message, { language, parts });
   return parts;

@@ -1,6 +1,6 @@
 import type { DagNode, DagNodeStatus } from "@shared/dag";
 import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
-import type { ChatMessage, Conversation, ConversationOpenResult, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, WorkspaceSnapshot } from "@shared/types";
+import type { ChatMessage, Conversation, ConversationOpenResult, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, MessagePart, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus, RemoteServerState } from "@shared/ipc";
 import type { OfficialState } from "@shared/official";
 import type { MemoryState } from "@shared/memory";
@@ -16,6 +16,7 @@ import {
   INLINE_MESSAGES,
   INLINE_OFFICE_MESSAGES,
   MATH_MESSAGES,
+  DAG_MESSAGES,
   MODELS,
   PREVIEW_CWD,
   PROJECTS,
@@ -73,6 +74,8 @@ function inlineFixture() {
 function transcriptFixture() {
   if (website) return fixtureMessages;
   if (params.get("math") === "1") return [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
+  if (params.get("dag") === "1") return DAG_MESSAGES;
+  if (params.get("thinking") === "blank") return blankThinking(fixtureMessages);
   return inlineFixture() ?? fixtureMessages;
 }
 // The settings scenes are routes, so they have to be entered before the shell mounts.
@@ -245,6 +248,32 @@ function ageThread(messages: ChatMessage[]): ChatMessage[] {
 }
 
 /**
+ * `?thinking=blank` puts the empty reasoning blocks back where they were seen: a provider
+ * does finish a thinking block whose whole text is one space, and each used to draw its own
+ * 「思考 · N 秒」 row that expanded to nothing. One sits before a real thought and the tools it
+ * led to, the last one ends a reply — which is also the case that used to push 折叠运行过程's cut
+ * past the answer and leave the run with no fold at all.
+ */
+function blankThinking(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages.length - 1;
+  return messages.map((message, index) => {
+    if (message.role !== "assistant" || !message.parts) return message;
+    const parts: MessagePart[] = [...message.parts];
+    const thought = parts.findIndex((part) => part.kind === "thinking");
+    if (index === 1 && thought >= 0) {
+      const timing = parts[thought];
+      parts.splice(thought, 0, {
+        kind: "thinking",
+        text: " ",
+        ...(timing.kind === "thinking" && timing.startedAt !== undefined ? { startedAt: timing.startedAt, endedAt: timing.endedAt } : {}),
+      });
+    }
+    if (index === last) parts.push({ kind: "thinking", text: "\n  " });
+    return { ...message, parts };
+  });
+}
+
+/**
  * Which conversations the sidebar draws as 运行中. Every fixture transcript is settled,
  * and the live mark comes from the engine's `conversation_running` push, so `?running=1`
  * is the only way to look at a spinning sidebar row in the harness. It is answered from
@@ -286,6 +315,7 @@ const openResult = (id: string): ConversationOpenResult => {
   // speak for a conversation that is not on screen when it lands.
   let messages = isActive && !newDraft ? fixtureMessages : [];
   if (!website && isActive && params.get("math") === "1") messages = [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
+  if (!website && isActive && params.get("dag") === "1") messages = DAG_MESSAGES;
   const inline = inlineFixture();
   if (isActive && inline) messages = inline;
   // `?older=1` ages the thread so the footers have to name their day. Every fixture is
@@ -294,6 +324,7 @@ const openResult = (id: string): ConversationOpenResult => {
   // the rest are spread over the previous days and a previous year, which is exactly
   // the mix a reopened old chat has.
   if (!website && isActive && params.get("older") === "1") messages = ageThread(messages);
+  if (!website && isActive && params.get("thinking") === "blank") messages = blankThinking(messages);
   return {
     ...snapshot(),
     conversation,
@@ -645,6 +676,11 @@ const api = {
   providers: {
     test: async (_provider: string, model: string) => ({ model, api: "openai-responses", status: "passed", tools: "passed", firstTokenMs: 180, elapsedMs: 650 }),
     list: async () => PROVIDERS,
+    reorder: async (ids: string[]) => {
+      const rank = new Map(ids.map((id, index) => [id, index]));
+      PROVIDERS.sort((a, b) => (rank.get(a.id) ?? ids.length) - (rank.get(b.id) ?? ids.length));
+      return [...PROVIDERS];
+    },
     native: async () => [],
     addNative: async () => PROVIDERS,
     fetch: async () => PROVIDERS[0].models,
@@ -661,7 +697,15 @@ const api = {
             : { unlimited: false, available: 18155.71 },
     }),
     add: async () => PROVIDERS,
-    update: async () => PROVIDERS,
+    update: async (patch: { id: string; enabled?: boolean; name?: string }) => {
+      const index = PROVIDERS.findIndex((provider) => provider.id === patch.id);
+      if (index >= 0) PROVIDERS[index] = {
+        ...PROVIDERS[index],
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(patch.name !== undefined ? { name: patch.name } : {}),
+      };
+      return [...PROVIDERS];
+    },
     remove: async () => PROVIDERS,
     refresh: async () => PROVIDERS[0].models,
     scanCcSwitch: async () => ({ found: false, path: "", candidates: [] }),
@@ -969,14 +1013,6 @@ const api = {
       onStates: () => () => undefined,
     };
   })(),
-  decision: {
-    getConfig: async () => ({ kind: "off" as const, browserControl: false }),
-    saveConfig: async (config: unknown) => config as { kind: "off"; browserControl: boolean },
-    test: async () => ({ ok: true as const }),
-    keyState: async () => ({ jev: false }),
-    setKey: async (key: string) => ({ jev: Boolean(key.trim()) }),
-    onChanged: () => () => undefined,
-  },
   // `?memory=on|running|ready` picks what 设置 → 长期记忆 opens on; run plays a short pass.
   memory: (() => {
     const mode = params.get("memory");

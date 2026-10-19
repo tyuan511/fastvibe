@@ -45,7 +45,7 @@ The [Android releases](https://github.com/tyuan511/fastvibe/releases?q=app-v&exp
 - **Files, terminals, and Git together.** Browse multiple project folders, find changed files in the tree, search terminal output, and review, stage, and commit changes without leaving the workspace.
 - **Longer and parallel work.** Use goal mode, todos, subagents, task dependencies, and isolated Git worktrees. Schedule recurring tasks and receive results in the conversation that requested them.
 - **Your models and tools.** Configure providers and per-model protocols, connect MCP servers, and add skills or pi extensions. Track token usage and estimated cost across conversations.
-- **Browser and computer use.** Let the agent work in the embedded browser, or enable desktop control on macOS and Windows. An optional Jev decision engine can handle browser, computer, and batch decisions.
+- **Browser and computer use.** Let the agent work in the embedded browser, or enable desktop control on macOS and Windows — one click, keystroke or scroll at a time, decided by your model.
 - **Optional long-term memory.** Let finished conversations inform future work through local Markdown notes. Memory is off by default and can be inspected or cleared in Settings.
 - **Work across devices.** Continue from the Flutter phone app, or connect the desktop to a headless Linux Agent over SSH. Chinese and English interfaces, themes, interface scaling, and configurable shortcuts are included.
 

@@ -1,5 +1,5 @@
 import { appendFileSync, readFileSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rename, stat, writeFile } from "node:fs/promises";
 import { FORK_USAGE_SESSION_FIELD } from "./session-fork.ts";
 
 /**
@@ -39,6 +39,117 @@ type ParsedSession = { sessionId: string; turns: UsageTurn[] };
 /** Parsed transcripts, keyed by path and invalidated by `mtimeMs` + `size`. */
 const sessionCache = new Map<string, ParsedSession & { mtimeMs: number; size: number }>();
 
+type CachedParse = ParsedSession & { mtimeMs: number; size: number };
+
+/**
+ * The same parses, kept in a file between launches.
+ *
+ * The in-memory memo above is empty at every start, so the first 使用统计 of a session read and
+ * scanned every transcript again — 2 to 3.7 s on 294 MB. A transcript only grows, and a parse is
+ * valid for exactly the `mtimeMs` + `size` it was made at, so the result is stored under that
+ * and the next launch parses only the files that changed since.
+ *
+ * Deliberately a file of its own and not a table in `fastvibe.db`: it is derived data that can
+ * be deleted at any time, and a new table would be a schema step — which makes every older
+ * build refuse to open the shared database. A missing, torn or foreign-version file is an empty
+ * cache, never an error.
+ */
+class ParseCacheFile {
+  static readonly VERSION = 1;
+  #file: string;
+  #entries = new Map<string, CachedParse>();
+  #loading: Promise<void> | null = null;
+  #timer: ReturnType<typeof setTimeout> | null = null;
+  #dirty = false;
+
+  constructor(file: string) {
+    this.#file = file;
+  }
+
+  async ready(): Promise<void> {
+    this.#loading ??= this.#load();
+    await this.#loading;
+  }
+
+  async #load(): Promise<void> {
+    try {
+      const parsed = JSON.parse(await readFile(this.#file, "utf8")) as { version?: unknown; files?: unknown };
+      if (parsed.version !== ParseCacheFile.VERSION || !isRecord(parsed.files)) return;
+      for (const [path, value] of Object.entries(parsed.files)) {
+        if (!isRecord(value) || typeof value.sessionId !== "string" || !Array.isArray(value.turns)) continue;
+        if (typeof value.mtimeMs !== "number" || typeof value.size !== "number") continue;
+        this.#entries.set(path, value as unknown as CachedParse);
+      }
+    } catch {
+      // Absent or unreadable: start empty.
+    }
+  }
+
+  get(path: string, mtimeMs: number, size: number): CachedParse | undefined {
+    const entry = this.#entries.get(path);
+    return entry && entry.mtimeMs === mtimeMs && entry.size === size ? entry : undefined;
+  }
+
+  set(path: string, entry: CachedParse): void {
+    this.#entries.set(path, entry);
+    this.#schedule();
+  }
+
+  /** Forget transcripts that no longer exist, so deleted chats do not pile up in the file. */
+  retain(paths: Iterable<string>): void {
+    const keep = new Set(paths);
+    for (const path of [...this.#entries.keys()]) {
+      if (!keep.has(path)) {
+        this.#entries.delete(path);
+        this.#dirty = true;
+      }
+    }
+    if (this.#dirty) this.#schedule();
+  }
+
+  #schedule(): void {
+    this.#dirty = true;
+    if (this.#timer) return;
+    this.#timer = setTimeout(() => {
+      this.#timer = null;
+      void this.flush();
+    }, 2_000);
+    this.#timer.unref?.();
+  }
+
+  async flush(): Promise<void> {
+    if (!this.#dirty) return;
+    this.#dirty = false;
+    const files: Record<string, CachedParse> = {};
+    for (const [path, entry] of this.#entries) files[path] = entry;
+    const temp = `${this.#file}.${process.pid}.tmp`;
+    try {
+      await writeFile(temp, JSON.stringify({ version: ParseCacheFile.VERSION, files }), { mode: 0o600 });
+      await rename(temp, this.#file);
+    } catch {
+      // A cache that cannot be written costs the next launch a re-parse, nothing more.
+      this.#dirty = true;
+    }
+  }
+}
+
+let parseCacheFile: ParseCacheFile | null = null;
+let parseCachePath = "";
+
+/** Keep transcript parses in `file` between launches. Safe to call on every read. */
+export function usePersistentParseCache(file: string): void {
+  if (parseCacheFile && parseCachePath === file) return;
+  parseCacheFile = new ParseCacheFile(file);
+  parseCachePath = file;
+}
+
+/** Drop the cached parses of transcripts that are gone, and write what changed. */
+export async function settleParseCache(livePaths: Iterable<string>): Promise<void> {
+  if (!parseCacheFile) return;
+  parseCacheFile.retain(livePaths);
+  await parseCacheFile.flush();
+}
+
 /**
  * Every assistant turn recorded in one transcript, in file order.
  *
@@ -77,6 +188,14 @@ export async function parseSessionTurns(
   const cached = sessionCache.get(file);
   if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
     return { sessionId: cached.sessionId, turns: cached.turns };
+  }
+  if (parseCacheFile) {
+    await parseCacheFile.ready();
+    const stored = parseCacheFile.get(file, info.mtimeMs, info.size);
+    if (stored) {
+      sessionCache.set(file, stored);
+      return { sessionId: stored.sessionId, turns: stored.turns };
+    }
   }
   // A transcript's last write is no earlier than its last turn, so a file untouched
   // since before the window being asked about holds nothing that window can show —
@@ -176,7 +295,9 @@ export async function parseSessionTurns(
     if (!turn.sessionId) turn.sessionId = resolvedId;
   }
   const result = { sessionId: resolvedId, turns };
-  sessionCache.set(file, { ...result, mtimeMs: info.mtimeMs, size: info.size });
+  const entry = { ...result, mtimeMs: info.mtimeMs, size: info.size };
+  sessionCache.set(file, entry);
+  parseCacheFile?.set(file, entry);
   return result;
 }
 
@@ -308,6 +429,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Exposed for tests / tooling: drop the memoised transcript parses. */
 export function clearSessionUsageCache(): void {
   sessionCache.clear();
+  parseCacheFile = null;
 }
 
 /**

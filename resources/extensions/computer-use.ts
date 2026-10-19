@@ -65,58 +65,6 @@ function boundConversationId(): string | undefined {
 const WINDOW_ID = Type.String({ description: "computer_list_windows 返回的 windowId（字符串形式的整数）" });
 const PID = Type.Number({ description: "computer_list_apps 返回的进程 pid" });
 
-/** The decision-model loop Main installs (src/main/pi/computer-task-runner.ts). */
-type ComputerTaskRunner = (request: {
-  conversationId?: string;
-  goal: string;
-  pid: number;
-  windowId: string;
-  signal?: AbortSignal;
-  mode?: string;
-  confirm?: (message: string) => Promise<boolean>;
-  onStep?: (line: string) => void;
-}) => Promise<{ status: string; detail?: string; steps: unknown[]; page?: unknown; backend: string; ms: number }>;
-
-/** The in-window interaction tools computer_task replaces while 电脑控制 is on. */
-const COMPUTER_STEP_TOOLS = ["computer_click", "computer_type", "computer_key", "computer_hotkey", "computer_scroll", "computer_batch"];
-
-/** Main's decision-model loop and its switch, when this host provides them (not headless). */
-function computerTaskRunner(): { run: ComputerTaskRunner; enabled: () => boolean } | undefined {
-  const scope = globalThis as Record<string, unknown>;
-  const enabled = scope.__fastvibeComputerTaskEnabled;
-  const runner = scope.__fastvibeComputerTask;
-  if (typeof enabled !== "function" || typeof runner !== "function") return undefined;
-  return {
-    run: runner as ComputerTaskRunner,
-    enabled: () => {
-      try {
-        return Boolean(enabled());
-      } catch {
-        return false;
-      }
-    },
-  };
-}
-
-/**
- * Make either the task tool or the step tools active, never both, by swapping one group
- * for the other: tools some other extension deactivated stay as that extension left them.
- */
-function syncDecisionTools(pi: ExtensionAPI, task: string, steps: string[], on: boolean): void {
-  const active = pi.getActiveTools();
-  // A group comes in only in place of the other one: with neither active (a
-  // read-only tool set), nothing is added.
-  const next = on
-    ? active.some((name) => steps.includes(name))
-      ? [...active.filter((name) => !steps.includes(name)), ...(active.includes(task) ? [] : [task])]
-      : active
-    : active.includes(task)
-      ? [...active.filter((name) => name !== task), ...steps.filter((name) => !active.includes(name))]
-      : active;
-  if (next === active) return;
-  pi.setActiveTools(next);
-}
-
 export default function computerUse(pi: ExtensionAPI): void {
   const conversationId = boundConversationId();
 
@@ -144,54 +92,6 @@ export default function computerUse(pi: ExtensionAPI): void {
     for (const image of result.images) content.push({ type: "image", data: image.data, mimeType: image.mimeType });
     if (content.length === 0) content.push({ type: "text", text: "(无输出)" });
     return { content, details: result.structured ? { structured: result.structured } : undefined };
-  }
-
-  // Offered only while a decision model is selected (设置 → 决策引擎), read when this
-  // session's tools load; with none, computer use stays on the step-by-step tools below.
-  const runTask = computerTaskRunner();
-  // computer_task and the in-window step tools are both registered; which are *active*
-  // follows 设置 → 决策引擎 › 电脑控制, re-read every turn. On, in-window interaction goes
-  // through computer_task only (click, type, key, hotkey, scroll, batch inactive — beside
-  // it the main model keeps stepping itself and Jev never runs); off, computer_task is not
-  // offered. Reading the desktop, menus (outside the window's tree, so computer_task cannot
-  // see them) and the clipboard stay either way.
-  if (runTask) {
-    const sync = () => syncDecisionTools(pi, "computer_task", COMPUTER_STEP_TOOLS, runTask.enabled());
-    pi.on("session_start", sync);
-    pi.on("before_agent_start", sync);
-  }
-  if (runTask) {
-    pi.registerTool({
-      name: "computer_task",
-      label: "电脑任务",
-      description:
-        "快速电脑执行器：在一个指定窗口里由决策模型逐步点击、输入、滚动，直到完成目标或无法继续。先用 computer_list_windows 找到 pid 和 windowId，再把用户的完整目标原文一次交给它（例如“在这个窗口新建一条提醒：标题 X，备注 Y，然后保存”），不要拆成小步，也不要写“然后告诉我……”——它只负责操作，不负责回答。返回执行过的每一步和最终窗口内容；由你据此回答用户，需要时再用 computer_window_state 或 computer_screenshot 核对。它只操作这一个窗口。",
-      promptSnippet: "让决策模型在一个窗口里连续执行一个目标",
-      parameters: Type.Object({
-        pid: PID,
-        windowId: WINDOW_ID,
-        goal: Type.String({ description: "用户的完整目标原文（或尚未完成的部分）" }),
-      }),
-      async execute(_id, params, signal, onUpdate) {
-        // Switched off since this turn began: refuse rather than drive the window anyway.
-        if (!runTask.enabled()) {
-          return { content: [{ type: "text", text: "电脑控制已在设置中关闭，computer_task 从下一轮起不可用；请改用 computer_click 等逐步工具。" }], details: undefined };
-        }
-        const lines: string[] = [];
-        const result = await runTask.run({
-          conversationId,
-          goal: params.goal,
-          pid: params.pid,
-          windowId: params.windowId,
-          signal,
-          onStep: (line) => {
-            lines.push(line);
-            onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }], details: undefined });
-          },
-        });
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
-      },
-    });
   }
 
   pi.registerTool({

@@ -231,6 +231,7 @@ export const Ipc = {
   /** Pushed whenever who is signed in changes: a login finishing, a logout, a refresh. */
   accountState: "account:state",
   providersList: "providers:list",
+  providersReorder: "providers:reorder",
   providersNative: "providers:native",
   providersFetch: "providers:fetch",
   providersAdd: "providers:add",
@@ -284,18 +285,6 @@ export const Ipc = {
   sshState: "ssh:state",
   /** Every live SSH host at once. Parent owns the handler; the pane must not treat `ssh:state` as global. */
   sshStates: "ssh:states",
-  /** 决策引擎：browser use 的决策模型（关闭 / Jev）；见 docs/decision-layer.md §5。 */
-  decisionGetConfig: "decision:get-config",
-  /** 本地桌面管理；远程客户端不得调用。 */
-  decisionSaveConfig: "decision:save-config",
-  /** 一次性连通性检测（GET /health），不发送任何 state；远程客户端不得调用。 */
-  decisionTest: "decision:test",
-  /** Whether a Jev key is stored (never the key itself). */
-  decisionKeyState: "decision:key-state",
-  /** Store or clear the Jev key; answers with the new key state. */
-  decisionSetKey: "decision:set-key",
-  /** 配置变化的广播，不带秘密——Jev key 只在 Main 的 .env 里。 */
-  decisionChanged: "decision:changed",
   /** Long-term memory: one switch, a file-based pipeline behind it (docs/memory.md). */
   memoryGetState: "memory:get-state",
   memorySetConfig: "memory:set-config",

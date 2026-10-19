@@ -287,6 +287,7 @@ export function createFastVibeApi(t: ApiTransport) {
     providers: {
       test: (id: string, model: string): Promise<import("./provider-test").ProviderTestResult> => t.invoke(Ipc.providersTest, { id, model }),
       list: (): Promise<ProviderConfig[]> => t.invoke(Ipc.providersList),
+      reorder: (ids: string[]): Promise<ProviderConfig[]> => t.invoke(Ipc.providersReorder, { ids }),
       native: (): Promise<NativeProviderConfig[]> => t.invoke(Ipc.providersNative),
       addNative: (payload: {
         id: string;
@@ -627,19 +628,6 @@ export function createFastVibeApi(t: ApiTransport) {
       onState: (listener: (state: RemoteHostConnectionState) => void): (() => void) => t.subscribe(Ipc.sshState, listener),
       onStates: (listener: (states: RemoteHostConnectionState[]) => void): (() => void) =>
         t.subscribe(Ipc.sshStates, listener),
-    },
-    /** 决策引擎：browser use 用哪个决策模型（关闭 / Jev）；见 docs/decision-layer.md §5。 */
-    decision: {
-      getConfig: (): Promise<import("./decision").DecisionModelConfig> => t.invoke(Ipc.decisionGetConfig),
-      saveConfig: (config: import("./decision").DecisionModelConfig): Promise<import("./decision").DecisionModelConfig> =>
-        t.invoke(Ipc.decisionSaveConfig, config),
-      test: (config: import("./decision").DecisionModelConfig): Promise<import("./decision").DecisionTestResult> =>
-        t.invoke(Ipc.decisionTest, config),
-      keyState: (): Promise<import("./decision").DecisionKeyState> => t.invoke(Ipc.decisionKeyState),
-      setKey: (key: string): Promise<import("./decision").DecisionKeyState> => t.invoke(Ipc.decisionSetKey, { key }),
-      /** A save made by *another* window; each window holds its own copy, loaded once. */
-      onChanged: (listener: (config: import("./decision").DecisionModelConfig) => void): (() => void) =>
-        t.subscribe(Ipc.decisionChanged, listener),
     },
     memory: {
       getState: (): Promise<import("./memory").MemoryState> => t.invoke(Ipc.memoryGetState),

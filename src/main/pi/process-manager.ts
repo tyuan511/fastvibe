@@ -137,7 +137,6 @@ import { installSdkQueueAdapter, type SdkQueueAdapter } from "./sdk-queue-adapte
 import {
   addNativeProvider as addNativeProviderConfig,
   addProvider as addProviderConfig,
-  adoptLegacyJevProvider,
   applyProviders,
   fetchProviderModels,
   listProviderConfigs,
@@ -147,6 +146,7 @@ import {
   providerKeyEnv,
   refreshProviderModels,
   removeProvider as removeProviderConfig,
+  reorderProviders as reorderProviderConfigs,
   readProviders,
   setProviderGateway,
   setProviderKey,
@@ -1103,10 +1103,6 @@ export class PiProcessManager {
           await unlink(item.sessionFile).catch(() => undefined);
         }),
       );
-      // A Jev key from before System One lived in 模型管理 becomes the official
-      // provider here, before the registry is built. A failure leaves the previous
-      // providers in place and must not stop the window opening.
-      await adoptLegacyJevProvider(this.#paths).catch(() => undefined);
       const keys = await loadProviderKeys(this.#paths);
       const providers = usableProviders(this.#paths, keys);
       // No provider is a normal first-run state, not a boot failure: `applyProviders`
@@ -2626,30 +2622,6 @@ export class PiProcessManager {
     return this.#modelsCache ?? [];
   }
   /**
-   * One field value for the browser_task loop (docs/decision-layer.md §5.3): the
-   * conversation's own model, called outside the conversation with reasoning off.
-   *
-   * `complete` with no reasoning effort sends a reasoning model its "off" effort, which
-   * is the point — the helper returns `{"text": …}` and nothing it could think about
-   * changes that; with reasoning on it only cost more time per field.
-   */
-  async completeDecisionText(conversationId: string, system: string, user: string, signal?: AbortSignal): Promise<string> {
-    await this.#ensureReady();
-    const registry = this.#models;
-    if (!registry) throw new Error(uiText("模型尚未就绪", "Model is not ready"));
-    const { session } = await this.#sessionFor(conversationId);
-    const model = session.model;
-    if (!model || !registry.hasConfiguredAuth(model)) {
-      throw new Error(uiText("还没有可用的模型", "No model is available"));
-    }
-    const response = await registry.complete(
-      model,
-      { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
-      { maxTokens: 512, cacheRetention: "none", timeoutMs: 20_000, ...(signal ? { signal } : {}) },
-    );
-    return response.content.map((block) => (block.type === "text" ? block.text : "")).join("").trim();
-  }
-  /**
    * The model background work (memory) runs on: the user's default model, else the one
    * the active chat is on, else whatever this install can authenticate. It belongs to no
    * conversation, so it must not depend on one being open.
@@ -3155,6 +3127,7 @@ export class PiProcessManager {
   async scanCcSwitch() { return scanCcSwitch(this.#paths); }
   async importCcSwitch(ids: string[]): Promise<ProviderConfig[]> { await importCcSwitch(this.#paths, ids); await this.reloadProviders(); return this.listProviders(); }
   async updateProvider(id: string, patch: { name?: string; baseUrl?: string; api?: string; enabled?: boolean; models?: ProviderModel[]; modelOrder?: string[]; apiKey?: string }): Promise<ProviderConfig[]> { updateProviderConfig(this.#paths, id, { name: patch.name, baseUrl: patch.baseUrl?.trim().replace(/\/+$/, ""), api: patch.api, enabled: patch.enabled, models: patch.models, modelOrder: patch.modelOrder }); if (patch.apiKey !== undefined) { const env = providerKeyEnv(this.#paths, id); if (env) await setProviderKey(this.#paths, env, patch.apiKey); } await this.reloadProviders(); return this.listProviders(); }
+  async reorderProviders(ids: string[]): Promise<ProviderConfig[]> { reorderProviderConfigs(this.#paths, ids); await this.reloadProviders(); return this.listProviders(); }
   async removeProvider(id: string): Promise<ProviderConfig[]> { await removeProviderConfig(this.#paths, id); await this.reloadProviders(); return this.listProviders(); }
 
   /**

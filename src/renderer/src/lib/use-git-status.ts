@@ -22,7 +22,7 @@ const POLL_MS = 10_000;
 const MAX_POLL_MS = 60_000;
 
 /** What a status says, for "did anything change since the last read?". */
-function signature(status: GitStatus): string {
+export function gitStatusSignature(status: GitStatus): string {
   return [
     status.branch ?? "",
     status.changed,
@@ -61,17 +61,103 @@ export async function readGitStatus(cwd: string, force = false): Promise<GitStat
   return request;
 }
 
+type Listener = (status: GitStatus) => void;
+type Watch = { listeners: Set<Listener>; wait: number; last: string; timer: number };
+const watches = new Map<string, Watch>();
+let globalHandlersInstalled = false;
+
+/**
+ * One poller per workspace, shared by everything that shows its status.
+ *
+ * The composer's branch chip, the resources panel, the file tree and the git pane each used to
+ * keep their own timer, and each timer forced a read past the cache — N surfaces on one
+ * workspace meant N `git status` + `git diff --numstat` rounds per beat, and the slow-call log
+ * shows them arriving in pairs. Now the first subscriber starts the beat, later ones join it,
+ * and the last one out stops it. The backoff, the hidden-window pause and the focus refresh are
+ * one copy, applied to every subscriber at once.
+ */
+export function subscribeGitStatus(cwd: string, listener: Listener): () => void {
+  let watch = watches.get(cwd);
+  if (!watch) {
+    watch = { listeners: new Set(), wait: POLL_MS, last: "", timer: 0 };
+    watches.set(cwd, watch);
+  }
+  watch.listeners.add(listener);
+  installGlobalHandlers();
+  const cached = cache.get(cwd);
+  if (cached) listener(cached.status);
+  // The first listener reads (a read that just happened is reused through the cache); a later
+  // one is told by the next result, or by the cache above.
+  if (watch.listeners.size === 1) {
+    load(cwd, !cached);
+    schedule(cwd);
+  } else if (!cached) {
+    void readGitStatus(cwd).then((status) => listener(status));
+  }
+  return () => {
+    const current = watches.get(cwd);
+    if (!current) return;
+    current.listeners.delete(listener);
+    if (current.listeners.size === 0) {
+      window.clearTimeout(current.timer);
+      watches.delete(cwd);
+    }
+  };
+}
+
+function load(cwd: string, force: boolean): void {
+  void readGitStatus(cwd, force).then((next) => {
+    const watch = watches.get(cwd);
+    if (!watch) return;
+    const sig = gitStatusSignature(next);
+    // A tree that answered the same thing twice is a tree nobody is editing.
+    watch.wait = sig === watch.last ? Math.min(watch.wait * 2, MAX_POLL_MS) : POLL_MS;
+    watch.last = sig;
+    for (const listener of [...watch.listeners]) listener(next);
+  });
+}
+
+function schedule(cwd: string): void {
+  const watch = watches.get(cwd);
+  if (!watch) return;
+  window.clearTimeout(watch.timer);
+  // A hidden window has nobody to show the result to: skip the tick, and take one read on the
+  // way back (`installGlobalHandlers`) so nothing is stale by a whole interval.
+  watch.timer = window.setTimeout(() => {
+    if (!document.hidden) load(cwd, true);
+    schedule(cwd);
+  }, watch.wait);
+}
+
+/** Read every watched workspace now and restart its beat: anything that means "look now". */
+export function refreshGitStatus(cwd?: string): void {
+  for (const [key, watch] of watches) {
+    if (cwd && key !== cwd) continue;
+    watch.wait = POLL_MS;
+    load(key, true);
+    schedule(key);
+  }
+}
+
+function installGlobalHandlers(): void {
+  if (globalHandlersInstalled || typeof window === "undefined") return;
+  globalHandlersInstalled = true;
+  window.addEventListener("focus", () => refreshGitStatus());
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshGitStatus();
+  });
+}
+
 /**
  * Git status for a workspace, fresh enough to drive the composer's branch chip:
  * refetched on window focus, whenever `refreshKey` changes (pass the streaming
- * flag so a finished turn re-reads), and on a slow interval. `null` until the
+ * flag so a finished turn re-reads), and on a slow shared interval. `null` until the
  * first read resolves, and when no workspace is bound.
  */
 export function useGitStatus(cwd?: string, refreshKey?: unknown): GitStatus | null {
   const [status, setStatus] = useState<GitStatus | null>(() =>
     cwd ? cache.get(cwd)?.status ?? null : null,
   );
-  const cwdRef = useRef(cwd);
   const keyRef = useRef(refreshKey);
 
   useEffect(() => {
@@ -79,56 +165,14 @@ export function useGitStatus(cwd?: string, refreshKey?: unknown): GitStatus | nu
       setStatus(null);
       return;
     }
-    let cancelled = false;
-    let wait = POLL_MS;
-    let last = "";
-    let timer = 0;
-    const load = (force: boolean): void => {
-      void readGitStatus(cwd, force).then((next) => {
-        if (cancelled) return;
-        const next_ = signature(next);
-        // A tree that answered the same thing twice is a tree nobody is editing.
-        wait = next_ === last ? Math.min(wait * 2, MAX_POLL_MS) : POLL_MS;
-        last = next_;
-        setStatus(next);
-      });
-    };
-    /** A read that also restarts the beat, for anything that means "look now". */
-    const refresh = (): void => {
-      wait = POLL_MS;
-      load(true);
-      schedule();
-    };
-    const schedule = (): void => {
-      window.clearTimeout(timer);
-      // A hidden window has nobody to show the result to, so it polls for as long as
-      // the app is left open in the background — skip those ticks, and take one read
-      // on the way back so the chip is never stale by a whole interval.
-      timer = window.setTimeout(() => {
-        if (!document.hidden) load(true);
-        schedule();
-      }, wait);
-    };
-    // A new workspace, or a `refreshKey` flip (a finished turn), bypasses the
-    // cache. Otherwise a read that just happened is reused — a sibling surface
-    // or a remount should not spawn a second `git` process.
-    const force = cwdRef.current !== cwd || keyRef.current !== refreshKey;
-    cwdRef.current = cwd;
+    return subscribeGitStatus(cwd, setStatus);
+  }, [cwd]);
+
+  // A flipped `refreshKey` (a finished turn) bypasses the cache; the first render does not.
+  useEffect(() => {
+    if (keyRef.current === refreshKey) return;
     keyRef.current = refreshKey;
-    load(force || !cache.has(cwd));
-    schedule();
-    const onFocus = (): void => refresh();
-    const onVisible = (): void => {
-      if (!document.hidden) refresh();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
+    if (cwd) refreshGitStatus(cwd);
   }, [cwd, refreshKey]);
 
   // Ignore a status read for a workspace we have since left, so the chip never
