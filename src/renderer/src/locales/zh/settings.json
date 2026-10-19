@@ -438,6 +438,7 @@
   "enable": "启用",
   "delete": "删除供应商",
   "apiFormat": "API 格式",
+  "apiFormatHint": "供应商的默认协议，单个模型可在详情里覆盖。",
   "apiKey": "API 密钥",
   "keySaved": "已保存，输入新密钥可更新",
   "pasteKey": "粘贴 API 密钥",

@@ -440,6 +440,7 @@
   "enable": "Enable",
   "delete": "Delete provider",
   "apiFormat": "API format",
+  "apiFormatHint": "Default protocol for this provider; a single model can override it.",
   "apiKey": "API key",
   "keySaved": "Saved — enter a new key to update",
   "pasteKey": "Paste API key",

@@ -1,20 +1,20 @@
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  Add01Icon,
-  ArrowLeft01Icon,
-  BoxesIcon,
-  Download01Icon,
-  Loading03Icon,
-} from "@hugeicons/core-free-icons";
+import { Add01Icon, BoxesIcon, Download01Icon, Loading03Icon, Search01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Input } from "@/components/ui/input";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { SettingsGroup, SettingsRow } from "./settings-group";
 import { providerLabel } from "@/lib/provider-label";
-import { cn } from "@/lib/utils";
-import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
+import { cleanError } from "@/lib/ipc-error";
+import { DndContext, DragOverlay, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import { CSS } from "@dnd-kit/utilities";
 import { ProviderIcon } from "@/components/provider-icon";
-import { type FastVibeModel, type NativeProviderConfig, type ProviderConfig, type ProviderModel } from "@shared/types";
+import type { FastVibeModel, NativeProviderConfig, ProviderConfig, ProviderModel } from "@shared/types";
 import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import { OAuthLoginDialog, type OAuthTarget } from "./oauth-login-dialog";
@@ -23,8 +23,8 @@ import { EMPTY_ADD, type AddState, type PickerState } from "./providers-settings
 import { fetchAddCandidates, logout, saveAdd, savePicker, startAddModels } from "./providers-settings-actions";
 import { useSettingsStore } from "@/stores/settings";
 import { ProjectDefaultsSection } from "./project-defaults";
-import { SettingsGroup, SettingsRow } from "./settings-group";
 import { ProviderDetail } from "./provider-detail";
+import { ProviderCardActions, ProviderCardName } from "./provider-card-actions";
 import { CcSwitchImportDialog } from "./cc-switch-import-dialog";
 import { AddProviderDialog, ModelPickDialog } from "./add-provider-dialog";
 
@@ -36,14 +36,16 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
   const [natives, setNatives] = useState<NativeProviderConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Phone: the provider list and a provider's detail are two pages, not two columns —
-  // side by side at 375pt the detail was a strip one word wide. Picking a provider opens
-  // its page; the page's 返回 comes back. Desktop ignores this and shows both.
-  const narrow = useIsNarrowViewport();
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [reordering, setReordering] = useState(false);
+  const [draggingProviderId, setDraggingProviderId] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+  );
   const openProvider = (id: string): void => {
+    setQuery("");
     setSelectedId(id);
-    setDetailOpen(true);
   };
   const [add, setAdd] = useState<AddState | null>(null);
   const [ccSwitchOpen, setCcSwitchOpen] = useState(false);
@@ -67,9 +69,6 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
 
   useEffect(() => {
     void Promise.all([refresh(), window.fastvibe.providers.native().then(setNatives)])
-      .then(([next]) => {
-        setSelectedId((current) => current ?? next[0]?.id ?? null);
-      })
       .catch(() => undefined)
       .finally(() => setLoading(false));
   }, []);
@@ -98,9 +97,33 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
     setDetail(null);
   }
 
-  const nativeProviders = providers.filter((item) => item.kind === "native");
-  const customs = providers.filter((item) => item.kind === "custom");
-  const selected = providers.find((item) => item.id === selectedId) ?? providers[0] ?? null;
+  async function reorderProviders(activeId: string, overId: string): Promise<void> {
+    if (activeId === overId || reordering) return;
+    const from = providers.findIndex((provider) => providerSortId(provider.id) === activeId);
+    const to = providers.findIndex((provider) => providerSortId(provider.id) === overId);
+    if (from < 0 || to < 0) return;
+    // Reorder the full catalog even when a search hides some of its rows.
+    const next = arrayMove(providers, from, to);
+    setProviders(next);
+    setReordering(true);
+    try {
+      setProviders(await window.fastvibe.providers.reorder(next.map((provider) => provider.id)));
+      onChanged();
+    } catch (error) {
+      toast.error(cleanError(error));
+      await refresh().catch(() => setProviders(providers));
+    } finally {
+      setReordering(false);
+    }
+  }
+
+  const draggingProvider = providers.find((provider) => providerSortId(provider.id) === draggingProviderId);
+  const needle = query.trim().toLocaleLowerCase();
+  const visibleProviders = providers.filter((provider) =>
+    [providerLabel(provider.name || provider.id), provider.id, provider.baseUrl,
+      ...provider.models.flatMap((model) => [model.id, model.name ?? ""])]
+      .some((value) => value.toLocaleLowerCase().includes(needle)),
+  );
 
   if (loading) {
     return (
@@ -112,18 +135,11 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
   }
 
   return (
-    // The pane is a column so the provider area below can take the height left over by the
-    // rows above it — see the model list in `provider-detail.tsx`.
-    <div className="flex min-h-0 flex-1 flex-col gap-5">
+    <div className="space-y-5">
       <SettingsGroup>
         <SettingsRow
           title={t("defaultModel.title")}
-          description={
-            <>
-              {t("defaultModel.desc")}
-              {models.length === 0 ? <span className="mt-1 block">{t("defaultModel.emptyHint")}</span> : null}
-            </>
-          }
+          description={t(models.length ? "defaultModel.desc" : "defaultModel.emptyHint")}
           control={
             <ModelThinkingSelect
               models={models}
@@ -139,125 +155,124 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
             />
           }
         />
-        <ProjectDefaultsSection models={models} />
+        <div className="px-4 py-3">
+          <ProjectDefaultsSection models={models} />
+        </div>
       </SettingsGroup>
 
-      <div className="flex min-h-0 flex-1 items-start gap-4">
-        <aside
-          className={cn(
-            "flex w-52 shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card",
-            narrow && (detailOpen ? "hidden" : "w-full"),
-          )}
-        >
-        <ScrollArea className="max-h-[28rem] min-h-0 flex-1">
-          <div className="p-2">
-            {nativeProviders.length ? (
-              <div className="mb-3">
-                <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">{t("providers.providers")}</p>
-                <div className="space-y-0.5">
-                  {nativeProviders.map((provider) => (
-                    <ProviderNavItem
-                      key={provider.id}
-                      provider={provider}
-                      selected={!narrow && selected?.id === provider.id}
-                      onSelect={() => openProvider(provider.id)}
-                    />
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {customs.length ? (
-              <div>
-                <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">{t("providers.custom")}</p>
-                <div className="space-y-0.5">
-                  {customs.map((provider) => (
-                    <ProviderNavItem
-                      key={provider.id}
-                      provider={provider}
-                      selected={!narrow && selected?.id === provider.id}
-                      onSelect={() => openProvider(provider.id)}
-                    />
-                  ))}
-                </div>
-              </div>
-            ) : null}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+          <h3 className="text-sm font-medium">{t("providers.providers")} <span className="ml-1 font-normal text-muted-foreground">{providers.length}</span></h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setCcSwitchOpen(true)}>
+              <HugeiconsIcon strokeWidth={2} icon={Download01Icon} />
+              {t("providers.importCcSwitch")}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setAdd({ ...EMPTY_ADD, selected: new Set() })}>
+              <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
+              {t("providers.add")}
+            </Button>
           </div>
-        </ScrollArea>
-        <div className="shrink-0 space-y-0.5 border-t border-border bg-muted/30 p-2">
-          <button
-            type="button"
-            className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-foreground hover:bg-muted"
-            onClick={() => setAdd({ ...EMPTY_ADD, selected: new Set() })}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={Add01Icon} className="size-3.5 text-muted-foreground" />
-            {t("providers.add")}
-          </button>
-          <button
-            type="button"
-            className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-            onClick={() => setCcSwitchOpen(true)}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={Download01Icon} className="size-3.5" />
-            {t("providers.importCcSwitch")}
-          </button>
         </div>
-        </aside>
-
-        {/* `self-stretch` rather than `items-stretch` on the row: the provider list is as tall
-            as its own rows, while the detail beside it fills the column. */}
-        <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col self-stretch", narrow && !detailOpen && "hidden")}>
-        {narrow ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="-ml-2 mb-3 h-8 gap-1.5 px-2 text-sm text-muted-foreground"
-            onClick={() => setDetailOpen(false)}
-          >
-            <HugeiconsIcon strokeWidth={2} icon={ArrowLeft01Icon} className="size-4" />
-            {t("providers.providers")}
-          </Button>
+        {providers.length > 0 ? (
+          <div className="relative">
+            <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("providers.searchProviders")} aria-label={t("providers.searchProviders")} className="pl-9" />
+          </div>
         ) : null}
-        {selected ? (
-          <ProviderDetail
-            provider={selected}
-            onAddModels={() => {
-              void startAddModels(selected, setPicker);
+        {visibleProviders.length > 0 ? (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            modifiers={[restrictToVerticalAxis]}
+            onDragStart={({ active }) => setDraggingProviderId(String(active.id))}
+            onDragEnd={({ active, over }) => {
+              setDraggingProviderId(null);
+              if (over) void reorderProviders(String(active.id), String(over.id));
             }}
-            onEditModel={(model) => setDetail({ providerId: selected.id, model })}
-            onOAuth={() => {
-              // The flow opens the host's system browser and waits on a loopback
-              // callback there; nothing about it can complete from a tab.
-              if (!selected.oauth) return;
-              setOauth({
-                target: { id: selected.id, name: selected.name, oauth: selected.oauth },
-                next: () => {
-                  // Both views have to move: this pane's rows, and the composer's model
-                  // menu — the login is what made this provider's models exist.
-                  void refresh().catch(() => undefined);
-                  onChanged();
-                },
-              });
-            }}
-            onLogout={() => void logout(selected, setProviders, onChanged)}
-            onConfigureGateway={() => setGatewayCredentialFor(selected)}
-            onIdentified={() => void refresh().catch(() => undefined)}
-            onChanged={async (next) => {
-              setProviders(next);
-              onChanged();
-            }}
-            onRemoved={async (next) => {
-              setProviders(next);
-              setSelectedId(next[0]?.id ?? null);
-              setDetailOpen(false);
-              onChanged();
-            }}
-          />
+            onDragCancel={() => setDraggingProviderId(null)}
+          >
+            <SortableContext items={visibleProviders.map((provider) => providerSortId(provider.id))} strategy={verticalListSortingStrategy}>
+              <SettingsGroup>
+                <Accordion
+                  value={selectedId ? [selectedId] : []}
+                  onValueChange={(value) => setSelectedId((value[0] as string | undefined) ?? null)}
+                  className="gap-0"
+                >
+                  {visibleProviders.map((provider) => (
+                    <SortableProviderItem
+                      key={provider.id}
+                      provider={provider}
+                      disabled={reordering}
+                      onRename={async (name) => { await mutate(() => window.fastvibe.providers.update({ id: provider.id, name })); }}
+                      actions={
+                        <ProviderCardActions
+                          provider={provider}
+                          disabled={reordering}
+                          onUpdate={async (patch) => { await mutate(() => window.fastvibe.providers.update({ id: provider.id, ...patch })); }}
+                          onRemove={async () => {
+                            await mutate(() => window.fastvibe.providers.remove(provider.id));
+                            if (selectedId === provider.id) setSelectedId(null);
+                          }}
+                        />
+                      }
+                      onMove={(direction) => {
+                        const index = visibleProviders.findIndex((item) => item.id === provider.id);
+                        const target = visibleProviders[index + direction];
+                        if (target) void reorderProviders(providerSortId(provider.id), providerSortId(target.id));
+                      }}
+                    >
+                      <ProviderDetail
+                        provider={provider}
+                        onAddModels={() => {
+                          void startAddModels(provider, setPicker);
+                        }}
+                        onEditModel={(model) => setDetail({ providerId: provider.id, model })}
+                        onOAuth={() => {
+                          // The flow opens the host's system browser and waits on a loopback
+                          // callback there; nothing about it can complete from a tab.
+                          if (!provider.oauth) return;
+                          setOauth({
+                            target: { id: provider.id, name: provider.name, oauth: provider.oauth },
+                            next: () => {
+                              // Both views have to move: this pane's rows, and the composer's model
+                              // menu — the login is what made this provider's models exist.
+                              void refresh().catch(() => undefined);
+                              onChanged();
+                            },
+                          });
+                        }}
+                        onLogout={() => void logout(provider, setProviders, onChanged)}
+                        onConfigureGateway={() => setGatewayCredentialFor(provider)}
+                        onIdentified={() => void refresh().catch(() => undefined)}
+                        onChanged={async (next) => {
+                          setProviders(next);
+                          onChanged();
+                        }}
+                      />
+                    </SortableProviderItem>
+                  ))}
+                </Accordion>
+              </SettingsGroup>
+            </SortableContext>
+            <DragOverlay>
+              {draggingProvider ? (
+                <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5 shadow-lg">
+                  <ProviderSummary provider={draggingProvider} />
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
         ) : (
-          <p className="py-10 text-center text-xs text-muted-foreground">{t("providers.pickOne")}</p>
+          <div className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border px-4 py-8 text-center">
+            <HugeiconsIcon strokeWidth={1.5} icon={BoxesIcon} className="mb-1 size-6 text-muted-foreground" />
+            <p className="text-sm font-medium">{t(providers.length ? "providers.noMatch" : "providers.emptyTitle")}</p>
+            <p className="text-xs text-muted-foreground">{t(providers.length ? "providers.searchHint" : "providers.emptyDesc")}</p>
+          </div>
         )}
-        </div>
+      </section>
 
-        <GatewayCredentialDialog
+      <GatewayCredentialDialog
         provider={gatewayCredentialFor}
         onClose={() => setGatewayCredentialFor(null)}
         onSaved={() => {
@@ -266,7 +281,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         }}
       />
 
-        <CcSwitchImportDialog
+      <CcSwitchImportDialog
         open={ccSwitchOpen}
         onClose={() => setCcSwitchOpen(false)}
         onImported={async (next) => {
@@ -278,7 +293,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         }}
       />
 
-        <AddProviderDialog
+      <AddProviderDialog
         state={add}
         natives={natives}
         addedIds={providers.map((item) => item.id)}
@@ -318,7 +333,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         }
       />
 
-        <ModelPickDialog
+      <ModelPickDialog
         state={picker}
         provider={providers.find((item) => item.id === picker?.providerId)}
         onPatch={(next) => setPicker((current) => (current ? { ...current, ...next } : current))}
@@ -326,14 +341,14 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         onSave={() => void savePicker(picker, providers, setPicker, mutate)}
       />
 
-        <ModelDetailDialog
+      <ModelDetailDialog
         target={detail}
         provider={providers.find((item) => item.id === detail?.providerId)}
         onClose={() => setDetail(null)}
         onSave={saveDetail}
       />
 
-        <OAuthLoginDialog
+      <OAuthLoginDialog
         target={oauth?.target ?? null}
         onClose={() => setOauth(null)}
         onDone={() => {
@@ -342,49 +357,70 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
           next?.();
         }}
       />
-      </div>
     </div>
   );
 }
-function ProviderNavItem({
-  provider,
-  selected,
-  onSelect,
-}: {
+function providerSortId(id: string): string { return `provider:${id}`; }
+
+function SortableProviderItem({ provider, disabled, actions, onRename, onMove, children }: {
   provider: ProviderConfig;
-  selected: boolean;
-  onSelect: () => void;
+  disabled: boolean;
+  actions: ReactNode;
+  onRename: (name: string) => Promise<void>;
+  onMove: (direction: -1 | 1) => void;
+  children: ReactNode;
 }): JSX.Element {
   const { t } = useTranslation("settings");
-  const connected = provider.hasKey || provider.hasOAuth;
+  const { listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
+    id: providerSortId(provider.id),
+    disabled,
+    transition: { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+  });
   return (
-    <button
-      type="button"
-      className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm transition-colors",
-        selected ? "bg-muted" : "hover:bg-muted/60",
-        !provider.enabled && "opacity-60",
-      )}
-      onClick={onSelect}
+    <AccordionItem
+      value={provider.id}
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0 : undefined }}
+      className="overflow-hidden border-border bg-card"
     >
-      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background">
-        {provider.kind === "native" ? (
-          // The built-in's own brand mark, else a neutral glyph — the SDK catalog is what
-          // decides which, see `provider-icon.tsx`.
-          <ProviderIcon provider={provider.id} />
-        ) : (
-          <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} className="size-3.5 text-muted-foreground" />
-        )}
+      <div className="group/provider-header relative flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 pr-11 hover:bg-muted/30 [&>h3]:absolute [&>h3]:inset-0">
+        <AccordionTrigger
+          ref={setActivatorNodeRef}
+          {...listeners}
+          title={t("providers.dragHint")}
+          aria-label={`${providerLabel(provider.name || provider.id)} ${t("providers.modelCount", { count: provider.models.length })}`}
+          aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+          onKeyDown={(event) => {
+            if (!disabled && event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+              event.preventDefault();
+              event.stopPropagation();
+              onMove(event.key === "ArrowUp" ? -1 : 1);
+            }
+          }}
+          className="cursor-grab select-none rounded-none border-0 p-0 hover:no-underline active:cursor-grabbing **:data-[slot=accordion-trigger-icon]:absolute **:data-[slot=accordion-trigger-icon]:right-4 **:data-[slot=accordion-trigger-icon]:top-1/2 **:data-[slot=accordion-trigger-icon]:-translate-y-1/2"
+        />
+        {/* Let the full header trigger receive clicks, except on the inline controls. */}
+        <div className="pointer-events-none relative flex min-w-0 flex-1 basis-40 items-center gap-3">
+          <ProviderSummary provider={provider} name={<ProviderCardName provider={provider} disabled={disabled} onRename={onRename} />} />
+        </div>
+        <div className="relative z-10 max-w-full">{actions}</div>
+      </div>
+      <AccordionContent className="h-auto px-4 pb-4 pt-1 [&_p:not(:last-child)]:mb-0">
+        {children}
+      </AccordionContent>
+    </AccordionItem>
+  );
+}
+
+function ProviderSummary({ provider, name }: { provider: ProviderConfig; name?: ReactNode }): JSX.Element {
+  const { t } = useTranslation("settings");
+  return (
+    <>
+      <span className="flex size-4 shrink-0 items-center justify-center">
+        {provider.kind === "native" ? <ProviderIcon provider={provider.id} /> : <HugeiconsIcon strokeWidth={2} icon={BoxesIcon} className="size-3.5 text-muted-foreground" />}
       </span>
-      <span className="min-w-0 flex-1">
-        <span className={cn("block truncate", selected && "font-medium")}>{providerLabel(provider.name || provider.id)}</span>
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className={cn("size-1.5 shrink-0 rounded-full", connected ? "bg-success" : "bg-muted-foreground/35")} />
-          <span className="truncate">
-            {connected ? t("providers.modelCount", { count: provider.models.length }) : t("providers.notConnected")}
-          </span>
-        </span>
-      </span>
-    </button>
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{name ?? providerLabel(provider.name || provider.id)}</span>
+      <span className="shrink-0 text-right text-xs font-normal text-muted-foreground">{t("providers.modelCount", { count: provider.models.length })}</span>
+    </>
   );
 }
