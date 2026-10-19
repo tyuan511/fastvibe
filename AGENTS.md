@@ -2694,6 +2694,33 @@ after the reply, the same quiet rule as a model switch — not a card inside tha
 it runs the label flickers; once the summary lands the same rule says 「已压缩上下文」.
 Without the re-serve, switching away and back mid-compaction lost it until the summary was written.
 
+## 侧标「已完成但未读」（`Conversation.unread`）
+
+「跑完了但没人看过」是一个事实，不是一个事件，所以它写在 catalog 行上（`fastvibe.db` 的 `conversations`），
+不是渲染层的一张 Map —— 重载、重启、第二个窗口和手机都要能答同一个问题。`failedInBackground` 仍旧是
+内存里的瞬时标记，因为它的说法本来就是「刚才那次异常结束没被看见」，不是一句可以活过重启的断言。
+
+- **谁标它**：`process-manager` 在 `agent_settled` 递出 `conversation_activity` 时，如果这条会话不是屏幕上的
+  那一条（`#activeId`）且结论是 `completed`，就 `catalog.markUnread(id)`。用户自己按的停止、`立即`、重复保护
+  本来就不发 activity，所以也不会标；失败的会话走 `failedInBackground` 那条红色标记，两者不是一回事。
+- **谁清它**：`ConversationCatalog.setActive`。打开就是读了 —— 包括「id 没变、只需要把标记摘掉」那一种，
+  所以清除写在 early-return 之前（否则就是一个永远摘不掉的圆点）。
+- **不碰 `updatedAt`**：`markUnread` 故意不走 `update()`。那个时间戳是 设置 → 归档对话 里的「更新时间」，
+  也是自动归档等的东西；看得慢不是对会话的修改，不该把它推出这两个窗口。
+- **界面上**：会话行最右侧一个 primary 小圆点，排在 等你 / 运行中 / 异常停止 之后（最低优先级：一个还
+  在动、还在等人的会话不是「读者已经读完」的会话）。圆点不会丢：除了打开会话没有东西清它，所以运行标记一下
+  去它就自己回来。项目文件夹行聚合同样的两个标记，**且允许同时出现**（它们来自不同会话，藏掉任何一个都是
+  假信息）：里面有运行中的就画 `RunningMark`，有未读的就画圆点。
+- **与 hover 的关系**：文件夹行原本就用 `opacity-0` 预留了操作按钮的位置，所以标记是**绝对定位画在那块位置
+  之上**而不是插进 flex 流 —— 行尾宽度不变，项目名不会跟着 hover 抖；hover、键盘聚焦、⋯ 菜单展开
+  （`group-has-[[data-slot=dropdown-menu-trigger][aria-expanded=true]]/project:hidden`，不能只写 `has-[[aria-expanded=true]]`：
+  展开/收起的 `CollapsibleTrigger` 也带这个属性，那样一个展开着的文件夹就永远看不见标记）时标记消失，
+  操作图标出现。触屏上操作按钮是常显的，所以标记 `pointer-coarse:static` 退回流里站在它们旁边 ——
+  手机上照样看得见哪个文件夹有活。两个行共用一个 `size-6` 最右列，所以会话的圆点、会话的 spinner 和
+  文件夹的标记读起来是一根对齐的柱子。
+- **预览**：`mock.html?unread=1`（未读圆点）、`mock.html?unread=1&running=1`（同一个文件夹两种标记）。
+- 手机端的行还没画这个字段（它随 catalog 已经到那边了，只是 Dart 侧不认识）。
+
 ## 排队消息的「立即发送」
 
 队列本身在 `fastvibe.db`：`queue_items` 一行一条提示词（`position` 是同一会话内的顺序，拖动重排

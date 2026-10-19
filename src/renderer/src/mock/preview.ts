@@ -164,7 +164,18 @@ const fixtureProjects = (websiteData?.projects ?? PROJECTS).map((project) =>
 const newDraft: Conversation | null = !websiteData && params.get("new") === "1"
   ? { id: "conv-new", title: "新对话", cwd: PREVIEW_CWD, project: PREVIEW_CWD, createdAt: Date.now(), updatedAt: Date.now() }
   : null;
-const fixtureConversations = websiteData?.conversations ?? (newDraft ? [newDraft, ...CONVERSATIONS] : CONVERSATIONS);
+const fixtureConversationsBase = websiteData?.conversations ?? (newDraft ? [newDraft, ...CONVERSATIONS] : CONVERSATIONS);
+/**
+ * `?unread=1` marks a few chats as 「a reply landed and nobody opened it」. Unlike 运行中,
+ * this one is a catalog field (`Conversation.unread`), not an engine event, so the harness
+ * stamps the fixtures instead of replaying a push. `?running=1` on top of it shows a folder
+ * carrying both marks at once — the preview project holds the active chat, so it is the one
+ * that gets the spinner too.
+ */
+const UNREAD_IDS = new Set(["conv-plugins", "conv-queue", "conv-paper"]);
+const fixtureConversations = params.get("unread") === "1"
+  ? fixtureConversationsBase.map((item) => (UNREAD_IDS.has(item.id) ? { ...item, unread: true } : item))
+  : fixtureConversationsBase;
 const fixtureMessages = websiteData?.messages ?? MESSAGES;
 const fixtureSession = websiteData?.session ?? SESSION;
 const fixtureStats = websiteData?.stats ?? STATS;

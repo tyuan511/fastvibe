@@ -4077,6 +4077,14 @@ export class PiProcessManager {
             ...(typeof payload.seq === "number" ? { seq: payload.seq } : {}),
           }
         : null;
+      // A reply that landed while the reader was on another chat has not been read yet.
+      // The dot goes on the catalog row rather than into a renderer map, so a reload, a
+      // restart or a phone all still say it — and it comes off when anybody opens the
+      // chat (`ConversationCatalog.setActive`). A run the user stopped, one 立即 cut
+      // short and the repetition guard build no `activity` at all, so none of them marks.
+      if (activity && activity.status === "completed" && this.#activeId !== conversation.id) {
+        this.#catalog.markUnread(conversation.id);
+      }
       if (this.#activeId === conversation.id || conversation.kind === "side-chat") {
         this.#emit(payload);
         if (activity) this.#emit(activity);

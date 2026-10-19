@@ -157,8 +157,29 @@ export class ConversationCatalog {
   }
 
   setActive(id: string | undefined): void {
-    if (this.#activeId === id) return;
+    // Opening a chat *is* reading it, so the mark that says 「a reply landed while you
+    // were on another one」 ends here — including the case where the chat was already
+    // active and only the mark needs clearing.
+    const opened = id ? this.#items.find((item) => item.id === id) : undefined;
+    const read = opened?.unread === true;
+    if (read && opened) delete opened.unread;
+    if (this.#activeId === id && !read) return;
     this.#activeId = id;
+    this.#write();
+  }
+
+  /**
+   * Say that a finished reply in this chat has not been read yet. See `Conversation.unread`.
+   *
+   * Deliberately not `update()`: that stamps `updatedAt`, which is what 设置 → 归档对话
+   * shows as 更新时间 and what the auto-archive sweep waits on. Being slow to look at a
+   * chat that finished is not a mutation *of* the chat, and it must not push it out of
+   * both of those windows.
+   */
+  markUnread(id: string): void {
+    const item = this.#items.find((entry) => entry.id === id);
+    if (!item || item.kind === "side-chat" || item.unread === true) return;
+    item.unread = true;
     this.#write();
   }
 

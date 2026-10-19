@@ -149,6 +149,23 @@ function ProjectHoverCard({
   );
 }
 
+/**
+ * The unread dot: the same flush-right `size-6` box a running chat's mark uses, so the
+ * two states of a row share one column and only the glyph changes.
+ */
+function UnreadDot({ label, className }: { label: string; className?: string }): JSX.Element {
+  return (
+    <span
+      className={cn("flex size-6 shrink-0 items-center justify-center", className)}
+      role="status"
+      aria-label={label}
+      title={label}
+    >
+      <span className="size-2 rounded-full bg-primary" />
+    </span>
+  );
+}
+
 export type RenameTarget = { type: "session"; id: string };
 /** Only projects can be removed; sessions are archived, never deleted. */
 export type DeleteTarget = { type: "project"; cwd: string; title: string };
@@ -273,6 +290,7 @@ export function DraggableProject({
   connectionState,
   tasks,
   runningTasks,
+  unreadTasks,
   onOpenChange,
   onNewChat,
   onReveal,
@@ -284,7 +302,10 @@ export function DraggableProject({
   open: boolean;
   connectionState?: RemoteHostConnectionState;
   tasks: number;
+  /** Chats of this project working right now. */
   runningTasks: number;
+  /** Chats of this project that finished while nobody had them on screen. */
+  unreadTasks: number;
   onOpenChange: (open: boolean) => void;
   onNewChat: () => void;
   onReveal: () => void;
@@ -318,7 +339,7 @@ export function DraggableProject({
                 setActivatorNodeRef(node);
               }}
               className={cn(
-                "group/project flex h-8 pointer-coarse:h-10 touch-pan-y items-center gap-0.5 rounded-md pr-1 pl-2 transition-opacity hover:bg-sidebar-accent/50",
+                "group/project relative flex h-8 pointer-coarse:h-10 touch-pan-y items-center gap-0.5 rounded-md pr-1 pl-2 transition-opacity hover:bg-sidebar-accent/50",
                 isDragging && "opacity-40",
               )}
               {...attributes}
@@ -411,6 +432,24 @@ export function DraggableProject({
                   <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
                 </IconButton>
               </div>
+              {/* The folder's own state marks, painted over the action buttons — which are
+                  already in the layout at `opacity-0`, so the row's tail keeps one width and a
+                  mark never shifts the name. Each box is `size-6` and flush right, which is
+                  exactly where a chat row's busy mark or unread dot sits, so a project and its
+                  chats read as one column. Gone wherever the buttons are shown: hover, keyboard
+                  focus, the ⋯ menu open. On touch those buttons are always shown, so the marks
+                  step into the flow beside them rather than covering them — a phone still gets
+                  to see which folders have work. */}
+              {runningTasks > 0 || unreadTasks > 0 ? (
+                <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center group-hover/project:hidden group-focus-within/project:hidden group-has-[[data-slot=dropdown-menu-trigger][aria-expanded=true]]/project:hidden pointer-coarse:static pointer-coarse:flex">
+                  {unreadTasks > 0 ? <UnreadDot label={t("sidebar.unreadChats", { count: unreadTasks })} /> : null}
+                  {runningTasks > 0 ? (
+                    <span className="flex size-6 shrink-0 items-center justify-center">
+                      <RunningMark label={t("sidebar.runningChats", { count: runningTasks })} />
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent className="w-40">
@@ -478,6 +517,7 @@ function SessionRowContent({
   showSpinner,
   waiting,
   failed = false,
+  unread = false,
   renamingThis,
   leadSlot = true,
   subTaskCount = 0,
@@ -497,6 +537,8 @@ function SessionRowContent({
   waiting: boolean;
   /** Its run ended abnormally while another chat was on screen (`failedInBackground`). */
   failed?: boolean;
+  /** Its run finished and nobody has opened the chat since (`Conversation.unread`). */
+  unread?: boolean;
   renamingThis: boolean;
   /** Reserve the folder-icon column so titles line up with project names. Off for 聊天. */
   leadSlot?: boolean;
@@ -579,6 +621,15 @@ function SessionRowContent({
               >
                 <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="size-3.5" />
               </span>
+            ) : unread ? (
+              // Last of the four, and that is the right order: a chat that is working,
+              // stopped, or parked on a question is not one the reader is done with, while
+              // the dot answers 「a finished reply is still unread」. Nothing clears it but
+              // opening the chat, so the dot comes back on its own when the live mark goes.
+              <UnreadDot
+                label={t("sidebar.unreadChat")}
+                className="group-hover/session:hidden group-focus-within/session:hidden"
+              />
             ) : null}
             <div className="hidden items-center gap-0.5 group-hover/session:flex group-focus-within/session:flex">
               <IconButton
@@ -653,6 +704,7 @@ export function DraggableSession({
   showSpinner,
   waiting,
   failed = false,
+  unread = false,
   renamingThis,
   leadSlot,
   subTasks,
@@ -674,6 +726,8 @@ export function DraggableSession({
   waiting: boolean;
   /** Its run ended abnormally while another chat was on screen (`failedInBackground`). */
   failed?: boolean;
+  /** A finished reply nobody has opened yet; see `Conversation.unread`. */
+  unread?: boolean;
   renamingThis: boolean;
   leadSlot?: boolean;
   /** The sub-agent tasks of this chat's DAG, in creation order. */
@@ -704,6 +758,7 @@ export function DraggableSession({
       showSpinner={showSpinner}
       waiting={waiting}
       failed={failed}
+      unread={unread}
       renamingThis={renamingThis}
       leadSlot={leadSlot}
       subTaskCount={subTaskCount}

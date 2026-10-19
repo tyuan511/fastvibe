@@ -1310,6 +1310,17 @@ export type Conversation = {
   scheduledTaskId?: string;
   /** User chose this title; do not replace it with an auto-generated one. */
   titleManual?: boolean;
+  /**
+   * A run finished in this chat while the reader was on another one, and nobody has
+   * opened it since. The sidebar draws a primary dot on such a row, and on the project
+   * folder that contains one.
+   *
+   * It lives on the catalog row rather than in a renderer map because it is a fact about
+   * the chat, not about one window: it has to survive a reload or a restart (the reply
+   * is still unread after either), and every client — a second window, a phone — follows
+   * the same catalog. Opening the chat clears it (`ConversationCatalog.setActive`).
+   */
+  unread?: boolean;
 };
 
 /** A conversation whose transcript matched a command-palette query. */

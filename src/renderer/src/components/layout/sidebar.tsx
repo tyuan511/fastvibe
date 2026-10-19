@@ -284,14 +284,17 @@ export const Sidebar = memo(function Sidebar({
 
   // Chats of a project, wherever the sidebar currently draws them. A pinned chat
   // leaves the project group but still counts; an empty draft and an archived chat do not.
+  // The counts are what the folder row paints at its right end: a run in flight and
+  // finished replies nobody has opened yet.
   const projectActivity = useMemo(() => {
-    const counts = new Map<string, { tasks: number; running: number }>();
+    const counts = new Map<string, { tasks: number; running: number; unread: number }>();
     for (const item of conversations) {
       if (!item.project || item.kind === "side-chat" || archived.has(item.id)) continue;
       if (!item.preview && running[item.id] !== true) continue;
-      const current = counts.get(item.project) ?? { tasks: 0, running: 0 };
+      const current = counts.get(item.project) ?? { tasks: 0, running: 0, unread: 0 };
       current.tasks += 1;
       if (running[item.id] === true) current.running += 1;
+      if (item.unread === true) current.unread += 1;
       counts.set(item.project, current);
     }
     return counts;
@@ -413,6 +416,7 @@ export const Sidebar = memo(function Sidebar({
         showSpinner={running[item.id] === true}
         waiting={waitingForUser[item.id] === true}
         failed={failedInBackground[item.id] === true}
+        unread={item.unread === true}
         renamingThis={renaming?.type === "session" && renaming.id === item.id}
         leadSlot={leadSlot}
         subTasks={dagGraphs[item.id]?.nodes}
@@ -692,6 +696,7 @@ export const Sidebar = memo(function Sidebar({
                       connectionState={group.project.connectionId ? sshStatesByHost.get(group.project.connectionId) : undefined}
                       tasks={projectActivity.get(group.cwd)?.tasks ?? 0}
                       runningTasks={projectActivity.get(group.cwd)?.running ?? 0}
+                      unreadTasks={projectActivity.get(group.cwd)?.unread ?? 0}
                       onOpenChange={(next) => setOpen(group.cwd, next)}
                       onNewChat={() => {
                         onNewChat(group.cwd);
