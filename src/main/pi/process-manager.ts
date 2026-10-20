@@ -69,6 +69,7 @@ import type {
 } from "@shared/types";
 import type { ProviderTestResult } from "@shared/provider-test";
 import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
+import { skillDisplayOf } from "@shared/skill-invocation";
 import { buildCommitMessagePlan, type CommitFileMaterial } from "../engine/commit-message";
 import { summarizeToolCalls } from "@shared/tool-summary";
 import type { ToolDetailLevel, TranscriptReadOptions } from "@shared/transcript-page";
@@ -202,6 +203,7 @@ import { runDagTool } from "../dag-tools";
 import { builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
 import { createGitWorktree, gitBranch, gitCommonRoot, gitToplevel, listGitWorktrees, removeGitWorktree } from "./git-worktree";
 import { bindBrowserConversation, bindComputerConversation } from "./conversation-binding";
+import { markStartup } from "../engine/startup-timeline";
 import { createTuiWidget, renderTuiComponent, type TuiComponent } from "./tui-bridge";
 import { ActivationTicket } from "./activation-ticket";
 
@@ -370,6 +372,11 @@ export type StreamWatch = {
   isWatched(conversationId: string): boolean;
   publish(event: Record<string, unknown>): void;
 };
+
+/** How long a message typed by a person waits for the launch-time MCP connect before going without its tools. */
+const MCP_PROMPT_GRACE_MS = 3_000;
+/** How long the MCP settings pane waits for it to report how each server ended up. */
+const MCP_PANE_GRACE_MS = 1_500;
 
 /** Host adapter backed by pi-coding-agent. It keeps one AgentSession per conversation in one Node process. */
 export class PiProcessManager {
@@ -588,6 +595,14 @@ export class PiProcessManager {
   /** Sessions whose MCP tool registry must be refreshed after a config change. */
   #pendingMcpReloads = new Set<string>();
   #mcpReloadPromise: Promise<void> | null = null;
+  /**
+   * The launch-time MCP connect, while it is in flight. Not awaited by `start()`: a prompt waits
+   * for it (briefly for a person typing, fully for queued and scheduled work) so the first turn
+   * after launch still sees the tools, but the chat opens without waiting on a server.
+   */
+  #mcpConnecting: Promise<void> | null = null;
+  /** Bumped each time a connect finishes; a session built under an older number may lack tools. */
+  #mcpVersion = 0;
   #skills: SkillManager;
   #appConfigHost: ((request: AppConfigHostRequest) => Promise<AppConfigHostResult>) | null = null;
   /**
@@ -1144,14 +1159,21 @@ export class PiProcessManager {
       installThinkingOffGuard(this.#runtime, this.#noThinkingOffModels);
       await this.#models.refresh({ allowNetwork: false });
       await this.#mcp.load();
-      await this.#mcp.connectAll();
+      markStartup("engine-runtime");
+      // Servers connect in the background. Awaiting them here put the slowest one (an `npx`
+      // download, a remote endpoint) in front of the first chat appearing, 0.5–1.5 s and
+      // up to the 20 s the connect timeouts allow. Sessions built before they answer pick the
+      // tools up through the same reload a settings change uses.
+      this.#startMcpConnect();
       // Chats an earlier build left with content and no preview: they are missing from the
       // sidebar, and 新对话 would open them.
       for (const item of this.#catalog.listAll()) this.#healPreview(item);
       const active = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
       if (active) await this.#ensureSession(active);
+      markStartup("engine-session");
       this.#dagScheduler.start();
       this.#setStatus({ state: "ready", cwd: this.#cwd });
+      markStartup("engine-ready");
       this.#scheduledTasks.start();
       // Durable work belongs to every conversation, not only whichever chat happened
       // to be active when Main restarted. Drains lazily create background sessions.
@@ -1231,6 +1253,7 @@ export class PiProcessManager {
       await Promise.all(sessions.map(async (item) => { item.unsubscribe(); this.#persist(item.session); await item.session.dispose(); }));
       this.#models = null;
       this.#runtime = null;
+      this.#mcpConnecting = null;
       await this.#mcp.close();
       if (this.#status.state === "ready" || this.#status.state === "starting") this.#setStatus({ state: "idle" });
     });
@@ -1260,6 +1283,9 @@ export class PiProcessManager {
     const held = this.#holdCommand(id, message);
     try {
       if (await this.#compactIfCommand(session, message)) return;
+      // The first message after launch should see the MCP tools the engine is still connecting.
+      // A person typing gets a short wait; the tools reach a later turn if a server is slower.
+      await this.#awaitMcp(MCP_PROMPT_GRACE_MS);
       // A pause with nothing held is a leftover (Stop on an idle chat); clear it so it
       // cannot catch this turn's follow-ups. A pause over held rows is the user's to
       // release (立即 / 继续发送) — a fresh turn does not release it.
@@ -1973,7 +1999,48 @@ export class PiProcessManager {
     const errors = managed.extensions.errors.map((error) => ({ path: error.path, name: error.path.split(/[\\/]/).pop() ?? error.path, commands: 0, tools: 0, error: error.error }));
     return [...loaded, ...errors];
   }
-  async listMcpServers(): Promise<McpServerStatus[]> { await this.#mcp.load(); return this.#mcp.list(); }
+  async listMcpServers(): Promise<McpServerStatus[]> {
+    await this.#mcp.load();
+    // A pane opened in the first seconds after launch should show how the servers ended up,
+    // not the moment before they answered; a slow one does not hold the pane for long.
+    await this.#awaitMcp(MCP_PANE_GRACE_MS);
+    return this.#mcp.list();
+  }
+  /**
+   * Connect the configured servers without blocking the caller, then hand their tools to the
+   * sessions that were built too early to have them.
+   */
+  #startMcpConnect(): void {
+    const started = performance.now();
+    const connecting = this.#mcp.connectAll().then(async () => {
+      this.#mcpVersion++;
+      markStartup("mcp-connected");
+      const servers = this.#mcp.list().filter((server) => server.enabled);
+      if (servers.length) {
+        console.info(`[mcp] ${servers.filter((server) => server.connected).length}/${servers.length} servers connected in ${Math.round(performance.now() - started)} ms (in the background; the engine did not wait)`);
+      }
+      // With nothing connected there are no tools to add, and a reload per launch for a
+      // user with no MCP servers would be pure cost.
+      if (!this.#mcp.list().some((server) => server.connected)) return;
+      for (const conversationId of this.#sessions.keys()) this.#pendingMcpReloads.add(conversationId);
+      await this.#scheduleMcpReload();
+    }).catch((error: unknown) => {
+      console.warn("[mcp] background connect failed:", error);
+    }).finally(() => {
+      if (this.#mcpConnecting === connecting) this.#mcpConnecting = null;
+    });
+    this.#mcpConnecting = connecting;
+  }
+  /** Wait for the launch-time connect, at most `graceMs` (forever when omitted). */
+  async #awaitMcp(graceMs?: number): Promise<void> {
+    const connecting = this.#mcpConnecting;
+    if (!connecting) return;
+    if (graceMs === undefined) return connecting;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const grace = new Promise<void>((resolve) => { timer = setTimeout(resolve, graceMs); timer.unref?.(); });
+    await Promise.race([connecting, grace]);
+    clearTimeout(timer);
+  }
   async #scheduleMcpReload(): Promise<void> {
     if (this.#mcpReloadPromise) return this.#mcpReloadPromise;
     this.#mcpReloadPromise = (async () => {
@@ -3532,9 +3599,13 @@ export class PiProcessManager {
       if (typeof content !== "string" || !managed.session.isIdle || managed.session.messages.some((message) => message.role === "user")) {
         return send(content, options);
       }
+      // Folded like every other user row: a handoff prompt could itself force a skill,
+      // and the row must read the way the transcript will render it back.
+      const prompt = skillDisplayOf(content);
       const message: ChatMessage = {
-        id: `local:${randomUUID()}`, role: "user", text: content,
-        tools: [], parts: [{ kind: "text", text: content }], createdAt: Date.now(),
+        id: `local:${randomUUID()}`, role: "user", text: prompt.text,
+        tools: [], parts: prompt.text ? [{ kind: "text", text: prompt.text }] : [], createdAt: Date.now(),
+        skill: prompt.skill,
       };
       this.#openingPrompts.set(id, message);
       this.#adoptPromptPreview(id, content);
@@ -3845,6 +3916,10 @@ export class PiProcessManager {
     // building its whole agent session, and which step is the slow one differs by machine
     // (extensions, a plugin's `session_start`, a bridge another chat is holding).
     const phases: Array<[string, number]> = [["transcript", transcriptMs]];
+    // The MCP tools are read while the extensions load below. If the launch-time connect finishes
+    // after that and before this session is registered, nobody reloads it for the tools (the
+    // connect's own pass only sees registered sessions), so the check is at registration.
+    const mcpVersionAtStart = this.#mcpVersion;
     let mark = performance.now();
     const lap = (name: string): void => {
       const now = performance.now();
@@ -4259,6 +4334,10 @@ export class PiProcessManager {
     }));
     this.#installQueueBoundary(conversation.id, result.session);
     this.#sessions.set(conversation.id, managed);
+    if (this.#mcpVersion !== mcpVersionAtStart && this.#mcp.list().some((server) => server.connected)) {
+      this.#pendingMcpReloads.add(conversation.id);
+      void this.#scheduleMcpReload();
+    }
     this.#touchSession(conversation.id);
     // 自动压缩 is always on for a new session. The engine keeps the flag in its own
     // settings file, which FastVibe does not own, so it is pinned here where every
@@ -4499,6 +4578,10 @@ export class PiProcessManager {
     try {
       if (signal?.aborted) throw new Error("任务已停止");
       if (await this.#compactIfCommand(session, message)) return;
+      // Queued rows, scheduled tasks and delegated work have no one waiting at a keyboard, and
+      // a run that silently lacks its MCP tools is worse than one that starts a moment later.
+      await this.#awaitMcp();
+      if (signal?.aborted) throw new Error("任务已停止");
       if (!session.isIdle) await session.waitForIdle();
       if (signal?.aborted) throw new Error("任务已停止");
       // Same acceptance contract as `prompt()`: the call resolves once the SDK has

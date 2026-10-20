@@ -32,6 +32,7 @@ import { applyShellLocale } from "./engine/shell-locale";
 import { applyOfficeCliEnv } from "./engine/office-cli";
 import { stopOfficeWatches } from "./engine/office-watch";
 import { initLogger, log } from "./engine/logger";
+import { markStartup, watchEventLoop } from "./engine/startup-timeline";
 import { applyKeepAwake, clearRunningConversations, setConversationRunning } from "./engine/keep-awake";
 import { createNetworkProxy } from "./engine/network-proxy";
 import {
@@ -66,6 +67,8 @@ import {
 import { cancelGrantFlow } from "./pi/computer-grant-flow";
 import { syncScheduleTray, disposeScheduleTray } from "./schedule-tray";
 
+// Every static import above has been evaluated by now; the gap from process start is the cost of loading the bundle.
+markStartup("main-loaded");
 app.setName("FastVibe");
 configureFastVibeUserData(app.getPath("userData"));
 process.env.FASTVIBE_RESOURCES_PATH = app.isPackaged
@@ -133,6 +136,7 @@ removeLegacyMemory(paths.runtimeRoot);
 const memory = new MemoryManager(paths, openDatabase(paths.databaseFile));
 const engine = new PiProcessManager(paths, memory);
 const terminals = new TerminalSessions();
+markStartup("main-init");
 /**
  * Which client each shell belongs to, by broadcast identity.
  *
@@ -469,6 +473,7 @@ app.whenReady().then(async () => {
   await childEnvironment;
   if (shutdownPhase !== "running") return;
   log.info("app ready");
+  markStartup("app-ready");
   installBrowserGlobal();
   // Registers the bridge global and an at-quit driver shutdown. The native library is
   // still not loaded here. A saved enabled preference must not start a driver
@@ -484,6 +489,7 @@ app.whenReady().then(async () => {
   }
   const startupSettings = readAppSettings(getFastVibePaths());
   networkProxy = await createNetworkProxy(startupSettings);
+  markStartup("proxy");
   applyNativeTheme(startupSettings);
   // 跟随系统 flips the OS between light and dark behind the app's back: the window's
   // pre-paint fill follows it (and so does the blur's own appearance, which macOS does).
@@ -638,7 +644,12 @@ app.whenReady().then(async () => {
     },
   });
 
+  markStartup("ipc-ready");
   createWindow();
+  markStartup("window-created");
+  // One line a minute at most, and only when the main thread stalled: the engine, every stream and
+  // the window IPC share it, and nothing said how often it is held up.
+  watchEventLoop({ write: (line) => log.warn(line) });
   powerMonitor.on("resume", () => engine.wakeSchedules());
   void engine.start();
   // Warm every bound remote project in the background. Do not wait for SSH before

@@ -18,9 +18,10 @@ export type { McpServerConfig, McpServerStatus } from "@shared/types";
  *
  * Both calls below are bounded, because neither the handshake nor `tools/list` has a
  * deadline of its own — an unreachable HTTP endpoint, or a stdio server that starts but
- * never speaks, simply never settles. The engine awaits `connectAll()` before it reports
- * itself ready, so without this the whole app sat in 「正在准备工作区…」 for as long as
- * that server stayed silent, with no way to send a prompt and nothing on screen to say why.
+ * never speaks, simply never settles. The engine used to await `connectAll()` before it
+ * reported itself ready, so without this the whole app sat in 「正在准备工作区…」 for as long
+ * that server stayed silent. It connects in the background now (`PiProcessManager.start`), but
+ * a connect still must end: a prompt waits for it, and so does a scheduled task.
  */
 const CONNECT_TIMEOUT_MS = 10_000;
 
@@ -97,6 +98,8 @@ export class McpManager {
   #configs: McpServerConfig[] = [];
   #connections = new Map<string, Connection>();
   #errors = new Map<string, string>();
+  /** Bumped by every `close()`: a connect that finishes under an older number is discarded. */
+  #generation = 0;
 
   constructor(file: string, options: { createTransport?: McpTransportFactory } = {}) {
     this.#file = file;
@@ -119,10 +122,22 @@ export class McpManager {
     return this.#configs.map((config) => ({ ...config, connected: this.#connections.has(config.id), tools: this.#connections.get(config.id)?.tools.map((tool) => tool.name) ?? [], error: this.#errors.get(config.id) }));
   }
 
+  /**
+   * Replace every connection with fresh ones for the enabled servers.
+   *
+   * The engine connects at launch without waiting for it, so a settings save or a restart can
+   * arrive while that connect is still in flight. Each run is stamped with the generation its
+   * own `close()` produced, and a connect that finishes under an older one is discarded — its
+   * child process closed, its error not recorded — so overlapping runs cannot refill the map
+   * the newer one just emptied, and the newer one does not have to wait out a hung server.
+   */
   async connectAll(): Promise<void> {
-    await this.close();
+    // Taken before the first await: two calls made back to back must not both read the number
+    // after the second one's bump, or they would trust each other's connections.
+    const generation = ++this.#generation;
+    await this.#closeConnections();
     this.#errors.clear();
-    await Promise.all(this.#configs.filter((config) => config.enabled).map((config) => this.#connect(config)));
+    await Promise.all(this.#configs.filter((config) => config.enabled).map((config) => this.#connect(config, generation)));
   }
 
   async tools(): Promise<ToolDefinition<any>[]> {
@@ -171,12 +186,17 @@ export class McpManager {
   }
 
   async close(): Promise<void> {
+    this.#generation++;
+    await this.#closeConnections();
+  }
+
+  async #closeConnections(): Promise<void> {
     const connections = [...this.#connections.values()];
     this.#connections.clear();
     await Promise.all(connections.map((connection) => connection.client.close().catch(() => undefined)));
   }
 
-  async #connect(config: McpServerConfig): Promise<void> {
+  async #connect(config: McpServerConfig, generation: number): Promise<void> {
     const client = new McpClient({ name: "FastVibe", version: "0.1.0", requestTimeoutMs: REQUEST_TIMEOUT_MS });
     let stderr = "";
     try {
@@ -187,6 +207,13 @@ export class McpManager {
       });
       await withTimeout(client.connect(transport), uiText("连接超时", "Connection timed out"));
       const tools = await withTimeout(client.listTools(), uiText("读取工具列表超时", "Listing tools timed out"));
+      // The engine was stopped while this server was still answering. Its child process is
+      // ours to end: registering the connection now would leave it running with nothing
+      // that ever closes it.
+      if (generation !== this.#generation) {
+        await client.close().catch(() => undefined);
+        return;
+      }
       const connection: Connection = { config, client, tools, instructions: client.instructions };
       this.#connections.set(config.id, connection);
       // A server that exits later is shown as down rather than as connected with tools
@@ -200,7 +227,8 @@ export class McpManager {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const details = stderr.trim();
-      this.#errors.set(config.id, details ? `${message}\n\n${details}` : message);
+      // A run that has been replaced reports nothing: its error would land on the newer run's.
+      if (generation === this.#generation) this.#errors.set(config.id, details ? `${message}\n\n${details}` : message);
       // A timed-out connect can still be in flight, and a stdio server is a child
       // process this one owns: closing releases it instead of leaving it running for
       // the life of the app.

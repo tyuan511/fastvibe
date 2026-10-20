@@ -2342,6 +2342,20 @@ of connections, config and the settings pane's status.
 - **A server that exits later is shown as down.** `client.onClose` drops the connection from the map
   and records 「连接已断开」, guarded by identity so a deliberate reconnect (`connectAll` closes first)
   is not reported as a loss. There is no lazy reconnect: save the settings or reload to bring it back.
+- **Servers connect in the background; the engine does not wait.** `start()` used to `await
+  connectAll()` before building the first session and reporting ready, which put the slowest server
+  (an `npx` download, a remote endpoint) in front of the first chat — 0.5–1.5 s on a normal config and
+  up to the 20 s the two connect timeouts allow. `#startMcpConnect` now runs it behind `start()`; when it
+  finishes, every live session is queued for the same `session.reload()` a settings change uses
+  (skipped when nothing connected, so a user with no servers pays no reload). A session registered
+  *between* its extensions reading the tool list and the connect finishing is caught at registration by
+  `#mcpVersion`. **A turn still sees the tools:** a person's prompt waits up to 3 s for the connect
+  (`MCP_PROMPT_GRACE_MS`), queued rows and scheduled tasks wait for all of it (`#promptWhenIdle`), and the
+  settings pane waits 1.5 s so it shows how each server ended up. `McpManager.connectAll` stamps each run
+  with a generation taken *synchronously* (before its first await); a connect that finishes under an
+  older number closes its client and records nothing, so an overlapping save or a `stop()` cannot leave a
+  child process unowned or refill the map the newer run just emptied, and a save never waits on a hung
+  server. The log line `[mcp] k/n servers connected in N ms (in the background …)` says how long it took.
 - **The form edits the standard `mcpServers` JSON as well as fields.** `shared/mcp-config.ts` is the one
   reading of that shape — Claude Desktop / Claude Code / Cursor (`mcpServers`), VS Code (`servers`), a bare
   name → entry map, or a README fragment missing its outer braces. The settings pane (paste, edit one
@@ -2411,6 +2425,31 @@ and declares the matches for the next request.
   `McpManager`, a scripted model (`createFauxCore`) — so what is declared, what a script can reach and
   what the events look like are pinned together.
 
+## 启动时间线与主线程卡顿日志（`engine/startup-timeline.ts`）
+
+「启动慢」「偶尔卡一下」以前没有数据：日志里只有 `app ready` 和 `window opened`。现在每个阶段自己打点，
+窗口和引擎都起来时写**一行** `[startup] ms since process start: main-loaded …, app-ready …, proxy …,
+ipc-ready …, window-created …, engine-runtime …, engine-session …, engine-ready …, window-shown …`
+（按发生顺序排；一个阶段只记第一次，所以之后再开的窗口不会改写它）。`mcp-connected` 在行写出之后才到，
+所以后台连接的耗时另有一行 `[mcp] …`。模块 Electron-free，引擎也在里面打点，无头 Agent 共用。
+
+- **`main-loaded` 是整个静态 import 图求值完的时间**（开发态 ~870 ms，安装版 ~230 ms）。其中单独
+  `import "@earendil-works/pi-coding-agent"` 就是 ~240–270 ms，是主进程冷启动里最大的一块，而且引擎需要它。
+- **`watchEventLoop`**：每分钟至多一行 `[loop] event loop stalled up to N ms`，一分钟里最长停顿不到 200 ms 就
+  不写。主进程一个线程承载引擎、流分发、git、远程服务器和窗口 IPC，这是判断「要不要把引擎搬进
+  `utilityProcess`」的依据，见 `docs/engine-utility-process.md`。
+- **没有做的启动优化，以及原因（都量过）：**
+  - *V8 编译缓存*（`module.enableCompileCache`）：在 Electron 自带的 Node 24 里量了主进程的重依赖导入，
+    有缓存 265 ms，没有 281–304 ms，省 10–30 ms；而要让它覆盖静态 import 图，必须多一个引导入口
+    （`package.json` 的 `main` 改指向它再动态 import 真入口），不值。
+  - *窗口提前创建*：`createNetworkProxy` 必须先于任何窗口，它保证没有会话在代理装好之前走直连；省下的
+    ~100 ms 换不起这条不变量。
+  - *切换会话「慢」*：`bench-session-open.mjs` 量出冷加载 18 个内置扩展第一次 ~260 ms（OS 文件缓存冷）/ ~55 ms（热），
+    **之后同进程里任意 cwd 的重载只要 12–23 ms**（SDK 的扩展缓存在进程里共享）。日志里那些 300 ms 以上的
+    `[session] opening` 几乎都是**启动后第一次打开**，它发生在 `start()` 里、和渲染进程启动并行。
+    典型转写的 `prepareTranscriptForOpen` 是 4 MB ~20 ms、9 MB ~35 ms、58 MB ~150–210 ms。所以切换本身
+    不是瓶颈，启动路径上真正大的是上面等 MCP 的那一段。
+
 ## Commands
 
 ```bash
@@ -2426,6 +2465,7 @@ pnpm shadcn add <component> -y
 node scripts/drill-sqlite-import.mjs   # 复制真实 userData 到临时目录，跑一遍旧 JSON 导入并比对行数/往返
 node scripts/bench-sqlite.mjs          # 检查点写入、目录 flush、启动打开 store 的耗时基线
 node scripts/compare-storage-backends.mjs  # 同一份真实副本上跑「旧 store（HEAD 的真代码）vs 新 store」：耗时与每次动作落盘字节
+node scripts/bench-session-open.mjs [轮数]  # 冷会话打开里「加载内置扩展」那一段：首次 vs 之后每次换 cwd 的重载（临时 agentDir，不碰真实数据）
 ```
 
 ## 依赖版本与安装包完整性

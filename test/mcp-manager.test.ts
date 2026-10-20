@@ -318,3 +318,68 @@ test("a missing or unreadable file means no servers", async () => {
   await broken.load();
   assert.deepEqual(broken.list(), []);
 });
+
+/** A manager whose servers answer only once `release()` is called, counting transports opened and closed. */
+async function gatedManager(configs: McpServerConfig[]) {
+  const file = join(mkdtempSync(join(tmpdir(), "mcp-")), "mcp.json");
+  // Transports still open. A close is idempotent and the client may ask for it more than once,
+  // so what matters is whether a transport is left in this set, not how many times it was closed.
+  const live = new Set<object>();
+  let opened = 0;
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => { open = resolve; });
+  const manager = new McpManager(file, {
+    createTransport: () => {
+      opened++;
+      const { client, server } = createInMemoryTransportPair();
+      live.add(client);
+      const originalClose = client.close.bind(client);
+      client.close = async () => { live.delete(client); await originalClose(); };
+      // Hold every reply back until released: the server is up but has not answered yet.
+      const queued: Rpc[] = [];
+      let released = false;
+      const answer = (message: Rpc) => {
+        const { id, method } = message;
+        if (id === undefined) return;
+        const reply = (result: unknown) => void server.send({ jsonrpc: "2.0", id, result } as never);
+        if (method === "initialize") reply({ protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } });
+        else if (method === "tools/list") reply({ tools: [{ name: "echo", description: "Echo", inputSchema: { type: "object" } }] });
+      };
+      server.onMessage((message) => (released ? answer(message as Rpc) : void queued.push(message as Rpc)));
+      void gate.then(() => { released = true; queued.splice(0).forEach(answer); });
+      void server.start();
+      return client;
+    },
+  });
+  await manager.save(configs);
+  await manager.load();
+  return { manager, release: open, counts: () => ({ opened, stillOpen: live.size }) };
+}
+
+test("two overlapping connectAll runs do not leave an unowned connection behind", async () => {
+  const { manager, release, counts } = await gatedManager([configOf("a")]);
+  const first = manager.connectAll();
+  const second = manager.connectAll();
+  release();
+  await Promise.all([first, second]);
+  assert.equal(manager.list()[0].connected, true);
+  // Two runs opened two transports; the first run's was closed when the second replaced it,
+  // so exactly one is still open.
+  assert.equal(counts().opened, 2);
+  assert.equal(counts().stillOpen, 1);
+  await manager.close();
+  assert.equal(counts().stillOpen, 0);
+});
+
+test("a server that answers after close() is not registered and is closed", async () => {
+  const { manager, release, counts } = await gatedManager([configOf("a")]);
+  const connecting = manager.connectAll();
+  // Let the connect get as far as waiting on the server, then stop the engine under it.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await manager.close();
+  release();
+  await connecting;
+  assert.equal(manager.list()[0].connected, false);
+  assert.deepEqual(await manager.tools(), []);
+  assert.equal(counts().stillOpen, 0);
+});

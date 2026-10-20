@@ -4,6 +4,7 @@ import { Ipc } from "@shared/ipc";
 import { readAppSettings, WINDOW_BUTTON_POSITION, windowBackgroundColor, windowIsGlass, windowVibrancy } from "./engine/app-settings";
 import { getFastVibePaths } from "./engine/paths";
 import { log } from "./engine/logger";
+import { markStartup } from "./engine/startup-timeline";
 import { readWindowState, writeWindowState } from "./engine/window-state";
 import { attachBrowserRenderer } from "./pi/browser-bridge";
 
@@ -95,6 +96,7 @@ export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => 
   };
 
   window.on("ready-to-show", () => {
+    markStartup("window-shown");
     if (restored?.maximized) window.maximize();
     window.show();
   });
