@@ -81,6 +81,7 @@ function transcriptFixture() {
   if (params.get("error") === "plain") return PLAIN_ERROR_MESSAGES;
   if (params.get("live") === "1") return liveThought(fixtureMessages);
   if (params.get("thinking") === "blank") return blankThinking(fixtureMessages);
+  if (params.get("batch") === "live") return liveBatch(fixtureMessages);
   if (params.get("blank") === "1") return blankProse(fixtureMessages);
   if (params.get("skill") === "1") return skillForced(fixtureMessages);
   return inlineFixture() ?? fixtureMessages;
@@ -329,6 +330,22 @@ function blankThinking(messages: ChatMessage[]): ChatMessage[] {
 }
 
 /**
+ * `?batch=live` puts one call back in flight inside a batch, which is the shape every other
+ * fixture is missing: all of them have already returned, so the harness could never show the
+ * split. The fold above then counts the calls that have landed and the running one stands on
+ * its own line below it — with its own spinner, and no 「正在工作」 row piled on under a line
+ * that already says what is happening.
+ */
+function liveBatch(messages: ChatMessage[]): ChatMessage[] {
+  const index = messages.findIndex((message) => (message.tools?.length ?? 0) >= 3);
+  if (index < 0) return messages;
+  const tools = [...messages[index].tools];
+  const last = tools.length - 1;
+  tools[last] = { ...tools[last], status: "running", result: undefined };
+  return messages.map((message, at) => (at === index ? { ...message, tools, completedAt: undefined } : message));
+}
+
+/**
  * `?blank=1` puts back the reply shape a remote model produces when it degenerates: a run of
  * blank content that is invisible to the eye and not to the layout — dozens of `<br>`s, lines
  * made of ideographic spaces, a text part that is nothing but breaks. Plain newlines are not
@@ -457,6 +474,7 @@ const openResult = (id: string): ConversationOpenResult => {
   if (!website && isActive && params.get("older") === "1") messages = ageThread(messages);
   if (!website && isActive && params.get("live") === "1") messages = liveThought(messages);
   if (!website && isActive && params.get("thinking") === "blank") messages = blankThinking(messages);
+  if (!website && isActive && params.get("batch") === "live") messages = liveBatch(messages);
   if (!website && isActive && params.get("blank") === "1") messages = blankProse(messages);
   if (!website && isActive && params.get("skill") === "1") messages = skillForced(messages);
   return {

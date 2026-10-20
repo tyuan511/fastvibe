@@ -3084,13 +3084,22 @@ timestamps always show.
   the statistics popover spells out its own `—`.
 - **Collapsed by default, and entirely the reader's afterwards** — nothing re-folds it under
   them. Every transcript draws it the same way: the main thread, 辅助对话, and 子 Agent.
+- **展开之后仍然限高，过程在折叠块内部滚动。** 一个长运行的过程可以有几十段思考与上百张工具卡，
+  正文体的 `max-h` 曾经等于它们全部的高度：展开「用时 …」要看一眼刚才做了什么，就把这条回复留在屏幕上的
+  那部分答案顶到窗口之外——折叠的意义正好被抵消。`lib/process-body.ts` 的 `PROCESS_BODY_CAP`
+  (`min(20rem,40vh)`，rem 所以它跟着界面字号一起缩放) 是一处定义，四个能装下一整个运行的折叠体共用它：
+  `RunCollapse`、`ProcessOverflow`（长运行被截断的隐藏尾部）、`ToolGroupRow` 的工具批次（`ToolRow` 的
+  `scrollBody`）、就地展开的长提示词。`test/process-body-cap.test.ts` 钉住这几处都读同一个常量——
+  谁改成自己的数字就是悄悄取消了限高，typecheck 看不见。单个工具卡不套这一层：它展开的是一个本来就
+  自己限高的面板（终端 72、diff 80、参数与输出 60），再加一层只会多出一根永远用不上的滚动条。
+  滚动条用应用自己那根（见 滚动条），所以这里不许出现 `scrollbar-width` / `scrollbar-color`。
 
 ## 连续工具折叠
 
-Consecutive quiet tools between two stretches of prose fold into one row, collapsed by
-default (`collapseToolRuns` in `src/renderer/src/lib/tool-run.ts`). While a call in the
-batch is in flight the line is that call's own description. Once the batch has settled
-and the reply has moved on to the next sentence, the line is a summary of at most six
+Consecutive **settled** tools between two stretches of prose fold into one row, collapsed by
+default (`collapseToolRuns` in `src/renderer/src/lib/tool-run.ts`). A call still in flight is
+never folded — it stands on its own line below the fold (see the bullet below). Once the batch
+has settled and the reply has moved on to the next sentence, the line is a summary of at most six
 categories, in the order they first appeared: 思考 (only with 折叠思考内容, always counted),
 命令 (shell calls only, always counted),
 读取, 写入 (write / edit / delete), 搜索 (search / web / list), 工具 (MCP, browser,
@@ -3102,8 +3111,19 @@ repeated on every verb. A named file is the underlined path link used everywhere
 tool name is not a path and stays a chip.
 A failed call is not counted on the summary line; the expanded row already marks it.
 A thought is its own block and
-splits the batch, the same way prose does; it is not folded into the row. Expanding
-the row shows the calls.
+splits the batch, the same way prose does (unless 折叠思考内容 says otherwise); it is not folded
+into the row. Expanding the row shows the calls — 一批工具在 `ToolRow` 里靠 `scrollBody` 拿到和
+「用时 …」同一个正文高度上限（`PROCESS_BODY_CAP`，见 折叠运行过程），批次再长也在这一行之下内部滚动。
+
+- **在飞的那个调用不进折叠，它自己占一行。** 曾经它是折叠行自己的文字（「正在运行 …」加一个 spinner），
+  于是一行在两种身份之间反复横跳：它一会儿报「现在在做什么」、一会儿报「已经做完了什么」，而每跳一次
+  `liveTail` 就重判一次——「正在工作」那一行于是隔一会儿多出来、隔一会儿又没了，同一个状态在两个位置上闪。
+  现在折叠行只数已经落地的调用，正在跑的那一个站在它下面单独一行（并行调用就各站一行），跑完才归进折叠。
+  折叠行的 `persistKey` 是批次的**第一个**调用，所以下面的调用陆续落地时它不换身份、不重新挂载。
+  `liveTool` 和 `ToolGroup.running` 随这条规则一起删掉了：一个不会含有在飞调用的批次不需要「现在在做什么」
+  那一支。**不要把两件事混回一件**：被 折叠思考内容 吞进来的思考仍然可以就是这一行（见下面「Live thinking」），
+  那是那个开关的定义本身——它折的就是思考；调用不一样，调用只在它自己那一行上活。
+  预览：`mock.html?batch=live`（把一批里的最后一个调用改回运行中）。
 
 - **Only a part the reader can see may break the batch.** `collapseToolRuns` drops a thinking
   or text part that would render nothing — the same two rules 空的思考不占一行 and

@@ -65,6 +65,14 @@ export type CollapsedPart =
  * Fold adjacent quiet tools (and, with `collapseThinking`, the thoughts between them)
  * into one run. A single call stays a row — it already is its own description. Without
  * the preference, thinking is emitted on its own and splits the batch, the same as prose.
+ *
+ * A call still in flight is not folded either, and it splits the batch behind it. The row
+ * is the thing the reader watches while the run goes on: had the live call been drawn *as*
+ * the batch line, that one row kept alternating between a summary of what is done and a
+ * description of what is happening now — and the 「正在工作」 row appeared in between the
+ * two, because the batch line had stopped being a live element for a token. Now the fold
+ * only ever counts settled calls and grows as they land, and the one call that is running
+ * stands on its own line below it, with its own spinner.
  */
 export function collapseToolRuns(
   parts: MessagePart[],
@@ -110,7 +118,7 @@ export function collapseToolRuns(
     if (part.kind === "tool") {
       const tool = toolById.get(part.toolId);
       if (!tool) continue;
-      if (foldsIntoRun(tool.name)) {
+      if (foldsIntoRun(tool.name) && tool.status !== "running") {
         pending.push({ kind: "tool", tool });
         continue;
       }
@@ -128,14 +136,6 @@ export function collapseToolRuns(
   }
   flush();
   return output;
-}
-
-/** The call actually in flight, not merely the last one listed. */
-export function liveTool(tools: ToolCallBlock[]): ToolCallBlock | undefined {
-  for (let index = tools.length - 1; index >= 0; index -= 1) {
-    if (tools[index]?.status === "running") return tools[index];
-  }
-  return undefined;
 }
 
 type Translate = (key: string, options?: { count?: number }) => string;

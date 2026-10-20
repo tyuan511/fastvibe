@@ -17,11 +17,10 @@ export type ToolGroup = {
   tools: ToolCallBlock[];
   /** How many thoughts this row hides — 0 unless 折叠思考内容 is on. */
   thoughts: number;
-  running: boolean;
   /**
-   * The thought being written right now, when the row is live on reasoning rather than on
-   * a call. `running` is then true as well, and the row shimmers 「正在思考」 with the same
-   * growing preview an unfolded thinking block shows.
+   * The thought being written right now. A call in flight is never in this row at all —
+   * it stands on its own line below the fold (see `collapseToolRuns`) — so a row is live
+   * exactly when it is writing a thought it swallowed.
    */
   liveThinking?: ThinkingPart;
 };
@@ -262,7 +261,6 @@ function buildGroup(
     items: run.items,
     tools: run.tools,
     thoughts,
-    running: run.liveThinking !== undefined || run.tools.some((tool) => tool.status === "running"),
     liveThinking: run.liveThinking,
   };
   if (first) builtGroups.set(first, { key, id: run.id, items: run.items, tools: run.tools, group });

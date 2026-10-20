@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { PROCESS_BODY_CAP } from "@/lib/process-body";
 import { formatDuration } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -92,7 +93,13 @@ export function RunCollapse({
         {trailing}
       </RunHeader>
       <CollapsibleContent>
-        <div className="flex flex-col gap-2.5 pt-3">{children}</div>
+        {/*
+         * The run's process is the longest thing in a turn — one run can hold dozens of
+         * thinking blocks and tool cards — and it used to be as tall as all of them. The
+         * body caps and scrolls inside (see `PROCESS_BODY_CAP`), so opening the fold to
+         * check what the run did never pushes the answer below the fold of the window.
+         */}
+        <div className={cn("flex flex-col gap-2.5 pt-3", PROCESS_BODY_CAP)}>{children}</div>
       </CollapsibleContent>
     </Collapsible>
   );

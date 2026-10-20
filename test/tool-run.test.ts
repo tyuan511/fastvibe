@@ -4,7 +4,6 @@ import type { MessagePart, ToolCallBlock } from "../src/shared/types.ts";
 import {
   collapseToolRuns,
   foldsIntoRun,
-  liveTool,
   runSummary,
   type RunItem,
 } from "../src/renderer/src/lib/tool-run.ts";
@@ -236,9 +235,52 @@ test("only the first clause keeps the completed prefix", () => {
   );
 });
 
-test("the live line is the call still running", () => {
-  assert.equal(liveTool([tool("a", "bash", "running"), tool("b", "read", "done")])?.id, "a");
-  assert.equal(liveTool([tool("a", "bash", "done")]), undefined);
+test("a call in flight stands on its own line and does not become the batch row", () => {
+  /** `"b1+b2"` for a fold, the id for a call that stands alone. */
+  const shape = (parts: ReturnType<typeof collapse>): string[] =>
+    parts.map((part) =>
+      part.kind === "run"
+        ? part.tools.map((item) => item.id).join("+")
+        : part.kind === "tool"
+          ? part.tool.id
+          : part.kind,
+    );
+
+  // [done, done, running] is the shape of a live batch: the fold counts what has landed,
+  // the running call is its own row below it. The fold line is therefore only ever the
+  // count — it never flips into a live description with a 「正在工作」 row appearing in
+  // between the two shapes.
+  const live = collapse([tool("b1", "bash"), tool("b2", "read"), tool("b3", "bash", "running")]);
+  assert.deepEqual(shape(live), ["b1+b2", "b3"]);
+  // The fold is keyed by its first call, so it keeps its identity as calls land into it.
+  assert.equal(live[0]?.kind === "run" ? live[0].id : "", "run:b1");
+
+  // The same batch once the last call returns: one fold, nothing standing alone.
+  assert.deepEqual(
+    shape(collapse([tool("b1", "bash"), tool("b2", "read"), tool("b3", "bash")])),
+    ["b1+b2+b3"],
+  );
+
+  // Parallel calls each keep their own line while they are in flight.
+  assert.deepEqual(
+    shape(collapse([tool("p1", "read", "running"), tool("p2", "read", "running")])),
+    ["p1", "p2"],
+  );
+
+  // A running call splits the batch behind it too, and that fold keeps its own id.
+  const after = collapse([tool("b1", "bash", "running"), tool("b2", "bash"), tool("b3", "bash")]);
+  assert.deepEqual(shape(after), ["b1", "b2+b3"]);
+  assert.equal(after[1]?.kind === "run" ? after[1].id : "", "run:b2");
+
+  // A thought the option folded in is still allowed to be the live thing: the row shimmers
+  // 「正在思考」 for it, because 折叠思考内容 puts thinking *inside* the row by design.
+  const thought = collapse([tool("b1", "bash"), tool("b2", "bash"), { kind: "thinking", text: "writing" }], {
+    collapseThinking: true,
+    streaming: true,
+  });
+  assert.deepEqual(shape(thought), ["b1+b2"]);
+  if (thought[0]?.kind !== "run") throw new Error("expected a run");
+  assert.equal(thought[0].liveThinking?.text, "writing");
 });
 
 /** A settled line in Chinese, spelled out so the 「已」 rule is visible in the assertion. */

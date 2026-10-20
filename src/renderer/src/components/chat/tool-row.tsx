@@ -4,6 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon, Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PROCESS_BODY_CAP } from "@/lib/process-body";
 import { cn } from "@/lib/utils";
 
 /**
@@ -45,6 +46,7 @@ export function ToolRow({
   persistKey,
   autoOpen = false,
   autoCollapseOnComplete = false,
+  scrollBody = false,
   onSubjectClick,
   trailing,
   children,
@@ -68,6 +70,12 @@ export function ToolRow({
   autoOpen?: boolean;
   /** Fold the body back up when the call settles. */
   autoCollapseOnComplete?: boolean;
+  /**
+   * Cap the body and scroll it inside the fold. A batch of tools has no panel of its
+   * own that is already bounded — it grows as long as the batch is — so expanding one
+   * used to push the reply off the screen. See `PROCESS_BODY_CAP`.
+   */
+  scrollBody?: boolean;
   /** When set, the subject becomes a link (zcode opens the file viewer this way). */
   onSubjectClick?: () => void;
   /** Extra chip rendered before the chevron, e.g. a diff stat. */
@@ -111,6 +119,8 @@ export function ToolRow({
     setOpen(next);
     if (persistKey) rememberExpanded(persistKey, next);
   };
+
+  const bodyClass = cn("ml-2 flex flex-col gap-2 border-l border-border pl-3.5", scrollBody && PROCESS_BODY_CAP);
 
   const subjectNode =
     subject && onSubjectClick ? (
@@ -214,7 +224,7 @@ export function ToolRow({
           </CollapsibleTrigger>
         </div>
         <CollapsibleContent className="pt-2">
-          <div className="ml-2 flex flex-col gap-2 border-l border-border pl-3.5">{children}</div>
+          <div className={bodyClass}>{children}</div>
         </CollapsibleContent>
       </Collapsible>
     );
@@ -226,7 +236,7 @@ export function ToolRow({
         {head(true)}
       </CollapsibleTrigger>
       <CollapsibleContent className="pt-2">
-        <div className="ml-2 flex flex-col gap-2 border-l border-border pl-3.5">{children}</div>
+        <div className={bodyClass}>{children}</div>
       </CollapsibleContent>
     </Collapsible>
   );

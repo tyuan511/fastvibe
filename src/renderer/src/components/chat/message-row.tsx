@@ -16,6 +16,7 @@ import { activeLanguage, i18n } from "@/lib/i18n";
 import { localeTag } from "@/lib/language";
 import { groupParts, mergeAssistantRun, resolveParts, type RenderPart } from "@/lib/group-parts";
 import { isProcessKind, thinkingTakesRow } from "@/lib/thinking-row";
+import { PROCESS_BODY_CAP } from "@/lib/process-body";
 import { blankTakesRow, isBlankOutput } from "@/lib/blank-output";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatMessage, MessagePart } from "@shared/types";
@@ -341,7 +342,7 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
           // One grid column sized by the text, so the footer stretches to that
           // width instead of shrinking to the word 「收起」.
           <div className="grid">
-            <div className="max-h-[min(20rem,40vh)] overflow-y-auto px-3 py-2">
+            <div className={cn(PROCESS_BODY_CAP, "px-3 py-2")}>
               <MarkdownView ref={bodyRef} text={text} />
             </div>
             {overflows ? toggle : null}
@@ -445,7 +446,7 @@ function ProcessOverflow({
         />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="flex flex-col gap-2.5 pt-1">{children}</div>
+        <div className={cn("flex flex-col gap-2.5 pt-1", PROCESS_BODY_CAP)}>{children}</div>
       </CollapsibleContent>
     </Collapsible>
   );
