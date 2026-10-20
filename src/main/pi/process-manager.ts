@@ -96,7 +96,7 @@ import {
   scanImportSources,
 } from "../engine/import/runner";
 import { readAppSettings, readDefaultModel, readPreferredModelSettings } from "../engine/runtime-settings";
-import { canTurnThinkingOff, suggestionMaxTokens, withThinkingOff, withThinkingOffFallback } from "../engine/thinking-off";
+import { canTurnThinkingOff, installThinkingOffGuard, modelWithoutThinkingOff, retryWithoutThinkingOff, roomForThinking, suggestionMaxTokens, willSendThinkingOff, withThinkingOff, withThinkingOffFallback } from "../engine/thinking-off";
 import { SUGGESTION_SYSTEM, buildCacheContext, buildSuggestionPrompt, cleanSuggestion, readSuggestionStream, suggestionMaterial, suggestionModeOf, withFinalMessage } from "../engine/reply-suggestion";
 import { submitPrompt } from "../engine/prompt-submission";
 import type { SubmitPromptRequest } from "../../shared/prompt-submission";
@@ -485,6 +485,12 @@ export class PiProcessManager {
   #suggestionEarly = new Set<string>();
   /** Models whose endpoint refused the thinking-off fields, so the next request does not try them again. */
   #thinkingOffRefused = new Set<string>();
+  /**
+   * Models whose endpoint refused pi's invented thinking-off parameter (`reasoning: {effort:
+   * "none"}` on a gpt-5 model over /responses), so the field is left out for them from then on
+   * (`thinking-off.ts`). Learned, never configured: a model that accepts `none` keeps not thinking.
+   */
+  #noThinkingOffModels = new Set<string>();
   /** Conversations whose session must be re-pointed at the reloaded model registry once its run lands. */
   #modelDirty = new Set<string>();
   /**
@@ -1132,6 +1138,10 @@ export class PiProcessManager {
         if (key) await this.#runtime.setRuntimeApiKey(provider.id, key);
       }
       this.#models = new ModelRegistry(this.#runtime);
+      // Side requests (a chat title, a handoff summary, a commit subject, a memory extraction) ask
+      // for no thinking, and pi answers that with a thinking-off parameter the model may not have.
+      // Nothing outside the agent loop retries such a failure, so the runtime itself takes it back.
+      installThinkingOffGuard(this.#runtime, this.#noThinkingOffModels);
       await this.#models.refresh({ allowNetwork: false });
       await this.#mcp.load();
       await this.#mcp.connectAll();
@@ -2612,7 +2622,21 @@ export class PiProcessManager {
     const model = registry?.find(provider, id);
     if (!registry || !model) return { model: id, api: "", status: "failed", tools: "not-tested", elapsedMs: 0, errorCode: "model" };
     if (!registry.hasConfiguredAuth(model)) return { model: id, api: model.api, status: "failed", tools: "not-tested", elapsedMs: 0, errorCode: "auth" };
-    return testProviderModel(model, registry.streamSimple.bind(registry));
+    const stream = registry.streamSimple.bind(registry);
+    // A model already known to have no thinking-off switch is tested as it will be used.
+    if (this.#noThinkingOffModels.has(`${model.provider}/${model.id}`) && willSendThinkingOff(model)) {
+      const guarded = modelWithoutThinkingOff(model);
+      return testProviderModel(guarded, stream, roomForThinking(guarded, undefined));
+    }
+    const first = await testProviderModel(model, stream);
+    // A refused request is ambiguous — a bad tool schema answers with a 400 too — so the model is
+    // only marked as having no thinking-off switch when leaving that field out is what worked.
+    if (first.status !== "failed" || first.errorCode !== "protocol" || !willSendThinkingOff(model)) return first;
+    const guarded = modelWithoutThinkingOff(model);
+    const retry = await testProviderModel(guarded, stream, roomForThinking(guarded, undefined));
+    if (retry.status === "failed") return first;
+    this.#noThinkingOffModels.add(`${model.provider}/${model.id}`);
+    return retry;
   }
 
   /**
@@ -2710,8 +2734,8 @@ export class PiProcessManager {
 
   /**
    * A short side request with thinking switched off where that is possible (`thinking-off.ts`).
-   * If the endpoint refuses the extra fields the request is made again as it was, once, and the
-   * model is remembered so only the first request ever pays for the refusal.
+   * Two refusals are possible and each is tried once, remembered per model: the endpoint may reject
+   * the switches this request adds, and it may reject the thinking-off value pi adds on its own.
    */
   async #completeQuick(
     registry: ModelRegistry,
@@ -2720,14 +2744,27 @@ export class PiProcessManager {
     options: NonNullable<Parameters<ModelRegistry["complete"]>[2]>,
   ): Promise<Awaited<ReturnType<ModelRegistry["complete"]>>> {
     const key = `${model.provider}/${model.id}`;
-    return withThinkingOffFallback(
-      (patched) => this.#streamSuggestion(registry, model, context, patched ? { ...options, onPayload: (payload: unknown) => withThinkingOff(payload) } : options),
+    const aborted = () => options.signal?.aborted === true;
+    return retryWithoutThinkingOff(
+      (target, requestOptions) => {
+        const request = { ...options, ...requestOptions } as typeof options;
+        return withThinkingOffFallback(
+          (patched) => this.#streamSuggestion(registry, target, context, patched ? { ...request, onPayload: (payload: unknown) => withThinkingOff(payload) } : request),
+          {
+            eligible: canTurnThinkingOff(target),
+            key,
+            refused: this.#thinkingOffRefused,
+            aborted,
+            onRefused: (failure) => console.info(`[suggest] ${key} refused the thinking-off fields (${failure.slice(0, 100)}); asking again without them`),
+          },
+        );
+      },
       {
-        eligible: canTurnThinkingOff(model),
-        key,
-        refused: this.#thinkingOffRefused,
-        aborted: () => options.signal?.aborted === true,
-        onRefused: (failure) => console.info(`[suggest] ${key} refused the thinking-off fields (${failure.slice(0, 100)}); asking again without them`),
+        model,
+        options,
+        refused: this.#noThinkingOffModels,
+        aborted,
+        onRefused: (failure) => console.info(`[suggest] ${key} refused pi's thinking-off parameter (${failure.slice(0, 100)}); asking again without it`),
       },
     );
   }

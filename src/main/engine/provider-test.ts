@@ -4,6 +4,9 @@ import type { ProviderTestError, ProviderTestResult } from "../../shared/provide
 
 type Stream = (model: Model<Api>, context: Context, options: ModelsSimpleStreamOptions) => AssistantMessageEventStream;
 
+/** Small, because a model that can be told not to think should answer "OK" without thinking. */
+const PROVIDER_TEST_TOKENS = 256;
+
 /** Errors are classified locally. Provider bodies, headers and credentials never reach the UI. */
 export function providerTestError(status: number | undefined, message: string): ProviderTestError {
   if (status === 401 || status === 403) return "auth";
@@ -17,7 +20,7 @@ export function providerTestError(status: number | undefined, message: string): 
 }
 
 /** Two bounded, isolated calls. The tool is a schema probe and is never executed. */
-export async function testProviderModel(model: Model<Api>, stream: Stream): Promise<ProviderTestResult> {
+export async function testProviderModel(model: Model<Api>, stream: Stream, maxTokens = PROVIDER_TEST_TOKENS): Promise<ProviderTestResult> {
   const started = Date.now();
   const result: ProviderTestResult = { model: model.id, api: model.api, status: "failed", elapsedMs: 0, tools: "not-tested" };
   const controller = new AbortController();
@@ -25,7 +28,7 @@ export async function testProviderModel(model: Model<Api>, stream: Stream): Prom
   let responseStatus: number | undefined;
   try {
     const options: ModelsSimpleStreamOptions = {
-      signal: controller.signal, timeoutMs: 20_000, maxRetries: 0, maxTokens: 256, cacheRetention: "none",
+      signal: controller.signal, timeoutMs: 20_000, maxRetries: 0, maxTokens, cacheRetention: "none",
       onResponse: (response) => { responseStatus = response.status; },
     };
     let answered = false;

@@ -22,6 +22,21 @@
  * Anthropic and Google are left alone: with no reasoning level requested the SDK sends no thinking
  * for them, which already is "off". OpenAI's own Responses endpoint will refuse these fields and
  * take the retry path once.
+ *
+ * The mirror-image failure is a model that has **no switch to turn thinking off at all**. When a
+ * request asks for no thinking, pi fills an OpenAI-family `/responses` body with
+ * `reasoning: { effort: "none" }` — right for gpt-5.1 onward, a 400 for the reasoning models
+ * before it, which know only minimal/low/medium/high. FastVibe asks for no thinking on every short
+ * side request (a chat's title, a handoff summary, a commit subject, 回复推荐, a memory extraction),
+ * and it never maps `off` itself because its UI never offers that level, so the value reaching the
+ * upstream is pi's guess and nothing else. The failure also lands outside the agent loop, where no
+ * retry policy runs: a gpt-5 chat simply never got a title.
+ *
+ * pi's lever here is `thinkingLevelMap: { off: null }` — "this model has no off switch", so the
+ * parameter is left out and the upstream answers with the model's own default. That is the same
+ * answer `withAdaptiveOff` in `pi-global-sync.ts` gives a Claude model that only accepts adaptive
+ * thinking. Here it is applied **after the upstream has said so**, not always: leaving the field
+ * out means the model may think, and not thinking is what these requests are after.
  */
 
 export type ThinkingOffTarget = { api?: string; reasoning?: boolean };
@@ -81,6 +96,158 @@ export async function withThinkingOffFallback<T extends Reply>(
   options.refused.add(options.key);
   options.onRefused?.(failure ?? "");
   return run(false);
+}
+
+/**
+ * The APIs where pi fills in a thinking-off value for a request that asked for no thinking
+ * at all: every `responses` family member, and chat completions only when the model maps
+ * `off` to a value of its own. Measured against pi-ai's own providers (`off: null` removes it).
+ */
+const INVENTS_THINKING_OFF = ["openai-responses", "azure-openai-responses", "openai-codex-responses"];
+
+export type ThinkingOffSwitchModel = {
+  api?: string;
+  provider?: string;
+  id?: string;
+  reasoning?: boolean;
+  maxTokens?: number;
+  thinkingLevelMap?: Record<string, string | null>;
+};
+
+/** Whether this model would be sent a thinking-off parameter nobody asked for. */
+export function willSendThinkingOff(model: ThinkingOffSwitchModel): boolean {
+  if (model.reasoning !== true || model.thinkingLevelMap?.off === null) return false;
+  if (INVENTS_THINKING_OFF.includes(model.api ?? "")) return true;
+  return model.api === "openai-completions" && typeof model.thinkingLevelMap?.off === "string";
+}
+
+/** The same model told to pi as having no off switch, so the parameter is left out. */
+export function modelWithoutThinkingOff<M extends ThinkingOffSwitchModel>(model: M): M {
+  if (model.thinkingLevelMap?.off === null) return model;
+  return { ...model, thinkingLevelMap: { ...model.thinkingLevelMap, off: null } } as M;
+}
+
+/**
+ * Whether a failure says the thinking-off parameter is what the upstream refused. OpenAI words
+ * it as `Invalid value for 'reasoning.effort': 'none' is not supported by this model`; relays
+ * answer with `"param": "reasoning.effort"` next to an `invalid_request_error`. A bare 400 is
+ * not enough — a bad key, a missing model and an oversized request all answer with one, and
+ * none of them is fixed by dropping this field.
+ */
+export function looksLikeRejectedThinkingOff(message: string | undefined): boolean {
+  if (!message) return false;
+  const refusedParameter =
+    /(reasoning[\s_.]*effort|reasoning_effort|\beffort\b|\breasoning\b|\bthinking\b)/i.test(message) &&
+    /(invalid|not supported|unsupported|unrecognized|unexpected|must be|supported values|one of)/i.test(message);
+  // Some endpoints name only the rejected value: `Invalid value: 'none'. Supported values are:
+  // 'minimal', 'low', and 'medium'.` The quotes are what keeps "none of the API keys are valid"
+  // out of this branch.
+  const refusedTheValue = /["'`]none["'`]/i.test(message) && /(invalid value|not supported|supported values are|unsupported)/i.test(message);
+  return refusedParameter || refusedTheValue;
+}
+
+/** Output room for a request that can no longer be told not to think: thinking counts against the cap. */
+export const THINKING_ROOM_TOKENS = 1024;
+
+/**
+ * The cap for a request made without the thinking-off parameter. A caller that asked for a
+ * sentence-sized budget would otherwise be cut off mid-thought and answer with nothing, which is
+ * how a retried title request would fail exactly like the one it replaced.
+ */
+export function roomForThinking(model: { maxTokens?: number }, asked: number | undefined): number {
+  const room = Math.min(THINKING_ROOM_TOKENS, model.maxTokens || THINKING_ROOM_TOKENS);
+  return Math.max(asked ?? 0, room);
+}
+
+/** What these helpers read off a side request: an output cap and a cancel handle. */
+type SideRequest = { maxTokens?: number; signal?: AbortSignal };
+/** A reply as these helpers need to see it. */
+type SideReply = { stopReason?: string; errorMessage?: string };
+
+/**
+ * Run a side request, and run it again without the invented thinking-off parameter if the upstream
+ * refuses that parameter — once per model, remembered in `refused` so no later request pays for the
+ * same refusal. Any other failure is handed back exactly as it came (a reply with `stopReason:
+ * "error"`, or the thrown error), because a timeout or a bad key is not fixed by dropping a field
+ * and the caller's own retry logic is the one that should see it.
+ */
+export async function retryWithoutThinkingOff<M extends ThinkingOffSwitchModel, T extends SideReply>(
+  run: (model: M, options: SideRequest | undefined) => Promise<T>,
+  input: { model: M; options?: SideRequest; refused: Set<string>; aborted?: () => boolean; onRefused?: (failure: string) => void },
+): Promise<T> {
+  const { model, options } = input;
+  const key = `${model.provider ?? ""}/${model.id ?? ""}`;
+  if (!willSendThinkingOff(model)) return run(model, options);
+  const withoutSwitch = () =>
+    run(modelWithoutThinkingOff(model), options?.maxTokens === undefined ? options : { ...options, maxTokens: roomForThinking(model, options.maxTokens) });
+  // A model this app has already been refused goes straight out without the field: the caller
+  // hands over the registry's own model every time, so the learning has to live here.
+  if (input.refused.has(key)) return withoutSwitch();
+  let failure: string | undefined;
+  let thrown: unknown;
+  let reply: T | undefined;
+  try {
+    reply = await run(model, options);
+    if (reply?.stopReason !== "error") return reply;
+    failure = reply.errorMessage;
+  } catch (error) {
+    thrown = error;
+    failure = error instanceof Error ? error.message : String(error);
+  }
+  if (input.aborted?.() || !looksLikeRejectedThinkingOff(failure)) {
+    if (thrown !== undefined) throw thrown;
+    return reply as T;
+  }
+  input.refused.add(key);
+  input.onRefused?.(failure ?? "");
+  return withoutSwitch();
+}
+
+/** The model to send now: the guarded copy once this model has been refused, else its own. */
+export function guardedModelFor<M extends ThinkingOffSwitchModel>(model: M, refused: Set<string>): M {
+  const key = `${model.provider ?? ""}/${model.id ?? ""}`;
+  return refused.has(key) && willSendThinkingOff(model) ? modelWithoutThinkingOff(model) : model;
+}
+
+/**
+ * Teach a model runtime that a model whose endpoint refused pi's invented thinking-off parameter
+ * should never be sent it again. Both seams are wrapped, because that is where every request in the
+ * app is made:
+ *
+ * - `complete` — the side requests without a thinking level (a chat's title and `/handoff` through
+ *   the extensions' own `ctx.modelRegistry`, a commit subject, a memory extraction). These are
+ *   promises, so a refusal is caught here: ask again with the field left out, and remember the model.
+ * - `streamSimple` — passively, no retry: a model already known to have no off switch is handed to
+ *   the real method already guarded. It is wrapped because the **agent's own** requests go through
+ *   it (`pi-coding-agent`'s `streamFn` closure calls `modelRuntime.streamSimple`, see
+ *   `core/sdk.js:270`, and compaction and branch summaries reuse that same function), so a session
+ *   whose thinking level is ever `off` would meet the identical 400 in the middle of a chat. A
+ *   stream cannot be retried here without restarting it mid-flight, and the level case is rare
+ *   enough that applying what was already learned is the right bargain.
+ *
+ * Both are instance properties on the runtime FastVibe created, so the SDK's own facades — it builds
+ * a second `ModelRegistry` over this runtime for extensions — reach them too. The runtime's own
+ * signatures are generic over the api; the guard only reads and copies the thinking map, so it is
+ * written against that narrower shape and casts at the seam.
+ */
+export function installThinkingOffGuard(runtime: object, refused: Set<string>): void {
+  type Complete = (model: ThinkingOffSwitchModel, context: unknown, options?: SideRequest) => Promise<SideReply>;
+  type StreamSimple = (model: ThinkingOffSwitchModel, context: unknown, options?: SideRequest) => unknown;
+  const target = runtime as unknown as { complete: Complete; streamSimple: StreamSimple };
+  const original: Complete = target.complete.bind(target);
+  const originalStreamSimple: StreamSimple = target.streamSimple.bind(target);
+  target.complete = (model, context, options) =>
+    retryWithoutThinkingOff(
+      (guardedModel, requestOptions) => original(guardedModel, context, requestOptions),
+      {
+        model,
+        options,
+        refused,
+        aborted: () => options?.signal?.aborted === true,
+        onRefused: (failure) => console.info(`[thinking-off] ${model.provider}/${model.id} refused the thinking-off parameter (${failure.slice(0, 120)}); asking again without it`),
+      },
+    );
+  target.streamSimple = (model, context, options) => originalStreamSimple(guardedModelFor(model, refused), context, options);
 }
 
 /** Output room for a model that never thinks first: the answer is a sentence. */

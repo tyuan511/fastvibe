@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createFauxCore, fauxAssistantMessage, InMemoryModelsStore, type AssistantMessage } from "@earendil-works/pi-ai";
 import sessionTitle from "../resources/extensions/session-title.ts";
+import { installThinkingOffGuard } from "../src/main/engine/thinking-off.ts";
 
 /**
  * The title call is fire-and-forget and sits outside the agent loop, so nothing
@@ -36,16 +37,28 @@ async function harness(options: {
   /** The reply for a title request, by 1-indexed title attempt. */
   title: (attempt: number) => AssistantMessage;
   retry?: Record<string, unknown>;
+  /** Chat requests are made on a reasoning model over this api, the way a gpt-5 chat is. */
+  api?: string;
+  /** The endpoint answers a request that carries pi's invented thinking-off parameter with a 400. */
+  refusesThinkingOff?: boolean;
+  /** Install FastVibe's guard on the runtime, as `PiProcessManager` does on start-up. */
+  guard?: boolean;
 }): Promise<{ session: AgentSession; titleCalls: () => number; close: () => void }> {
   const dir = mkdtempSync(join(tmpdir(), "session-title-"));
-  const faux = createFauxCore({ api: "faux-api", provider: "faux", models: [{ id: "scripted" }] });
+  const faux = createFauxCore({ api: options.api ?? "faux-api", provider: "faux", models: [{ id: "scripted", reasoning: options.api !== undefined }] });
   let titleCalls = 0;
   // A factory per call: which request it is decides the reply, so the test does not
   // depend on whether the title call or the agent's own request reaches the provider first.
   faux.setResponses(
     Array.from(
       { length: 8 },
-      () => (context: Context) => (isTitleRequest(context) ? options.title(++titleCalls) : fauxAssistantMessage("done")),
+      () =>
+      (context: Context, _request: unknown, _state: unknown, model: { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }) => {
+        if (!isTitleRequest(context)) return fauxAssistantMessage("done");
+        titleCalls += 1;
+        if (options.refusesThinkingOff && model.reasoning && model.thinkingLevelMap?.off !== null) return errorReply(THINKING_OFF_REFUSAL);
+        return options.title(titleCalls);
+      },
     ),
   );
   const runtime = await ModelRuntime.create({
@@ -58,14 +71,14 @@ async function harness(options: {
   });
   runtime.registerProvider("faux", {
     baseUrl: "http://faux.invalid",
-    api: "faux-api" as never,
+    api: (options.api ?? "faux-api") as never,
     apiKey: "unused",
     streamSimple: faux.streamSimple as never,
     models: [
       {
         id: "scripted",
         name: "scripted",
-        reasoning: false,
+        reasoning: options.api !== undefined,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 100_000,
@@ -73,6 +86,8 @@ async function harness(options: {
       },
     ],
   });
+
+  if (options.guard) installThinkingOffGuard(runtime, new Set<string>());
 
   const cwd = join(dir, "project");
   const agentDir = join(dir, "agent");
@@ -98,6 +113,9 @@ async function harness(options: {
 }
 
 const PROMPT = "帮我修复登录流程里那个偶发的重定向问题";
+
+/** What a gpt-5 endpoint answers `reasoning: { effort: "none" }` with. */
+const THINKING_OFF_REFUSAL = "Invalid value for 'reasoning.effort': 'none' is not supported by this model. Try using one of: minimal, low, medium, high";
 
 async function waitFor(check: () => boolean, timeoutMs = 3000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -208,6 +226,26 @@ test("a truncated reply is treated as a failure, not clipped into a title", asyn
     await settle();
     assert.equal(h.titleCalls(), 2, "a cut-off reply is worth one more attempt");
     assert.equal(h.session.sessionName, undefined);
+  } finally {
+    h.close();
+  }
+});
+
+test("a chat on a model whose endpoint refuses pi's thinking-off parameter still gets a title", async () => {
+  // The title request asks for no thinking, and pi answers that with `reasoning: {effort:"none"}`
+  // — a 400 on the reasoning models before gpt-5.1. The guard lives on the runtime, which is where
+  // the extension's own `ctx.modelRegistry` and Main's requests meet, so nothing may throw and the
+  // chat still names itself: the second attempt is made with the parameter left out.
+  const h = await harness({
+    api: "openai-responses",
+    refusesThinkingOff: true,
+    guard: true,
+    title: () => fauxAssistantMessage("修复登录重定向"),
+  });
+  try {
+    await h.session.prompt(PROMPT);
+    assert.equal(await waitFor(() => h.session.sessionName === "修复登录重定向"), true);
+    assert.equal(h.titleCalls(), 2, "refused once, then asked again without the field");
   } finally {
     h.close();
   }

@@ -1664,6 +1664,18 @@ engine is gone because the SDK never read them.
   每次请求在 `logs/main.log` 里有一行 `[suggest] mode=… model=… ms=… in=… cacheRead=… -> shown|stop=length|…`。
 - 预览：`mock.html?suggest=1`。手机端（Flutter）还不认 `reply_suggestion`，会忽略它。
 
+## 旁路请求与 pi 补上的「关闭思考」参数（`engine/thinking-off.ts`）
+
+一轮请求**没有请求思考强度**时，pi 会替模型补一个关闭思考的参数，而不是什么都不发：`openai-responses` / `azure-openai-responses` / `openai-codex-responses` 补 `reasoning: { effort: "none" }`，`openai-completions` 只在模型自己映射了 `off` 时补 `reasoning_effort`。FastVibe 从不映射 `off`（UI 不提供这一档，`decodeEfforts` 里就写着），所以这些请求都带着 pi 的猜测出门——而 gpt-5 之前的推理模型只认 minimal/low/medium/high，回一句 400。这类请求全在 agent loop 之外，SDK 的 retry 策略一次也不会碰到它们，症状就是「gpt 模型的对话永远没有标题」这种没有任何人看见的失败。
+
+- **入口只有一个：`installThinkingOffGuard(runtime)`，在 `PiProcessManager.start()` 里 `new ModelRegistry(...)` 之后立刻装。** 它包 runtime 实例上的**两个方法**，因为整个应用不带思考档位的请求只会从这两处出去：`complete`（标题生成、`/handoff`、AI 提交信息、记忆抽取——扩展拿到的 `ctx.modelRegistry` 是 SDK 自己 `new ModelRegistry(this._modelRuntime)` 出来的第二层门面，FastVibe 碰不到它，所以只能在它底下的 runtime 上做）与 `streamSimple`（**主对话与压缩也走它**：`pi-coding-agent/core/sdk.js` 那个 `streamFn` 闭包调的是 `modelRuntime.streamSimple`）。两个 `bind` 都在赋值之前完成，SDK 改名只会当场抛错，不会留下半包装的状态。
+- **被拒了才去掉，不是每次都去掉。** 去掉参数的语义是「这个模型没有关闭思考的开关」（`thinkingLevelMap: { off: null }`，与 `pi-global-sync.ts` 的 `withAdaptiveOff` 同一手法），代价是模型按默认强度思考——而这些请求存在的理由恰恰是不想思考。所以接受 `none` 的模型保留快路：一次失败 → 原样重发（不带该参数）→ 把 `provider/id` 记进 `#noThinkingOffModels`（进程内的学习，不落盘，和 `#thinkingOffRefused` 一样）。已经在集合里的模型每次都直接按去掉参数的样子发，因为调用方每次交回来的都是 registry 里那个原始 model，学习必须发生在 helper 里。
+- **去掉参数要同时放宽输出上限**（`roomForThinking`，1024，封顶在模型自己的 `maxTokens`）：思考计入 `max_tokens`，128 的标题请求会在思考中途被切，`stopReason: "length"` 又被 `candidateTitle` 判为不可用，重试四次还是没标题——修了 400 换来一个更难查的哑失败。
+- **只认「点名了思考参数」的拒绝。** `looksLikeRejectedThinkingOff` 要求同时出现 reasoning/effort/thinking（或引号里的 `'none'`）与 invalid / not supported 一类措辞；超时、429、坏 key 原样交回给调用方（返回的 error reply 还是抛出的 error，形状都不改），也不把模型误标成没有开关。
+- **`streamSimple` 那侧只换模型、不重试**：重试一条已经在跑的流等于把它重启，代价不成比例。它做的是另一件事——把已经学到的模型在交给 SDK 之前换掉（`guardedModelFor`），返回的还是 SDK 自己那条 `AssistantMessageEventStream`。这条是必需的，因为 pi-ai 分不出「档位是 off」和「根本没表态」：`pi-agent-core/agent.js:307` 把 off 转成 `reasoning: undefined`，`streamSimple` 再转成 `reasoningEffort: undefined`，两者落到同一个补值分支——FastVibe 今天不提供 off 档所以主对话走不到，但恢复来的转写、别的宿主写下的会话都可能走到，那时 400 出现在对话中间而不是标题上。
+- **两处 `streamSimple` 的直接调用方各自显式套 helper**（它们绕过了 runtime 的 `complete`）：`#completeQuick`（回复推荐，与它原有的 thinking-off 补丁两层叠加，各学各的）和 `testProvider`（模型自检：只有 `protocol` 类失败才按去掉参数的模型重跑一次并放宽输出上限，**重跑成功才认定**这个模型没有开关，因为 400 也可能真是坏的工具 schema）。
+- 验证：`test/thinking-off.test.ts` 里一组 payload 断言直接跑 pi-ai 的 provider（stub fetch 抓请求体），钉住三件事——「无映射 → `effort:"none"`」「`off:null` → 不发」「带 `reasoning:"off"` 与不带档位**完全一样**」；最后那条就是上面那个语义塌缩的证据，也是包 `streamSimple` 的理由。`test/session-title.test.ts` 用真实 SDK 跑完整对话钉住「扩展那侧确实被 guard 覆盖」。
+
 ## 账号登录（FastVibe 账号，`engine/account.ts`）
 
 桌面端可以登录 `app.fastvibe.dev` 的账号（服务端在私有仓库 `tyuan511/fastvibe-services`，
