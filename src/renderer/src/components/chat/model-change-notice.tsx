@@ -34,7 +34,7 @@ export function ModelChangeNotice({ to }: { to: EngineModel }): JSX.Element {
       <span aria-hidden className="h-px min-w-4 flex-1 bg-border" />
       <span className="flex min-w-0 items-center gap-1.5">
         <span className="shrink-0">{t("model.switched")}</span>
-        <span className="max-w-40 truncate font-medium text-muted-foreground/80">{current}</span>
+        <span className="max-w-80 truncate font-medium text-muted-foreground/80">{current}</span>
       </span>
       <span aria-hidden className="h-px min-w-4 flex-1 bg-border" />
     </div>

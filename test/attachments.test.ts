@@ -75,6 +75,18 @@ test("real file chips are still rebuilt from the persisted prompt suffix", () =>
   }]);
 });
 
+test("attachment-only prompts keep their chips without adding visible text", () => {
+  const items = [
+    { id: "file", kind: "file" as const, name: "notes.md", path: "/tmp/notes.md" },
+    { id: "paste", kind: "file" as const, name: "pasted.txt", text: "粘贴的正文" },
+  ];
+  for (const attachments of [[items[0]], [items[1]], items]) {
+    const payload = attachmentPromptSuffix(attachments);
+    assert.equal(stripAttachmentBlock(payload), "");
+    assert.deepEqual(extractPromptAttachments(payload).map((item) => item.name), attachments.map((item) => item.name));
+  }
+});
+
 test("attachment-looking text in the middle of a prompt is not stripped", () => {
   const text = "<fastvibe-attachments>\n- /tmp/not-real.txt\n</fastvibe-attachments>\nkeep going";
   assert.equal(stripAttachmentBlock(text), text);

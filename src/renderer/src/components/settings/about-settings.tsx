@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Download01Icon, RefreshIcon, RotateCcwIcon } from "@hugeicons/core-free-icons";
+import { Download01Icon, RotateCcwIcon, StarIcon } from "@hugeicons/core-free-icons";
 import { AppLogo } from "@/components/app-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,21 +21,25 @@ import type { AppInfo } from "@shared/ipc";
 import { AboutUpdate } from "./about-update";
 import { SettingsGroup, SettingsRow } from "./settings-group";
 
+function GithubMark(): JSX.Element {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="size-4 fill-current">
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.084-.73.084-.73 1.205.084 1.84 1.237 1.84 1.237 1.07 1.835 2.807 1.305 3.492.998.108-.776.418-1.305.762-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.292-1.552 3.297-1.23 3.297-1.23.647 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.43.372.81 1.103.81 2.222 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+    </svg>
+  );
+}
+
 /**
  * Settings → 关于: who this install is (logo, version) and what it is built from.
  *
- * Three cards below the identity header. 更新 is the app's own update check. The next card
- * is the embedded engine: its pi coding agent version, and the one-shot merge of the
- * connected config into the global pi install. 更多 holds everything else about this
- * install: the models.dev snapshot (refreshable now; it also refreshes on its own hourly —
- * limits and prices move faster than releases), where its data lives, exporting the
- * main/renderer logs as a zip, and resetting preferences.
+ * 开源 links to the repository. 更新 is the app's own update check. The next card
+ * holds the embedded engine version and the one-shot merge into the global pi install.
+ * 更多 holds the data directory, log export, and preference reset.
  */
 export function AboutSettings(): JSX.Element {
   const { t } = useTranslation("settings");
   const reset = useSettingsStore((state) => state.reset);
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [updating, setUpdating] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportedPath, setExportedPath] = useState("");
   const [resetting, setResetting] = useState(false);
@@ -44,37 +48,16 @@ export function AboutSettings(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    // A refresh that lands before getInfo returns would otherwise be overwritten by
-    // the snapshot the page asked for a moment earlier.
-    let live: AppInfo["modelsDev"];
-    const off = window.fastvibe.app.onModelsDev((modelsDev) => {
-      live = modelsDev;
-      if (!cancelled) setInfo((prev) => (prev ? { ...prev, modelsDev } : prev));
-    });
     void window.fastvibe.app
       .getInfo()
       .then((next) => {
-        if (!cancelled) setInfo(live ? { ...next, modelsDev: live } : next);
+        if (!cancelled) setInfo(next);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
-      off();
     };
   }, []);
-
-  async function updateModelsDev(): Promise<void> {
-    setUpdating(true);
-    try {
-      const modelsDev = await window.fastvibe.app.updateModelsDev();
-      setInfo((prev) => (prev ? { ...prev, modelsDev } : prev));
-      toast.success(t("about.updated"));
-    } catch (err) {
-      toast.error(cleanError(err));
-    } finally {
-      setUpdating(false);
-    }
-  }
 
   async function exportLogs(): Promise<void> {
     // The zip lands in the host's downloads, where a remote caller cannot get at it.
@@ -88,8 +71,6 @@ export function AboutSettings(): JSX.Element {
       setExporting(false);
     }
   }
-
-  const modelsDev = info?.modelsDev;
 
   function syncConfig(mode: "merge" | "replace"): void {
     setSyncing(mode);
@@ -121,33 +102,31 @@ export function AboutSettings(): JSX.Element {
         </div>
       </header>
 
-      <AboutUpdate />
-
-      <SettingsGroup>
+      <SettingsGroup title={t("about.openSource")}>
         <SettingsRow
-          title={t("about.engine")}
-          description={t("about.engineDesc")}
-          control={
-            <span className="font-mono text-sm">{info?.engineVersion ?? "—"}</span>
+          title={
+            <>
+              <span className="flex size-7 items-center justify-center text-foreground">
+                <GithubMark />
+              </span>
+              <span className="font-mono text-[13px]">tyuan511/fastvibe</span>
+            </>
           }
-        />
-        <SettingsRow
-          title={t("about.office")}
-          description={t("about.officeDesc")}
           control={
-            <span className="font-mono text-sm">{info?.officeVersion ?? "—"}</span>
-          }
-        />
-        <SettingsRow
-          title={t("about.sync")}
-          description={t("about.syncDesc")}
-          control={
-            <Button size="xs" variant="outline" disabled={syncing !== null} onClick={() => setConfirmSync(true)}>
-              {syncing ? t("about.syncing") : t("about.syncAction")}
+            <Button
+              size="xs"
+              variant="default"
+              render={<a href="https://github.com/tyuan511/fastvibe" target="_blank" rel="noreferrer" />}
+              nativeButton={false}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={StarIcon} />
+              {t("about.star")}
             </Button>
           }
         />
       </SettingsGroup>
+
+      <AboutUpdate />
 
       <Dialog open={confirmSync} onOpenChange={(open) => { if (!syncing) setConfirmSync(open); }}>
         <DialogContent>
@@ -171,32 +150,12 @@ export function AboutSettings(): JSX.Element {
 
       <SettingsGroup title={t("about.more")}>
         <SettingsRow
-          title={t("about.modelsDev")}
-          description={
-            <>
-              {modelsDev?.models
-                ? t("about.counts", { models: modelsDev.models, aliases: modelsDev.aliases })
-                : t("about.missing")}
-              <span className="mt-0.5 block">{t("about.autoRefresh")}</span>
-              {/* The failure replaces nothing: the counts above are still the ones in use. */}
-            </>
-          }
+          title={t("about.sync")}
+          description={t("about.syncDesc")}
           control={
-            <div className="flex items-center gap-3">
-              {modelsDev?.generatedAt ? (
-                <span className="text-xs text-muted-foreground">
-                  {t("about.generatedAt", { date: new Date(modelsDev.generatedAt).toLocaleString() })}
-                </span>
-              ) : null}
-              <Button size="xs" variant="outline" disabled={updating} onClick={() => void updateModelsDev()}>
-                {updating ? (
-                  <Spinner className="size-3" />
-                ) : (
-                  <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />
-                )}
-                {t(updating ? "about.updating" : "about.update")}
-              </Button>
-            </div>
+            <Button size="xs" variant="outline" disabled={syncing !== null} onClick={() => setConfirmSync(true)}>
+              {syncing ? t("about.syncing") : t("about.syncAction")}
+            </Button>
           }
         />
         <SettingsRow

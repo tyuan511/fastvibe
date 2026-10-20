@@ -155,9 +155,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
             />
           }
         />
-        <div className="px-4 py-3">
-          <ProjectDefaultsSection models={models} />
-        </div>
+        <ProjectDefaultsSection models={models} />
       </SettingsGroup>
 
       <section className="space-y-3">

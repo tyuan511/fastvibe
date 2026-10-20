@@ -12,7 +12,6 @@ import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
 import { randomUUID } from "../../../../shared/random.ts";
 import { engine, promptConversation } from "@/lib/engine-client";
-import { translate } from "@/lib/i18n";
 import type { ChatAttachment, ChatMessage } from "@shared/types";
 import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
 import { isAbortOutcome } from "@shared/abort";
@@ -122,7 +121,7 @@ export function SidePaneChat({
       }
       return;
     }
-    const promptText = text || translate("chat:composer.seeAttachments");
+    const promptText = text;
     // The selected-text reference is displayed below the message, but the selected
     // question itself is the prompt. Do not append the reference metadata a second
     // time on the first automatic send.

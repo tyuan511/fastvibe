@@ -706,7 +706,7 @@ export function App(): JSX.Element {
     // prompt there are IPC hops (`availableModels`, `conversations.create`,
     // `recordPrompt`), and Main can be busy streaming another conversation for tens
     // or hundreds of ms — a second click or Enter in that window used to send the
-    // same prompt again, without its text (`请查看附件` + the same attachments).
+    // same attachments again, without the original text.
     if (submitting.current) return;
     // Reserve the send before any await, including waiting for Stop. Otherwise two
     // Enter presses can both resume after the same abort and submit twice.
@@ -798,10 +798,8 @@ export function App(): JSX.Element {
       // An await above may have crossed a chat switch. This submission still belongs
       // to the composer it captured; it must not clear or send the incoming chat's draft.
       if (useSessionStore.getState().activeId !== submitOwner) return;
-      // The text the engine will actually receive, and therefore also the text the
-      // row shows: they used to differ (file names in the bubble, `请查看附件` in the
-      // engine), so re-reading the transcript silently rewrote the message.
-      const promptText = text || t("composer.seeAttachments");
+      // Keep attachment-only prompts textless in both the row and the engine.
+      const promptText = text;
       // Consume the composer before any further await: from here the draft and the
       // attachments belong to this call, so a second click finds an empty composer
       // (and a disabled send button) instead of re-sending the same prompt without
@@ -940,7 +938,7 @@ export function App(): JSX.Element {
     files: ChatAttachment[],
     conversationId: string,
   ): Promise<void> {
-    const payload = `${text || t("composer.seeAttachments")}${attachmentPromptSuffix(files)}`;
+    const payload = `${text}${attachmentPromptSuffix(files)}`;
     const images = attachmentsToImages(files);
     await engine.prompt(payload, { images, conversationId });
     void engine
