@@ -34,17 +34,22 @@ function code(text: string): string {
 }
 
 const CONSTANT = read(SRC, "lib/process-body.ts");
-const capClass = /PROCESS_BODY_CAP = "([^"]+)"/.exec(CONSTANT)?.[1];
+const capClass = /PROCESS_BODY_CAP =\s*"([^"]+)"/.exec(CONSTANT)?.[1];
 
 /** Surfaces that apply the cap themselves. */
 const CAPS = ["run-collapse.tsx", "tool-row.tsx", "message-row.tsx"];
 
-test("the cap is half the reading area, in a scrolling box", () => {
+test("the cap is half the reading area, in a box that never shifts width", () => {
   assert.ok(capClass, "PROCESS_BODY_CAP must be exported as a single class string");
   // Half of `--thread-height` — the transcript viewport, not the window: the reading area
   // is that minus the header and the composer, and no CSS unit reaches it from inside.
   assert.match(capClass, /max-h-\[calc\(var\(--thread-height,[^\)]+\)\/2\)\]/);
   assert.match(capClass, /overflow-y-auto/);
+  // The app's own bar is a classic 11px bar that takes layout space, so the gutter has to be
+  // reserved: without it the bar appearing narrows every row by 11px and a horizontal bar
+  // flashes for a frame (measured: clientWidth 672 -> 661).
+  assert.match(capClass, /\[scrollbar-gutter:stable\]/);
+  assert.match(capClass, /overflow-x-hidden/);
   // Either property makes Chromium repaint the platform scrollbar (AGENTS.md 滚动条).
   assert.doesNotMatch(code(CONSTANT), /scrollbar-(width|color)\s*:/);
 });
@@ -86,7 +91,10 @@ test("one scroll layer: the inner capped body gives its bound up to the outer", 
   const rule = /\[data-process-body\] \[data-process-body\]\s*\{([^}]*)\}/.exec(css);
   assert.ok(rule, "index.css must carry the nested-body rule");
   assert.match(rule[1], /max-height:\s*none/);
-  assert.match(rule[1], /overflow-y:\s*visible/);
+  // Both axes: an `overflow-x: hidden` left next to `overflow-y: visible` makes the browser
+  // compute the y axis back to `auto`, which puts the scroll container right back there.
+  assert.match(rule[1], /overflow:\s*visible/);
+  assert.doesNotMatch(rule[1], /overflow-y:\s*visible/);
   // Tailwind utilities live in a layer that outranks `base`, so an unlayered rule is the
   // only thing that wins — the same reason the ScrollArea thumb rules sit outside.
   const before = css.slice(0, rule.index);

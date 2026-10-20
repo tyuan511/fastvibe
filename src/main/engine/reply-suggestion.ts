@@ -20,6 +20,8 @@ export const SUGGESTION_SYSTEM = [
   "Write it from the user's point of view, as one short, natural message (a task, a follow-up question, or a confirmation).",
   "Write in the same language as the user's last message.",
   "Reply with the message only: no quotes, no label, no explanation.",
+  "Only suggest a message that gives the assistant something to do or decide: an instruction, a question, a choice, or a go-ahead for work it proposed.",
+  "Never suggest what the user does on their own machine or tells nobody, such as running, testing or trying it locally, checking the result, waiting, thinking it over, or holding off on a step (\"let me run it first\", \"don't push yet, I'll check\", \"I'll take a look\"), nor thanks or sign-offs: the assistant cannot act on those.",
   "If there is no obvious next message, reply with exactly NONE.",
 ].join(" ");
 

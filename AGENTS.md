@@ -987,11 +987,13 @@ rather than highlighted (below).
 ### 变更视图
 
 `side-pane-git.tsx` 同时展示冲突、已暂存和未暂存文件，选择项包含路径和 diff 来源；同一文件可同时在暂存区和工作区。聊天里每轮的「已修改 N 个文件」卡片（`chat/file-chips.tsx`）是该轮工具自己的 patch，点击它（卡片上的文件行或「查看变更」）打开的是这个变更视图，不再是独立的修改记录面板；路径以绝对形式交给 `openGitDiff`，由 `selectGitChange` 落到真正包含它的分组（未暂存/已暂存/冲突），文件已提交或已回退时退回工作区的第一个改动。
-列表与目录树复用 `git-change-list.tsx`：`git-change-tree.ts` 只压缩单子目录链，分叉保留；行布局为文件名、固定操作槽、状态列，方向键和右键操作与点击一致。右上角仅保留列表/目录树切换（ListIcon / FolderTreeIcon），不显示文件筛选和全部折叠。历史列表在 `git-history.tsx`，与文件区之间可拖动调整高度。提交区由 `git-commit-form.tsx` 组成：输入框右侧 AI 生成、提交分体按钮，菜单仅保留「提交」和「提交并推送」。有改动且无冲突即可直接提交，Cmd/Ctrl+Enter 同样执行；多行草稿在切换仓库时保留。两个操作与聊天顶部提交入口共用 `performGitCommit`：先暂存仓库全部改动，输入为空时基于 index 自动生成提交信息，再提交，唯一区别是是否追加推送。手动 AI 生成读取所有改动；生成期间输入框显示「正在生成提交信息…」，生成按钮显示 Spinner，失败保留原草稿。提交成功即清空已提交草稿并刷新，后续推送失败单独报告。桌面与 SSH 共用 `commitGitChanges`（底层仍只提交 index）并都注册 AI 生成方法；保留独立的 `workspace:git-amend` 兼容已有调用。
+列表与目录树复用 `git-change-list.tsx`：`git-change-tree.ts` 只压缩单子目录链，分叉保留；行布局为文件名、固定操作槽、状态列，方向键和右键操作与点击一致。右上角仅保留列表/目录树切换（ListIcon / FolderTreeIcon），不显示文件筛选和全部折叠。历史列表在 `git-history.tsx`，与文件区之间可拖动调整高度。提交区由 `git-commit-form.tsx` 组成：输入框右侧 AI 生成、提交分体按钮，菜单仅保留「提交」和「提交并推送」。有改动且无冲突即可直接提交，Cmd/Ctrl+Enter 同样执行；多行草稿在切换仓库时保留。两个操作与聊天顶部提交入口共用 `performGitCommit`：先暂存仓库全部改动，输入为空时基于 index 自动生成提交信息，再提交，唯一区别是是否追加推送。手动 AI 生成读取所有改动；生成期间输入框显示「正在生成提交信息…」，生成按钮显示 Spinner，失败保留原草稿。**提交信息一律英文，与 AI 偏好语言无关**：AI 偏好语言决定的是对话里怎么对读者说话，而提交信息是仓库历史的一行，git log、CI 和同事都在读；它曾经跟随 `FASTVIBE_AI_LANGUAGE_PROMPT`，于是中文安装上的 `git log` 是中文。两段提示词（分组摘要、最终 subject）因此收在 `engine/commit-message.ts` 的 `buildCommitGroupSummaryPrompt` / `buildCommitSubjectPrompt` 里并写明英文，`generateCommitMessage` 不再拼语言指令——分组摘要也要英文，因为分片模式下它是最终请求唯一的证据。`test/commit-message.test.ts` 钉住这两段里既有 `in English`、又没有 `Language requirement`。提交成功即清空已提交草稿并刷新，后续推送失败单独报告。桌面与 SSH 共用 `commitGitChanges`（底层仍只提交 index）并都注册 AI 生成方法；保留独立的 `workspace:git-amend` 兼容已有调用。
 `DiffView` 仍是唯一 diff 渲染器，默认统一（合并）视图，按用户操作切换并排，支持换行和 hunk 跳转；并排列只配对同一变更块内的增删行。变更视图加载后自动选中冲突/未暂存/已暂存文件，刷新和暂存尽量保留当前路径；目录与文件面板采用相同的宽度规则：默认 224px，最小 120px，最多占面板的 75%，复用标准 SplitHandle 拖动调宽，不因拖窄自动收起。有独立收起/展开按钮；所有宽度都在变更面板内与 diff 并排展示，不使用抽屉，也不按面板宽度自动收起。diff 始终保持挂载，不能以目录/差异两级视图互相替换；目录收起/展开不重置历史分支筛选。
 
 - 每轮改动卡片的形状：头部只占一行（「已修改 N 个文件」+ 合计 + 展开箭头 + 右侧「查看变更」），**不再画 32px 图标底块或两行堆叠**——下面每一行都已经带文件图标，头部再放一个是重复，而且它把卡片顶得比内容还高。文件行是 `FileIcon` + 文件名 + 灰色目录 + 增删数，与 `git-change-list.tsx` 的列表行同一套切分（`splitLabel`）：名字认文件，目录只说明它在哪；没有目录的标签整段当名字，不截断。
 - **列表默认五行高，超出在卡片内滚动**（`max-h-40`，rem 所以跟着「界面字号」走；一行是 `py-1.5` + `text-sm` 的 2rem）。原来的「再显示 N 个文件」连同 `files.more` / `files.collapse` 一起删了：头部已经能整卡收起，列表里再套一层折叠就是两个上限干同一件事，而且四十个文件的回合会把这条回复顶出屏幕。
+- **滚动条贴卡片右边，不飘在行尾。** 滚动条画在滚动元素的 border box 上，所以内边距必须落在滚动盒**里面**：`pb-1.5` 在外、`max-h-40 overflow-y-auto` 再包一层 `px-1.5`，行和数字的位置一个像素都没动（滚动条仍然从内容盒里拿那 11px），但条子贴到了卡片的框上。以前 `px-1.5` 在外，条子离右边还有 6px，看起来像行尾中间浮着一根。底边距留在外面是另一件事：放进去它就成了可滚动内容，五行文件会被裁掉第五行。
+- 预览：`mock.html?chips=many`（十三个文件，才会出现那根条——其它 fixture 一个回合最多写两个文件）。
 - `main/source-control.ts` 是桌面和 SSH Agent 共用的 Git 实现。新方法通过中立调用表和远程策略注册：`workspace:git-comparison`、`workspace:git-history`；`git-diff` 的可选 `revision` 只接受完整 commit hash。
 - 分支文件列表和 patch 使用同一个 upstream merge base；历史支持当前分支与全部分支，以拓扑顺序读取完整 parents，`git-graph.ts` 按真实父哈希分配和合并色道；根提交不得画向无关历史的线。HEAD、本地/远端分支和标签按 `for-each-ref` 的结构化元数据展示；分页固定初次读取的 tip hashes，避免新提交造成跳页。点击提交自动打开首个文件，显示作者、时间、提交正文及标签；合并提交默认对比第一父提交，根提交对比空树。
 - Git 路径按 literal pathspec 传递，不 trim 文件名。未跟踪文件用 `diff --no-index` 读取，只有退出码 1 表示成功生成差异，其它失败必须显示。
@@ -1242,6 +1244,8 @@ hover 变深；Windows/Linux 的步进按钮关掉（7px 的轨道放不下它�
   和 viewport 上的 `scrollbar-thumb-scrollbar` 就是这样把聊天区那根最显眼的条打回原形的。
 - `scrollbar-gutter: stable` 单独用是安全的：它预留的是**被美化后**的宽度（实测 11px 作者宽度 →
   11px 槽），所以 `transcript-gutter` 只留 gutter 不留 width，转写与 composer 的对齐照旧。
+  转写里那些限高的折叠正文（`PROCESS_BODY_CAP`，见 折叠运行过程）也留：我们的条**占布局宽度**，
+  不留槽的话竖条一出现就抽走 11px，行变窄、横向条闪出来，而且只在展开/收起那一瞬看得到。
   composer 的两层（`.chat-editor-layer`）同理：一层用 `scrollbar-color` 假装透明、一层被美化，
   15px 对 11px，高亮就会从文字上滑走——要透明就画透明（`::-webkit-scrollbar-thumb`）。
 - 自动滚动时转写的 thumb 画成透明（`[data-autoscrolling]`，由 `@shadcn/react` 的 message scroller
@@ -3094,15 +3098,26 @@ timestamps always show.
   - **上限是阅读区高度的一半，不是窗口的一半。** 阅读区 = 窗口减去标题栏与输入框，实测 913px 的窗口
     只有 717px 可用；这个值在 CSS 里没有任何单位能从转写内部拿到，所以 `MessageList` 的 viewport 自己把它
     写成 `--thread-height`（一个 ResizeObserver，窗口和输入框一变就重测），上限就是 `calc(var(--thread-height)/2)`。
+  - **必须预留滚动条槽，否则展开/收起会闪出一根横向滚动条。** 应用自己那根是**占布局宽度**的 11px 经典条
+    （不是 overlay），所以正文一超过上限、竖条一出现，就从里面抽走 11px（实测 `clientWidth` 672 → 661），
+    所有行重新排版、变窄 11px，原本正好贴边的内容就溢到横向上——这就是「展开或收起内部工具块时短暂出现
+    横向滚动条」那一下。`[scrollbar-gutter:stable]` 把槽位常驻，不管竖条在不在了，宽度都不再动（实测
+    反复开关折叠、逐帧采样：修前同一个 body 出现 672 / 661 两个宽度，修后自始至终只有 661）。并且折叠正文
+    **永不横向滚动**（`overflow-x-hidden`）：转写是屏幕上唯一该横向滚的东西，行内容全都得换行——实测塞一个
+    3000px 宽的块，修前 `overflow-x: auto` 画出 11px 高的真横向条，修后 `barHeightPx = 0`。两条里
+    `scrollbar-gutter` 是机制、`overflow-x-hidden` 是承诺，缺任何一个都会回到旧行为。
   - **只滚一层。** 有上限的折叠体可以套在另一个里（工具批次就住在「用时 …」里），两边都限高就是
     「滚动条套滚动条」——用户抱怨的正是这个。所以每个被限高的 body 都带 `data-process-body` 标记，
     `index.css` 里一条 `[data-process-body] [data-process-body]` 把里层那个的上限交还给外层：外层滚，
     里层撑开。没被套住的 body 保留自己的上限，这才是「运行中、上面还没有折叠」时工具批次的界。
-    这条规则**必须在 `@layer` 之外**——`max-h-*` / `overflow-y-*` 是 Tailwind 工具类，写进 `@layer base` 会输。
+    这条规则**必须在 `@layer` 之外**——`max-h-*` / `overflow-*` 是 Tailwind 工具类，写进 `@layer base` 会输；
+    并且它重置的是 `overflow` 两个轴，只写 `overflow-y: visible` 会把 `overflow-x: hidden` 留在场上，
+    而浏览器会因为两轴不一致把 `visible` 那轴算成 `auto`——滚动容器又回来了。
   - 单个工具卡不套这一层：它展开的是一个本来就自己限高的面板（终端 72、diff 80、参数与输出 60），
     那限的是**一个输出的长度**，不是「一层折叠」，再包一层只会多出一根用不上的滚动条。
   - `test/process-body-cap.test.ts` 钉住这几件事：四处都读同一个常量、都带标记、`--thread-height` 真的被
-    发布、CSS 规则存在且在 layer 外。typecheck 看不见其任何一项。
+    发布、CSS 规则存在且在 layer 外、常量里同时有 `scrollbar-gutter:stable` 与 `overflow-x-hidden`。
+    typecheck 看不见其中任何一项。
   - 滚动条用应用自己那根（见 滚动条），所以这里不许出现 `scrollbar-width` / `scrollbar-color`。
 
 ## 连续工具折叠

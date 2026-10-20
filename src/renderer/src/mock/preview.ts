@@ -83,6 +83,7 @@ function transcriptFixture() {
   if (params.get("thinking") === "blank") return blankThinking(fixtureMessages);
   if (params.get("batch") === "live") return liveBatch(fixtureMessages);
   if (params.get("blank") === "1") return blankProse(fixtureMessages);
+  if (params.get("chips") === "many") return manyEdits(fixtureMessages);
   if (params.get("skill") === "1") return skillForced(fixtureMessages);
   return inlineFixture() ?? fixtureMessages;
 }
@@ -373,6 +374,55 @@ function blankProse(messages: ChatMessage[]): ChatMessage[] {
 }
 
 /**
+ * `?chips=many` grows the last turn's change list past the five rows 每轮改动卡片 shows at
+ * most, which is the only shape that puts a scrollbar inside that card — every other fixture
+ * writes two files. The bar is what the preview exists for: it has to hug the card's edge
+ * rather than float in the gutter the row padding used to sit in.
+ */
+const CHIP_FILES: [string, number, number][] = [
+  ["src/renderer/src/lib/process-body.ts", 33, 0],
+  ["src/renderer/src/components/chat/run-collapse.tsx", 3, 3],
+  ["src/renderer/src/components/chat/tool-row.tsx", 8, 4],
+  ["src/renderer/src/components/chat/message-row.tsx", 2, 2],
+  ["src/renderer/src/index.css", 14, 0],
+  ["src/renderer/src/components/chat/file-chips.tsx", 21, 9],
+  ["src/renderer/src/components/chat/todo-list.tsx", 6, 2],
+  ["src/renderer/src/lib/group-parts.tsx", 11, 5],
+  ["src/renderer/src/components/chat/thinking-block.tsx", 4, 1],
+  ["src/renderer/src/lib/tool-run.ts", 17, 0],
+  ["src/renderer/src/components/chat/diff-view.tsx", 9, 6],
+  ["src/renderer/src/lib/changed-files.ts", 2, 0],
+];
+
+function manyEdits(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages.length - 1;
+  return messages.map((message, index) => {
+    if (index !== last || message.role !== "assistant") return message;
+    const tools = [
+      ...CHIP_FILES.map((entry, at) => {
+        const [file, added, removed] = entry;
+        const patch = [
+          `--- a/${file}`,
+          `+++ b/${file}`,
+          `@@ -1,${removed + 1} +1,${added + 1} @@`,
+          ...Array.from({ length: removed }, (_, line) => `-// dropped ${line + 1}`),
+          ...Array.from({ length: added }, (_, line) => `+// written ${line + 1}`),
+        ].join("\n");
+        return {
+          id: `tool-chips-${at}`,
+          name: "edit",
+          args: { path: `${PREVIEW_CWD}/${file}` },
+          status: "done" as const,
+          details: { diff: patch, patch },
+        };
+      }),
+      ...(message.tools ?? []),
+    ];
+    return { ...message, tools };
+  });
+}
+
+/**
  * The queue tray `?skill=1` fills as well. A queued row is still the draft spelling —
  * `/skill:…` — because the engine has not seen it yet, and the tray reads the badge from
  * that form too (`components/chat/message-queue.tsx`).
@@ -476,6 +526,7 @@ const openResult = (id: string): ConversationOpenResult => {
   if (!website && isActive && params.get("thinking") === "blank") messages = blankThinking(messages);
   if (!website && isActive && params.get("batch") === "live") messages = liveBatch(messages);
   if (!website && isActive && params.get("blank") === "1") messages = blankProse(messages);
+  if (!website && isActive && params.get("chips") === "many") messages = manyEdits(messages);
   if (!website && isActive && params.get("skill") === "1") messages = skillForced(messages);
   return {
     ...snapshot(),

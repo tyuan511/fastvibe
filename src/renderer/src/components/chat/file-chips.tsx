@@ -191,16 +191,27 @@ export function TurnFileChips({ files, className }: { files: ChangedFile[]; clas
         </Button>
       </div>
       <CollapsibleContent>
-        <div className="px-1.5 pb-1.5">
-          {/*
-           * Five rows of `py-1.5` + a `text-sm` line is 5 × 2rem, and the cap is in rem
-           * so it follows 界面字号 like the rows themselves. The list scrolls instead of
-           * growing: a turn that wrote forty files must not push its own reply off screen.
-           */}
+        {/*
+         * The box that scrolls is the full width of the card, and the inset lives on what
+         * is inside it: a scrollbar is painted on the edge of the scrolling element's border
+         * box, so the old `px-1.5` wrapper parked the bar 6px off the card's right edge — a
+         * bar floating in the middle of the row ends rather than one hugging the frame. Every
+         * row keeps its position (the bar still takes its 11px out of the content box) and the
+         * bar lands against the edge. The bottom gap stays outside the scroller, or it would
+         * be scrolled content and cut the fifth row of a five-file list.
+         */}
+        <div className="pb-1.5">
           <div className="max-h-40 overflow-y-auto">
-            {files.map((file) => (
-              <FileRow key={file.path} file={file} cwd={cwd} onOpen={(changed) => review(changed.path)} />
-            ))}
+            <div className="px-1.5">
+              {/*
+               * Five rows of `py-1.5` + a `text-sm` line is 5 × 2rem, and the cap is in rem
+               * so it follows 界面字号 like the rows themselves. The list scrolls instead of
+               * growing: a turn that wrote forty files must not push its own reply off screen.
+               */}
+              {files.map((file) => (
+                <FileRow key={file.path} file={file} cwd={cwd} onOpen={(changed) => review(changed.path)} />
+              ))}
+            </div>
           </div>
         </div>
       </CollapsibleContent>

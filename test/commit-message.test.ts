@@ -1,13 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildCommitGroupSummaryPrompt,
   buildCommitMessagePlan,
+  buildCommitSubjectPrompt,
   classifyCommitFile,
   countPatchLines,
   parseCommitPorcelain,
   samplePatch,
   type CommitFileMaterial,
 } from "../src/main/engine/commit-message.ts";
+
+test("commit prompts pin English and never carry a language setting", () => {
+  // AI 偏好语言 (zh) is what used to reach these requests and put a Chinese subject into `git log`.
+  // The subject prompt is the one that decides the line, so English has to be stated in it.
+  const subject = buildCommitSubjectPrompt("src/a.ts @@ -1 +1 @@");
+  assert.match(subject, /in English/);
+  assert.doesNotMatch(subject, /Language requirement/);
+  assert.doesNotMatch(subject, /简体中文/);
+  // A hierarchical plan writes its group summaries first, and those summaries are the final
+  // request's only evidence — an English subject built on Chinese bullets is a coin flip.
+  const group = buildCommitGroupSummaryPrompt("src/a.ts @@ -1 +1 @@");
+  assert.match(group, /in English/);
+  assert.doesNotMatch(group, /Language requirement/);
+  // The untrusted-data guard survives both rewrites; it is what stops a diff from issuing orders.
+  for (const prompt of [subject, group]) {
+    assert.match(prompt, /untrusted data/);
+    assert.match(prompt, /<changes>[\s\S]*<\/changes>/);
+  }
+});
 
 test("commit context classifies high-noise files without treating every config as generated", () => {
   assert.equal(classifyCommitFile("pnpm-lock.yaml"), "lock");

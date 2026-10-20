@@ -615,12 +615,15 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
    fold. Both capping is what drew a scrollbar around a scrollbar, so an inner body hands its
    bound back to the outer one: the outer scrolls, the inner contributes its full height. A
    body that is not nested keeps its own cap, which is what bounds a tool batch during a live
-   run, when there is no fold above it yet. Unlayered on purpose — `max-h-*` and
-   `overflow-y-*` are Tailwind utilities and a rule in `@layer base` loses to them, which is
-   also why the ScrollArea rules above sit outside the layers. */
+   run, when there is no fold above it yet. `overflow` is reset on both axes because the cap
+   hides the horizontal one — leaving `overflow-x: hidden` alongside an `overflow-y: visible`
+   would make the browser compute the y axis back to `auto` and put the scroll container right
+   back there. Unlayered on purpose — `max-h-*` and `overflow-*` are Tailwind utilities and a
+   rule in `@layer base` loses to them, which is also why the ScrollArea rules above sit
+   outside the layers. */
 [data-process-body] [data-process-body] {
   max-height: none;
-  overflow-y: visible;
+  overflow: visible;
 }
 
 /* Sidebar list edges ----------------------------------------------------------
