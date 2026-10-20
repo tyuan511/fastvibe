@@ -159,10 +159,40 @@ export function roomForThinking(model: { maxTokens?: number }, asked: number | u
   return Math.max(asked ?? 0, room);
 }
 
-/** What these helpers read off a side request: an output cap and a cancel handle. */
-type SideRequest = { maxTokens?: number; signal?: AbortSignal };
+/** What these helpers read off a side request: an output cap, a thinking level and a cancel handle. */
+type SideRequest = { maxTokens?: number; signal?: AbortSignal; reasoning?: unknown };
+/** The same request as the runtime sees it: the guard adds a payload hook to ask for no thinking. */
+type CompleteRequest = SideRequest & { onPayload?: (payload: unknown, model: unknown) => unknown };
 /** A reply as these helpers need to see it. */
 type SideReply = { stopReason?: string; errorMessage?: string };
+
+/**
+ * Whether to add the switches that ask for no thinking.
+ *
+ * Only a request that names **no thinking level** gets them. That is what every side request in the
+ * app is (a chat's title, `/handoff`, a commit subject, a memory extraction), while the agent's own
+ * turn names the reader's level and 「跟随模型默认」 means leave the parameter alone — a main chat
+ * must not be quietly de-thoughted by a guard written for the bypath calls.
+ *
+ * A reasoning model this app cannot tell not to think is the one that needs them: FastVibe never
+ * maps `off`, so on a `chat/completions` endpoint pi sends nothing at all and the model thinks at
+ * its own default. Measured on a Qwen token-plan endpoint, an unpatched commit subject given 512
+ * output tokens came back `length` with no text after 10.5s, while the same model on 回复推荐's
+ * patched path answered in 0.6–1.8s.
+ */
+export function shouldAskWithoutThinking(model: ThinkingOffSwitchModel, options: SideRequest | undefined): boolean {
+  return model.reasoning === true && options?.reasoning === undefined && canTurnThinkingOff(model);
+}
+
+/**
+ * The same request with room for a thought it could not prevent. `maxTokens` is only a ceiling, so
+ * raising it costs nothing on a model that obeys the switch, and on one that does not it is the
+ * difference between an answer and a truncated empty one.
+ */
+export function withThinkingRoom<M extends ThinkingOffSwitchModel>(model: M, options: SideRequest | undefined): SideRequest | undefined {
+  if (model.reasoning !== true || options?.reasoning !== undefined) return options;
+  return { ...(options ?? {}), maxTokens: roomForThinking(model, options?.maxTokens) };
+}
 
 /**
  * Run a side request, and run it again without the invented thinking-off parameter if the upstream
@@ -217,6 +247,10 @@ export function guardedModelFor<M extends ThinkingOffSwitchModel>(model: M, refu
  * - `complete` — the side requests without a thinking level (a chat's title and `/handoff` through
  *   the extensions' own `ctx.modelRegistry`, a commit subject, a memory extraction). These are
  *   promises, so a refusal is caught here: ask again with the field left out, and remember the model.
+ *   This is also where the request is told not to think directly (`shouldAskWithoutThinking`) rather
+ *   than at each call site: a 128-token title and a 512-token subject fail identically on a model
+ *   that thinks first, and a call site that forgets the patch fails *silently* — the chat just keeps
+ *   its fallback title, the git pane just says generation did not finish.
  * - `streamSimple` — passively, no retry: a model already known to have no off switch is handed to
  *   the real method already guarded. It is wrapped because the **agent's own** requests go through
  *   it (`pi-coding-agent`'s `streamFn` closure calls `modelRuntime.streamSimple`, see
@@ -230,15 +264,32 @@ export function guardedModelFor<M extends ThinkingOffSwitchModel>(model: M, refu
  * signatures are generic over the api; the guard only reads and copies the thinking map, so it is
  * written against that narrower shape and casts at the seam.
  */
-export function installThinkingOffGuard(runtime: object, refused: Set<string>): void {
-  type Complete = (model: ThinkingOffSwitchModel, context: unknown, options?: SideRequest) => Promise<SideReply>;
+export function installThinkingOffGuard(runtime: object, refused: Set<string>, fieldsRefused: Set<string> = new Set()): void {
+  // The runtime's own reply always names how it ended, which is what `withThinkingOffFallback`
+  // reads to decide whether the endpoint refused the fields.
+  type Complete = (model: ThinkingOffSwitchModel, context: unknown, options?: CompleteRequest) => Promise<{ stopReason: string; errorMessage?: string }>;
   type StreamSimple = (model: ThinkingOffSwitchModel, context: unknown, options?: SideRequest) => unknown;
   const target = runtime as unknown as { complete: Complete; streamSimple: StreamSimple };
   const original: Complete = target.complete.bind(target);
   const originalStreamSimple: StreamSimple = target.streamSimple.bind(target);
   target.complete = (model, context, options) =>
     retryWithoutThinkingOff(
-      (guardedModel, requestOptions) => original(guardedModel, context, requestOptions),
+      (guardedModel, requestOptions) => {
+        // Two refusals, each tried once and remembered per model, because an endpoint can take one
+        // of these switches and refuse the other: the fields added here, and the value pi invents.
+        const prepared = withThinkingRoom(guardedModel, requestOptions ?? options);
+        const key = `${guardedModel.provider ?? ""}/${guardedModel.id ?? ""}`;
+        return withThinkingOffFallback(
+          (patched) => original(guardedModel, context, patched ? { ...prepared, onPayload: (payload: unknown) => withThinkingOff(payload) } : prepared),
+          {
+            eligible: shouldAskWithoutThinking(guardedModel, options),
+            key,
+            refused: fieldsRefused,
+            aborted: () => options?.signal?.aborted === true,
+            onRefused: (failure) => console.info(`[thinking-off] ${key} refused the thinking-off fields (${failure.slice(0, 120)}); asking again without them`),
+          },
+        );
+      },
       {
         model,
         options,

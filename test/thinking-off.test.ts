@@ -112,7 +112,9 @@ import {
   modelWithoutThinkingOff,
   retryWithoutThinkingOff,
   roomForThinking,
+  shouldAskWithoutThinking,
   willSendThinkingOff,
+  withThinkingRoom,
   guardedModelFor,
   THINKING_ROOM_TOKENS,
 } from "../src/main/engine/thinking-off.ts";
@@ -264,7 +266,7 @@ test("the runtime guard reaches the request an extension makes", async () => {
   const seen: Array<Record<string, unknown>> = [];
   const refused = new Set<string>();
   const runtime = {
-    complete: async (model: Record<string, any>, _context: unknown, options?: Record<string, unknown>) => {
+    complete: async (model: Record<string, any>, _context: unknown, options?: Record<string, any>) => {
       seen.push({ off: model.thinkingLevelMap?.off, maxTokens: options?.maxTokens });
       return seen.length === 1 ? offSwitchRefusal : { stopReason: "stop" };
     },
@@ -273,8 +275,77 @@ test("the runtime guard reaches the request an extension makes", async () => {
   installThinkingOffGuard(runtime, refused);
   const reply = await runtime.complete(gpt5 as unknown as Record<string, any>, {}, { maxTokens: 128 });
   assert.equal(reply.stopReason, "stop");
-  assert.deepEqual(seen, [{ off: undefined, maxTokens: 128 }, { off: null, maxTokens: THINKING_ROOM_TOKENS }]);
+  // A reasoning model that cannot be told to stop needs the room on the *first* ask, not only
+  // after a refusal: 128 tokens of thinking leave no answer, and nothing outside the agent loop
+  // would retry it. The ceiling costs nothing when the model does obey.
+  assert.deepEqual(seen, [{ off: undefined, maxTokens: THINKING_ROOM_TOKENS }, { off: null, maxTokens: THINKING_ROOM_TOKENS }]);
   assert.ok(refused.has("openai/gpt-5"));
+});
+
+test("the guard tells a side request's model not to think, and leaves the ones it must not touch alone", async () => {
+  const bodies: Array<Record<string, any>> = [];
+  const send = (options?: Record<string, any>) => {
+    const runtime: Record<string, any> = { complete: async (_m: unknown, _c: unknown, opts?: Record<string, any>) => { bodies.push(opts?.onPayload?.({ model: "m" }) ?? {}); return { stopReason: "stop" }; }, streamSimple: () => undefined };
+    installThinkingOffGuard(runtime, new Set(), new Set());
+    return runtime.complete({ id: "qwen", provider: "custom-qwen", api: "openai-completions", reasoning: true, maxTokens: 131_072 }, {}, options);
+  };
+  await send({ maxTokens: 512 });
+  assert.deepEqual(bodies[0], {
+    model: "m",
+    enable_thinking: false,
+    thinking: { type: "disabled" },
+    chat_template_kwargs: { enable_thinking: false },
+  }, "the same switches 回复推荐 adds, now on every side request");
+
+  bodies.length = 0;
+  await send({ maxTokens: 512, reasoning: "high" });
+  assert.deepEqual(bodies[0], {}, "a request that names its own level is the reader's, not a bypath call");
+
+  bodies.length = 0;
+  await send();
+  assert.equal(bodies[0]?.enable_thinking, false, "a request that passes no options of its own is still a side request");
+});
+
+test("an endpoint that refuses those switches is asked again without them, once per model", async () => {
+  const asked: boolean[] = [];
+  const fieldsRefused = new Set<string>();
+  const runtime: Record<string, any> = {
+    complete: async (_m: unknown, _c: unknown, opts?: Record<string, any>) => {
+      const patched = Boolean(opts?.onPayload);
+      asked.push(patched);
+      if (patched) return { stopReason: "error", errorMessage: "400 Unrecognized request argument supplied: enable_thinking" };
+      return { stopReason: "stop" };
+    },
+    streamSimple: () => undefined,
+  };
+  installThinkingOffGuard(runtime, new Set(), fieldsRefused);
+  const qwen = { id: "qwen", provider: "custom-qwen", api: "openai-completions", reasoning: true, maxTokens: 131_072 };
+  await runtime.complete(qwen, {}, { maxTokens: 512 });
+  assert.deepEqual(asked, [true, false]);
+  assert.ok(fieldsRefused.has("custom-qwen/qwen"));
+  asked.length = 0;
+  await runtime.complete(qwen, {}, { maxTokens: 512 });
+  assert.deepEqual(asked, [false], "the next request does not pay for the same refusal");
+});
+
+test("only a side request on an OpenAI-compatible reasoning model is told not to think", () => {
+  const qwen = { id: "q", provider: "p", api: "openai-completions", reasoning: true };
+  assert.equal(shouldAskWithoutThinking(qwen, { maxTokens: 512 }), true);
+  assert.equal(shouldAskWithoutThinking(qwen, { reasoning: "high" }), false, "the reader asked for thinking");
+  assert.equal(shouldAskWithoutThinking({ ...qwen, reasoning: false }, undefined), false, "nothing to switch off");
+  assert.equal(shouldAskWithoutThinking({ ...qwen, api: "anthropic-messages" }, undefined), false, "and no field to add");
+  assert.equal(shouldAskWithoutThinking({ ...qwen, api: "google-generative-ai" }, undefined), false);
+});
+
+test("the output room is given to a model that may think, and never taken away", () => {
+  const qwen = { api: "openai-completions", reasoning: true, maxTokens: 131_072 };
+  assert.equal(withThinkingRoom(qwen, { maxTokens: 128 })?.maxTokens, THINKING_ROOM_TOKENS);
+  assert.equal(withThinkingRoom(qwen, { maxTokens: 16_000 })?.maxTokens, 16_000, "a big ask is its own room");
+  assert.equal(withThinkingRoom(qwen, { reasoning: "high", maxTokens: 128 })?.maxTokens, 128, "thinking on purpose keeps the caller's budget");
+  assert.equal(withThinkingRoom({ ...qwen, maxTokens: 50 }, { maxTokens: 20 })?.maxTokens, 50, "never above the model's own limit");
+  assert.equal(withThinkingRoom({ ...qwen, reasoning: false }, { maxTokens: 128 })?.maxTokens, 128, "untouched");
+  assert.equal(withThinkingRoom(qwen, undefined)?.maxTokens, THINKING_ROOM_TOKENS, "and a request with no options of its own");
+  assert.equal(withThinkingRoom(qwen, undefined)?.reasoning, undefined);
 });
 
 test("the model runtime this guard wraps still answers to the two methods it wraps", () => {

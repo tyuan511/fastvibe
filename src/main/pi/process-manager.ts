@@ -1158,8 +1158,10 @@ export class PiProcessManager {
       this.#models = new ModelRegistry(this.#runtime);
       // Side requests (a chat title, a handoff summary, a commit subject, a memory extraction) ask
       // for no thinking, and pi answers that with a thinking-off parameter the model may not have.
-      // Nothing outside the agent loop retries such a failure, so the runtime itself takes it back.
-      installThinkingOffGuard(this.#runtime, this.#noThinkingOffModels);
+      // Nothing outside the agent loop retries such a failure, so the runtime itself takes it back —
+      // and asks the models it can not to think, because the same requests are sized for an answer,
+      // not for a thought (`thinking-off.ts`).
+      installThinkingOffGuard(this.#runtime, this.#noThinkingOffModels, this.#thinkingOffRefused);
       await this.#models.refresh({ allowNetwork: false });
       await this.#mcp.load();
       markStartup("engine-runtime");
@@ -2973,7 +2975,7 @@ export class PiProcessManager {
       maxGroups: 8,
     });
     const language = process.env.FASTVIBE_AI_LANGUAGE_PROMPT?.trim();
-    const complete = async (prompt: string, maxTokens: number): Promise<{ text: string; stopReason: string }> => {
+    const complete = async (prompt: string, maxTokens: number): Promise<{ text: string; stopReason: string; error?: string }> => {
       const response = await registry.complete(
         model,
         { messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
@@ -2982,6 +2984,7 @@ export class PiProcessManager {
       return {
         text: response.content.map((block) => block.type === "text" ? block.text : "").join("").trim(),
         stopReason: response.stopReason,
+        error: response.errorMessage,
       };
     };
 
@@ -3033,7 +3036,12 @@ export class PiProcessManager {
       "Commit subject:",
     ].filter(Boolean).join("\n\n"), 512);
     if (response.stopReason !== "stop") {
-      throw new Error(uiText("生成提交信息未完成", "Commit message generation did not finish"));
+      // Say which of them it was: `length` means the model spent the budget on a thought (a model
+      // that cannot be told not to have one), `error` means the endpoint refused the request, and a
+      // reasonless 「未完成」 ruled out neither and left nothing in `logs/main.log` to read.
+      const reason = response.error?.trim().slice(0, 300);
+      console.warn(`[commit] ${model.provider}/${model.id} stopped as ${response.stopReason}${reason ? `: ${reason}` : ""}`);
+      throw new Error(reason || `${uiText("生成提交信息未完成", "Commit message generation did not finish")}（${response.stopReason}）`);
     }
     const line = response.text
       .replace(/^```(?:text)?\s*/i, "")

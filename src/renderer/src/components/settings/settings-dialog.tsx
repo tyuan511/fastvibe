@@ -206,12 +206,16 @@ export function SettingsDialog({
       ) : null}
       <ScrollArea className="min-h-0 flex-1">
         {/*
-         * One window tall, so a pane can stretch its last region to exactly the height the
-         * window has left instead of guessing it (`flex-1` inside a column whose height is
-         * `auto` gets nothing to grow into). A pane taller than this overflows and the
-         * viewport scrolls it, as before. Only 供应商's model list uses the stretch.
+         * At least one window tall, so a pane can stretch its last region to exactly the height
+         * the window has left instead of guessing it (`flex-1` inside a column whose height is
+         * `auto` gets nothing to grow into). A pane taller than this overflows and the viewport
+         * scrolls it, as before. Only 供应商's model list uses the stretch.
+         *
+         * `min-h-full`, not `h-full`: a fixed height clips the bottom padding out of the
+         * scrollable area — the box stops at the window edge and the overflowing rows run past
+         * its padding, so a long pane ended flush against the bottom of the screen.
          */}
-        <div className="mx-auto flex h-full w-full max-w-200 flex-col px-4 py-5 md:px-8 md:py-8">
+        <div className="mx-auto flex min-h-full w-full max-w-200 flex-col px-4 py-5 md:px-8 md:py-8">
           <h2 className={cn("mb-5 text-xl font-medium tracking-tight max-md:hidden", section === "usage" && "hidden")}>
             {settingsSectionLabel(section)}
           </h2>
