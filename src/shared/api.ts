@@ -261,8 +261,8 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineGetMessage, { conversationId, entryId }),
       getMessagesPage: (payload: import("./transcript-page").TranscriptPageRequest): Promise<ConversationHistoryPage> =>
         t.invoke(Ipc.engineGetMessagesPage, payload),
-      getStats: (conversationId?: string): Promise<SessionStats> =>
-        t.invoke(Ipc.engineGetStats, { conversationId }),
+      getStats: (conversationId?: string, summary?: boolean): Promise<SessionStats> =>
+        t.invoke(Ipc.engineGetStats, { conversationId, ...(summary ? { summary: true } : {}) }),
       setSteeringMode: (mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> =>
         t.invoke(Ipc.engineSetSteering, { mode, conversationId }),
       setFollowUpMode: (mode: "all" | "one-at-a-time", conversationId?: string): Promise<EngineSessionState> =>

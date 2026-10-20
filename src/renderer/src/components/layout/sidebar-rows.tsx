@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -36,7 +36,7 @@ import { formatRelativeTime } from "@/lib/time";
 import { bindingStateKey, displayRemotePath, isRemoteProject, isRemoteRef, remoteProjectActivityKey } from "@/lib/remote-project";
 import type { RemoteHostConnectionState } from "@shared/remote-host";
 import type { DagNode } from "@shared/dag";
-import type { Conversation, Project } from "@shared/types";
+import type { Conversation, Project, SessionStats } from "@shared/types";
 
 // Pins live in `lib/pinned.ts`: the sidebar draws them and the auto-archive sweep must
 // leave a pinned chat alone, and only one of those two is a component. Re-exported here
@@ -480,21 +480,74 @@ export function sectionKey(kind: "pinned" | "recent" | "project", cwd?: string):
   return kind === "project" ? `project:${cwd ?? ""}` : kind;
 }
 
-/** Hover card for a conversation row: the full title, when it last ran, and its working directory. */
-function SessionHoverCard({ item }: { item: Conversation }): JSX.Element {
+/** Conversation identity and cumulative usage, read only while its card is open. */
+function SessionHoverCard({ item, open, running }: { item: Conversation; open: boolean; running: boolean }): JSX.Element {
+  const { t, i18n } = useTranslation("app");
+  const [stats, setStats] = useState<SessionStats | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setStats(null);
+    setFailed(false);
+    const load = async () => {
+      try {
+        const value = await window.fastvibe.engine.getStats(item.id, true);
+        if (!cancelled) {
+          setStats(value);
+          setFailed(false);
+        }
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+      if (!cancelled && running) timer = setTimeout(load, 5_000);
+    };
+    void load();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [item.id, item.updatedAt, open, running]);
+  const count = (value: number | undefined) => value == null ? "—" : value.toLocaleString(i18n.language, {
+    maximumFractionDigits: 0,
+  });
+  const tokens = stats?.tokens;
+  // Three numbers on one line. This card is a glance, not a report: the per-request
+  // breakdown (cache hit, uncached input, cost) lives in the composer's context ring,
+  // and each label names its own scope, so there is no footnote to explain them.
+  const metrics = [
+    ["rounds", count(stats?.rounds)],
+    ["tokens", count(tokens?.total)],
+    ["output", count(tokens?.output)],
+  ];
   const directory = isRemoteRef(item.cwd) ? displayRemotePath(item.cwd) : item.cwd;
   return (
-    <div className="flex w-full flex-col gap-2 px-3 py-2.5 text-left">
+    <div className="flex w-full flex-col gap-1.5 px-3 py-2 text-left">
       <div className="flex items-start justify-between gap-3">
         <span className="min-w-0 flex-1 break-words text-sm font-medium">{item.title}</span>
         <span className="shrink-0 text-muted-foreground">{formatRelativeTime(item.updatedAt)}</span>
       </div>
       {directory ? (
-        <div className="flex items-start gap-2">
-          <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 font-mono break-all">{directory}</span>
+        <div className="flex items-center gap-1.5">
+          <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-3.5 shrink-0 text-muted-foreground" />
+          {/* One line, ellipsised: a long path used to wrap and push the stats down. */}
+          <span className="min-w-0 truncate font-mono text-muted-foreground" title={directory}>
+            {directory}
+          </span>
         </div>
       ) : null}
+      <dl className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-border/60 pt-1.5 tabular-nums">
+        {failed ? (
+          <span className="text-muted-foreground">{t("sidebar.sessionCard.unavailable")}</span>
+        ) : !stats ? (
+          <span className="text-muted-foreground">{t("loading")}</span>
+        ) : (
+          metrics.map(([key, value]) => (
+            <div key={key} className="flex min-w-0 items-baseline gap-1">
+              <dt className="text-muted-foreground">{t(`sidebar.sessionCard.${key}`)}</dt>
+              <dd className="font-medium">{value}</dd>
+            </div>
+          ))
+        )}
+      </dl>
     </div>
   );
 }
@@ -738,6 +791,7 @@ export function DraggableSession({
   const { listeners, setNodeRef, isDragging } = useDraggable({ id: item.id });
   const { setNodeRef: setDroppableRef } = useDroppable({ id: item.id });
   const [subTasksOpen, setSubTasksOpen] = useState(false);
+  const [cardOpen, setCardOpen] = useState(false);
   const subTaskCount = subTasks?.length ?? 0;
   const { triggerRef, offset, measure } = useSidebarCardOffset();
   const row = (
@@ -779,7 +833,7 @@ export function DraggableSession({
       <ContextMenu>
         <ContextMenuTrigger className="w-full">
           {renamingThis ? row : (
-            <Tooltip onOpenChange={(next) => next && measure()}>
+            <Tooltip onOpenChange={(next) => { setCardOpen(next); if (next) measure(); }}>
               <TooltipTrigger
                 render={
                   <div
@@ -793,7 +847,7 @@ export function DraggableSession({
                 {row}
               </TooltipTrigger>
               <TooltipContent side="right" align="center" sideOffset={offset} className={SIDEBAR_CARD_CLASS}>
-                <SessionHoverCard item={item} />
+                <SessionHoverCard item={item} open={cardOpen} running={showSpinner} />
               </TooltipContent>
             </Tooltip>
           )}

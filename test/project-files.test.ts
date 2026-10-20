@@ -55,3 +55,27 @@ test("a git work tree lists tracked and untracked files, not ignored ones", asyn
   assert.ok(relative.includes("src/fresh.ts"));
   assert.equal(relative.some((item) => item.includes("node_modules")), false);
 });
+
+test("a multi-folder project ranks every folder's files, named after their folder", async () => {
+  const base = await mkdtemp(join(tmpdir(), "fastvibe-multi-files-"));
+  const api = join(base, "api");
+  const web = join(base, "web");
+  await mkdir(join(api, "src"), { recursive: true });
+  await mkdir(join(web, "src"), { recursive: true });
+  await writeFile(join(api, "README.md"), "");
+  await writeFile(join(web, "README.md"), "");
+  await writeFile(join(web, "src", "App.tsx"), "");
+  // Nested inside the primary: its files are already the primary's, and listed once.
+  await mkdir(join(api, "src", "shared"), { recursive: true });
+  await writeFile(join(api, "src", "shared", "types.ts"), "");
+
+  const readmes = await searchProjectFiles(api, "readme", [web, join(base, "missing"), join(api, "src", "shared")]);
+  assert.deepEqual(readmes.map((item) => item.relative), ["README.md", "web/README.md"]);
+  assert.equal(readmes[1]?.path, join(web, "README.md"));
+
+  const app = await searchProjectFiles(api, "web/src/app", [web]);
+  assert.equal(app[0]?.path, join(web, "src", "App.tsx"));
+
+  const types = await searchProjectFiles(api, "types", [join(api, "src", "shared")]);
+  assert.deepEqual(types.map((item) => item.relative), ["src/shared/types.ts"]);
+});

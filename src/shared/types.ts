@@ -32,6 +32,8 @@ export type SessionTokenTotals = {
 };
 
 export type SessionStats = {
+  /** Number of persisted user messages across the whole conversation, including retries. */
+  rounds?: number;
   /** Whole conversation: every transcript entry, compacted history included. */
   tokens?: SessionTokenTotals;
   /**
@@ -262,6 +264,12 @@ export type ChatMessage = {
   /** Structured spans of the extension's registered message renderer. */
   runs?: TuiRun[][];
   attachments?: ChatAttachment[];
+  /**
+   * Present on a user row whose prompt invoked a skill (`/skill:name`): the badge the
+   * thread draws in place of the skill's own text. `text` then holds only what the
+   * person typed — see `shared/skill-invocation.ts`.
+   */
+  skill?: { name: string; location?: string };
   /** Model/request failure for this assistant turn. Absent on success or user abort. */
   error?: string;
   /**

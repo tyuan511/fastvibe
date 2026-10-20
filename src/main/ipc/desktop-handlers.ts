@@ -398,7 +398,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     }
   });
   handle(Ipc.workspaceSearchFiles, (payload: { cwd?: unknown; query?: unknown }) =>
-    searchProjectFiles(payload?.cwd, payload?.query),
+    searchProjectFiles(payload?.cwd, payload?.query, engine.otherProjectFolders(payload?.cwd)),
   );
   handle(Ipc.workspaceWriteFile, (payload: { path?: unknown; text?: unknown }) => {
     writeWorkspaceTextFile(payload?.path, payload?.text);

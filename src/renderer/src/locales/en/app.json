@@ -112,6 +112,12 @@
   "newSession": "New chat",
   "reveal": "Show in Finder",
   "remote": "Remote",
+  "sessionCard": {
+    "rounds": "Turns",
+    "tokens": "Total tokens",
+    "output": "Output tokens",
+    "unavailable": "Usage statistics are temporarily unavailable"
+  },
   "projectCard": {
     "local": "Local",
     "remote": "Remote",

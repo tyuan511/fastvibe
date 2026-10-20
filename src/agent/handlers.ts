@@ -132,7 +132,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
       ? engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit, toolDetail, payload.readOptions)
       : engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit);
   });
-  handle(Ipc.engineGetStats, (payload?: { conversationId?: string }) => engine.getSessionStats(payload?.conversationId));
+  handle(Ipc.engineGetStats, (payload?: { conversationId?: string; summary?: boolean }) => engine.getSessionStats(payload?.conversationId, payload?.summary));
   handle(Ipc.engineSetSteering, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setSteeringMode(payload.mode, payload.conversationId));
   handle(Ipc.engineSetFollowUp, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setFollowUpMode(payload.mode, payload.conversationId));
   handle(Ipc.enginePromptConversation, (payload: { id: string; message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => engine.promptConversation(payload.id, payload.message, payload.images));

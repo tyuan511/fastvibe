@@ -235,8 +235,8 @@ export function registerEngineIpc(engine: PiProcessManager): void {
       ? engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit, toolDetail, payload.readOptions)
       : engine.getMessagesPage(payload.conversationId, payload.beforeEntryId, payload.turnLimit);
   });
-  handle(Ipc.engineGetStats, async (payload?: { conversationId?: string }) => {
-    return engine.getSessionStats(payload?.conversationId);
+  handle(Ipc.engineGetStats, async (payload?: { conversationId?: string; summary?: boolean }) => {
+    return engine.getSessionStats(payload?.conversationId, payload?.summary);
   });
   handle(Ipc.engineSetSteering, async (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => {
     return engine.setSteeringMode(payload.mode, payload.conversationId);

@@ -3,6 +3,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ProjectFileHit } from "@shared/types";
+import { folderName } from "../../shared/project-folders.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,27 +33,49 @@ const inflight = new Map<string, Promise<string[]>>();
  * hides, and never following a symlink (that would leave the project). The list
  * is cached briefly: the menu filters on every keystroke, and spawning git each
  * time is the slow part.
+ *
+ * `otherFolders` are a multi-folder project's other folders. Their files are ranked
+ * together with the working directory's, and named after their folder
+ * (`web/src/App.tsx`), the way the transcript names them, so two `README.md` can be
+ * told apart. A file reachable from two roots (a folder nested in another) is listed
+ * once, under the first.
  */
-export async function searchProjectFiles(cwd: unknown, query: unknown): Promise<ProjectFileHit[]> {
+export async function searchProjectFiles(cwd: unknown, query: unknown, otherFolders: readonly unknown[] = []): Promise<ProjectFileHit[]> {
   const root = await projectRoot(cwd);
   if (!root) return [];
-  const files = await listFiles(root);
-  const q = normalizeQuery(query);
-  return rankProjectFiles(files, q, RESULT_LIMIT).map((relative) => ({
-    relative,
-    path: join(root, ...relative.split("/")),
-  }));
+  const roots = [root];
+  for (const folder of otherFolders) {
+    const extra = await projectRoot(folder);
+    if (extra && !roots.includes(extra)) roots.push(extra);
+  }
+  // The working directory's listing failing is an error the menu reports; another
+  // folder that went missing only drops out of the results.
+  const listed = await Promise.all(roots.map((item, index) => (index === 0 ? listFiles(item) : listFiles(item).catch(() => []))));
+  const hits: ProjectFileHit[] = [];
+  const seen = new Set<string>();
+  roots.forEach((item, index) => {
+    const prefix = index === 0 ? "" : `${folderName(item)}/`;
+    for (const file of listed[index] ?? []) {
+      if (!safeRelative(file)) continue;
+      const path = join(item, ...file.split("/"));
+      if (seen.has(path)) continue;
+      seen.add(path);
+      hits.push({ relative: prefix + file, path });
+    }
+  });
+  return rankBy(hits, (hit) => hit.relative, normalizeQuery(query), RESULT_LIMIT);
 }
 
 export function rankProjectFiles(files: readonly string[], query: string, limit: number): string[] {
-  const q = normalizeQuery(query);
-  const scored = files
-    .filter((file) => safeRelative(file))
-    .map((file) => ({ file, score: scoreFile(file, q) }));
-  const matched = q ? scored.filter((item) => item.score > 0) : scored;
+  return rankBy(files.filter((file) => safeRelative(file)), (file) => file, normalizeQuery(query), limit);
+}
+
+function rankBy<T>(items: readonly T[], label: (item: T) => string, q: string, limit: number): T[] {
+  const scored = items.map((item) => ({ item, file: label(item), score: scoreFile(label(item), q) }));
+  const matched = q ? scored.filter((entry) => entry.score > 0) : scored;
   matched.sort((a, b) => b.score - a.score || a.file.localeCompare(b.file));
   const cap = Number.isFinite(limit) ? Math.max(0, Math.min(RESULT_LIMIT, Math.floor(limit))) : RESULT_LIMIT;
-  return matched.slice(0, cap).map((item) => item.file);
+  return matched.slice(0, cap).map((entry) => entry.item);
 }
 
 function normalizeQuery(query: unknown): string {

@@ -5,11 +5,19 @@
  * This module is imported by the renderer, so it does not use `node:path`.
  */
 
+/** Another folder's own instructions and skills: named in the prompt, read only when needed. */
+export type FolderResourceHints = {
+  instructions: string[];
+  skills: Array<{ name: string; description: string; path: string }>;
+};
+
 export type FolderPromptInfo = {
   path: string;
   primary: boolean;
   repository: boolean;
   branch?: string;
+  /** Present only for a folder other than the working directory. */
+  resources?: FolderResourceHints;
 };
 
 export function folderName(path: string): string {
@@ -85,6 +93,15 @@ export function buildProjectFoldersPrompt(
       ? `git repository${folder.branch ? `, branch ${folder.branch}` : ""}`
       : "not a git repository";
     lines.push(`- ${folder.path} (${role}; ${git})`);
+    for (const file of folder.resources?.instructions ?? []) lines.push(`  - instructions: ${file}`);
+    for (const skill of folder.resources?.skills ?? []) {
+      lines.push(`  - skill ${skill.name}${skill.description ? `: ${skill.description}` : ""} (${skill.path})`);
+    }
+  }
+  if (folders.some((folder) => folder.resources && (folder.resources.instructions.length > 0 || folder.resources.skills.length > 0))) {
+    lines.push(
+      "The instruction files and skills listed under a folder belong to that folder and are not loaded. Before you change files in that folder, read its instruction files with the read tool and follow them there. Read a skill's SKILL.md when the task calls for that skill. Do not read them for work that stays in other folders.",
+    );
   }
   if (options?.worktree) {
     lines.push("This chat is isolated in a worktree of the working directory only. The other folders are the real directories.");

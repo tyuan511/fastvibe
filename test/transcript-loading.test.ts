@@ -11,6 +11,7 @@ import { mapEngineMessages } from "../src/main/engine/map-messages.ts";
 import { transcriptWindow, transcriptEntryEnd } from "../src/main/engine/transcript-window.ts";
 import { previewTranscript } from "../src/shared/transcript-preview.ts";
 import { summarizeToolCalls } from "../src/shared/tool-summary.ts";
+import { conversationStats } from "../src/main/engine/conversation-stats.ts";
 
 const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
 const module = { exports: {} };
@@ -28,7 +29,7 @@ new Function("module", "exports", "require", projection)(module, module.exports,
 const projectSessionMessages = (module.exports as typeof import("../src/main/pi/process-manager-transcript.ts")).projectSessionMessages;
 const hostSource = readFileSync(new URL("../src/main/pi/process-manager.ts", import.meta.url), "utf8");
 const ast = ts.createSourceFile("host.ts", hostSource, ts.ScriptTarget.Latest, true);
-const wanted = new Set(["#readTranscript", "#messagesFrom", "getSnapshot", "getMessagesPage", "getMessage"]);
+const wanted = new Set(["#readTranscript", "#messagesFrom", "getSnapshot", "getMessagesPage", "getMessage", "getSessionStats"]);
 const methods: string[] = [];
 function visit(node: import("typescript").Node) {
   if (ts.isMethodDeclaration(node) && wanted.has(node.name.getText(ast))) methods.push(node.getText(ast));
@@ -39,8 +40,8 @@ assert.equal(methods.length, wanted.size);
 const compiled = ts.transpileModule(`class Host {${methods.join("\n").replaceAll("#", "")}}`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
-const Host = new Function("projectSessionMessages", "summarizeToolCalls", "previewTranscript", "uiText", `${compiled}; return Host;`)(
-  projectSessionMessages, summarizeToolCalls, previewTranscript, (text: string) => text,
+const Host = new Function("projectSessionMessages", "summarizeToolCalls", "previewTranscript", "uiText", "conversationStats", "catalogPrice", "modelPriceIndex", `${compiled}; return Host;`)(
+  projectSessionMessages, summarizeToolCalls, previewTranscript, (text: string) => text, conversationStats, () => undefined, () => new Map(),
 );
 const stamp = "2026-10-16T00:00:00.000Z";
 function entry(id: string, parentId: string | null, role: string, content: unknown) {
@@ -162,6 +163,37 @@ test("oversized transcripts are not retained; corrupt parent cycles fail without
   const cyclic = [entries(0)[0], entry("a", "b", "user", "a"), entry("b", "a", "assistant", "b")];
   await writeFile(file, cyclic.map((row) => JSON.stringify(row)).join("\n"));
   await assert.rejects(reader.read(file, dir), /cycle/);
+});
+
+test("sidebar statistics read cold history without creating an agent, include abandoned branches, and invalidate on append", async (t) => {
+  const rows = entries(2);
+  // Retry branches still consumed tokens and must count, even though the final branch skips one.
+  rows.push(entry("retry", "u1", "assistant", [{ type: "text", text: "retried" }]));
+  const { host, file, dir } = await fixture(t, rows);
+  const original = await readFile(file, "utf8");
+  const stats = await host.getSessionStats("c", true);
+  assert.equal(stats.rounds, 2);
+  assert.equal(stats.steps, 3);
+  assert.equal(await readFile(file, "utf8"), original, "hover does not rewrite a transcript");
+  assert.equal((await host.transcriptReader.read(file, dir)).length, 4, "current branch omits the abandoned reply");
+  assert.equal((await host.transcriptReader.readEntries(file, dir)).length, 5);
+  rows.push(entry("u2", "retry", "user", "next question"));
+  await writeFile(file, rows.map((row) => JSON.stringify(row)).join("\n"));
+  assert.equal((await host.getSessionStats("c", true)).rounds, 3);
+});
+
+test("sidebar statistics prefer a live session opened during the read and handle an empty chat", async (t) => {
+  const { host } = await fixture(t);
+  host.transcriptReader.readEntries = async () => {
+    host.sessions.set("c", { session: { sessionManager: { getEntries: () => [] } } });
+    return entries(10).slice(1);
+  };
+  assert.equal((await host.getSessionStats("c", true)).rounds, 0);
+  host.sessions.clear();
+  host.catalog.get = () => ({ cwd: "/missing/workspace" });
+  assert.equal((await host.getSessionStats("c", true)).tokens.total, 0);
+  host.catalog.get = () => undefined;
+  await assert.rejects(host.getSessionStats("deleted", true), /not found/);
 });
 
 

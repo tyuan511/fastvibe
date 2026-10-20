@@ -112,6 +112,12 @@
   "newSession": "新建会话",
   "reveal": "在访达中显示",
   "remote": "远程",
+  "sessionCard": {
+    "rounds": "轮次",
+    "tokens": "累计 Token",
+    "output": "输出 Token",
+    "unavailable": "暂时无法读取用量统计"
+  },
   "projectCard": {
     "local": "本地",
     "remote": "远程",

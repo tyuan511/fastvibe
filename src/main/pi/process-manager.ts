@@ -78,7 +78,9 @@ import { TranscriptReader } from "../engine/transcript-reader";
 import { ToolDeltaThrottle } from "./tool-delta-throttle";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { installNativeCompactionGuard } from "../engine/native-compaction";
+import { runtimeContextExtension } from "../engine/runtime-context";
 import { lastRequestUsage, turnTokens } from "../engine/turn-usage";
+import { conversationStats } from "../engine/conversation-stats";
 import { promptPreview } from "../engine/prompt-preview";
 import { searchConversationContent } from "../engine/conversation-search";
 import { prepareTranscriptForOpen, readTranscriptPrompt, transcriptPrompt, writeTranscriptEntries } from "../engine/transcript-file";
@@ -113,6 +115,7 @@ import {
 import { applyToolModes, toolModes } from "../engine/tool-modes";
 import { buildProjectFoldersPrompt, projectFolderPaths } from "../../shared/project-folders.ts";
 import { describeProjectFolders, resolveProjectRepos } from "../engine/project-repos";
+import { additionalResourceFolders, folderResourceHints } from "../engine/project-folder-resources";
 import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
 import { openDatabase, type Db } from "../engine/db";
@@ -1912,7 +1915,21 @@ export class PiProcessManager {
     }
   }
 
-  async getSessionStats(conversationId?: string): Promise<SessionStats> {
+  async getSessionStats(conversationId?: string, summary = false): Promise<SessionStats> {
+    if (summary && conversationId) {
+      const conversation = this.#catalog.get(conversationId);
+      if (!conversation) throw new Error("conversation not found");
+      // A sidebar hover must never load extensions, create a workspace or activate a chat.
+      let session = this.#sessions.get(conversationId)?.session;
+      const entries = session?.sessionManager.getEntries() ?? (conversation.sessionFile
+        ? await this.#transcriptReader.readEntries(conversation.sessionFile, conversation.cwd || conversation.project || ".")
+        : []);
+      // A session may have opened while the file was being read; its live entries win.
+      session = this.#sessions.get(conversationId)?.session;
+      const prices = modelPriceIndex(this.#paths);
+      return conversationStats(session?.sessionManager.getEntries() ?? entries, (provider, model) =>
+        prices.get(`${provider}/${model}`) ?? prices.get(model) ?? catalogPrice(model));
+    }
     const { id, session } = await this.#sessionFor(conversationId);
     const stats = session.getSessionStats();
     const timing = this.#timing.get(id ?? "");
@@ -1935,6 +1952,7 @@ export class PiProcessManager {
       cost: this.#sessionCost(session),
       toolCalls: stats.toolCalls,
       steps: stats.assistantMessages,
+      rounds: stats.userMessages,
       timing: { totalMs, modelMs: Math.max(0, totalMs - toolMs), toolMs },
     };
   }
@@ -2485,6 +2503,13 @@ export class PiProcessManager {
     if (!result) throw new Error(uiText("无法更改主文件夹", "Could not change the primary folder"));
     return { snapshot: this.#catalog.snapshot(), previous: result.previous, next: result.project.cwd };
   }
+  /** A local project's folders other than its primary one: what the composer's `@` search adds to `cwd`. */
+  otherProjectFolders(cwd: unknown): string[] {
+    if (typeof cwd !== "string") return [];
+    const project = this.#catalog.listProjects().find((item) => item.cwd === cwd);
+    if (!project || project.kind === "remote") return [];
+    return projectFolderPaths(project).slice(1);
+  }
   async projectRepos(cwd: string): Promise<ProjectRepo[]> {
     const project = this.#requireLocalProject(cwd);
     return resolveProjectRepos(projectFolderPaths(project));
@@ -2515,8 +2540,13 @@ export class PiProcessManager {
     if (!project || project.kind === "remote") return undefined;
     const folders = projectFolderPaths(project);
     if (folders.length < 2) return undefined;
-    const described = await describeProjectFolders(folders, project.cwd);
-    return buildProjectFoldersPrompt(conversation.cwd || project.cwd, described, { worktree: Boolean(conversation.worktree) });
+    const cwd = conversation.cwd || project.cwd;
+    // The other folders' AGENTS.md and skills are named, not loaded: the agent reads them when
+    // its work reaches that folder. The snapshot changes when one appears, so it is re-sent then.
+    const others = new Set(additionalResourceFolders(project, cwd));
+    const described = (await describeProjectFolders(folders, project.cwd))
+      .map((folder) => (others.has(folder.path) ? { ...folder, resources: folderResourceHints(folder.path, cwd) } : folder));
+    return buildProjectFoldersPrompt(cwd, described, { worktree: Boolean(conversation.worktree) });
   }
   renameProject(cwd: string, name: string): WorkspaceSnapshot { this.#catalog.renameProject(cwd, name); return this.#catalog.snapshot(); }
   reorderProjects(cwds: string[]): WorkspaceSnapshot { this.#catalog.reorderProjects(cwds); return this.#catalog.snapshot(); }
@@ -3998,17 +4028,17 @@ export class PiProcessManager {
           });
         },
       }, {
-        // Lists the project's other folders on every turn. Read live, so adding a
-        // folder reaches the next message without rebuilding the session.
+        // Read live, but append a hidden context snapshot only when folders change.
         name: "fastvibe-project-folders",
         hidden: true,
-        factory: (pi) => {
-          pi.on("before_agent_start", async (event) => {
+        factory: runtimeContextExtension({
+          customType: "fastvibe-project-folders-context",
+          title: "project folders",
+          read: async () => {
             const addition = await this.#projectFoldersPrompt(conversation);
-            if (!addition || event.systemPrompt.includes(addition)) return undefined;
-            return { systemPrompt: `${event.systemPrompt}\n\n${addition}` };
-          });
-        },
+            return addition ? { content: addition } : undefined;
+          },
+        }),
       }],
     });
     // browser-use and computer-use both close over the conversation id at factory time,
