@@ -1,0 +1,28 @@
+diff --git a/lib/unixTerminal.js b/lib/unixTerminal.js
+index 1ec12f796a822c78fba9ad7f6448c3987e325c23..ad01cda6181804967ec1aa4c5905045a8dd7d8a7 100644
+--- a/lib/unixTerminal.js
++++ b/lib/unixTerminal.js
+@@ -28,8 +28,8 @@ var native = utils_1.loadNativeModule('pty');
+ var pty = native.module;
+ var helperPath = native.dir + '/spawn-helper';
+ helperPath = path.resolve(__dirname, helperPath);
+-helperPath = helperPath.replace('app.asar', 'app.asar.unpacked');
+-helperPath = helperPath.replace('node_modules.asar', 'node_modules.asar.unpacked');
++helperPath = helperPath.replace(/app\.asar(?!\.unpacked)/, 'app.asar.unpacked');
++helperPath = helperPath.replace(/node_modules\.asar(?!\.unpacked)/, 'node_modules.asar.unpacked');
+ var DEFAULT_FILE = 'sh';
+ var DEFAULT_NAME = 'xterm';
+ var DESTROY_SOCKET_TIMEOUT_MS = 200;
+diff --git a/lib/windowsConoutConnection.js b/lib/windowsConoutConnection.js
+index 1be15ca061370127d2e24e943067538ab395a566..1afc2947888403fa4e2a93a5ffc312c5755203f4 100644
+--- a/lib/windowsConoutConnection.js
++++ b/lib/windowsConoutConnection.js
+@@ -72,7 +72,7 @@ var ConoutConnection = /** @class */ (function () {
+         var workerData = {
+             conoutPipeName: _conoutPipeName
+         };
+-        var scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');
++        var scriptPath = __dirname.replace(/node_modules\.asar(?!\.unpacked)/, 'node_modules.asar.unpacked');
+         this._worker = new worker_threads_1.Worker(path_1.join(scriptPath, 'worker/conoutSocketWorker.js'), { workerData: workerData });
+         this._worker.on('message', function (message) {
+             switch (message) {

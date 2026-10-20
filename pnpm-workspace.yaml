@@ -58,3 +58,6 @@ peerDependencyRules:
     '@earendil-works/pi-ai': '1.3.0'
     '@earendil-works/pi-coding-agent': '1.3.0'
     '@earendil-works/pi-tui': '1.3.0'
+
+patchedDependencies:
+  node-pty: patches/node-pty.patch
