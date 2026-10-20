@@ -95,6 +95,7 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
   const [historyOpen, setHistoryOpen] = useState(true);
   const [historyScope, setHistoryScope] = useState<GitHistoryScope>("all");
   const [busy, setBusy] = useState<string>();
+  const [generating, setGenerating] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [epoch, setEpoch] = useState(0);
   const [historyEpoch, setHistoryEpoch] = useState(0);
@@ -189,10 +190,11 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
     request.current++;
     setReloading(false);
     setBusy("generate");
+    setGenerating(true);
     const conversationId = useSessionStore.getState().activeId;
     const original = message;
     try {
-      const generated = await window.fastvibe.workspace.gitGenerateCommitMessage(cwd, conversationId ?? undefined, status.staged > 0);
+      const generated = await window.fastvibe.workspace.gitGenerateCommitMessage(cwd, conversationId ?? undefined);
       if (alive.current && useSessionStore.getState().activeId === conversationId && (commitDrafts.get(cwd) ?? "") === original) {
         setMessage(generated);
         commitDrafts.set(cwd, generated);
@@ -201,25 +203,38 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
       if (alive.current) onError(cause instanceof Error ? cause.message : t("git.generateFailed"));
     } finally {
       busyRef.current = false;
-      if (alive.current) setBusy(undefined);
+      if (alive.current) { setBusy(undefined); setGenerating(false); }
     }
   }
 
   async function submit(action: GitCommitAction = "commit"): Promise<void> {
-    if (!status || status.files.some(isConflict) || busyRef.current) return;
+    if (!status?.changed || status.files.some(isConflict) || busyRef.current) return;
     const original = message;
     const subject = original.trim();
-    if (action !== "amend" && (!subject || !status.staged)) return;
     busyRef.current = true;
     request.current++;
     setReloading(false);
     setBusy(action);
+    const conversationId = useSessionStore.getState().activeId;
+    let draft = original;
     const outcome = await performGitCommit(action, subject, {
-      commit: (text, options) => window.fastvibe.workspace.gitCommit(cwd, text, options),
-      pull: () => window.fastvibe.workspace.gitPull(cwd),
+      stageAll: () => window.fastvibe.workspace.gitStage(cwd, undefined, true),
+      generateMessage: async () => {
+        if (alive.current) setGenerating(true);
+        try {
+          const generated = await window.fastvibe.workspace.gitGenerateCommitMessage(cwd, conversationId ?? undefined, true);
+          if ((commitDrafts.get(cwd) ?? "") === original) {
+            draft = generated;
+            commitDrafts.set(cwd, generated);
+            if (alive.current) setMessage(generated);
+          }
+          return generated;
+        } finally { if (alive.current) setGenerating(false); }
+      },
+      commit: (text) => window.fastvibe.workspace.gitCommit(cwd, text),
       push: () => window.fastvibe.workspace.gitPush(cwd),
     }, (next) => {
-      if ((commitDrafts.get(cwd) ?? "") === original) commitDrafts.delete(cwd);
+      if ((commitDrafts.get(cwd) ?? "") === draft) commitDrafts.delete(cwd);
       if (!alive.current) return;
       setMessage("");
       setStatus(next);
@@ -235,11 +250,10 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
       setHistoryEpoch((n) => n + 1);
     }
     if (outcome.ok) {
-      const key = action === "amend" ? "git.amendDone" : action === "commit-push" ? "git.commitPushDone" : action === "commit-sync" ? "git.commitSyncDone" : "git.commitDone";
-      toast.success(t(key, { subject }));
+      toast.success(t(action === "commit-push" ? "git.commitPushDone" : "git.commitDone", { subject: outcome.message }));
     } else {
       const detail = outcome.error instanceof Error ? outcome.error.message : t("git.actionFailed");
-      onError(outcome.phase === "commit" ? detail : t(action === "commit-sync" ? "git.syncAfterCommitFailed" : "git.pushAfterCommitFailed", { error: detail }));
+      onError(outcome.phase === "push" ? t("git.pushAfterCommitFailed", { error: detail }) : detail);
       void reloadRef.current();
     }
   }
@@ -272,8 +286,8 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
           message={message}
           branch={status?.branch ?? "HEAD"}
           busy={busy}
-          canCommit={!!message.trim() && !!status?.staged && !status.files.some(isConflict)}
-          canAmend={!!status?.isRepository && !status.files.some(isConflict)}
+          generating={generating}
+          canCommit={!!status?.changed && !status.files.some(isConflict)}
           canGenerate={!!status?.changed}
           onChange={(next) => { setMessage(next); commitDrafts.set(cwd, next); }}
           onGenerate={() => void generateMessage()}

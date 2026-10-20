@@ -6,35 +6,35 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Spinner } from "@/components/ui/spinner";
 import { IconButton } from "@/components/icon-button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { APP_PLATFORM } from "@/lib/platform";
 import type { GitCommitAction } from "@/lib/git-commit";
 
-export function GitCommitForm({ message, branch, busy, canCommit, canAmend, canGenerate, onChange, onGenerate, onCommit }: {
+export function GitCommitForm({ message, branch, busy, generating, canCommit, canGenerate, onChange, onGenerate, onCommit }: {
   message: string;
   branch: string;
   busy?: string;
+  generating: boolean;
   canCommit: boolean;
-  canAmend: boolean;
   canGenerate: boolean;
   onChange: (message: string) => void;
   onGenerate: () => void;
   onCommit: (action: GitCommitAction) => void;
 }): JSX.Element {
   const { t } = useTranslation("sidepane");
-  const generating = busy === "generate";
-  const committing = busy && ["commit", "amend", "commit-push", "commit-sync"].includes(busy);
+  const committing = busy === "commit" || busy === "commit-push";
   const hint = t("git.commitHint", { branch, shortcut: APP_PLATFORM === "darwin" ? "⌘Enter" : "Ctrl+Enter" });
+  const placeholder = generating ? t("git.generatingMessage") : hint;
   return (
     <div className="shrink-0 space-y-2 border-b border-border p-2">
       <div className="@container/commit-input relative">
         <Textarea
           rows={1}
-          value={message}
+          value={generating ? "" : message}
           aria-label={t("git.commitMessage")}
           aria-busy={generating}
-          aria-description={hint}
-          title={hint}
+          aria-description={placeholder}
+          title={placeholder}
           className="min-h-8 max-h-40 resize-none py-1.5 pr-9 text-xs md:text-xs"
           disabled={!!busy}
           onChange={(event) => onChange(event.target.value)}
@@ -47,10 +47,12 @@ export function GitCommitForm({ message, branch, busy, canCommit, canAmend, canG
         />
         {/* A native textarea placeholder wraps and increases field-sizing:content.
             Keep the empty-state hint on one line while allowing real message bodies to grow. */}
-        {!message ? (
+        {!message || generating ? (
           <div aria-hidden className="pointer-events-none absolute top-1/2 right-9 left-2.5 -translate-y-1/2 text-xs text-muted-foreground">
-            <span className="hidden truncate @min-[13rem]/commit-input:block">{hint}</span>
-            <span className="block truncate @min-[13rem]/commit-input:hidden">{t("git.commitMessage")}</span>
+            {generating ? <span className="block truncate">{placeholder}</span> : <>
+              <span className="hidden truncate @min-[13rem]/commit-input:block">{hint}</span>
+              <span className="block truncate @min-[13rem]/commit-input:hidden">{t("git.commitMessage")}</span>
+            </>}
           </div>
         ) : null}
         <IconButton size="icon-xs" variant="ghost" className="absolute top-1 right-1 size-6 text-muted-foreground" label={t("git.generateMessage")} disabled={!!busy || !canGenerate} onClick={onGenerate}>
@@ -67,10 +69,7 @@ export function GitCommitForm({ message, branch, busy, canCommit, canAmend, canG
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" sideOffset={5} className="min-w-44">
             <DropdownMenuItem disabled={!canCommit} onClick={() => onCommit("commit")}>{t("git.commit")}</DropdownMenuItem>
-            <DropdownMenuItem disabled={!canAmend} onClick={() => onCommit("amend")}>{t("git.commitAmend")}</DropdownMenuItem>
-            <DropdownMenuSeparator />
             <DropdownMenuItem disabled={!canCommit} onClick={() => onCommit("commit-push")}>{t("git.commitPush")}</DropdownMenuItem>
-            <DropdownMenuItem disabled={!canCommit} onClick={() => onCommit("commit-sync")}>{t("git.commitSync")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

@@ -1,4 +1,4 @@
-import { useState, type JSX } from "react";
+import { useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -23,6 +23,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { IconButton } from "@/components/icon-button";
 import { useGitStatus } from "@/lib/use-git-status";
 import { useSidePaneStore } from "@/stores/side-pane";
+import { performGitCommit } from "@/lib/git-commit";
+import { isConflict } from "@/components/layout/git-change-list";
 import type { GitStatus } from "@shared/ipc";
 
 type BusyAction = "generate" | "commit" | "commit-push" | "pull" | "push" | "unbind";
@@ -51,11 +53,14 @@ export function GitStatusPopover({
   const [epoch, setEpoch] = useState(0);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<BusyAction | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const committingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const status = useGitStatus(cwd, `${String(refreshKey)}:${epoch}`);
 
   if (!status?.isRepository || !status.branch) return null;
   const repository = status;
+  const canCommit = !!status.changed && !status.files.some(isConflict);
 
   const title = t("git.headerStatus", {
     branch: repository.branch,
@@ -121,6 +126,7 @@ export function GitStatusPopover({
   async function generateMessage(): Promise<void> {
     if (busy || !cwd) return;
     setBusy("generate");
+    setGenerating(true);
     setError(null);
     try {
       setMessage(await window.fastvibe.workspace.gitGenerateCommitMessage(repository.cwd, conversationId));
@@ -128,38 +134,44 @@ export function GitStatusPopover({
       setError(cause instanceof Error ? cause.message : t("git.generateFailed"));
     } finally {
       setBusy(null);
+      setGenerating(false);
     }
   }
 
   async function commit(push: boolean): Promise<void> {
     const subject = message.trim();
-    if (!cwd || busy) return;
-    if (!subject) {
-      setError(t("git.commitMessageRequired"));
-      return;
-    }
+    if (!cwd || busy || committingRef.current || !canCommit) return;
+    committingRef.current = true;
     const action = push ? "commit-push" : "commit";
     setBusy(action);
     setError(null);
-    let committed = false;
-    try {
-      await window.fastvibe.workspace.gitStage(repository.cwd, undefined, true);
-      refreshed();
-      await window.fastvibe.workspace.gitCommit(repository.cwd, subject);
-      committed = true;
+    const outcome = await performGitCommit(action, subject, {
+      stageAll: () => window.fastvibe.workspace.gitStage(repository.cwd, undefined, true),
+      generateMessage: async () => {
+        setGenerating(true);
+        try {
+          const generated = await window.fastvibe.workspace.gitGenerateCommitMessage(repository.cwd, conversationId, true);
+          setMessage(generated);
+          return generated;
+        } finally { setGenerating(false); }
+      },
+      commit: (text) => window.fastvibe.workspace.gitCommit(repository.cwd, text),
+      push: () => window.fastvibe.workspace.gitPush(repository.cwd),
+    }, () => {
       setMessage("");
       refreshed();
-      if (push) await window.fastvibe.workspace.gitPush(repository.cwd);
-      refreshed();
-      toast.success(t(push ? "git.commitPushDone" : "git.commitDone", { subject }));
-    } catch (cause) {
-      const detail = cause instanceof Error
-        ? cause.message
+    });
+    refreshed();
+    if (outcome.ok) {
+      toast.success(t(push ? "git.commitPushDone" : "git.commitDone", { subject: outcome.message }));
+    } else {
+      const detail = outcome.error instanceof Error
+        ? outcome.error.message
         : push ? t("git.commitPushFailed") : t("git.commitFailed");
-      setError(committed ? t("git.pushAfterCommitFailed", { error: detail }) : detail);
-    } finally {
-      setBusy(null);
+      setError(outcome.phase === "push" ? t("git.pushAfterCommitFailed", { error: detail }) : detail);
     }
+    committingRef.current = false;
+    setBusy(null);
   }
 
   return (
@@ -259,13 +271,14 @@ export function GitStatusPopover({
         <div className="mt-1 flex items-center gap-2 px-2 pb-2">
           <div className="relative min-w-0 flex-1">
             <Input
-              value={message}
-              placeholder={t("git.commitMessage")}
+              value={generating ? "" : message}
+              placeholder={t(generating ? "git.generatingMessage" : "git.commitMessage")}
+              aria-busy={generating}
               disabled={Boolean(busy)}
               className="h-8 bg-background pr-8 text-sm"
               onChange={(event) => setMessage(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && message.trim()) void commit(false);
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) void commit(false);
               }}
             />
             <IconButton
@@ -277,7 +290,7 @@ export function GitStatusPopover({
               className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
               onClick={() => void generateMessage()}
             >
-              {busy === "generate" ? <Spinner className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} />}
+              {generating ? <Spinner className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={MagicWand02Icon} />}
             </IconButton>
           </div>
           <div className="flex shrink-0 items-center overflow-hidden rounded-lg bg-primary">
@@ -285,10 +298,10 @@ export function GitStatusPopover({
               type="button"
               size="sm"
               className="h-8 rounded-none pr-0.5 pl-1.5"
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || !canCommit}
               onClick={() => void commit(false)}
             >
-              {busy === "commit" ? <Spinner className="size-3.5" /> : null}
+              {busy === "commit" || busy === "commit-push" ? <Spinner className="size-3.5" /> : null}
               {t("git.commit")}
             </Button>
             <DropdownMenu>
@@ -306,7 +319,11 @@ export function GitStatusPopover({
                 <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3.5" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" sideOffset={6} className="w-max min-w-max">
-                <DropdownMenuItem className="whitespace-nowrap" onClick={() => void commit(true)}>
+                <DropdownMenuItem disabled={!canCommit} className="whitespace-nowrap" onClick={() => void commit(false)}>
+                  <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} />
+                  {t("git.commit")}
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={!canCommit} className="whitespace-nowrap" onClick={() => void commit(true)}>
                   <HugeiconsIcon strokeWidth={2} icon={ArrowUp02Icon} />
                   {t("git.commitPush")}
                 </DropdownMenuItem>
