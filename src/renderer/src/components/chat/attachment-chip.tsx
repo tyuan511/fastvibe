@@ -10,20 +10,23 @@ import { ImagePreview } from "@/components/image-preview";
 import type { ChatAttachment } from "@shared/types";
 
 /**
- * Images are thumbnails in the composer and bounded, uncropped pictures in a
- * message. Both open the shared lightbox. Other files keep their compact named chip.
+ * An attached image is one `size-20` square (80px at the default 界面字号, rem so it
+ * scales with it) in the composer and in a message alike. `object-cover` crops it to
+ * that square, which is the honest trade for a thread that keeps every pasted screenshot
+ * forever: at the old bounded-picture size one wide screenshot filled the first screen of
+ * a chat and pushed the reply it belonged to out of view. The thumbnail only has to be
+ * recognisable — the whole picture, uncropped, is one click away in the shared
+ * lightbox. Other files keep their compact named chip.
  */
 export function AttachmentChip({
   item,
   onRemove,
   onOpen,
-  variant = "composer",
   className,
 }: {
   item: ChatAttachment;
   onRemove?: () => void;
   onOpen?: () => void;
-  variant?: "composer" | "message";
   className?: string;
 }): JSX.Element {
   const { t } = useTranslation("chat");
@@ -31,7 +34,7 @@ export function AttachmentChip({
 
   if (item.kind === "image" && item.dataUrl) {
     return (
-      <span className={cn("group/attachment relative inline-flex shrink-0 self-start", variant === "message" ? "max-w-[min(20rem,100%)]" : "max-w-full", className)}>
+      <span className={cn("group/attachment relative inline-flex max-w-full shrink-0 self-start", className)}>
         <Button
           type="button"
           variant="ghost"
@@ -43,11 +46,7 @@ export function AttachmentChip({
             else setPreviewOpen(true);
           }}
         >
-          <img
-            src={item.dataUrl}
-            alt={item.name}
-            className={variant === "composer" ? "size-28 object-cover" : "block h-auto max-h-72 w-auto max-w-full object-contain"}
-          />
+          <img src={item.dataUrl} alt={item.name} className="size-20 object-cover" />
         </Button>
         {onRemove ? (
           <IconButton

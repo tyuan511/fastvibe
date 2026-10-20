@@ -241,9 +241,6 @@
     "edited_one": "已修改 {{count}} 个文件",
     "edited_other": "已修改 {{count}} 个文件",
     "review": "查看变更",
-    "more_one": "再显示 {{count}} 个文件",
-    "more_other": "再显示 {{count}} 个文件",
-    "collapse": "收起",
     "noDiff": "没有可显示的 diff",
     "officeChanged": "这是 Office 文档，没有逐行差异。打开可看排版。"
   },

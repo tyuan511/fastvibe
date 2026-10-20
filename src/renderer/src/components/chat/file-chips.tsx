@@ -1,13 +1,14 @@
 import { useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowRight01Icon, FileEditIcon } from "@hugeicons/core-free-icons";
+import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
 import { collectChangedFiles, type ChangedFile } from "@/lib/changed-files";
 import { DiffStatBadge } from "@/components/chat/diff-stat";
 import { DiffView } from "@/components/chat/diff-view";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
+import { FileIcon } from "@/components/file-icon";
 import { displayProjectPath, projectFolderPaths } from "@shared/project-folders";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { officeFormatOf } from "@shared/office";
@@ -25,7 +26,6 @@ import {
 export type { ChangedFile };
 export { collectChangedFiles };
 
-const VISIBLE_FILE_LIMIT = 3;
 
 function fileLabel(path: string, cwd?: string): string {
   const { conversations, projects, activeId } = useSessionStore.getState();
@@ -34,6 +34,19 @@ function fileLabel(path: string, cwd?: string): string {
   const folders = project ? projectFolderPaths(project) : [];
   const shown = folders.length > 1 ? displayProjectPath(path, cwd, folders) : displayPath(path, cwd);
   return shown.replace(/\\/g, "/");
+}
+
+/**
+ * `docs/release/v0.22.6.md` → name `v0.22.6.md`, directory `docs/release`.
+ * The row leads with the name and draws the directory behind it in muted, the same
+ * split the 变更 list uses: the name is what identifies the file, the rest only says
+ * where it lives, and a path that has no directory keeps the whole label as the name.
+ */
+function splitLabel(label: string): { name: string; directory: string } {
+  const index = label.lastIndexOf("/");
+  return index < 0
+    ? { name: label, directory: "" }
+    : { name: label.slice(index + 1), directory: label.slice(0, index) };
 }
 
 function FileRow({
@@ -48,6 +61,7 @@ function FileRow({
   const { t } = useTranslation("chat");
   const [previewOpen, setPreviewOpen] = useState(false);
   const label = fileLabel(file.path, cwd);
+  const { name, directory } = splitLabel(label);
   const absolute = (): string => {
     const { conversations, activeId } = useSessionStore.getState();
     return resolvePath(file.path, conversations.find((item) => item.id === activeId)?.cwd);
@@ -71,13 +85,19 @@ function FileRow({
                     setPreviewOpen(false);
                     onOpen(file);
                   }}
-                  className="flex w-full items-center gap-3 rounded-md px-2 py-1 text-left transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none data-open:bg-muted"
+                  className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none data-open:bg-muted"
                 />
               }
             />
           }
         >
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground">{label}</span>
+          <FileIcon name={name} />
+          <span className="min-w-0 shrink truncate text-sm text-foreground" title={label}>{name}</span>
+          {directory ? (
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70">{directory}</span>
+          ) : (
+            <span className="min-w-0 flex-1" />
+          )}
           <DiffStatBadge added={file.added} removed={file.removed} />
         </ContextMenuTrigger>
         <ContextMenuContent className="w-48">
@@ -98,7 +118,8 @@ function FileRow({
         data-overlay-surface
         className="overlay-surface flex max-h-[min(30rem,var(--available-height))] w-[min(48rem,var(--available-width))] flex-col overflow-hidden rounded-xl border border-border bg-popover/95 p-0 shadow-lg"
       >
-        <div className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-2.5">
+        <div className="flex shrink-0 items-center gap-2.5 border-b border-border px-3 py-2">
+          <FileIcon name={name} />
           <span className="min-w-0 flex-1 truncate text-sm font-medium" title={file.path}>{file.path}</span>
           <DiffStatBadge added={file.added} removed={file.removed} />
         </div>
@@ -115,14 +136,19 @@ function FileRow({
 }
 
 /**
- * One turn's writes, as the Codex card: a header naming how many files changed
- * and the line totals, with three paths shown until expanded. Hover previews the
- * turn's own diff; a path (or 查看变更) opens the file in the 变更 view.
+ * One turn's writes: one compact header line naming how many files changed and the
+ * line totals, then the paths — five rows tall at most, the rest reached by scrolling
+ * inside the card. Hover previews the turn's own diff; a path (or 查看变更) opens the
+ * file in the 变更 view.
+ *
+ * The header carries no glyph of its own — every row below it is already marked by
+ * its file icon, so a leading 32px box only made the card taller than its content.
+ * There is no 「再显示 N 个文件」 either: a fold that hid the tail behind a click while
+ * the head still needed scrolling was two limits doing one job badly.
  */
 export function TurnFileChips({ files, className }: { files: ChangedFile[]; className?: string }): JSX.Element | null {
   const { t } = useTranslation("chat");
   const [open, setOpen] = useState(true);
-  const [expanded, setExpanded] = useState(false);
   const cwd = useWorkspacePath();
   const openGitDiff = useSidePaneStore((state) => state.openGitDiff);
   if (files.length === 0) return null;
@@ -141,59 +167,42 @@ export function TurnFileChips({ files, className }: { files: ChangedFile[]; clas
       onOpenChange={setOpen}
       className={cn("w-full overflow-hidden rounded-xl border border-border bg-muted/40", className)}
     >
-      <div className="flex items-center gap-2 px-3 py-2.5">
+      <div className={cn("flex items-center gap-2 px-3 py-1.5", open && "border-b border-border/60")}>
         <CollapsibleTrigger
           className={cn(
-            "flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md text-left",
+            "flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md py-0.5 text-left",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
           )}
         >
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-            <HugeiconsIcon strokeWidth={2} icon={FileEditIcon} className="size-4" />
+          {/* Shrinks before the totals and the button do, so a narrow column clips the label rather than pushing them out. */}
+          <span className="min-w-0 truncate text-sm font-medium text-foreground">
+            {t("files.edited", { count: files.length })}
           </span>
-          <span className="flex min-w-0 flex-col">
-            <span className="flex items-center gap-1 text-sm font-medium text-foreground">
-              <span className="truncate">{t("files.edited", { count: files.length })}</span>
-              <HugeiconsIcon
-                strokeWidth={2}
-                aria-hidden
-                icon={ArrowRight01Icon}
-                className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-200", open && "rotate-90")}
-              />
-            </span>
-            <DiffStatBadge added={added} removed={removed} />
-          </span>
+          <DiffStatBadge added={added} removed={removed} />
+          <HugeiconsIcon
+            strokeWidth={2}
+            aria-hidden
+            icon={ArrowRight01Icon}
+            className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-200", open && "rotate-90")}
+          />
         </CollapsibleTrigger>
-        <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={() => review(files[0].path)}>
+        <Button type="button" variant="outline" size="xs" className="shrink-0 rounded-full" onClick={() => review(files[0].path)}>
           {t("files.review")}
         </Button>
       </div>
       <CollapsibleContent>
-        <Collapsible open={expanded} onOpenChange={setExpanded} className="px-1.5 pb-1.5">
-          <div className="max-h-60 overflow-y-auto">
-            {files.slice(0, VISIBLE_FILE_LIMIT).map((file) => (
+        <div className="px-1.5 pb-1.5">
+          {/*
+           * Five rows of `py-1.5` + a `text-sm` line is 5 × 2rem, and the cap is in rem
+           * so it follows 界面字号 like the rows themselves. The list scrolls instead of
+           * growing: a turn that wrote forty files must not push its own reply off screen.
+           */}
+          <div className="max-h-40 overflow-y-auto">
+            {files.map((file) => (
               <FileRow key={file.path} file={file} cwd={cwd} onOpen={(changed) => review(changed.path)} />
             ))}
-            {files.length > VISIBLE_FILE_LIMIT ? (
-              <CollapsibleContent>
-                {files.slice(VISIBLE_FILE_LIMIT).map((file) => (
-                  <FileRow key={file.path} file={file} cwd={cwd} onOpen={(changed) => review(changed.path)} />
-                ))}
-              </CollapsibleContent>
-            ) : null}
           </div>
-          {files.length > VISIBLE_FILE_LIMIT ? (
-            <CollapsibleTrigger render={<Button variant="ghost" className="mt-1 justify-start gap-2 px-2" />}>
-              {expanded ? t("files.collapse") : t("files.more", { count: files.length - VISIBLE_FILE_LIMIT })}
-              <HugeiconsIcon
-                strokeWidth={2}
-                aria-hidden
-                icon={ArrowRight01Icon}
-                className={cn("size-3.5 transition-transform duration-200", expanded ? "-rotate-90" : "rotate-90")}
-              />
-            </CollapsibleTrigger>
-          ) : null}
-        </Collapsible>
+        </div>
       </CollapsibleContent>
     </Collapsible>
   );

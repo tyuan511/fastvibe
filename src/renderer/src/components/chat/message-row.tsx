@@ -49,7 +49,6 @@ function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
         <AttachmentChip
           key={item.id}
           item={item}
-          variant="message"
           onOpen={
             item.kind !== "image" && item.path
               ? () => {
