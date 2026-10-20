@@ -13,7 +13,7 @@
 
 [下载](#下载) · [开始使用](#开始使用) · [功能](#功能) · [用手机继续工作](#用手机继续工作) · [开发](#开发) · [更新说明 / Release notes](docs/release/README.md)
 
-![FastVibe 工作区：对话与工具调用](docs/images/workspace-zh.webp)
+![FastVibe 工作区，斜线分割：左半亮色主题，右半暗色主题](docs/images/workspace-zh.webp)
 
 ## 下载
 

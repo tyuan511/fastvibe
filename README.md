@@ -13,7 +13,7 @@ An AI agent workspace for code, documents, and everyday tasks. Work with your ow
 
 [Download](#download) · [Get started](#get-started) · [Features](#features) · [Use your phone](#use-your-phone) · [Development](#development) · [Release notes / 更新说明](docs/release/README.md)
 
-![FastVibe workspace with conversations and tools](docs/images/workspace-en.webp)
+![The FastVibe workspace, split diagonally between its light theme (left) and dark theme (right)](docs/images/workspace-en.webp)
 
 ## Download
 

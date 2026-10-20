@@ -1191,6 +1191,15 @@ is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glas
   repository, `tyuan511/fastvibe-services`) loads this same page in its hero iframe and takes
   its product screenshots from it; both pass `desktop=1`, and the window is concentric with
   the panes (24px radius = 8px inset + 16px pane radius), so keep the two in step.
+- **The README hero is one frame of that scene cut on a diagonal** (`node
+  scripts/capture-readme-hero.mjs` → `docs/images/workspace-{en,zh}.webp`): light on the left
+  of the line, dark on the right. Both halves come from **one page load** — the theme is
+  switched in place with the same `fastvibe-website-theme` message the site's own iframe
+  answers — because the fixture is still unfolding while it settles, so two loads of one URL
+  are two different moments and the seam would land on a sidebar row in one half and on
+  nothing in the other. The compositing is a canvas in the browser rather than an image tool:
+  Chromium is the only thing here that writes WebP, and the seam wants its antialiased clip
+  anyway.
 
 ### Type scale & interface size
 
@@ -2473,6 +2482,9 @@ pnpm test           # node's own runner over test/*.test.ts — pure modules onl
 pnpm check:scripts  # only the browser page scripts (a compile error there is a
                     # `Script failed to execute` at tool-call time, not a build error)
 pnpm shadcn add <component> -y
+
+# README 首图（亮/暗斜线分割）：复用或自起 vite，需要 Chrome/Chromium 与 playwright
+node scripts/capture-readme-hero.mjs
 
 # SQLite 存储的演练与基线（都不碰正在运行的数据目录）
 node scripts/drill-sqlite-import.mjs   # 复制真实 userData 到临时目录，跑一遍旧 JSON 导入并比对行数/往返
