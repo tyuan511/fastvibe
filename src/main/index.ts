@@ -151,11 +151,14 @@ const sshManager = new SshManager({
   // Linux without a secret service falls back to a hard-coded key ("basic_text"), which
   // is obfuscation rather than encryption; the 0600 file is no worse than that.
   secrets: {
-    available: () => app.isReady()
-      && safeStorage.isEncryptionAvailable()
+    available: async () => app.isReady()
+      && await safeStorage.isAsyncEncryptionAvailable()
       && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"),
-    seal: (plain) => safeStorage.encryptString(plain).toString("base64"),
-    open: (sealed) => safeStorage.decryptString(Buffer.from(sealed, "base64")),
+    seal: async (plain) => (await safeStorage.encryptStringAsync(plain)).toString("base64"),
+    open: async (sealed) => {
+      const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(Buffer.from(sealed, "base64"));
+      return { plain: result, reseal: shouldReEncrypt };
+    },
   },
   onState: (state) => broadcast(Ipc.sshState, state),
   onPush: (channel, payload) => broadcast(channel, payload),
@@ -538,6 +541,9 @@ app.whenReady().then(async () => {
     () => createWindow(),
   );
   registerRemoteIpc(queueSettingsWrite, account);
+  // The profiles' passwords are opened asynchronously; the gateway and the reconnect
+  // lookup read them synchronously, so they have to be in before anything can ask.
+  await sshManager.load().catch((error: unknown) => log.warn(`ssh hosts: ${String(error)}`));
   registerSshIpc();
   createAppServer({
     identity: loadOrCreateServerIdentity(getFastVibePaths().serverIdentityFile, {

@@ -4,6 +4,7 @@ import type { FastVibePaths } from "../engine/paths.ts";
 import { normalizePublicUrl, type PhoneAccess, type RemoteHostConnectionActivity, type RemoteHostConnectionState, type RemoteHostProfile, type RemoteHostTestResult, type RemoteTransferProgress, type SshHostKeyScan } from "../../shared/remote-host.ts";
 import { hashPassword, passwordProblem } from "../server/auth.ts";
 import { readSshHosts, redactSshHosts, removeSshHost, saveSshHost, type SecretBox, type SshHostSnapshot } from "./ssh-hosts.ts";
+import { readSshConfig } from "./ssh-config.ts";
 import { captureHostKey, writeTrustedHostKey, type CapturedHostKey } from "./ssh-known-hosts.ts";
 import { loadAgentRuntime, agentRuntimeTarget, agentRuntimeRemoteDownloadCommand, agentRuntimeUploadCommand, sha256Helper, type AgentRuntimeSource, type AgentRuntimeTarget } from "./agent-runtime.ts";
 import { downloadHelpers, loginEnvironment, NODE_MIRROR, remoteShellCommand, shellQuote } from "./remote-shell.ts";
@@ -36,15 +37,48 @@ export class SshManager {
     this.#deps = deps;
   }
 
-  /** Every profile with its secrets, for Main. A renderer gets `publicHosts()`. */
-  hosts(): SshHostSnapshot { return readSshHosts(this.#deps.paths.sshHostsFile, this.#deps.secrets); }
-  publicHosts(): SshHostSnapshot { return redactSshHosts(this.hosts()); }
-  saveHost(host: RemoteHostProfile): SshHostSnapshot {
-    return redactSshHosts(saveSshHost(this.#deps.paths.sshHostsFile, host, this.#deps.secrets));
+  /**
+   * The saved profiles, passwords opened. The keychain only answers asynchronously, but
+   * `hosts()` and `profile()` are read from places that cannot wait (a connection status
+   * callback, the gateway's lookup), so they answer from here and every write refreshes it.
+   */
+  #saved: RemoteHostProfile[] = [];
+  /** Reads and writes of the hosts file run one at a time: each is read-modify-write across awaits. */
+  #queue: Promise<unknown> = Promise.resolve();
+
+  #exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.#queue.then(task, task);
+    this.#queue = run.catch(() => undefined);
+    return run;
   }
-  removeHost(id: string): SshHostSnapshot {
+
+  /** Read the hosts file and open its passwords. Call before anything asks for a profile. */
+  load(): Promise<void> {
+    return this.#exclusive(async () => {
+      this.#saved = (await readSshHosts(this.#deps.paths.sshHostsFile, this.#deps.secrets)).saved;
+    });
+  }
+
+  /** Every profile with its secrets, for Main. A renderer gets `publicHosts()`. */
+  hosts(): SshHostSnapshot { return { saved: this.#saved, discovered: readSshConfig() }; }
+  async publicHosts(): Promise<SshHostSnapshot> {
+    await this.load();
+    return redactSshHosts(this.hosts());
+  }
+  saveHost(host: RemoteHostProfile): Promise<SshHostSnapshot> {
+    return this.#exclusive(async () => {
+      const snapshot = await saveSshHost(this.#deps.paths.sshHostsFile, host, this.#deps.secrets);
+      this.#saved = snapshot.saved;
+      return redactSshHosts(snapshot);
+    });
+  }
+  removeHost(id: string): Promise<SshHostSnapshot> {
     this.#scans.delete(id);
-    return redactSshHosts(removeSshHost(this.#deps.paths.sshHostsFile, id, this.#deps.secrets));
+    return this.#exclusive(async () => {
+      const snapshot = await removeSshHost(this.#deps.paths.sshHostsFile, id, this.#deps.secrets);
+      this.#saved = snapshot.saved;
+      return redactSshHosts(snapshot);
+    });
   }
 
   profile(id: string): RemoteHostProfile | undefined {

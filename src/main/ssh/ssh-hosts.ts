@@ -13,11 +13,15 @@ type StoredProfile = RemoteHostProfile & { passwordSealed?: string };
  * Seals a secret with the platform keychain (Electron `safeStorage`). Absent, or unable
  * to encrypt (a Linux session with no secret service), the password stays in the 0600
  * file as before rather than being lost.
+ *
+ * Every method is asynchronous: Electron 46 removes the synchronous `safeStorage` calls.
+ * `reseal` is the keychain saying the stored form is out of date (its key rotated) and
+ * should be written again.
  */
 export type SecretBox = {
-  available(): boolean;
-  seal(plain: string): string;
-  open(sealed: string): string;
+  available(): Promise<boolean>;
+  seal(plain: string): Promise<string>;
+  open(sealed: string): Promise<{ plain: string; reseal: boolean }>;
 };
 
 export type SshHostSnapshot = {
@@ -25,11 +29,12 @@ export type SshHostSnapshot = {
   discovered: RemoteHostProfile[];
 };
 
-export function readSshHosts(file: string, secrets?: SecretBox): SshHostSnapshot {
-  const saved = readSaved(file, secrets);
+export async function readSshHosts(file: string, secrets?: SecretBox): Promise<SshHostSnapshot> {
+  const { hosts: saved, stale } = await readSaved(file, secrets);
   // Profiles written before sealing existed carry a plain password; seal them as soon as
-  // the keychain can, instead of waiting for the user to happen to edit one.
-  if (secrets?.available() && hasPlainPassword(file)) writeSaved(file, saved, secrets);
+  // the keychain can, instead of waiting for the user to happen to edit one. A sealed one
+  // the keychain calls out of date is written again for the same reason.
+  if ((stale || hasPlainPassword(file)) && await secrets?.available()) await writeSaved(file, saved, secrets);
   const discovered = readSshConfig();
   return { saved, discovered };
 }
@@ -40,10 +45,10 @@ export function readSshHosts(file: string, secrets?: SecretBox): SshHostSnapshot
  * The renderer never holds a saved password (`hasPassword` stands in for it), so a
  * password-auth profile arriving without one keeps the password already on file.
  */
-export function saveSshHost(file: string, profile: RemoteHostProfile, secrets?: SecretBox): SshHostSnapshot {
+export async function saveSshHost(file: string, profile: RemoteHostProfile, secrets?: SecretBox): Promise<SshHostSnapshot> {
   const next = normalize(profile);
   if (!next.id || !next.label || !next.host) throw new Error("SSH 主机配置无效");
-  const current = readSaved(file, secrets);
+  const current = (await readSaved(file, secrets)).hosts;
   const previous = current.find((item) => item.id === next.id);
   if (next.authMethod === "password" && !next.password) {
     if (previous?.password) next.password = previous.password;
@@ -52,13 +57,13 @@ export function saveSshHost(file: string, profile: RemoteHostProfile, secrets?: 
   if (next.authMethod !== "password") delete next.password;
   const saved = current.filter((item) => item.id !== next.id);
   saved.push(next);
-  writeSaved(file, saved, secrets);
+  await writeSaved(file, saved, secrets);
   return { saved, discovered: readSshConfig() };
 }
 
-export function removeSshHost(file: string, id: string, secrets?: SecretBox): SshHostSnapshot {
-  const saved = readSaved(file, secrets).filter((item) => item.id !== id);
-  writeSaved(file, saved, secrets);
+export async function removeSshHost(file: string, id: string, secrets?: SecretBox): Promise<SshHostSnapshot> {
+  const saved = (await readSaved(file, secrets)).hosts.filter((item) => item.id !== id);
+  await writeSaved(file, saved, secrets);
   return { saved, discovered: readSshConfig() };
 }
 
@@ -71,29 +76,36 @@ export function redactSshHosts(snapshot: SshHostSnapshot): SshHostSnapshot {
   return { saved: snapshot.saved.map(redact), discovered: snapshot.discovered.map(redact) };
 }
 
-function readSaved(file: string, secrets?: SecretBox): StoredProfile[] {
+async function readSaved(file: string, secrets?: SecretBox): Promise<{ hosts: StoredProfile[]; stale: boolean }> {
+  let items: StoredProfile[];
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<StoredHosts>;
-    if (parsed.version !== 1 || !Array.isArray(parsed.hosts)) return [];
-    return parsed.hosts.map((item) => normalize(unseal(item, secrets))).filter((item) => item.id && item.label && item.host);
+    if (parsed.version !== 1 || !Array.isArray(parsed.hosts)) return { hosts: [], stale: false };
+    items = parsed.hosts;
   } catch {
-    return [];
+    return { hosts: [], stale: false };
   }
+  const opened = await Promise.all(items.map((item) => unseal(item, secrets)));
+  return {
+    hosts: opened.map((entry) => normalize(entry.profile)).filter((item) => item.id && item.label && item.host),
+    stale: opened.some((entry) => entry.stale),
+  };
 }
 
 /**
  * Open a sealed password. One that cannot be opened right now (no keychain this session)
  * stays sealed rather than being dropped, so the next write does not erase it.
  */
-function unseal(item: StoredProfile, secrets?: SecretBox): StoredProfile {
+async function unseal(item: StoredProfile, secrets?: SecretBox): Promise<{ profile: StoredProfile; stale: boolean }> {
   const { passwordSealed, ...rest } = item ?? ({} as StoredProfile);
-  if (typeof passwordSealed !== "string" || !passwordSealed) return rest;
-  if (!secrets?.available()) return { ...rest, passwordSealed };
+  if (typeof passwordSealed !== "string" || !passwordSealed) return { profile: rest, stale: false };
+  if (!secrets || !await secrets.available()) return { profile: { ...rest, passwordSealed }, stale: false };
   try {
-    return { ...rest, password: secrets.open(passwordSealed) };
+    const { plain, reseal } = await secrets.open(passwordSealed);
+    return { profile: { ...rest, password: plain }, stale: reseal };
   } catch {
     // Sealed by another user account or a reset keychain: unrecoverable, so ask again.
-    return rest;
+    return { profile: rest, stale: false };
   }
 }
 
@@ -106,13 +118,13 @@ function hasPlainPassword(file: string): boolean {
   }
 }
 
-function writeSaved(file: string, hosts: StoredProfile[], secrets?: SecretBox): void {
-  const sealing = secrets?.available() ? secrets : undefined;
-  const stored: StoredProfile[] = hosts.map((host) => {
+async function writeSaved(file: string, hosts: StoredProfile[], secrets?: SecretBox): Promise<void> {
+  const sealing = secrets && await secrets.available() ? secrets : undefined;
+  const stored: StoredProfile[] = await Promise.all(hosts.map(async (host) => {
     const { password, hasPassword: _hasPassword, ...rest } = host;
     if (!password) return rest;
-    return sealing ? { ...rest, passwordSealed: sealing.seal(password) } : { ...rest, password };
-  });
+    return sealing ? { ...rest, passwordSealed: await sealing.seal(password) } : { ...rest, password };
+  }));
   mkdirSync(dirname(file), { recursive: true });
   const temporary = join(dirname(file), `.${file.split(/[\\/]/).pop()}.tmp`);
   writeFileSync(temporary, `${JSON.stringify({ version: 1, hosts: stored }, null, 2)}\n`, { mode: 0o600 });
