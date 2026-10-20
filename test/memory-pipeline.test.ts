@@ -217,15 +217,18 @@ test("a live agent is shown Codex's read prompt with the summary, only when ther
   const h = harness({ chats: 1 });
   try {
     const handlers = new Map<string, (event: any) => any>();
-    h.manager.extension()({ on: (name: string, handler: (event: any) => any) => { handlers.set(name, handler); } } as never);
+    const ctx = { sessionManager: { buildSessionProjection: () => ({ messages: [] }) } };
+    h.manager.extension()({ on: (name: string, handler: (event: any, ctx: any) => any) => { handlers.set(name, (event) => handler(event, ctx)); } } as never);
     assert.equal(await handlers.get("before_agent_start")!({ systemPrompt: "BASE" }), undefined, "no summary yet, nothing to add");
 
     await h.manager.run();
     const after = await handlers.get("before_agent_start")!({ systemPrompt: "BASE" });
     assert.match(after.systemPrompt, /^BASE\n\n## Memory\n/);
     assert.match(after.systemPrompt, /Never update memories\. You can only read them\./);
-    assert.match(after.systemPrompt, /========= MEMORY_SUMMARY BEGINS =========\nv1\n/);
-    assert.match(after.systemPrompt, /偏好 pnpm/);
+    assert.doesNotMatch(after.systemPrompt, /偏好 pnpm/);
+    assert.match(after.message.content, /========= MEMORY_SUMMARY BEGINS =========\nv1\n/);
+    assert.match(after.message.content, /偏好 pnpm/);
+    assert.equal(after.message.display, false);
     assert.ok(after.systemPrompt.includes(`${h.files.memoriesDir}/MEMORY.md`));
   } finally { cleanup(h); }
 });

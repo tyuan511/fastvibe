@@ -52,6 +52,18 @@ export function consolidationPrompt(memoryRoot: string): string {
 export const SUMMARY_PROMPT_MAX_CHARS = 20_000;
 
 export function readPathPrompt(input: { basePath: string; summary: string }): string {
-  const summary = input.summary.length > SUMMARY_PROMPT_MAX_CHARS ? `${input.summary.slice(0, SUMMARY_PROMPT_MAX_CHARS)}\n…(truncated)` : input.summary;
+  const summary = boundedSummary(input.summary);
   return `\n\n${renderTemplate(load("read_path.md"), { base_path: input.basePath, memory_summary: summary.trim() })}`;
+}
+
+function boundedSummary(summary: string): string {
+  return summary.length > SUMMARY_PROMPT_MAX_CHARS ? `${summary.slice(0, SUMMARY_PROMPT_MAX_CHARS)}\n…(truncated)` : summary;
+}
+
+/** Keep Codex's read rules stable while the changing summary travels as context. */
+export function readPathContext(input: { basePath: string; summary: string }): { systemPrompt: string; content: string } {
+  return {
+    systemPrompt: readPathPrompt({ basePath: input.basePath, summary: "Use the latest FastVibe memory context snapshot in this conversation for the current MEMORY_SUMMARY." }),
+    content: `========= MEMORY_SUMMARY BEGINS =========\n${boundedSummary(input.summary).trim()}\n========= MEMORY_SUMMARY ENDS =========`,
+  };
 }

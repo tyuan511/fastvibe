@@ -18,7 +18,7 @@ new memory on).
 `runtime/engine/memories/` is the folder the agent reads, and what 打开文件夹 reveals:
 
 ```
-memory_summary.md     first line `v1`; a compact map, placed in the system prompt of every turn
+memory_summary.md     first line `v1`; a compact map, supplied as hidden context on change
 MEMORY.md             the handbook, by task group, citing recap files; read with grep
 raw_memories.md       input to consolidation: `## Thread <id>` per selected conversation
 rollout_summaries/    one recap per conversation: <created UTC>-<hash4>-<slug>.md
@@ -87,11 +87,16 @@ the same diff again. Only a valid result becomes the new baseline.
 ## Read path
 
 `memory.extension()` is a hidden extension of every conversation's session. On
-`before_agent_start`, when memory is on and `memory_summary.md` exists, it appends Codex's
-`read_path.md` to that turn's system prompt (not to the transcript): the folder layout, when to
-use memory, a quick pass of at most four to six lookups, "never update memories", how to treat
-stale facts, and the summary inline (capped at 20,000 characters, Codex's 5,000 tokens). There
-are no memory tools: the agent uses `read` and `grep`.
+`before_agent_start`, when memory is on and `memory_summary.md` exists, it keeps Codex's
+`read_path.md` rules in the system prompt: the folder layout, when to use memory, a quick pass
+of at most four to six lookups, "never update memories", and how to treat stale facts. The
+summary itself (capped at 20,000 characters, Codex's 5,000 tokens) is a hidden persisted context
+message. A changed summary appends a new snapshot, preserving earlier request bytes; an
+unchanged one adds nothing. Only the latest snapshot describes the current memory map.
+The compaction-aware projection decides whether one already exists, so reloads and forks
+deduplicate correctly and compaction can trigger reinjection. Turning memory off or losing
+the summary filters all memory snapshots from subsequent requests; raw session history stays
+append-only. There are no memory tools: the agent uses `read` and `grep`.
 
 **Citations are the usage signal.** The prompt asks the agent to end a reply that used memory
 with an `<oai-mem-citation>` block naming file ranges and the conversation ids (`rollout_ids`)

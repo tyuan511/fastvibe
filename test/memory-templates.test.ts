@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { WORKSPACE_DIFF_FILE, consolidationPrompt, readPathPrompt, renderTemplate, stage1Input, stage1System, SUMMARY_PROMPT_MAX_CHARS } from "../src/main/engine/memory-templates.ts";
+import { WORKSPACE_DIFF_FILE, consolidationPrompt, readPathContext, readPathPrompt, renderTemplate, stage1Input, stage1System, SUMMARY_PROMPT_MAX_CHARS } from "../src/main/engine/memory-templates.ts";
 
 test("Codex's templates ship with their notice and render with no placeholder left", () => {
   assert.ok(existsSync(join(process.cwd(), "resources", "memories", "NOTICE.md")));
@@ -54,6 +54,19 @@ test("the read path hands a folder name a shell command can take", () => {
   const base = "/Users/me/Library/Application Support/FastVibe/memories";
   const prompt = readPathPrompt({ basePath: base, summary: "v1\n" });
   assert.ok(prompt.includes(`"${base}"`), "the folder appears quoted, ready for a shell");
+});
+
+test("memory updates keep read rules identical and bound only the changing snapshot", () => {
+  const first = readPathContext({ basePath: "/memory folder", summary: "v1\nfirst preference" });
+  const second = readPathContext({ basePath: "/memory folder", summary: "v1\nsecond preference" });
+  assert.equal(first.systemPrompt, second.systemPrompt);
+  assert.match(first.systemPrompt, /Never update memories\. You can only read them\./);
+  assert.match(first.systemPrompt, /latest FastVibe memory context/);
+  assert.doesNotMatch(first.systemPrompt, /first preference/);
+  assert.match(second.content, /second preference/);
+  const large = readPathContext({ basePath: "/m", summary: "x".repeat(SUMMARY_PROMPT_MAX_CHARS * 2) });
+  assert.match(large.content, /…\(truncated\)/);
+  assert.ok(large.content.length < SUMMARY_PROMPT_MAX_CHARS + 150);
 });
 
 test("a placeholder with no value is an error", () => {

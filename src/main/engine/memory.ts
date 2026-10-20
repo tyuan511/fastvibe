@@ -23,7 +23,8 @@ import {
   type MemoryStateFile,
   type Stage1Output,
 } from "./memory-plan.ts";
-import { WORKSPACE_DIFF_FILE, consolidationPrompt, readPathPrompt, stage1Input, stage1System } from "./memory-templates.ts";
+import { WORKSPACE_DIFF_FILE, consolidationPrompt, readPathContext, stage1Input, stage1System } from "./memory-templates.ts";
+import { runtimeContextExtension } from "./runtime-context.ts";
 import { hasSubstance, renderRollout } from "./memory-transcript.ts";
 import { changesBetween, readBaseline, readTree, removeSymlinks, renderWorkspaceDiff, validateArtifacts, writeBaseline } from "./memory-workspace.ts";
 
@@ -79,8 +80,8 @@ function hasSummary(folder: string): boolean {
  * **Stage 1** reads a conversation once it has been quiet for a while and asks the model
  * for the part worth remembering: a detailed note and a recap. **Stage 2** hands the
  * recent notes to an agent that keeps `MEMORY.md`, the handbook, and `memory_summary.md`, a
- * map small enough to sit in every prompt. A live agent is shown the map and reads the rest
- * on demand, so memory costs one section per turn and nothing else. What an agent says it
+ * map small enough to sit in context. A live agent receives a hidden snapshot when the
+ * map changes and reads the rest on demand. What an agent says it
  * used (the citation block its read prompt asks for) is what keeps a conversation's memory
  * in the next consolidation.
  *
@@ -201,18 +202,20 @@ export class MemoryManager implements MemoryHost {
   }
 
   /**
-   * Inline extension of every conversation's session: Codex's read-path prompt, with the
-   * summary inline, goes into the system prompt of each turn (not into the transcript).
+   * Inline extension of every conversation's session: Codex's read rules stay in the
+   * system prompt; changing summaries are hidden snapshots.
    */
   extension(): ExtensionFactory {
-    return (pi) => {
-      pi.on("before_agent_start", async (event) => {
-        if (!this.#config.enabled) return undefined;
+    return runtimeContextExtension({
+      customType: "fastvibe-memory-context",
+      title: "memory",
+      enabled: () => this.#config.enabled,
+      read: async () => {
         const summary = (await readText(join(this.#files.memoriesDir, SUMMARY_FILE))).trim();
         if (!summary) return undefined;
-        return { systemPrompt: event.systemPrompt + readPathPrompt({ basePath: this.#files.memoriesDir, summary }) };
-      });
-    };
+        return readPathContext({ basePath: this.#files.memoriesDir, summary });
+      },
+    });
   }
 
   /**
