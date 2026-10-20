@@ -178,6 +178,8 @@
   },
   "group": {
     "separator": "，",
+    "thoughts_one": "已思考 {{count}} 次",
+    "thoughts_other": "已思考 {{count}} 次",
     "ranCommands_one": "已运行 {{count}} 个命令",
     "ranCommands_other": "已运行 {{count}} 个命令",
     "readOne": "已读取",

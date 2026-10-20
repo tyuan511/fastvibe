@@ -406,6 +406,16 @@ export function SettingsDialog({
                     />
                   }
                 />
+                <Row
+                  title={t("chat.collapseThinking")}
+                  description={t("chat.collapseThinkingDesc")}
+                  control={
+                    <Switch
+                      checked={settings.collapseThinking}
+                      onCheckedChange={(checked) => update({ collapseThinking: checked })}
+                    />
+                  }
+                />
               </Group>
             </div>
           ) : null}

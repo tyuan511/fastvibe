@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import * as abort from "../src/shared/abort.ts";
 import * as attachmentMetadata from "../src/shared/attachment-metadata.ts";
+import * as skillInvocation from "../src/shared/skill-invocation.ts";
 import * as toolResult from "../src/shared/tool-result.ts";
 import type { ChatMessage, EngineEvent } from "../src/shared/types.ts";
 import {
@@ -25,6 +26,7 @@ const exports: { applyEngineEvent?: (messages: ChatMessage[], event: EngineEvent
 new Function("require", "exports", compiled)((name: string) => {
   if (name === "@shared/abort") return abort;
   if (name === "@shared/attachment-metadata") return attachmentMetadata;
+  if (name === "@shared/skill-invocation") return skillInvocation;
   if (name === "@shared/tool-result") return toolResult;
   if (name.endsWith("random.ts")) return { randomUUID };
   if (name === "@/lib/i18n") return { i18n: { t: (key: string) => key } };

@@ -68,6 +68,7 @@ abstract final class AppIcons {
   static const search = HugeIcons.strokeRoundedSearch01;
   static const settings = HugeIcons.strokeRoundedSettings02;
   static const sparkles = HugeIcons.strokeRoundedSparkles;
+  static const magicWand = HugeIcons.strokeRoundedMagicWand02;
   static const square = HugeIcons.strokeRoundedSquare;
   static const terminal = HugeIcons.strokeRoundedSquareTerminal;
   static const sun = HugeIcons.strokeRoundedSun03;

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'skill_invocation.dart';
 
 /// One row of the transcript as the phone draws it.
 ///
@@ -22,6 +23,7 @@ class ChatMessage {
     this.compact,
     this.parts,
     this.attachments,
+    this.skill,
     this.lastId,
     this.deferredIds = const <String>[],
   }) : tools = tools ?? <ToolBlock>[];
@@ -38,10 +40,15 @@ class ChatMessage {
     }
     final parts = parseParts(map['parts']);
     final attachments = parseAttachments(map['attachments']);
+    final rawText = map['text'] is String ? map['text'] as String : '';
+    final skill = map['role'] == 'user' ? SkillMark.fromJson(map['skill']) : null;
+    final prompt = map['role'] == 'user' && skill == null
+        ? skillDisplayOf(rawText) : (text: rawText, skill: null);
     return ChatMessage(
       id: map['id'] is String ? map['id'] as String : 'message-${DateTime.now().microsecondsSinceEpoch}',
       role: map['role'] is String ? map['role'] as String : 'assistant',
-      text: map['text'] is String ? map['text'] as String : '',
+      text: prompt.text,
+      skill: skill ?? prompt.skill,
       deferredIds: map['deferredContent'] == true && map['id'] is String
           ? <String>[map['id'] as String] : const <String>[],
       thinking: map['thinking'] is String ? map['thinking'] as String : null,
@@ -53,7 +60,9 @@ class ChatMessage {
       createdAt: map['createdAt'] is num ? (map['createdAt'] as num).toInt() : null,
       completedAt: map['completedAt'] is num ? (map['completedAt'] as num).toInt() : null,
       compact: map['compact'] is Map ? CompactInfo.fromJson(map['compact'] as Map) : null,
-      parts: parts.isEmpty ? null : parts,
+      parts: prompt.skill != null
+          ? <MessagePart>[if (prompt.text.isNotEmpty) TextPart(prompt.text)]
+          : parts.isEmpty ? null : parts,
       attachments: attachments.isEmpty ? null : attachments,
     );
   }
@@ -73,6 +82,9 @@ class ChatMessage {
   CompactInfo? compact;
   List<MessagePart>? parts;
   List<ChatAttachment>? attachments;
+  final SkillMark? skill;
+
+  String get promptText => skillCommandOf(skill, text);
 
   /// On a merged row: the id of the last message folded into it, which is where the
   /// turn footer is looked up.
@@ -82,7 +94,7 @@ class ChatMessage {
 
   bool get joinable => role == 'assistant' && kind != 'compact';
 
-  bool get hasContent => text.trim().isNotEmpty || (thinking?.trim().isNotEmpty ?? false) || tools.isNotEmpty;
+  bool get hasContent => skill != null || text.trim().isNotEmpty || (thinking?.trim().isNotEmpty ?? false) || tools.isNotEmpty;
 
   ChatMessage copy() => ChatMessage(
         id: id,
@@ -99,6 +111,7 @@ class ChatMessage {
         compact: compact,
         parts: parts == null ? null : List<MessagePart>.from(parts!),
         attachments: attachments,
+        skill: skill,
         lastId: lastId,
         deferredIds: deferredIds,
       );

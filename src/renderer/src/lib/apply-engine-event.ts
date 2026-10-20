@@ -11,6 +11,7 @@ import type {
 } from "@shared/types";
 import { assistantStopVerdict, isRepetitionStop } from "@shared/abort";
 import { extractPromptAttachments } from "@shared/attachment-metadata";
+import { skillDisplayOf, skillPromptText } from "@shared/skill-invocation";
 import { toolImagesOf, toolResultStatus } from "@shared/tool-result";
 import { randomUUID } from "../../../shared/random.ts";
 import { i18n } from "@/lib/i18n";
@@ -56,12 +57,18 @@ export function lastUserIsLocal(messages: ChatMessage[]): boolean {
   return false;
 }
 
-/** Text of a user `message_start` the engine just injected, if any. */
+/**
+ * Text of a user `message_start` the engine just injected, if any.
+ *
+ * Returned in the shape the composer sent it (`/skill:…`), because the caller matches it
+ * against a queued row's own text to take that row off screen — and the engine has already
+ * expanded a forced skill into the whole `SKILL.md` by the time this event is written.
+ */
 export function userMessageText(event: EngineEvent): string | undefined {
   if (event.type !== "message_start") return undefined;
   const message = isRecord(event.message) ? event.message : undefined;
   if (!message || message.role !== "user") return undefined;
-  return contentText(message.content);
+  return skillPromptText(contentText(message.content));
 }
 
 function contentText(content: unknown): string {
@@ -78,8 +85,11 @@ function contentText(content: unknown): string {
 }
 
 function userRowFromEngine(message: Record<string, unknown>): ChatMessage {
-  const text = contentText(message.content);
-  const attachments: ChatAttachment[] = extractPromptAttachments(text);
+  // A steer the engine injected between turns carries the expanded skill, so it is folded
+  // exactly like the composer's own row and Main's transcript mapping fold it.
+  const prompt = skillDisplayOf(contentText(message.content));
+  const text = prompt.text;
+  const attachments: ChatAttachment[] = extractPromptAttachments(contentText(message.content));
   if (Array.isArray(message.content)) {
     let images = 0;
     for (const part of message.content) {
@@ -105,6 +115,7 @@ function userRowFromEngine(message: Record<string, unknown>): ChatMessage {
     parts: text ? [{ kind: "text", text }] : [],
     createdAt: typeof message.timestamp === "number" ? message.timestamp : Date.now(),
     attachments: attachments.length > 0 ? attachments : undefined,
+    skill: prompt.skill,
   };
 }
 

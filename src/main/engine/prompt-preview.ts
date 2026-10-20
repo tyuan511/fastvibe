@@ -1,4 +1,5 @@
 import { uiText } from "./ui-text.ts";
+import { skillPromptText } from "../../shared/skill-invocation.ts";
 
 /**
  * Titles that mean "nothing named this chat yet". Both languages: the default is
@@ -21,7 +22,13 @@ export function promptPreview(
   current: { title?: string; titleManual?: boolean },
   text: string,
 ): { title: string; preview: string } {
-  const preview = text.trim().slice(0, 80);
+  // A prompt that forced a skill reaches Main twice over: the renderer records the draft
+  // as typed (`/skill:office …`), and a chat whose first turn Main fills itself reads the
+  // transcript, where that command has already been expanded into the whole SKILL.md.
+  // Folding it back to the command keeps both paths writing the same row, and keeps a
+  // skill's instructions out of the chat's name.
+  const prompt = skillPromptText(text);
+  const preview = prompt.trim().slice(0, 80);
   const named = Boolean(current.titleManual) || Boolean(current.title && !PLACEHOLDER_TITLES.has(current.title));
   return {
     preview,

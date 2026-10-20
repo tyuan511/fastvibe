@@ -7,19 +7,24 @@
  * that was never written, sitting between the real thoughts and the tool calls.
  */
 
+// The explicit `.ts` is what lets `node --test` load this module: it reads no tsconfig and
+// resolves neither the `@/*` alias nor an extensionless relative path.
+import { blankTakesRow, isBlankOutput } from "./blank-output.ts";
+
 /** Reasoning with nothing to read: no characters, or only whitespace. */
 export function thinkingIsBlank(text: string): boolean {
-  return text.trim().length === 0;
+  return isBlankOutput(text);
 }
 
 /**
  * A blank block still takes a row while it is the reply's live tail: 「正在思考」 is a
  * true report of work in flight, and it is what tells the reader the model has not
  * stalled before the first token of a thought arrives. Once the block has ended,
- * though, there is nothing left for the row to say.
+ * though, there is nothing left for the row to say — the same rule an empty stretch
+ * of prose follows, so the two cannot disagree about what a blank part is worth.
  */
 export function thinkingTakesRow(text: string, live: boolean): boolean {
-  return live || !thinkingIsBlank(text);
+  return blankTakesRow(text, live);
 }
 
 /**

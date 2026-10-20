@@ -594,6 +594,97 @@ export const DAG_MESSAGES: ChatMessage[] = [
   },
 ];
 
+/**
+ * `?error=1` / `?error=plain` — a reply that failed, in the shapes the engine hands the renderer:
+ * a gateway status glued to JSON, a three-paragraph SDK setup error whose last row is one
+ * unbreakable path, a stack trace, and a bare sentence. The last one has nothing to disclose, so
+ * it must not draw a 查看详情 control at all.
+ *
+ * These are the cases that deformed the card, so they are the ones the harness has to be able to
+ * show: a path with no wrap point widened the whole transcript column, and a stack trace pushed
+ * everything below it off screen. One failure per turn — consecutive assistant rows merge into one
+ * reply and keep only the last error, so a user prompt separates them.
+ */
+const ERROR_TURNS: Array<{ prompt: string; error: string }> = [
+  {
+    prompt: "读一下配置文件，然后重新发一次请求。",
+    error:
+      '429: {"message":"Allocated quota exceeded, please increase your quota limit. For details, see: ' +
+      'https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit",' +
+      '"id":"14fc57c3-2e05-4bdb-9384-391c4add6d52","type":"insufficient_quota","code":"insufficient_quota"}',
+  },
+  {
+    prompt: "换成 claude 试试。",
+    error:
+      "No API key found for anthropic.\n\nUse /login to log into a provider via OAuth or API key. See:\n" +
+      "  /Users/yuantang/code/fastvibe/node_modules/.pnpm/@earendil-works+pi-coding-agent@1.3.0/docs/providers.md",
+  },
+  {
+    prompt: "那重新构建一遍。",
+    error:
+      "error during build:\n" +
+      'Error: Could not resolve "./missing" from src/renderer/src/App.tsx\n' +
+      "    at file:///Users/dev/code/fastvibe/src/renderer/src/App.tsx:12:3\n" +
+      "    at async Promise.all (index 0)\n" +
+      "    at async buildRenderer (file:///Users/dev/code/fastvibe/node_modules/.pnpm/electron-vite@5.0.0/node_modules/electron-vite/dist/index.mjs:418:7)",
+  },
+  {
+    prompt: "再试一次。",
+    error:
+      '503 data: {"error":{"code":"ServiceUnavailable","param":null,"message":"Service is ' +
+      'unavailable now. Please try later.","type":"ServiceUnavailable"}}',
+  },
+  {
+    prompt: "把这个文件也发上去。",
+    // The deformation case: one token with no wrap point at all — a base64 blob the provider
+    // echoed back. `break-words` alone cannot save this (`overflow-wrap: break-word` only breaks
+    // a word that would overflow its line, and a fit-content line has no width to overflow).
+    error: `413: {"message":"Request entity too large: ${"QUJD".repeat(90)}","type":"invalid_request_error"}`,
+  },
+];
+
+const errorThread = (): ChatMessage[] =>
+  ERROR_TURNS.flatMap((turn, index) => {
+    const at = NOW - (ERROR_TURNS.length - index) * 3 * MINUTE;
+    return [
+      {
+        id: `msg-error-u${index}`,
+        role: "user" as const,
+        text: turn.prompt,
+        tools: [],
+        parts: [{ kind: "text" as const, text: turn.prompt }],
+        createdAt: at,
+      },
+      {
+        id: `msg-error-a${index}`,
+        role: "assistant" as const,
+        text: "我先读取配置文件，然后重新发一次请求。",
+        tools: [],
+        parts: [{ kind: "text" as const, text: "我先读取配置文件，然后重新发一次请求。" }],
+        createdAt: at + MINUTE,
+        completedAt: at + MINUTE,
+        error: turn.error,
+      },
+    ];
+  });
+
+export const ERROR_MESSAGES: ChatMessage[] = errorThread();
+
+/** The same failure with nothing structured in it: no status, no code, no body. */
+export const PLAIN_ERROR_MESSAGES: ChatMessage[] = [
+  ...MESSAGES.slice(0, 1),
+  {
+    id: "msg-error-plain",
+    role: "assistant",
+    text: "",
+    tools: [],
+    parts: [],
+    createdAt: NOW - MINUTE,
+    completedAt: NOW - MINUTE,
+    error: "Connection error.",
+  },
+];
+
 export const SESSION: EngineSessionState = {
   // The model the divider's last switch landed on, so the chip and the transcript agree.
   model: { provider: "deepseek", id: "deepseek-v4-pro" },
@@ -605,6 +696,7 @@ export const SESSION: EngineSessionState = {
 };
 
 export const STATS: SessionStats = {
+  rounds: 12,
   tokens: { input: 48_210, output: 3_180, cacheRead: 12_400, cacheWrite: 2_048, total: 65_838 },
   turn: { tokens: { input: 12_940, output: 620, cacheRead: 34_100, cacheWrite: 512, total: 48_172 }, modelMs: 18_400 },
   lastRequest: { outputTokens: 320, durationMs: 4_000 },

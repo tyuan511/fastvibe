@@ -1,4 +1,5 @@
 import { randomUUID } from "../../../shared/random.ts";
+import { skillDisplayOf } from "../../../shared/skill-invocation.ts";
 import type {
   ChatMessage,
   EngineEvent,
@@ -42,16 +43,19 @@ export function optimisticQueuedTurn(item: {
   attachments?: ChatMessage["attachments"];
 }): ChatMessage[] {
   const now = Date.now();
-  const text = item.text;
+  // Folded the same way `addUserMessage` folds a prompt the composer sent, and the same
+  // way Main folds the persisted row: the words, plus a badge for a forced skill.
+  const text = skillDisplayOf(item.text);
   return [
     {
       id: `${QUEUED_TURN}${item.id}`,
       role: "user",
-      text,
+      text: text.text,
       tools: [],
-      parts: text ? [{ kind: "text", text }] : [],
+      parts: text.text ? [{ kind: "text", text: text.text }] : [],
       createdAt: now,
       attachments: item.attachments,
+      skill: text.skill,
     },
     { id: `${QUEUED_REPLY}${item.id}`, role: "assistant", text: "", tools: [], parts: [], createdAt: now },
   ];

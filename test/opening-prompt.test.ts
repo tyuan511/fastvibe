@@ -11,6 +11,7 @@ import { sendOpeningPrompt } from "../src/main/pi/opening-prompt.ts";
 import { mapEngineMessages } from "../src/main/engine/map-messages.ts";
 import * as abort from "../src/shared/abort.ts";
 import * as attachmentMetadata from "../src/shared/attachment-metadata.ts";
+import * as skillInvocation from "../src/shared/skill-invocation.ts";
 import * as toolResult from "../src/shared/tool-result.ts";
 import type { ChatMessage, EngineEvent } from "../src/shared/types.ts";
 
@@ -29,12 +30,22 @@ const compiled = ts.transpileModule(`class Harness { ${methods.join("\n").replac
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 // Execute the actual host methods without loading Electron, as other engine tests do.
-const Harness = new Function("sendOpeningPrompt", "randomUUID", "uiText", "projectSessionMessages", `${compiled}; return Harness;`)(
-  sendOpeningPrompt, randomUUID, (zh: string) => zh,
+const Harness = new Function(
+  "sendOpeningPrompt",
+  "randomUUID",
+  "uiText",
+  "projectSessionMessages",
+  "skillDisplayOf",
+  `${compiled}; return Harness;`,
+)(
+  sendOpeningPrompt,
+  randomUUID,
+  (zh: string) => zh,
   ({ session }: { session: AgentSession }) => {
     const entries = session.sessionManager.getBranch().filter((entry) => entry.type === "message");
     return { messages: mapEngineMessages(entries.map((entry) => entry.message), (message) => entries.find((entry) => entry.message === message)?.id), anchored: true };
   },
+  skillInvocation.skillDisplayOf,
 );
 
 // Run the real renderer reducer without React, DOM, or browser automation.
@@ -46,6 +57,7 @@ const exports: { applyEngineEvent?: (messages: ChatMessage[], event: EngineEvent
 new Function("require", "exports", renderer)((name: string) => {
   if (name === "@shared/abort") return abort;
   if (name === "@shared/attachment-metadata") return attachmentMetadata;
+  if (name === "@shared/skill-invocation") return skillInvocation;
   if (name === "@shared/tool-result") return toolResult;
   if (name.endsWith("random.ts")) return { randomUUID };
   if (name === "@/lib/i18n") return { i18n: { t: (key: string) => key } };
@@ -193,4 +205,24 @@ test("replayed opening events do not duplicate snapshot rows, and cancellation i
   const other: ChatMessage = { ...row, id: "local:other", text: "other" };
   assert.deepEqual(apply([row], { type: "opening_prompt", message: row }, false).messages, [row]);
   assert.deepEqual(apply([row, other], { type: "opening_prompt_cancelled", messageId: row.id }, false).messages, [other]);
+});
+
+test("pi accepts an image without text, and live and restored rows keep it textless", async (t) => {
+  const f = await fixture(t);
+  const image = {
+    type: "image" as const,
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    mimeType: "image/png",
+  };
+  f.memory.resolve();
+  f.reply.resolve();
+  await f.session.prompt("", { images: [image] });
+  const user = f.session.messages.find((message) => message.role === "user")!;
+  assert.deepEqual(user.content, [{ type: "text", text: "" }, image]);
+  for (const rows of [f.messages, (await f.host.getSnapshot("next")).messages]) {
+    const row = rows.find((message: ChatMessage) => message.role === "user")!;
+    assert.equal(row.text, "");
+    assert.equal(row.attachments?.length, 1);
+    assert.equal(row.attachments[0].dataUrl, `data:image/png;base64,${image.data}`);
+  }
 });

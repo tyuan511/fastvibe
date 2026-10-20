@@ -1,3 +1,5 @@
+import { stripSkillInvocation } from "../../shared/skill-invocation.ts";
+
 /**
  * 回复推荐: after a reply finishes, guess what the user will most likely send next and
  * offer it as the composer's placeholder, accepted with Tab.
@@ -53,7 +55,9 @@ export function suggestionMaterial(messages: readonly unknown[]): SuggestionMate
   const assistant = textOf(last);
   if (!assistant) return undefined;
   const user = [...messages].reverse().find((message) => (message as { role?: unknown })?.role === "user");
-  const userText = user ? textOf(user) : "";
+  // A prompt that forced a skill carries the whole SKILL.md; the guess is about what the
+  // person asks next, so read it from their own words alone.
+  const userText = user ? stripSkillInvocation(textOf(user)) : "";
   if (!userText) return undefined;
   return { user: tail(userText, USER_CHARS), assistant: tail(assistant, ASSISTANT_CHARS) };
 }

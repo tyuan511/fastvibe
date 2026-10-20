@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../i18n/core.dart';
 import '../theme/theme.dart';
+import 'blank_output.dart';
 
 /// The theme data and style sheet, built once per palette, size and language.
 ///
@@ -142,10 +143,15 @@ class MarkdownView extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = _themeFor(palette, compact);
     final size = compact ? 15.0 : 16.0;
+    // A reply padded with forty `<br>`s or lines of `&nbsp;` is shortened before the parser
+    // sees it, so the gap survives as one gap rather than as a screen of nothing. This is the
+    // one seam every Markdown surface goes through — the transcript, a tool card, a file and
+    // the release notes — which is what keeps them from disagreeing mid-reply.
+    final body = collapseBlankRuns(text);
     return GptMarkdownTheme(
       gptThemeData: theme.data,
       child: GptMarkdown(
-        text,
+        body,
         isStreaming: streaming,
         useDollarSignsForLatex: true,
         style: TextStyle(

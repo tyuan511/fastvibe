@@ -16,13 +16,16 @@ import { activeLanguage, i18n } from "@/lib/i18n";
 import { localeTag } from "@/lib/language";
 import { groupParts, mergeAssistantRun, resolveParts, type RenderPart } from "@/lib/group-parts";
 import { isProcessKind, thinkingTakesRow } from "@/lib/thinking-row";
+import { blankTakesRow, isBlankOutput } from "@/lib/blank-output";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatMessage, MessagePart } from "@shared/types";
 import { collectInlinePreviews, type InlinePreview } from "@shared/inline-media";
+import { skillCommandOf } from "@shared/skill-invocation";
+import { prettyProviderDetail } from "@shared/assistant-error";
 import { resolvePath } from "@/lib/workspace-path";
 import { useWorkspacePath } from "@/stores/session";
-import { ImagePreview } from "@/components/image-preview";
 import { AttachmentChip } from "./attachment-chip";
+import { SkillBadgeRow } from "./skill-badge";
 import { collectChangedFiles, TurnFileChips } from "./file-chips";
 import { InlinePreviews, InlineThumbStrip } from "./inline-preview";
 import { MarkdownView } from "./markdown-view";
@@ -31,6 +34,7 @@ import { ToolCard } from "./tool-card";
 import { ToolGroupRow } from "./tool-group";
 import { ToolRow } from "./tool-row";
 import { CompactNotice } from "./compact-notice";
+import { AssistantErrorNotice } from "./error-notice";
 import { DagSettledNotice } from "./dag-settled-notice";
 import { ModelChangeNotice } from "./model-change-notice";
 import { RunCollapse, RunProgress } from "./run-collapse";
@@ -38,42 +42,24 @@ import { TuiLines } from "./tui-lines";
 import { isRemoteRef } from "@/lib/remote-project";
 
 function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
-  const [preview, setPreview] = useState<ChatAttachment | null>(null);
-  const previewSrc = preview?.dataUrl ?? "";
-
   return (
-    <>
-      <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
-        {items.map((item) => {
-          const previewable = item.kind === "image" && Boolean(item.dataUrl);
-          return (
-            <AttachmentChip
-              key={item.id}
-              item={item}
-              className={previewable ? "cursor-zoom-in" : undefined}
-              onOpen={
-                previewable
-                  ? () => setPreview(item)
-                  : item.path
-                    ? () => {
-                        if (isRemoteRef(item.path) ) return;
-                        void window.fastvibe.workspace.reveal(item.path!);
-                      }
-                    : undefined
-              }
-            />
-          );
-        })}
-      </div>
-      <ImagePreview
-        src={previewSrc}
-        alt={preview?.name}
-        open={Boolean(previewSrc)}
-        onOpenChange={(open) => {
-          if (!open) setPreview(null);
-        }}
-      />
-    </>
+    <div className="mb-1.5 flex max-w-full flex-wrap items-start justify-end gap-2">
+      {items.map((item) => (
+        <AttachmentChip
+          key={item.id}
+          item={item}
+          variant="message"
+          onOpen={
+            item.kind !== "image" && item.path
+              ? () => {
+                  if (isRemoteRef(item.path!)) return;
+                  void window.fastvibe.workspace.reveal(item.path!);
+                }
+              : undefined
+          }
+        />
+      ))}
+    </div>
   );
 }
 
@@ -150,11 +136,11 @@ function MessageActions({
           ) : null}
         </span>
       ) : null}
-      {message.text ? (
+      {message.text || message.skill ? (
         <ActionButton
           label={t("message.copy")}
           onClick={() => {
-            void navigator.clipboard.writeText(stripAttachmentBlock(message.text));
+            void navigator.clipboard.writeText(promptAsSent(message));
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1000);
           }}
@@ -264,7 +250,9 @@ function RetryStatus({ message }: { message: ChatMessage }): JSX.Element | null 
         persistKey={`retry:${message.id}`}
       >
         {retry.error ? (
-          <div className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{retry.error}</div>
+          <div className="font-mono text-xs leading-5 whitespace-pre-wrap break-words text-muted-foreground select-text">
+            {prettyProviderDetail(retry.error)}
+          </div>
         ) : null}
       </ToolRow>
     </PartSlot>
@@ -274,6 +262,16 @@ function RetryStatus({ message }: { message: ChatMessage }): JSX.Element | null 
 /** Inline tool rows are grouped, but still share the assistant column's width cap. */
 function PartSlot({ children }: { children: JSX.Element }): JSX.Element {
   return <div className="flex w-full max-w-2xl flex-col">{children}</div>;
+}
+
+/**
+ * The prompt as it was actually sent: the person's own words, with a forced skill put back
+ * as the command that carried it. 复制 and 编辑 both read this — an edit that dropped the
+ * prefix would re-run the turn without the skill the prompt was written for, because the
+ * engine expands the command, not the row.
+ */
+function promptAsSent(message: ChatMessage): string {
+  return skillCommandOf(message.skill, stripAttachmentBlock(message.text));
 }
 
 /**
@@ -467,6 +465,7 @@ function ChatMessageRowImpl({
   showThinking,
   showTimestamp,
   collapseRuns,
+  collapseThinking,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -476,6 +475,7 @@ function ChatMessageRowImpl({
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
+  collapseThinking: boolean;
 }): JSX.Element {
   // A reply spans several engine messages; render it as one block with one footer.
   const message = useMemo(() => mergeAssistantRun(messages), [messages]);
@@ -502,7 +502,12 @@ function ChatMessageRowImpl({
   );
   // Summaries inside a folded tool run are translated, so a language switch
   // has to rebuild them. Reading the language here is what invalidates the cache.
-  const parts = useMemo(() => groupParts(message, i18n.language), [message, i18n.language]);
+  // The fold and whether this reply is still streaming are part of the same cache key:
+  // a thought is only live at the tail of a run that has not settled.
+  const parts = useMemo(
+    () => groupParts(message, i18n.language, { collapseThinking, streaming }),
+    [collapseThinking, message, i18n.language, streaming],
+  );
 
   // 折叠运行过程: a finished run's work — thinking, tool calls, and the prose it wrote along
   // the way — goes behind one collapsed 「用时 …」 row, and the reply written after the last
@@ -538,12 +543,17 @@ function ChatMessageRowImpl({
 
   // One rule decides whether a part is on screen, so the reply, 折叠运行过程 and the overflow row
   // cannot disagree about it: a thinking block with nothing to read takes no row once it has
-  // ended. It keeps one while it is the reply's live tail — 「正在思考」 is true news even before
-  // the first token of the thought, and it is the reader's sign that the run has not stalled.
+  // ended, and neither does a stretch of prose that is only line breaks and invisible spaces.
+  // Each keeps a row while it is the reply's live tail — 「正在思考」 and the blinking caret are
+  // true news even before the first token arrives, and they are the reader's sign that the run
+  // has not stalled.
   const partTakesRow = useCallback(
-    (part: RenderPart, index: number): boolean =>
-      part.kind !== "thinking" ||
-      (showThinking && thinkingTakesRow(part.text, streaming && index === parts.length - 1)),
+    (part: RenderPart, index: number): boolean => {
+      const live = streaming && index === parts.length - 1;
+      if (part.kind === "thinking") return showThinking && thinkingTakesRow(part.text, live);
+      if (part.kind === "text") return blankTakesRow(part.text, live);
+      return true;
+    },
     [parts.length, showThinking, streaming],
   );
 
@@ -581,8 +591,9 @@ function ChatMessageRowImpl({
     // 「a body that would render nothing」 check was spelling out by hand.
     if (cut === 0) return null;
     // No prose after the last tool call: the run wrote no answer, so there is nothing to
-    // leave on screen and folding would hide its only output.
-    if (!parts.slice(cut).some((part) => part.kind === "text")) return null;
+    // leave on screen and folding would hide its only output. A reply that ends in nothing
+    // but line breaks is the same case wearing a tail — it takes no row either.
+    if (!parts.slice(cut).some((part) => part.kind === "text" && !isBlankOutput(part.text))) return null;
     return { cut, durationMs: workMs };
   }, [collapseRuns, message.error, message.role, partTakesRow, parts, streaming, workMs]);
 
@@ -692,6 +703,9 @@ function ChatMessageRowImpl({
   const liveTail =
     lastPart?.kind === "text" ||
     (showThinking && lastPart?.kind === "thinking") ||
+    // A swallowed thought that is still being written shimmers in the run's own line, which
+    // is a live element the same as the standalone block's would have been.
+    (lastPart?.kind === "group" && lastPart.group.liveThinking !== undefined) ||
     (lastPart?.kind === "compact" && lastPart.compact?.status === "running") ||
     message.tools.some((tool) => tool.status === "running");
   if (isUser && editing) {
@@ -699,8 +713,9 @@ function ChatMessageRowImpl({
       <Message align="end" className="group/row">
         <MessageContent className="items-end">
           {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
+          {message.skill ? <SkillBadgeRow skill={message.skill} /> : null}
           <InlinePromptEditor
-            value={stripAttachmentBlock(message.text)}
+            value={promptAsSent(message)}
             onCancel={() => setEditing(false)}
             onSubmit={submitEdit}
           />
@@ -740,6 +755,7 @@ function ChatMessageRowImpl({
     }
     if (part.kind === "text") {
       if (isUser) {
+        if (!stripAttachmentBlock(part.text).trim()) return null;
         return <UserPromptBubble key={`text-${index}`} text={part.text} />;
       }
       return (
@@ -789,6 +805,7 @@ function ChatMessageRowImpl({
     <Message align={isUser ? "end" : "start"} className="group/row">
       <MessageContent className={isUser ? "items-end" : "items-start"}>
         {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
+        {message.skill && isUser ? <SkillBadgeRow skill={message.skill} /> : null}
 
         {streaming && !isUser ? <RunProgress startedAt={runStart} /> : null}
 
@@ -825,14 +842,7 @@ function ChatMessageRowImpl({
         {message.retry ? <RetryStatus message={message} /> : null}
         {streaming && !message.error && !message.retry && !liveTail ? <WorkingStatus message={message} /> : null}
 
-        {message.error && !message.retry && !streaming ? (
-          <Bubble variant="destructive" align="start">
-            <BubbleContent className="flex items-start gap-2 text-sm leading-5">
-              <HugeiconsIcon strokeWidth={2} icon={AlertCircleIcon} className="mt-0.5 size-3.5 shrink-0" />
-              <span className="min-w-0 whitespace-pre-wrap wrap-break-word">{message.error}</span>
-            </BubbleContent>
-          </Bubble>
-        ) : null}
+        {message.error && !message.retry && !streaming ? <AssistantErrorNotice error={message.error} /> : null}
         {message.stop && !message.error && !message.retry && !streaming ? <StopNotice reason={message.stop} cause={message.stopCause} /> : null}
 
         {/*
@@ -891,6 +901,7 @@ export const ChatMessageRow = memo(ChatMessageRowImpl, (prev, next) => {
     prev.showThinking === next.showThinking &&
     prev.showTimestamp === next.showTimestamp &&
     prev.collapseRuns === next.collapseRuns &&
+    prev.collapseThinking === next.collapseThinking &&
     prev.onRetry === next.onRetry &&
     prev.onEdit === next.onEdit &&
     prev.onFork === next.onFork &&

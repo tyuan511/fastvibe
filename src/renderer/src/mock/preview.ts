@@ -1,6 +1,6 @@
 import type { DagNode, DagNodeStatus } from "@shared/dag";
 import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
-import type { ChatMessage, Conversation, ConversationOpenResult, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, MessagePart, WorkspaceSnapshot } from "@shared/types";
+import type { ChatMessage, Conversation, ConversationOpenResult, ConversationQueueState, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, MessagePart, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus, RemoteServerState } from "@shared/ipc";
 import type { OfficialState } from "@shared/official";
 import type { MemoryState } from "@shared/memory";
@@ -13,6 +13,8 @@ import {
   MARKET_PACKAGES,
   MCP_SERVERS,
   MESSAGES,
+  ERROR_MESSAGES,
+  PLAIN_ERROR_MESSAGES,
   INLINE_MESSAGES,
   INLINE_OFFICE_MESSAGES,
   MATH_MESSAGES,
@@ -75,7 +77,12 @@ function transcriptFixture() {
   if (website) return fixtureMessages;
   if (params.get("math") === "1") return [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
   if (params.get("dag") === "1") return DAG_MESSAGES;
+  if (params.get("error") === "1") return ERROR_MESSAGES;
+  if (params.get("error") === "plain") return PLAIN_ERROR_MESSAGES;
+  if (params.get("live") === "1") return liveThought(fixtureMessages);
   if (params.get("thinking") === "blank") return blankThinking(fixtureMessages);
+  if (params.get("blank") === "1") return blankProse(fixtureMessages);
+  if (params.get("skill") === "1") return skillForced(fixtureMessages);
   return inlineFixture() ?? fixtureMessages;
 }
 // The settings scenes are routes, so they have to be entered before the shell mounts.
@@ -142,6 +149,9 @@ const initialSettings: Record<string, unknown> = {
   darkTheme: website ? "github-dark" : "tokyo-night",
   sidebarWidth: website ? 260 : 264,
   sidebarCollapsed: sidebar === "collapsed",
+  // `?foldthink=1` turns on 设置 → 对话 → 折叠思考内容, so the transcript can be read with the
+  // thoughts counted inside the tool line instead of on rows of their own.
+  ...(params.get("foldthink") === "1" ? { collapseThinking: true } : {}),
   // The files scene has to be wide enough for the pane's `@min-[32rem]/files` container
   // query, which is what swaps the preview for tree + preview side by side.
   sidePaneWidth: website ? (websiteScene === "files" ? 760 : 460) : 384,
@@ -190,6 +200,9 @@ const mockSessionOverrides: { model?: { provider: string; id: string }; thinking
 function mockSession(conversationId?: string): EngineSessionState {
   return {
     ...fixtureSession,
+    // `?live=1`: the reply is still in flight, which is the only state in which a thought
+    // counts as live and its row animates.
+    ...(params.get("live") === "1" ? { running: true, isStreaming: true } : {}),
     // `?suggest=1`: a 回复推荐 is on offer, so the composer's placeholder and its Tab hint can be seen.
     ...(params.get("suggest") === "1" ? { suggestion: "帮我把这次改动补上单元测试" } : {}),
     ...mockSessionOverrides,
@@ -263,6 +276,39 @@ function ageThread(messages: ChatMessage[]): ChatMessage[] {
  * led to, the last one ends a reply — which is also the case that used to push 折叠运行过程's cut
  * past the answer and leave the run with no fold at all.
  */
+/**
+ * `?live=1` leaves the last reply in flight with a thought being written after its last call,
+ * and puts the session in `running` so the transcript reads as streaming. It is what the live
+ * half of 折叠思考内容 is looked at with: the run line shimmers 「正在思考」 and previews the
+ * growing text, the same line an unfolded block would have drawn (`?foldthink=1` is what puts
+ * the thought *inside* that line).
+ */
+function liveThought(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages.length - 1;
+  return messages.map((message, index) => {
+    if (index !== last || message.role !== "assistant" || !message.parts) return message;
+    const parts = [...message.parts];
+    let after = -1;
+    for (let position = parts.length - 1; position >= 0; position -= 1) {
+      if (parts[position]?.kind === "tool") {
+        after = position;
+        break;
+      }
+    }
+    // The thought has to be the reply's *last* part: that is what makes it a live one, and a
+    // run that is still writing. Anything the model wrote after it would have settled already.
+    parts.length = after + 1;
+    parts.push({
+      kind: "thinking",
+      text:
+        "再确认一下 ⌘J 会不会被输入框吞掉：composer 的 keydown 先走到快捷菜单，还是先被浏览器的默认行为拿走了？" +
+        "看一下注册的地方是在全局还是挂在窗口上…",
+      startedAt: Date.now() - 9000,
+    });
+    return { ...message, parts };
+  });
+}
+
 function blankThinking(messages: ChatMessage[]): ChatMessage[] {
   const last = messages.length - 1;
   return messages.map((message, index) => {
@@ -279,6 +325,80 @@ function blankThinking(messages: ChatMessage[]): ChatMessage[] {
     }
     if (index === last) parts.push({ kind: "thinking", text: "\n  " });
     return { ...message, parts };
+  });
+}
+
+/**
+ * `?blank=1` puts back the reply shape a remote model produces when it degenerates: a run of
+ * blank content that is invisible to the eye and not to the layout — dozens of `<br>`s, lines
+ * made of ideographic spaces, a text part that is nothing but breaks. Plain newlines are not
+ * in the fixture on purpose; `remark-parse` already collapses those, which is the fact the
+ * whole rule hangs on (`lib/blank-output.ts`).
+ */
+function blankProse(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages.length - 1;
+  return messages.map((message, index) => {
+    if (message.role !== "assistant" || !message.parts) return message;
+    if (index !== last) return message;
+    const padded: MessagePart = {
+      kind: "text",
+      text:
+        "表单、列表展示和到期拦截已经完成。\n\n" +
+        `${"<br>\n".repeat(60)}${"\u3000\n\n".repeat(20)}` +
+        "上面那段空白是模型自己写的：六十个 <br>、二十行全角空格。\n\n" +
+        "\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\n\n" +
+        "下面还有正文。",
+    };
+    // Appended after every tool call, so it is the answer half 折叠运行过程 leaves on screen.
+    const parts: MessagePart[] = [...message.parts, padded];
+    return { ...message, parts, text: `${message.text}\n${padded.kind === "text" ? padded.text : ""}` };
+  });
+}
+
+/**
+ * The queue tray `?skill=1` fills as well. A queued row is still the draft spelling —
+ * `/skill:…` — because the engine has not seen it yet, and the tray reads the badge from
+ * that form too (`components/chat/message-queue.tsx`).
+ */
+function skillQueue(conversationId: string, isActive: boolean): ConversationQueueState {
+  const empty: ConversationQueueState = { conversationId, revision: 0, items: [], pause: null };
+  if (!isActive || params.get("skill") !== "1") return empty;
+  return {
+    conversationId,
+    revision: 1,
+    items: [
+      {
+        id: "q-skill",
+        conversationId,
+        text: `/skill:${SKILLS[2].name} 把这次的改动整理成发布说明`,
+        behavior: "followUp",
+      },
+    ],
+    pause: null,
+  };
+}
+
+/**
+ * `?skill=1` shows a prompt that forced a skill. The engine expands `/skill:name …` into the
+ * whole `SKILL.md` before the message is persisted, so a thread row arrives as the person's own
+ * words plus `skill` — the badge — and never as the model's instruction sheet. Hover the badge
+ * for the skill's description (the tooltip falls back to its path for a skill this engine no
+ * longer lists); the second turn is a skill forced with nothing typed after it, which is the
+ * row that has no bubble at all.
+ */
+function skillForced(messages: ChatMessage[]): ChatMessage[] {
+  const withSkill = [SKILLS[0], SKILLS[1]];
+  let seen = 0;
+  return messages.map((message) => {
+    if (message.role !== "user") return message;
+    const skill = withSkill[seen];
+    seen += 1;
+    if (!skill) return message;
+    if (seen === 1) {
+      return { ...message, skill: { name: skill.name, location: skill.filePath } };
+    }
+    // No words of their own: the badge is the whole turn.
+    return { ...message, text: "", parts: [], skill: { name: skill.name, location: skill.filePath } };
   });
 }
 
@@ -325,6 +445,8 @@ const openResult = (id: string): ConversationOpenResult => {
   let messages = isActive && !newDraft ? fixtureMessages : [];
   if (!website && isActive && params.get("math") === "1") messages = [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
   if (!website && isActive && params.get("dag") === "1") messages = DAG_MESSAGES;
+  if (!website && isActive && params.get("error") === "1") messages = ERROR_MESSAGES;
+  if (!website && isActive && params.get("error") === "plain") messages = PLAIN_ERROR_MESSAGES;
   const inline = inlineFixture();
   if (isActive && inline) messages = inline;
   // `?older=1` ages the thread so the footers have to name their day. Every fixture is
@@ -333,7 +455,10 @@ const openResult = (id: string): ConversationOpenResult => {
   // the rest are spread over the previous days and a previous year, which is exactly
   // the mix a reopened old chat has.
   if (!website && isActive && params.get("older") === "1") messages = ageThread(messages);
+  if (!website && isActive && params.get("live") === "1") messages = liveThought(messages);
   if (!website && isActive && params.get("thinking") === "blank") messages = blankThinking(messages);
+  if (!website && isActive && params.get("blank") === "1") messages = blankProse(messages);
+  if (!website && isActive && params.get("skill") === "1") messages = skillForced(messages);
   return {
     ...snapshot(),
     conversation,
@@ -345,7 +470,9 @@ const openResult = (id: string): ConversationOpenResult => {
       ? { ...fixtureSession, messageCount: messages.length, running: params.get("running") === "1" }
       : { ...fixtureSession, messageCount: 0 },
     status: { state: "ready", cwd: fixtureCwd },
-    queue: { conversationId: conversation.id, revision: 0, items: [], pause: null },
+    // `?skill=1` also parks one forced-skill prompt in the follow-up queue, which is drawn
+    // from the draft spelling (`/skill:…`) rather than the engine's expansion.
+    queue: skillQueue(conversation.id, isActive),
     // Only the chat that owns a goal carries one: the panel is conversation-bound, and
     // the preview is where that is checked (`?goal=1`).
     extensionStatus:
@@ -636,7 +763,7 @@ const api = {
       conversationId: conversationId ?? fixtureActiveId,
       messages: conversationId && conversationId !== fixtureActiveId ? fixtureMessages.slice(0, 2) : fixtureMessages,
       running: runningIds.has(conversationId ?? fixtureActiveId),
-      queue: { conversationId: conversationId ?? fixtureActiveId, revision: 0, items: [], pause: null },
+      queue: skillQueue(conversationId ?? fixtureActiveId, !conversationId || conversationId === fixtureActiveId),
       pendingUi: parkedPrompts().filter((request) => request.conversationId === (conversationId ?? fixtureActiveId)),
       turnEvents: [],
       overflowed: false,

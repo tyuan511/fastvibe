@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fastvibe_mobile/chat/composer.dart';
 import 'package:fastvibe_mobile/chat/images.dart';
 import 'package:fastvibe_mobile/chat/message.dart';
+import 'package:fastvibe_mobile/chat/skill_badge.dart';
 import 'package:fastvibe_mobile/chat/process_group.dart';
 import 'package:fastvibe_mobile/chat/prompt_card.dart';
 import 'package:fastvibe_mobile/chat/queue.dart';
@@ -299,6 +300,22 @@ void main() {
   });
 
   for (final active in [light, dark]) {
+    testWidgets('skill badges render words and skill-only rows in ${active.dark ? "dark" : "light"}', (tester) async {
+      await pump(tester, Scaffold(body: TranscriptView(
+        messages: [
+          ChatMessage.fromJson({'id': 'u2', 'role': 'user', 'text': '', 'skill': {'name': 'pdf'}}),
+          ChatMessage.fromJson({'id': 'u1', 'role': 'user', 'text': '写周报', 'skill': {'name': 'office'}}),
+        ],
+        footers: const {}, running: false, waiting: false, workingSince: null,
+        onLongPress: (_) {}, onOlder: () {},
+      )), palette: active);
+      expect(find.byType(SkillBadge), findsNWidgets(2));
+      expect(find.textContaining('office'), findsOneWidget);
+      expect(find.textContaining('pdf'), findsOneWidget);
+      expect(find.textContaining('写周报'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('deferred content loads only visible rows, with a retry in ${active.dark ? "dark" : "light"}', (tester) async {
       final loaded = <String>[];
       var result = Completer<void>();

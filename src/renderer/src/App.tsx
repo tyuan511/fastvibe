@@ -21,6 +21,8 @@ import { SidePane, disposeSidePaneTabs } from "@/components/layout/side-pane";
 import { ConversationResources } from "@/components/layout/conversation-resources";
 import { forgetFileTree } from "@/lib/file-tree-state";
 import { forgetSidebarProject } from "@/lib/sidebar-project-state";
+import { rememberSkillDescriptions } from "@/lib/skill-descriptions";
+import { skillCommandOf } from "@shared/skill-invocation";
 import { handleBrowserRequest } from "@/components/layout/side-pane-browser";
 import { PANEL_COLLAPSE_TRANSITION } from "@/components/layout/collapsible-panel";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -145,7 +147,7 @@ export function App(): JSX.Element {
       useSessionStore
         .getState()
         .messages.filter((item) => item.role === "user")
-        .map((item) => item.text)
+        .map((item) => skillCommandOf(item.skill, item.text))
         .filter(Boolean),
     [],
   );
@@ -562,7 +564,12 @@ export function App(): JSX.Element {
     if (settingsOpen) return;
     void window.fastvibe.engine
       .listSkills()
-      .then(setSkills)
+      .then((list) => {
+        setSkills(list);
+        // The transcript's skill badges read their one-line hint from the same list; a
+        // badge for a skill this engine no longer shows falls back to its file path.
+        rememberSkillDescriptions(list);
+      })
       .catch(() => undefined);
   }, [settingsOpen, active?.project]);
 
@@ -1121,8 +1128,9 @@ export function App(): JSX.Element {
         message.role === "user"
           ? message
           : [...current.messages].reverse().find((item) => item.role === "user" && item.createdAt <= message.createdAt);
-      const text = source?.text?.trim();
-      if (!text || !canChat) return;
+      // Leading newlines delimit attachment metadata when there are no typed words.
+      const text = source ? skillCommandOf(source.skill, source.text).trimEnd() : "";
+      if ((!text.trim() && !source?.attachments?.length) || !canChat) return;
       if (current.streaming) {
         try {
           await engine.abort();

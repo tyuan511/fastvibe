@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import { transcriptDisplay } from "@/lib/transcript-display";
 import { useTranscriptNavigation } from "@/stores/transcript-navigation";
+import { useSettingsStore } from "@/stores/settings";
 import type { ChatMessage } from "@shared/types";
 import { SelectionActionBar } from "./selection-action-bar";
 import { NewSessionHero } from "./new-session";
@@ -60,7 +61,11 @@ const promptPreviews = new WeakMap<ChatMessage, string>();
 function promptPreview(message: ChatMessage): string {
   const cached = promptPreviews.get(message);
   if (cached !== undefined) return cached;
-  const preview = clip(stripAttachmentBlock(message.text), PROMPT_LIMIT);
+  // A turn whose prompt forced a skill says so in the same spelling the sidebar row uses:
+  // the badge's own text is not something this marker could show, and 「(nothing typed)」
+  // is worse than the command that was sent.
+  const words = stripAttachmentBlock(message.text);
+  const preview = clip(message.skill ? `/skill:${message.skill.name}${words ? ` ${words}` : ""}` : words, PROMPT_LIMIT);
   promptPreviews.set(message, preview);
   return preview;
 }
@@ -360,6 +365,7 @@ function ThreadRow({
   showThinking,
   showTimestamp,
   collapseRuns,
+  collapseThinking,
 }: {
   row: MessageRow;
   last: boolean;
@@ -371,6 +377,7 @@ function ThreadRow({
   showThinking: boolean;
   showTimestamp: boolean;
   collapseRuns: boolean;
+  collapseThinking: boolean;
 }): JSX.Element {
   const isUser = row.messages[0].role === "user";
   const { ref, pinned } = usePinnedPrompt();
@@ -395,6 +402,7 @@ function ThreadRow({
         showThinking={showThinking}
         showTimestamp={showTimestamp}
         collapseRuns={collapseRuns}
+        collapseThinking={collapseThinking}
       />
       {isUser && pinned ? (
         <div
@@ -476,6 +484,9 @@ export function MessageList({
   onAskSelectionInSideChat?: (text: string) => void;
 }): JSX.Element {
   const { showThinking, showTimestamp, collapseRuns } = transcriptDisplay();
+  // 设置 → 对话 → 折叠思考内容. A real preference (unlike the three above, which the product
+  // always draws the same way), so it is read from the store and not from the harness module.
+  const collapseThinking = useSettingsStore((state) => state.settings.collapseThinking);
   const { t } = useTranslation("chat");
   const navigationTarget = useTranscriptNavigation((state) => state.target);
   const navigated = useRef<object | null>(null);
@@ -777,6 +788,7 @@ export function MessageList({
                               showThinking={showThinking}
                               showTimestamp={showTimestamp}
                               collapseRuns={collapseRuns}
+                              collapseThinking={collapseThinking}
                             />
                           ))}
                         </MessageGroup>

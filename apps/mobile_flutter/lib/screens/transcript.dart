@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 
+import '../chat/blank_output.dart';
 import '../chat/dag_data.dart';
 import '../chat/image_bytes.dart';
 import '../chat/image_note.dart';
@@ -12,6 +13,7 @@ import '../chat/message.dart';
 import '../chat/output_files.dart';
 import '../chat/output_files_row.dart';
 import '../chat/process_group.dart';
+import '../chat/skill_badge.dart';
 import '../chat/turn_meta.dart';
 import '../i18n/core.dart';
 import '../theme/theme.dart';
@@ -619,7 +621,12 @@ class _UserRow extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: <Widget>[
-              Container(
+              if (message.skill != null) ...<Widget>[
+                SkillBadge(skill: message.skill!),
+                if (text.isNotEmpty || (message.attachments?.isNotEmpty ?? false))
+                  const SizedBox(height: 6),
+              ],
+              if (text.isNotEmpty || (message.attachments?.isNotEmpty ?? false)) Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
                   vertical: 10,
@@ -735,7 +742,8 @@ class _AssistantRow extends StatelessWidget {
                 const SizedBox(height: 12),
               ],
               for (var index = 0; index < drawn.length; index++) ...<Widget>[
-                if (index > 0) const SizedBox(height: _blockGap),
+                if (index > 0 && _blockTakesRow(drawn[index], index == drawn.length - 1))
+                  const SizedBox(height: _blockGap),
                 _block(drawn[index], index == drawn.length - 1),
               ],
               if (message.error != null) ...<Widget>[
@@ -774,12 +782,23 @@ class _AssistantRow extends StatelessWidget {
     return OutputFilesRow(files: files, palette: palette, onOpen: onOpenFile!);
   }
 
+  /// Whether [_block] draws anything, and therefore whether the gap before it belongs on
+  /// screen. Without this a reply that ends in a run of blank prose still leaves a stack of
+  /// 12px holes where the empty rows used to be.
+  bool _blockTakesRow(RenderBlock block, bool isLast) => switch (block) {
+    TextBlock(:final text) => blankTakesRow(text, live && isLast),
+    DagBlock() => false,
+    _ => true,
+  };
+
   Widget _block(RenderBlock block, bool isLast) => switch (block) {
-    TextBlock(:final text) => MarkdownView(
-      text: text,
-      palette: palette,
-      streaming: live,
-    ),
+    // A stretch of prose with nothing to read takes no row once the run has moved on; while
+    // it is the live tail it keeps one, because the streaming caret on that empty bubble is
+    // the reader's proof that the reply is still being written. (`collapseBlankRuns` inside
+    // `MarkdownView` is what stops the wall from ever growing — this is the settled case.)
+    TextBlock(:final text) => !_blockTakesRow(block, isLast)
+      ? const SizedBox.shrink()
+      : MarkdownView(text: text, palette: palette, streaming: live),
     ProcessBlock(:final steps) => ProcessGroup(
       steps: steps,
       palette: palette,

@@ -1,23 +1,27 @@
-import { memo, type JSX } from "react";
+import { memo, useLayoutEffect, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { ArrowDown01Icon } from "@hugeicons/core-free-icons";
 import { subagentStatusText } from "@/lib/subagent-status";
 import { findSubagent, subagentEntries, subagentResultStatus } from "@shared/subagent-state";
 import { Spinner } from "@/components/ui/spinner";
+import { Button } from "@/components/ui/button";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { countPatch, fileChange, type FileChange } from "@/lib/changed-files";
 import { asRecord, argString, describeTool, familyOf, unwrapShellCommand } from "@/lib/tool-presentation";
 import { parseToolTodos } from "@/lib/todos";
-import { codemodeCalls, codemodeCode, codemodeFence, formatCallDuration, splitCodemodeSource, type CodemodeCall } from "@/lib/codemode";
+import { codemodeCalls, codemodeCode, formatCallDuration, splitCodemodeSource, type CodemodeCall } from "@/lib/codemode";
 import { DiffStatBadge } from "./diff-stat";
 import { DiffView } from "./diff-view";
-import { MarkdownView } from "./markdown-view";
+import { CodeBlock, MarkdownView } from "./markdown-view";
 import { QuestionAnswers } from "./question-answers";
 import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
 import { DagInline, useDagBatch } from "@/components/dag/dag-inline";
 import { useTranscriptConversation } from "./conversation-context";
+import { cn } from "@/lib/utils";
 
 const RESULT_LIMIT = 4000;
 
@@ -66,23 +70,83 @@ function trim(text: string): string {
   return body.length > RESULT_LIMIT ? `${body.slice(0, RESULT_LIMIT)}\n…` : body;
 }
 
+/** Long commands start at three lines; expanding keeps their scrollbar at the panel edge. */
+function TerminalCommand({ command }: { command: string }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const bodyRef = useRef<HTMLPreElement>(null);
+
+  useLayoutEffect(() => {
+    setExpanded(false);
+  }, [command]);
+
+  useLayoutEffect(() => {
+    const node = bodyRef.current;
+    if (!node) return;
+    const measure = (): void => {
+      const lineHeight = Number.parseFloat(getComputedStyle(node).lineHeight);
+      setOverflows(node.scrollHeight > lineHeight * 3 + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [command, expanded]);
+
+  return (
+    <div className="relative text-sm leading-5">
+      <div className={cn(expanded && "max-h-[calc(8lh+1.5rem)] overflow-y-auto")}>
+        <div className="flex items-start gap-2 px-4 py-3 font-mono">
+          <span className="shrink-0 text-muted-foreground">$</span>
+          <pre
+            ref={bodyRef}
+            className={cn(
+              "min-w-0 flex-1 whitespace-pre-wrap break-all text-foreground select-text",
+              !expanded && "line-clamp-3",
+              // Leave room for the corner toggle, including while the command scrolls.
+              overflows && "pr-6",
+            )}
+          >
+            {command}
+          </pre>
+        </div>
+      </div>
+      {overflows ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="absolute top-3 right-3 size-5 text-muted-foreground"
+          aria-label={t(expanded ? "message.collapse" : "message.expand")}
+          title={t(expanded ? "message.collapse" : "message.expand")}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <HugeiconsIcon
+            icon={ArrowDown01Icon}
+            strokeWidth={2}
+            aria-hidden
+            className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
+          />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 /** Terminal output panel: `$ command` header, then stdout (zcode's `nG` layout). */
 function TerminalPanel({ command, output, running }: { command: string; output: string; running: boolean }): JSX.Element {
   const { t } = useTranslation("chat");
   return (
-    <div className="mb-1 space-y-3 rounded-xl border border-border bg-muted/30 px-4 py-3">
-      <div className="flex items-start gap-2">
-        <span className="shrink-0 text-muted-foreground">$</span>
-        <pre className="min-w-0 flex-1 truncate font-mono text-sm whitespace-pre-wrap break-words text-foreground">
-          {unwrapShellCommand(command)}
-        </pre>
-      </div>
+    <div className="mb-1 overflow-hidden rounded-xl border border-border bg-muted/30">
+      <TerminalCommand command={unwrapShellCommand(command)} />
       {output.trim() ? (
-        <pre className="max-h-72 overflow-auto font-mono text-sm leading-5 whitespace-pre-wrap break-words text-muted-foreground select-text">
+        <pre className="max-h-72 overflow-auto px-4 pb-3 font-mono text-sm leading-5 whitespace-pre-wrap break-words text-muted-foreground select-text">
           {trim(output)}
         </pre>
       ) : !running ? (
-        <p className="font-mono text-sm text-muted-foreground">{t("tools.noOutput")}</p>
+        <p className="px-4 pb-3 font-mono text-sm text-muted-foreground">{t("tools.noOutput")}</p>
       ) : null}
     </div>
   );
@@ -200,8 +264,8 @@ function CodemodePanel({ tool, running }: { tool: ToolCallBlock; running: boolea
             {options ? <span className="ml-2 font-mono font-normal">{options}</span> : null}
           </p>
           {/* `chat-markdown` is what gives a fenced block the same padding it has in a reply. */}
-          <div className="chat-markdown max-h-72 overflow-y-auto text-sm">
-            <MarkdownView text={codemodeFence(body)} />
+          <div className="chat-markdown text-sm">
+            <CodeBlock language="js" code={body} scrollClassName="max-h-72 overflow-y-auto" />
           </div>
         </section>
       ) : null}

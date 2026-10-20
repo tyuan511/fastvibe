@@ -1,6 +1,6 @@
 import type { ChatMessage, MessagePart, ToolCallBlock } from "@shared/types";
 import { i18n } from "@/lib/i18n";
-import { collapseToolRuns, runSummary, type RunItem, type SummaryPiece } from "./tool-run";
+import { collapseToolRuns, runSummary, type RunFoldOptions, type RunItem, type ThinkingPart, type SummaryPiece } from "./tool-run";
 
 /**
  * Consecutive quiet tools between two stretches of prose collapse into one row.
@@ -9,12 +9,21 @@ import { collapseToolRuns, runSummary, type RunItem, type SummaryPiece } from ".
 
 export type ToolGroup = {
   id: string;
-  /** Settled line, e.g. 「已运行 2 个命令，已读取 process-manager.ts」. */
+  /** Settled line, e.g. 「已思考 2 次，已运行 2 个命令，已读取 process-manager.ts」. */
   summary: string;
   pieces: SummaryPiece[];
+  /** Everything the row stands for, in the order the engine wrote it: calls and thoughts. */
   items: RunItem[];
   tools: ToolCallBlock[];
+  /** How many thoughts this row hides — 0 unless 折叠思考内容 is on. */
+  thoughts: number;
   running: boolean;
+  /**
+   * The thought being written right now, when the row is live on reasoning rather than on
+   * a call. `running` is then true as well, and the row shimmers 「正在思考」 with the same
+   * growing preview an unfolded thinking block shows.
+   */
+  liveThinking?: ThinkingPart;
 };
 
 export type RenderPart =
@@ -202,15 +211,13 @@ export function resolveParts(message: ChatMessage): MessagePart[] {
  * A settled run of quiet tools keeps the same group object while a reply streams on.
  *
  * `mergeAssistantRun` and `groupParts` are rebuilt for the streaming row on every flush, and
- * building a group walks its tools to write the summary line. A turn with hundreds of calls
+ * building a group walks its items to write the summary line. A turn with hundreds of calls
  * therefore re-summarised every one of them per token and handed `ToolGroupRow` a new object
  * each time, which defeated its memo. Tool blocks keep their identity once they are done
  * (`applyEngineEvent` clones only the one being written), so a group is reused while it still
- * holds the very same blocks in the same order, under the same language.
+ * holds the very same blocks in the same order, under the same fold.
  */
-const builtGroups = new WeakMap<ToolCallBlock, { language: string; id: string; items: RunItem[]; tools: ToolCallBlock[]; group: ToolGroup }>();
-
-const itemTools = (item: RunItem): ToolCallBlock[] => [item.tool];
+const builtGroups = new WeakMap<ToolCallBlock, { key: string; id: string; items: RunItem[]; tools: ToolCallBlock[]; group: ToolGroup }>();
 
 function sameTools(a: readonly ToolCallBlock[], b: readonly ToolCallBlock[]): boolean {
   if (a.length !== b.length) return false;
@@ -218,40 +225,67 @@ function sameTools(a: readonly ToolCallBlock[], b: readonly ToolCallBlock[]): bo
   return true;
 }
 
-function buildGroup(run: { id: string; items: RunItem[]; tools: ToolCallBlock[] }, language: string): ToolGroup {
+/**
+ * Identity, not text: a streamed thinking part is cloned on every delta, so a batch whose
+ * thought is still growing always misses this cache — which is what keeps the live preview
+ * current. Once the parts settle their identity holds, and the row stops rebuilding.
+ */
+function sameItems(a: readonly RunItem[], b: readonly RunItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (!left || !right || left.kind !== right.kind) return false;
+    if (left.kind === "tool" && right.kind === "tool" && left.tool !== right.tool) return false;
+    if (left.kind === "thinking" && right.kind === "thinking" && (left.part !== right.part || left.live !== right.live)) return false;
+  }
+  return true;
+}
+
+function buildGroup(
+  run: { id: string; items: RunItem[]; tools: ToolCallBlock[]; liveThinking?: ThinkingPart },
+  language: string,
+  fold: boolean,
+): ToolGroup {
   const first = run.tools[0];
+  const key = `${language}${fold ? "f" : "-"}`;
   const cached = first ? builtGroups.get(first) : undefined;
-  if (cached && cached.language === language && cached.id === run.id && sameTools(cached.tools, run.tools) && sameTools(cached.items.flatMap(itemTools), run.items.flatMap(itemTools))) {
+  if (cached && cached.key === key && cached.id === run.id && sameTools(cached.tools, run.tools) && sameItems(cached.items, run.items)) {
     return cached.group;
   }
-  const summary = runSummary(run.tools, (key, options) => i18n.t(key, options) as string);
+  const summary = runSummary(run.items, (k, options) => i18n.t(k, options) as string);
+  const thoughts = run.items.reduce((total, item) => total + (item.kind === "thinking" ? 1 : 0), 0);
   const group: ToolGroup = {
     id: run.id,
     summary: summary.line,
     pieces: summary.pieces,
     items: run.items,
     tools: run.tools,
-    running: run.tools.some((tool) => tool.status === "running"),
+    thoughts,
+    running: run.liveThinking !== undefined || run.tools.some((tool) => tool.status === "running"),
+    liveThinking: run.liveThinking,
   };
-  if (first) builtGroups.set(first, { language, id: run.id, items: run.items, tools: run.tools, group });
+  if (first) builtGroups.set(first, { key, id: run.id, items: run.items, tools: run.tools, group });
   return group;
 }
 
 /**
- * Cached on the message identity and the active language — the summary is
- * translated, so a language switch must not serve the previous line.
+ * Cached on the message identity, the active language and how the run is folded — the summary
+ * is translated, so a language switch must not serve the previous line, and a preference
+ * change (or a run settling) must not keep serving the old fold.
  */
-const groupedParts = new WeakMap<ChatMessage, { language: string; parts: RenderPart[] }>();
+const groupedParts = new WeakMap<ChatMessage, { key: string; parts: RenderPart[] }>();
 
 /** Resolve tool ids, and fold consecutive quiet calls that sit between prose. */
-export function groupParts(message: ChatMessage, language: string = i18n.language): RenderPart[] {
+export function groupParts(message: ChatMessage, language: string = i18n.language, fold: RunFoldOptions = {}): RenderPart[] {
+  const key = `${language}|${fold.collapseThinking ? 1 : 0}|${fold.streaming ? 1 : 0}`;
   const cached = groupedParts.get(message);
-  if (cached && cached.language === language) return cached.parts;
+  if (cached && cached.key === key) return cached.parts;
 
   const byId = new Map(message.tools.map((tool) => [tool.id, tool]));
-  const parts: RenderPart[] = collapseToolRuns(resolveParts(message), byId).map((part) =>
-    part.kind === "run" ? { kind: "group", group: buildGroup(part, language) } : part,
+  const parts: RenderPart[] = collapseToolRuns(resolveParts(message), byId, fold).map((part) =>
+    part.kind === "run" ? { kind: "group", group: buildGroup(part, language, fold.collapseThinking === true) } : part,
   );
-  groupedParts.set(message, { language, parts });
+  groupedParts.set(message, { key, parts });
   return parts;
 }

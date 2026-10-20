@@ -30,6 +30,13 @@ export type AppSettings = ProxySettings & {
   /** Offer the model `tool_search`, which finds and loads tools that are not declared up front. */
   toolSearch: boolean;
   /**
+   * 折叠思考内容 (设置 → 对话). When on, a thought that sits inside a batch of tool calls joins
+   * that batch's line and is counted there (「已思考 2 次」) instead of taking its own row.
+   * Off by default: the transcript has always shown reasoning on its own line, and hiding it
+   * is a choice about density, not a default worth making for someone who never asked.
+   */
+  collapseThinking: boolean;
+  /**
    * 动态子 Agent 编排 (设置 → 子 Agent). When on, the main agent is given the `dag_*` tools.
    * Off leaves them out of the active set, so a turn cannot create or drive a graph.
    */
@@ -175,6 +182,7 @@ const DEFAULTS: AppSettings = {
   replySuggestions: true,
   codemode: true,
   toolSearch: true,
+  collapseThinking: false,
   dynamicDag: true,
   browserUseSystem: false,
   browserEngine: "auto",
@@ -254,6 +262,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (typeof next.replySuggestions !== "boolean") delete next.replySuggestions;
   if (typeof next.codemode !== "boolean") delete next.codemode;
   if (typeof next.toolSearch !== "boolean") delete next.toolSearch;
+  if (typeof next.collapseThinking !== "boolean") delete next.collapseThinking;
   if (typeof next.dynamicDag !== "boolean") delete next.dynamicDag;
   if (typeof next.browserUseSystem !== "boolean") delete next.browserUseSystem;
   if (!isBrowserEngine(next.browserEngine)) delete next.browserEngine;

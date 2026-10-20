@@ -180,6 +180,7 @@
     "fork": "从此处分叉",
     "working": "正在工作",
     "workingOn": "正在工作",
+    "skill": "技能",
     "expand": "展开",
     "collapse": "收起",
     "expandProcess": "展开之前的 {{count}} 个步骤",
@@ -200,7 +201,11 @@
     "earlier_other": "显示更早的 {{count}} 个回合",
     "stoppedAtLength": "回复达到了模型的最大输出长度，已被截断。可以点「继续」重新生成，或在 设置 → 模型与默认 → 模型详情 中调大「最大输出」。",
     "stoppedAborted": "已中断",
-    "stoppedRepetition": "模型陷入了重复输出，已自动停止本轮回复。可以点「继续」重试，或换一个模型、调低思考强度。"
+    "stoppedRepetition": "模型陷入了重复输出，已自动停止本轮回复。可以点「继续」重试，或换一个模型、调低思考强度。",
+    "errorNoMessage": "请求失败，没有返回更多信息。",
+    "errorDetailShow": "查看详情",
+    "errorDetailHide": "收起详情",
+    "errorDetailCopy": "复制报错"
   },
   "permission": {
     "needConfirm": "需要确认",

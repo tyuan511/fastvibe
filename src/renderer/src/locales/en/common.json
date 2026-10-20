@@ -178,6 +178,8 @@
   },
   "group": {
     "separator": ", ",
+    "thoughts_one": "Thought {{count}} time",
+    "thoughts_other": "Thought {{count}} times",
     "ranCommands_one": "Ran {{count}} command",
     "ranCommands_other": "Ran {{count}} commands",
     "readOne": "Read",

@@ -180,6 +180,7 @@
     "fork": "Fork from here",
     "working": "Working",
     "workingOn": "Still working",
+    "skill": "Skill",
     "expand": "Expand",
     "collapse": "Collapse",
     "expandProcess": "Show {{count}} earlier steps",
@@ -200,7 +201,11 @@
     "earlier_other": "Show {{count}} earlier turns",
     "stoppedAtLength": "The reply hit the model's maximum output length and was cut off. Press Continue to regenerate it, or raise Max output in Settings → Models & defaults → Model details.",
     "stoppedAborted": "Interrupted",
-    "stoppedRepetition": "The model fell into a repetition loop, so this reply was stopped automatically. Click Continue to retry, or switch models or lower the thinking effort."
+    "stoppedRepetition": "The model fell into a repetition loop, so this reply was stopped automatically. Click Continue to retry, or switch models or lower the thinking effort.",
+    "errorNoMessage": "The request failed without a message.",
+    "errorDetailShow": "Show details",
+    "errorDetailHide": "Hide details",
+    "errorDetailCopy": "Copy error"
   },
   "permission": {
     "needConfirm": "Confirmation needed",

@@ -23,6 +23,7 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 import { applyEngineEvent, userMessageText } from "@/lib/apply-engine-event";
+import { isSkillCommand, skillDisplayOf } from "@shared/skill-invocation";
 import { randomUUID } from "../../../shared/random.ts";
 import { applySubagentStream, upsertSubagent } from "./session-subagents";
 import { i18n } from "@/lib/i18n";
@@ -853,23 +854,30 @@ export const useSessionStore = create<SessionStore>((set, get) => {
   dismissNotice: (id) => set((state) => ({ notices: state.notices.filter((item) => item.id !== id) })),
   addUserMessage: (text, attachments) =>
     set((state) => {
+      // A forced skill is expanded by the engine into the whole SKILL.md. Draw the row the
+      // way the transcript will read it back — the person's words and a badge — so the
+      // optimistic row and the row that replaces it at the end of the turn are the same.
+      const prompt = skillDisplayOf(text);
       const messages: ChatMessage[] = [
         ...state.messages,
         {
           id: `local:${randomUUID()}`,
           role: "user",
-          text,
+          text: prompt.text,
           tools: [],
-          parts: text ? [{ kind: "text", text }] : [],
+          parts: prompt.text ? [{ kind: "text", text: prompt.text }] : [],
           createdAt: Date.now(),
           attachments,
+          skill: prompt.skill,
         },
       ];
       // A slash command can be handled by an extension without starting an agent
       // turn (goal menus, …). Only a plain prompt pre-creates
       // the assistant bubble; for `/…` the bubble is created by `agent_start`
       // when a turn actually runs, so the UI never hangs in a fake "streaming".
-      const startsTurn = !text.trim().startsWith("/");
+      // `/skill:…` is the slash line that *does* start one: the engine expands it
+      // into the prompt the model answers.
+      const startsTurn = !text.trim().startsWith("/") || isSkillCommand(text);
       if (startsTurn) {
         messages.push({
           id: randomUUID(),
@@ -898,8 +906,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       if (item.sending || item.claimed || state.sentNow?.id === id) return state;
       // A slash line may be a command the engine runs without a turn (`/compact`
       // waits for the run instead of replacing it). It is not drawn as one: a turn
-      // that never comes is exactly what this row would then be.
-      if (item.text.trim().startsWith("/")) return state;
+      // that never comes is exactly what this row would then be. A forced skill is the
+      // slash line that does start a turn, so it is drawn.
+      if (item.text.trim().startsWith("/") && !isSkillCommand(item.text)) return state;
       const prior = state.sentNow;
       const cleared = prior ? retractOptimisticTurn(state.messages) : state.messages;
       // What this turn waits behind. A turn it replaces was waiting behind the same

@@ -2,6 +2,7 @@ import type { ChatAttachment, ChatMessage, DagSettledInfo, MessagePart, Thinking
 import { assistantStopVerdict, isRepetitionStop } from "../../shared/abort.ts";
 import { extractPromptAttachments } from "../../shared/attachment-metadata.ts";
 import { stripMemoryCitation } from "../../shared/memory-citation.ts";
+import { parseSkillInvocation } from "../../shared/skill-invocation.ts";
 import { toolImagesOf, toolResultStatus } from "../../shared/tool-result.ts";
 import { isToolImageRef } from "../../shared/tool-image-ref.ts";
 import { uiText } from "./ui-text.ts";
@@ -151,14 +152,24 @@ export function mapEngineMessages(
       continue;
     }
     const role = message.role === "assistant" || message.role === "system" ? message.role : "user";
-    const { text, thinking, tools, attachments, parts } = extractContent(message.content);
+    const content = extractContent(message.content);
+    // A prompt that invoked a skill holds the whole SKILL.md the engine expanded that
+    // command into — the model's instruction sheet, not what the person wrote. The row
+    // keeps their own words and a badge naming the skill, so the same reading works for
+    // a live send, a reloaded transcript and a phone that never learns the markup.
+    const skill = role === "user" ? parseSkillInvocation(content.text) : null;
+    const text = skill ? skill.args : content.text;
+    const parts = skill ? replaceSkillParts(content.parts, skill.args) : content.parts;
+    const { thinking, tools, attachments } = content;
     if (role === "user") attachments.push(...extractPromptAttachments(text));
     const id = idOf?.(entry) ?? String(message.id ?? crypto.randomUUID());
     applyThinkingTimings(parts, id ? timings?.get(id) : undefined);
     const error = assistantError(message);
     const stop = error ? undefined : assistantStop(message);
     const stopCause = stop === "aborted" && isRepetitionStop(message) ? "repetition" : undefined;
-    if (!text && !thinking && tools.length === 0 && attachments.length === 0 && !error && role !== "assistant") continue;
+    // A skill with nothing typed after it is still a turn the person took: the row has
+    // no text of its own, but the badge is the whole message, so it stays on screen.
+    if (!text && !skill && !thinking && tools.length === 0 && attachments.length === 0 && !error && role !== "assistant") continue;
     output.push({
         id,
         role,
@@ -172,6 +183,7 @@ export function mapEngineMessages(
         completedAt: role === "assistant" ? (id ? completedAtOf?.get(id) : undefined) : undefined,
         kind: role === "system" ? "notice" : "message",
         attachments: attachments.length > 0 ? attachments : undefined,
+        skill: skill ? { name: skill.name, ...(skill.location ? { location: skill.location } : {}) } : undefined,
         error,
         stop,
         stopCause,
@@ -181,6 +193,27 @@ export function mapEngineMessages(
     }
   }
   return output;
+}
+
+/**
+ * Put the person's own words where the skill block was. A user prompt is one text part
+ * today, so the block and the words after it are replaced by that part carrying the
+ * words alone; a message that has no words left keeps no text part, which is what leaves
+ * the row as the badge on its own.
+ */
+function replaceSkillParts(parts: MessagePart[], args: string): MessagePart[] {
+  const out: MessagePart[] = [];
+  let placed = false;
+  for (const part of parts) {
+    if (part.kind !== "text") {
+      out.push(part);
+      continue;
+    }
+    if (placed) continue;
+    placed = true;
+    if (args) out.push({ ...part, text: args });
+  }
+  return out;
 }
 
 /** Hand each measured block to the thinking part it belongs to, in content order. */

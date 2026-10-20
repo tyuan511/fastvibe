@@ -18,8 +18,10 @@ const TICKER_SLIDE_MAX = 72;
  * stream cuts that slide off before it finishes — the row then shows only a
  * fragment. Collapsing whitespace keeps the preview one line; the expanded body
  * still renders the original breaks.
+ *
+ * Exported because a folded run line previews a live thought the same way.
  */
-function tickerLine(text: string): string | null {
+export function tickerLine(text: string): string | null {
   const line = text.replace(/\s+/gu, " ").trim();
   return line.length > 0 ? line : null;
 }
@@ -187,8 +189,11 @@ export const ThinkingBlock = memo(function ThinkingBlock({
  * One line, growing at the right. The window follows the tail, so a fast stream
  * keeps a full row of the latest text on screen instead of restarting an entrance
  * on each newline. A short slide covers a few new characters; a burst snaps.
+ *
+ * Also drawn in the tool run's line when 折叠思考内容 has swallowed a thought that is
+ * still being written — that row shows the same preview the standalone block does.
  */
-function ReasoningTicker({ text }: { text: string }): JSX.Element {
+export function ReasoningTicker({ text }: { text: string }): JSX.Element {
   const frameRef = useRef<HTMLSpanElement>(null);
   const trackRef = useRef<HTMLSpanElement>(null);
   const shiftRef = useRef(0);

@@ -18,6 +18,7 @@ import '../chat/message.dart';
 import '../chat/option_sheet.dart';
 import '../chat/output_files.dart';
 import '../chat/prompt_card.dart';
+import '../chat/skill_invocation.dart';
 import '../chat/queue.dart';
 import '../chat/queue_panel.dart';
 import '../chat/snapshot_sync.dart';
@@ -809,13 +810,15 @@ class _ChatScreenState extends State<ChatScreen> {
             : (title: _chat!.title, preview: _chat!.preview),
         onPrompt: () {
           if (!current()) return;
+          final prompt = skillDisplayOf(text);
           _setMessages(<ChatMessage>[
             ..._messages,
             ChatMessage(
               id: localId,
               role: 'user',
-              text: text,
-              parts: <MessagePart>[TextPart(text)],
+              text: prompt.text,
+              skill: prompt.skill,
+              parts: <MessagePart>[if (prompt.text.isNotEmpty) TextPart(prompt.text)],
               attachments: <ChatAttachment>[
                 for (var index = 0; index < selected.length; index++)
                   ChatAttachment(
@@ -969,11 +972,11 @@ class _ChatScreenState extends State<ChatScreen> {
           .where(
             (message) =>
                 message.kind != 'compact' &&
-                stripImageDimensionNote(message.text).trim().isNotEmpty,
+                stripImageDimensionNote(message.promptText).trim().isNotEmpty,
           )
           .map(
             (message) =>
-                '${message.role == 'user' ? t('common.me') : 'FastVibe'}:\n${stripImageDimensionNote(message.text).trim()}',
+                '${message.role == 'user' ? t('common.me') : 'FastVibe'}:\n${stripImageDimensionNote(message.promptText).trim()}',
           )
           .join('\n\n');
       await copyToClipboard(transcript);
@@ -1036,7 +1039,7 @@ class _ChatScreenState extends State<ChatScreen> {
           label: t('common.copy'),
           icon: AppIcons.copy,
           onSelect: () async {
-            await copyToClipboard(stripImageDimensionNote(message.text).trim());
+            await copyToClipboard(stripImageDimensionNote(message.promptText).trim());
             toastSuccess(t('toast.copied'));
           },
         ),
@@ -1046,7 +1049,7 @@ class _ChatScreenState extends State<ChatScreen> {
             label: t('chat.reuse'),
             icon: AppIcons.pencilEdit,
             onSelect: () =>
-                _draft.text = stripImageDimensionNote(message.text).trim(),
+                _draft.text = stripImageDimensionNote(message.promptText).trim(),
           ),
       ]),
     );

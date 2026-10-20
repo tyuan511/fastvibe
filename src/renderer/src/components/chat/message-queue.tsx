@@ -38,6 +38,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { IconButton } from "@/components/icon-button";
 import { cn } from "@/lib/utils";
 import type { QueuePauseReason, QueuedPrompt } from "@shared/types";
+import { skillDisplayOf } from "@shared/skill-invocation";
+import { SkillBadge } from "./skill-badge";
 
 function pauseCopy(reason: QueuePauseReason): string {
   return i18n.t(`chat:queue.${reason}`) as string;
@@ -72,6 +74,10 @@ function QueueRowContent({
   const { t } = useTranslation("chat");
   const sending = Boolean(item.sending);
   const claimed = Boolean(item.claimed);
+  // A queued `/skill:…` says which skill it will force, not the whole SKILL.md it turns
+  // into — the same reading the transcript row and the sidebar get.
+  const prompt = skillDisplayOf(item.text);
+  const label = prompt.text || item.attachments?.map((attachment) => attachment.name).join(", ") || "";
   return (
     <div
       className={cn(
@@ -100,8 +106,9 @@ function QueueRowContent({
       <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium tabular-nums text-muted-foreground">
         {index + 1}
       </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={item.text}>
-        {item.text}
+      {prompt.skill ? <SkillBadge skill={prompt.skill} className="shrink-0" /> : null}
+      <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={label}>
+        {label}
       </span>
       {sending && !overlay ? (
         <span className="shrink-0 text-xs text-muted-foreground">

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { PathLink } from "@/components/path-menu";
 import { useHighlightedCode } from "@/lib/highlight";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
+import { collapseBlankRuns } from "@/lib/blank-output";
 import { useSessionStore } from "@/stores/session";
 import { resolvePath } from "@/lib/workspace-path";
 import { stripMemoryCitation } from "@shared/memory-citation";
@@ -35,7 +36,12 @@ const DIFF_LANGUAGES = new Set(["diff", "patch"]);
 const MAX_CODE_PREVIEW_CHARS = 24_000;
 const MarkdownPathContext = createContext<ReadonlySet<string>>(new Set());
 
-const CodeBlock = memo(function CodeBlock({ language, code }: { language?: string; code: string }): JSX.Element {
+export const CodeBlock = memo(function CodeBlock({ language, code, scrollClassName }: {
+  language?: string;
+  code: string;
+  /** Constrain the code viewport inside its border, leaving the toolbar in place. */
+  scrollClassName?: string;
+}): JSX.Element {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -78,9 +84,9 @@ const CodeBlock = memo(function CodeBlock({ language, code }: { language?: strin
         </Button>
       </div>
       {diff ? (
-        <DiffView text={displayCode} className="mt-0 rounded-none border-0 bg-transparent" />
+        <DiffView text={displayCode} className={cn("mt-0 rounded-none border-0 bg-transparent", scrollClassName)} />
       ) : (
-        <div className="code-shiki overflow-x-auto text-sm leading-5">
+        <div className={cn("code-shiki overflow-x-auto text-sm leading-5", scrollClassName)}>
           {html ? (
             <div dangerouslySetInnerHTML={{ __html: html }} />
           ) : (
@@ -218,7 +224,9 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, headingIds }: { text: 
  */
 export const MarkdownView = memo(forwardRef<HTMLDivElement, { text: string; className?: string; headingIds?: boolean }>(function MarkdownView({ text, className, headingIds }, ref): JSX.Element {
   // A reply that used memory ends with a citation block the pipeline reads; the reader does not.
-  const blocks = useMemo(() => splitMarkdownBlocks(stripMemoryCitation(text)), [text]);
+  // And a reply padded with forty `<br>`s or lines of invisible space is shortened before it is
+  // cut, so the gap survives as one gap rather than as a screen of nothing.
+  const blocks = useMemo(() => splitMarkdownBlocks(collapseBlankRuns(stripMemoryCitation(text))), [text]);
   return (
     <div ref={ref} className={cn("chat-markdown-flow", className)}>
       {blocks.map((block, index) => (

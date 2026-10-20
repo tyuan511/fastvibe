@@ -26,6 +26,7 @@ import type {
   SlashCommand,
 } from "@shared/types";
 import { applyFileMention, fileMentionAtCaret } from "@/lib/file-mention";
+import { skillDraftOf, skillDraftText } from "@/lib/skill-draft";
 import { isCompactionCancelled } from "@shared/abort";
 import { filesToAttachments, pastedTextAttachmentName, shouldAttachPastedText } from "@/lib/attachments";
 import { randomUUID } from "../../../../shared/random.ts";
@@ -37,6 +38,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useExtensionStatusValue, useSessionStore } from "@/stores/session";
 import { GitBranchChip } from "./git-branch-chip";
 import { AttachmentChip } from "./attachment-chip";
+import { SkillBadge } from "./skill-badge";
 import { MessageQueue } from "./message-queue";
 import { ExtensionStatusBadges } from "./extension-surface";
 
@@ -397,6 +399,9 @@ export function Composer({
   const { t } = useTranslation("chat");
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [typedValue, setTypedValue] = useState<string | null>(null);
+  const draft = skillDraftOf(value, commands, typedValue === value);
+  const inputValue = draft.text;
   const [dragging, setDragging] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
@@ -473,13 +478,13 @@ export function Composer({
     if (!el || echoedValue.current === value) return;
     echoedValue.current = value;
     if (document.activeElement !== el) return;
-    const end = value.length;
+    const end = el.value.length;
     el.setSelectionRange(end, end);
     setCaret(end);
   }, [value]);
 
   const slash = useMemo(() => {
-    if (slashDismissed || !/^\/[^\s]*$/.test(value)) return [];
+    if (draft.skill || slashDismissed || !/^\/[^\s]*$/.test(value)) return [];
     const q = value.slice(1).toLowerCase();
     return commands
       .filter((item) => {
@@ -487,7 +492,7 @@ export function Composer({
         return !q || hay.includes(q);
       })
       .slice(0, 8);
-  }, [commands, slashDismissed, value]);
+  }, [commands, draft.skill?.name, slashDismissed, value]);
 
   useEffect(() => {
     setSlashIndex(0);
@@ -497,7 +502,7 @@ export function Composer({
   // when this chat has a project — a scratch draft has nothing to list — and a closed
   // menu stays closed while the caret remains in that same token, so Escape can leave
   // a literal `@query` in the draft.
-  const mentionToken = fileMentionAtCaret(value, caret);
+  const mentionToken = fileMentionAtCaret(inputValue, caret);
   const mention = !readOnly && !locked && project && slash.length === 0 && mentionToken && mentionDismissed !== mentionToken.start
     ? mentionToken
     : null;
@@ -551,6 +556,7 @@ export function Composer({
   }, [fileHitIndex, fileHits]);
 
   function applySlash(command: SlashCommand): void {
+    setTypedValue(null);
     // Toggles like `/goal` act the moment they are chosen: clear the draft and run
     // the command so the mode badge appears below the composer, instead of leaving
     // `/goal` in the box for the user to send.
@@ -567,10 +573,8 @@ export function Composer({
 
   function selectFile(hit: ProjectFileHit): void {
     if (!mention) return;
-    const next = applyFileMention(value, mention);
-    echoedValue.current = next.value;
-    onChange(next.value);
-    setCaret(next.caret);
+    const next = applyFileMention(inputValue, mention);
+    handleChange(next.value, next.caret);
     setMentionDismissed(mention.start);
     const name = hit.relative.split("/").pop() || hit.relative;
     if (!attachments.some((item) => item.path === hit.path)) {
@@ -589,6 +593,13 @@ export function Composer({
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     if (event.nativeEvent.isComposing || event.key === "Process") return;
+
+    if (draft.skill && event.key === "Backspace" &&
+      event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0) {
+      event.preventDefault();
+      removeSkill(0);
+      return;
+    }
 
     // Tab takes the offered suggestion. Only on an empty box with no modifier: Shift+Tab
     // and Ctrl+Tab keep moving focus, and the palettes below own Tab while they are open.
@@ -659,11 +670,12 @@ export function Composer({
 
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       const el = event.currentTarget;
-      const atFirstLine = !value.slice(0, el.selectionStart).includes("\n");
-      const atLastLine = !value.slice(el.selectionEnd).includes("\n");
+      const atFirstLine = !inputValue.slice(0, el.selectionStart).includes("\n");
+      const atLastLine = !inputValue.slice(el.selectionEnd).includes("\n");
       const past = history();
       if (event.key === "ArrowUp" && atFirstLine && past.length > 0) {
         event.preventDefault();
+        setTypedValue(null);
         if (histIndex === null) {
           histDraft.current = value;
           const next = past.length - 1;
@@ -678,6 +690,7 @@ export function Composer({
       }
       if (event.key === "ArrowDown" && atLastLine && histIndex !== null) {
         event.preventDefault();
+        setTypedValue(null);
         if (histIndex < past.length - 1) {
           const next = histIndex + 1;
           setHistIndex(next);
@@ -810,11 +823,26 @@ export function Composer({
   function handleChange(next: string, nextCaret: number): void {
     // Claim the value before it round-trips through state, so the caret effect above
     // can tell a keystroke apart from a draft written in from outside.
-    echoedValue.current = next;
+    const nextValue = skillDraftText(draft.skill, next);
+    setTypedValue(nextValue);
+    echoedValue.current = nextValue;
     setSlashDismissed(false);
     setCaret(nextCaret);
     setHistIndex(null);
-    onChange(next);
+    onChange(nextValue);
+  }
+
+  function removeSkill(nextCaret = inputValue.length): void {
+    setTypedValue(null);
+    echoedValue.current = inputValue;
+    onChange(inputValue);
+    setCaret(nextCaret);
+    setHistIndex(null);
+    setSlashDismissed(true);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(nextCaret, nextCaret);
+    });
   }
 
   return (
@@ -876,7 +904,8 @@ export function Composer({
             const name = slashAt >= 0 ? hit.relative.slice(slashAt + 1) : hit.relative;
             return (
               <button
-                key={hit.relative}
+                // Two folders of one project can share a name, and so a label: the path cannot.
+                key={hit.path}
                 ref={index === fileHitIndex ? fileHitRef : undefined}
                 type="button"
                 role="option"
@@ -1034,13 +1063,16 @@ export function Composer({
           }}
         />
 
-        {attachments.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+        {draft.skill || attachments.length > 0 ? (
+          <div className="flex flex-wrap items-start gap-2 px-3 pt-3">
+            {draft.skill ? (
+              <SkillBadge skill={draft.skill} onRemove={!locked && !readOnly ? () => removeSkill() : undefined} />
+            ) : null}
             {attachments.map((item) => (
               <AttachmentChip
                 key={item.id}
                 item={item}
-                onRemove={() => onAttachmentsChange(attachments.filter((entry) => entry.id !== item.id))}
+                onRemove={!locked && !readOnly ? () => onAttachmentsChange(attachments.filter((entry) => entry.id !== item.id)) : undefined}
               />
             ))}
           </div>
@@ -1050,12 +1082,12 @@ export function Composer({
           <Textarea
             ref={textareaRef}
             rows={1}
-            value={value}
+            value={inputValue}
             disabled={locked || readOnly}
             placeholder={suggested ?? notice ?? (!readOnly && streaming ? t("composer.placeholderQueued") : placeholder ?? t("composer.placeholder"))}
             className={cn(
               "field-sizing-content max-h-56 min-h-13 resize-none border-0 bg-transparent px-4 text-sm leading-6 shadow-none focus-visible:ring-0 disabled:bg-transparent disabled:opacity-100 dark:bg-transparent dark:disabled:bg-transparent",
-              attachments.length > 0 ? "pt-2" : "pt-3.5",
+              draft.skill || attachments.length > 0 ? "pt-2" : "pt-3.5",
               // Room for the Tab hint, which leads the line.
               suggested && "pl-14",
             )}

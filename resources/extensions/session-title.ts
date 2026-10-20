@@ -131,9 +131,28 @@ async function backoff(ms: number, signal: AbortSignal | undefined): Promise<voi
   });
 }
 
+/**
+ * Fold `/skill:name …` back out of a prompt the engine has already expanded.
+ *
+ * By the time `before_agent_start` sees it, that command has become the whole `SKILL.md`
+ * wrapped in a `<skill …>` block — 3 KB to 40 KB of instructions for the model, which must
+ * not become the chat's name. This mirrors `src/shared/skill-invocation.ts`, which an
+ * extension cannot import (it ships as a loose file); `test/skill-invocation.test.ts` keeps
+ * the two spellings of the block in step.
+ */
+const SKILL_BLOCK = /^<skill name="([^"]+)" location="([^"]*)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/;
+
+function foldSkill(text: string): string {
+  const match = SKILL_BLOCK.exec(text);
+  if (!match) return text;
+  return match[4] ? `/skill:${match[1]} ${match[4]}` : `/skill:${match[1]}`;
+}
+
 function promptText(raw: string): string {
-  const text = raw.trim();
+  const text = foldSkill(raw.trim());
   if (!text) return "";
+  // A skill forced with nothing typed after it says nothing about what the chat is for.
+  if (/^\/\S+$/.test(text)) return "";
   const withoutCommand = text.replace(/^\/\S+\s+/, "").trim();
   return clip(withoutCommand || text, PROMPT_CHARS);
 }
