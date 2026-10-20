@@ -750,6 +750,44 @@ function hydrateModels(value: unknown): ProviderModel[] {
     // deleting it here keeps the next write from copying a dead field forward.
     delete (model as unknown as Record<string, unknown>).features;
     if (isProviderApi(api)) model.api = api;
+    // Metadata is not the user's to keep: context window, output ceiling, modalities and
+    // prices are read off the catalog, and a stored copy is only what the snapshot said
+    // on the day the model was added. That copy used to survive every refresh, so an
+    // install kept whatever entry happened to win the first time — including the wrong
+    // price the old order-dependent folding produced. Only a model the user tuned
+    // (`edited`) is authoritative; every other row is re-derived here, and a model the
+    // catalog does not know keeps what it had.
+    if (model.edited !== true) {
+      // A stored copy is a record of what the snapshot said on the day the model was
+      // added; the catalog is what it says now. Re-deriving is what lets a corrected
+      // snapshot reach an install that already had the wrong numbers.
+      const catalog = enrichModel(loadModelsDev(), id, model.name || id);
+      // A model the catalog does not describe keeps what it was stored with: the
+      // defaults `enrichModel` substitutes are conservative guesses, and replacing a real
+      // context window with 128K would make the window guard compact far too early.
+      if (catalog.source === "models.dev") {
+        model.contextWindow = catalog.contextWindow;
+        model.maxTokens = catalog.maxTokens;
+        model.reasoning = catalog.reasoning;
+        model.input = catalog.input;
+        model.thinkingLevels = catalog.thinkingLevels;
+        model.cost = catalog.cost;
+        model.costTiers = catalog.costTiers;
+        model.effortMap = catalog.effortMap;
+      } else {
+        // An id the catalog does not describe keeps its own cost, but still goes through
+        // the same hydration: `models.json` rejects a value the engine cannot read, and a
+        // half-written price would discard every provider in the file.
+        model.cost = isModelCost(cost) ? cost : undefined;
+        model.costTiers = hydrateCostTiers(costTiers);
+        model.thinkingLevels = hydrateThinkingLevels(thinkingLevels);
+        model.effortMap = hydrateEffortMap(effortMap);
+        model.input = INPUT_MODALITIES.filter((item) => Array.isArray(input) && input.includes(item));
+        if (model.input.length === 0) model.input = ["text"];
+      }
+      models.push(model);
+      continue;
+    }
     // A stored price is kept — native providers carry the SDK's richer list — but a
     // model persisted before pricing existed (the snapshot's v2 fields) has none, and
     // without one `models.json` hands the engine an all-zero price, which is why
