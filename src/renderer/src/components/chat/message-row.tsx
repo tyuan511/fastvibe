@@ -783,7 +783,7 @@ function ChatMessageRowImpl({
       return (
         <Fragment key={part.group.id}>
           <PartSlot>
-            <ToolGroupRow group={part.group} />
+            <ToolGroupRow group={part.group} thinkingOwner={thinkingOwner} />
           </PartSlot>
           <InlinePreviews items={shown} />
         </Fragment>

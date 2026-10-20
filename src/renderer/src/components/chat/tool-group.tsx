@@ -2,6 +2,7 @@ import { memo, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BrainIcon, Layers01Icon } from "@hugeicons/core-free-icons";
+import type { ChatMessage, MessagePart } from "@shared/types";
 import type { ToolGroup } from "@/lib/group-parts";
 import { describeTool } from "@/lib/tool-presentation";
 import { liveTool } from "@/lib/tool-run";
@@ -10,7 +11,7 @@ import { useWorkspacePath } from "@/stores/session";
 import { PathLink } from "@/components/path-menu";
 import { displayPath } from "@/lib/workspace-path";
 import { Spinner } from "@/components/ui/spinner";
-import { ReasoningTicker, tickerLine } from "./thinking-block";
+import { ReasoningTicker, ThinkingBlock, tickerLine } from "./thinking-block";
 import { ToolCard } from "./tool-card";
 import { ToolRow } from "./tool-row";
 import type { SummaryPiece } from "@/lib/tool-run";
@@ -47,22 +48,28 @@ function SummaryLine({ pieces, cwd }: { pieces: SummaryPiece[]; cwd?: string }):
 }
 
 /**
- * One thought the row swallowed, shown in the body when the batch is expanded. The row
- * itself is the fold, so the text carries no second chevron — but it does keep a 「思考」
- * mark, because between two call cards a bare paragraph reads as one more tool's output.
+ * One thought the row swallowed, shown in the body when the batch is expanded. It is the
+ * ordinary thinking block — collapsed to its 「思考」 line, opened by the reader — so a
+ * folded thought looks and behaves like one outside the fold. Not `active`: a live thought
+ * is the row's own 「正在思考」 line, and only settled ones are listed here.
  */
-function FoldedThought({ part }: { part: ThinkingPart }): JSX.Element {
-  const { t } = useTranslation("chat");
+function FoldedThought({
+  part,
+  owner,
+}: {
+  part: ThinkingPart;
+  owner?: ChatMessage;
+}): JSX.Element {
+  // Same fallback as an unfolded block: the round-trip the thought came from, when no bounds were measured.
+  const fallback =
+    owner && owner.completedAt !== undefined ? { startedAt: owner.createdAt, endedAt: owner.completedAt } : undefined;
   return (
-    <div className="flex flex-col gap-1">
-      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground/70">
-        <HugeiconsIcon strokeWidth={2} icon={BrainIcon} className="size-3 shrink-0" />
-        {t("thinking.done")}
-      </span>
-      <div className="max-h-60 overflow-auto border-l border-border pl-3.5 text-sm leading-5 whitespace-pre-wrap break-words text-muted-foreground/80 select-text">
-        {part.text}
-      </div>
-    </div>
+    <ThinkingBlock
+      thinking={part.text}
+      startedAt={part.startedAt ?? fallback?.startedAt}
+      endedAt={part.endedAt ?? fallback?.endedAt}
+      active={false}
+    />
   );
 }
 
@@ -78,7 +85,13 @@ function FoldedThought({ part }: { part: ThinkingPart }): JSX.Element {
  * It keeps a tool-call icon and the same weight as the rows around it; the chevron stays
  * visible because the line is a fold, and a hover-only mark reads as static text.
  */
-export const ToolGroupRow = memo(function ToolGroupRow({ group }: { group: ToolGroup }): JSX.Element {
+export const ToolGroupRow = memo(function ToolGroupRow({
+  group,
+  thinkingOwner,
+}: {
+  group: ToolGroup;
+  thinkingOwner?: ReadonlyMap<MessagePart, ChatMessage>;
+}): JSX.Element {
   const { t } = useTranslation("chat");
   useTranslation("common");
   const cwd = useWorkspacePath();
@@ -113,7 +126,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ group }: { group: ToolG
         item.kind === "tool" ? (
           <ToolCard key={item.tool.id} tool={item.tool} />
         ) : (
-          <FoldedThought key={`thought-${index}`} part={item.part} />
+          <FoldedThought key={`thought-${index}`} part={item.part} owner={thinkingOwner?.get(item.part)} />
         ),
       )}
     </ToolRow>

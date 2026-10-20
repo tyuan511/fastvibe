@@ -250,14 +250,24 @@ function FailureHint({ error }: { error: string }): JSX.Element {
           </span>
         }
       />
-      <TooltipContent side="top" align="start" className="max-w-96">
-        <div className="flex max-w-96 items-start gap-2">
-          <span className="line-clamp-6 min-w-0 flex-1 text-sm whitespace-pre-wrap break-words">
+      <TooltipContent side="top" align="start" className="max-w-96 px-3 py-2">
+        {/*
+         * The copy button sits in the top-right corner and the text keeps a gutter for
+         * it (`pr-6`). It used to be a flex sibling, which the popup's `items-center`
+         * then centred: with a one-line message that reads as a corner, but a wrapped
+         * one — an edit's `Could not find edits[0] in /Users/…/thinking-off.ts` — put
+         * the icon halfway down the block, next to the middle line instead of the
+         * first. Absolute against the text block keeps it in the corner whatever the
+         * message wraps to, and the gutter is what stops a long line from running
+         * under it.
+         */}
+        <div className="relative max-w-96">
+          <span className="line-clamp-6 block min-w-0 pr-6 text-sm whitespace-pre-wrap break-words">
             {text}
           </span>
           <button
             type="button"
-            className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
+            className="absolute top-0 right-0 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground hover:text-foreground"
             aria-label={copied ? t("tools.copied") : t("tools.copy")}
             onClick={(event) => {
               event.preventDefault();

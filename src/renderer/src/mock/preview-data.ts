@@ -230,7 +230,11 @@ const FAILED_BUILD: ToolCallBlock = {
   name: "bash",
   args: { command: "cd /Users/dev/code/fastvibe && npx electron-vite build 2>&1 | tail -5" },
   status: "error",
-  result: "error during build:\nError: Could not resolve \"./missing\" from src/renderer/src/App.tsx",
+  // A long unbroken path, i.e. the failure badge's hardest case: the tooltip has to
+  // wrap it, and the copy button has to stay in the corner rather than drift down.
+  result:
+    "Could not find edits[0] in /Users/dev/code/fastvibe/src/main/engine/thinking-off.ts. " +
+    "The oldText must match exactly including all whitespace and newlines.",
 };
 
 /* A `codemode` call: the script, the tools it ran (one failed) and what it printed. */
