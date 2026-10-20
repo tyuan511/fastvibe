@@ -11,6 +11,7 @@ import {
   Edit02Icon,
   Loading03Icon,
   Plug01Icon,
+  RefreshIcon,
 } from "@hugeicons/core-free-icons";
 import { IconButton } from "@/components/icon-button";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +34,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -152,6 +154,8 @@ export function McpSettings(): JSX.Element {
   const [servers, setServers] = useState<McpServerStatus[]>([]);
   const [draft, setDraft] = useState<ServerDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  /** The server whose 重新连接 is in flight. One at a time: the sessions are reloaded at its end. */
+  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
 
   async function refresh(): Promise<void> {
     try {
@@ -177,6 +181,21 @@ export function McpSettings(): JSX.Element {
       return false;
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** 重新连接 one server and reload the chats that use MCP. Never throws. */
+  async function reconnect(server: McpServerStatus): Promise<void> {
+    setReconnectingId(server.id);
+    try {
+      const next = await window.fastvibe.engine.reconnectMcpServer(server.id);
+      setServers(next);
+      if (next.find((item) => item.id === server.id)?.connected) toast.success(t("mcp.reconnected", { name: server.name }));
+      else toast.error(t("mcp.reconnectFailed", { name: server.name }));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("mcp.reconnectFailed", { name: server.name }));
+    } finally {
+      setReconnectingId(null);
     }
   }
 
@@ -266,6 +285,9 @@ export function McpSettings(): JSX.Element {
               onToggle={(enabled) =>
                 void save(servers.map((item) => (item.id === server.id ? { ...item, enabled } : item)))
               }
+              reconnecting={reconnectingId === server.id}
+              busy={saving || reconnectingId !== null}
+              onReconnect={() => void reconnect(server)}
               onEdit={() => setDraft(draftFromServer(server))}
               onRemove={() => void save(servers.filter((item) => item.id !== server.id))}
             />
@@ -301,11 +323,18 @@ export function McpSettings(): JSX.Element {
 function ServerRow({
   server,
   onToggle,
+  reconnecting,
+  busy,
+  onReconnect,
   onEdit,
   onRemove,
 }: {
   server: McpServerStatus;
   onToggle: (enabled: boolean) => void;
+  reconnecting: boolean;
+  /** Something is saving or reconnecting, so a second one waits. */
+  busy: boolean;
+  onReconnect: () => void;
   onEdit: () => void;
   onRemove: () => void;
 }): JSX.Element {
@@ -366,7 +395,16 @@ function ServerRow({
         </ItemDescription>
       </ItemContent>
       <ItemActions className="ml-auto shrink-0 self-center">
-        <Switch checked={server.enabled} onCheckedChange={onToggle} />
+        <Switch checked={server.enabled} onCheckedChange={onToggle} disabled={reconnecting} />
+        <IconButton
+          label={t("mcp.reconnect")}
+          size="icon-xs"
+          variant="ghost"
+          disabled={busy || !server.enabled}
+          onClick={onReconnect}
+        >
+          {reconnecting ? <Spinner className="size-3" /> : <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />}
+        </IconButton>
         <IconButton label={t("mcp.edit")} size="icon-xs" variant="ghost" onClick={onEdit}>
           <HugeiconsIcon strokeWidth={2} icon={Edit02Icon} />
         </IconButton>

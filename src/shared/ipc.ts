@@ -27,6 +27,7 @@ export const Ipc = {
   engineListMarketPackages: "engine:list-market-packages",
   engineListMcpServers: "engine:list-mcp-servers",
   engineSaveMcpServers: "engine:save-mcp-servers",
+  engineReconnectMcpServer: "engine:reconnect-mcp-server",
   engineListSkills: "engine:list-skills",
   engineCreateSkill: "engine:create-skill",
   engineImportSkill: "engine:import-skill",

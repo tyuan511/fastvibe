@@ -577,6 +577,10 @@ const api = {
     }),
     listMcpServers: async () => MCP_SERVERS,
     saveMcpServers: async (configs: unknown) => (Array.isArray(configs) ? MCP_SERVERS : MCP_SERVERS),
+    reconnectMcpServer: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      return MCP_SERVERS;
+    },
     listSkills: async () => SKILLS,
     createSkill: async () => SKILLS,
     importSkill: async () => SKILLS,

@@ -383,3 +383,55 @@ test("a server that answers after close() is not registered and is closed", asyn
   assert.deepEqual(await manager.tools(), []);
   assert.equal(counts().stillOpen, 0);
 });
+
+test("reconnect(id) replaces only that server's connection", async () => {
+  const opened: string[] = [];
+  const { manager } = await managerWith([configOf("a"), configOf("b")], (config, server) => {
+    opened.push(config.id);
+    fakeServer(server);
+  });
+  const before = (await manager.tools()).map((tool) => tool.name).sort();
+  await manager.reconnect("a");
+  assert.deepEqual(opened.sort(), ["a", "a", "b"], "a was connected twice, b once");
+  assert.deepEqual(manager.list().map((server) => server.connected), [true, true]);
+  assert.deepEqual((await manager.tools()).map((tool) => tool.name).sort(), before);
+  await manager.close();
+});
+
+test("reconnect(id) recovers a server that failed and clears its error", async () => {
+  let attempts = 0;
+  const { manager } = await managerWith([configOf("a")], (_config, server) => {
+    if (++attempts === 1) throw new Error("spawn ENOENT");
+    fakeServer(server);
+  });
+  assert.equal(manager.list()[0].connected, false);
+  assert.match(manager.list()[0].error ?? "", /ENOENT/);
+  await manager.reconnect("a");
+  assert.equal(manager.list()[0].connected, true);
+  assert.equal(manager.list()[0].error, undefined);
+  await manager.close();
+});
+
+test("reconnect(id) of a disabled server only disconnects it, and an unknown id is refused", async () => {
+  const { manager } = await managerWith([configOf("a")], (_config, server) => fakeServer(server));
+  await manager.save([configOf("a", { enabled: false })]);
+  await manager.load();
+  await manager.reconnect("a");
+  assert.equal(manager.list()[0].connected, false);
+  assert.deepEqual(await manager.tools(), []);
+  await assert.rejects(() => manager.reconnect("missing"), /MCP/);
+});
+
+test("a connect still in flight when the same server is reconnected does not replace the newer one", async () => {
+  const { manager, release, counts } = await gatedManager([configOf("a")]);
+  const first = manager.connectAll();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const second = manager.reconnect("a");
+  release();
+  await Promise.all([first, second]);
+  assert.equal(manager.list()[0].connected, true);
+  assert.equal(counts().opened, 2);
+  assert.equal(counts().stillOpen, 1, "the superseded connect was closed, not left running");
+  await manager.close();
+  assert.equal(counts().stillOpen, 0);
+});

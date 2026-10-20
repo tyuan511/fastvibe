@@ -100,6 +100,8 @@ export class McpManager {
   #errors = new Map<string, string>();
   /** Bumped by every `close()`: a connect that finishes under an older number is discarded. */
   #generation = 0;
+  /** The same, for one server: `reconnect(id)` discards that server's connect that is still in flight. */
+  #epochs = new Map<string, number>();
 
   constructor(file: string, options: { createTransport?: McpTransportFactory } = {}) {
     this.#file = file;
@@ -138,6 +140,24 @@ export class McpManager {
     await this.#closeConnections();
     this.#errors.clear();
     await Promise.all(this.#configs.filter((config) => config.enabled).map((config) => this.#connect(config, generation)));
+  }
+
+  /**
+   * Drop one server's connection and connect it again, leaving the others as they are.
+   *
+   * A disabled server is only disconnected. The server's own epoch is bumped first, so a connect of
+   * the same server that is still in flight (the launch-time one, a hung endpoint) is discarded when
+   * it finally answers instead of replacing this one.
+   */
+  async reconnect(id: string): Promise<void> {
+    const config = this.#configs.find((item) => item.id === id);
+    if (!config) throw new Error(uiText("没有这个 MCP 服务器", "No such MCP server"));
+    this.#epochs.set(id, (this.#epochs.get(id) ?? 0) + 1);
+    const previous = this.#connections.get(id);
+    this.#connections.delete(id);
+    this.#errors.delete(id);
+    await previous?.client.close().catch(() => undefined);
+    if (config.enabled) await this.#connect(config, this.#generation);
   }
 
   async tools(): Promise<ToolDefinition<any>[]> {
@@ -198,6 +218,9 @@ export class McpManager {
 
   async #connect(config: McpServerConfig, generation: number): Promise<void> {
     const client = new McpClient({ name: "FastVibe", version: "0.1.0", requestTimeoutMs: REQUEST_TIMEOUT_MS });
+    const epoch = this.#epochs.get(config.id) ?? 0;
+    // Replaced by a newer `connectAll()` / `close()`, or by a `reconnect()` of this very server.
+    const replaced = (): boolean => generation !== this.#generation || epoch !== (this.#epochs.get(config.id) ?? 0);
     let stderr = "";
     try {
       const transport = this.#createTransport(config, (chunk) => {
@@ -210,7 +233,7 @@ export class McpManager {
       // The engine was stopped while this server was still answering. Its child process is
       // ours to end: registering the connection now would leave it running with nothing
       // that ever closes it.
-      if (generation !== this.#generation) {
+      if (replaced()) {
         await client.close().catch(() => undefined);
         return;
       }
@@ -228,7 +251,7 @@ export class McpManager {
       const message = error instanceof Error ? error.message : String(error);
       const details = stderr.trim();
       // A run that has been replaced reports nothing: its error would land on the newer run's.
-      if (generation === this.#generation) this.#errors.set(config.id, details ? `${message}\n\n${details}` : message);
+      if (!replaced()) this.#errors.set(config.id, details ? `${message}\n\n${details}` : message);
       // A timed-out connect can still be in flight, and a stdio server is a child
       // process this one owns: closing releases it instead of leaving it running for
       // the life of the app.

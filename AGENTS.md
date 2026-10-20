@@ -2356,6 +2356,16 @@ of connections, config and the settings pane's status.
   older number closes its client and records nothing, so an overlapping save or a `stop()` cannot leave a
   child process unowned or refill the map the newer run just emptied, and a save never waits on a hung
   server. The log line `[mcp] k/n servers connected in N ms (in the background …)` says how long it took.
+- **重新连接 (设置 → MCP 工具，每个服务器行右侧的刷新图标).** `engine:reconnect-mcp-server` `{ id }` →
+  `PiProcessManager.reconnectMcpServer` → `McpManager.reconnect(id)`: drop that one connection, connect it again, leave the
+  others alone, then queue **every** live session for `session.reload()` and await the idle ones (a second pass covers a
+  reload that was already running and never saw the sessions queued just now). A session in the middle of a reply is
+  reloaded when it settles, never under a tool call. `reconnect` bumps a per-server epoch, so a connect of the same
+  server still in flight (the launch-time one, a hung endpoint) closes itself when it finally answers instead of
+  replacing the newer connection. It saves nothing, so unlike `engine:save-mcp-servers` it is not in the gateway's
+  config-sync set: an SSH Agent's own servers are untouched. A disabled server's button is disabled (the toggle is what
+  connects it); the toast says whether *that* server ended up connected, and the row's badge carries the reason.
+  Allowed remotely, registered on the headless Agent too. Preview: `mock.html?lang=zh#/settings/mcp`.
 - **The form edits the standard `mcpServers` JSON as well as fields.** `shared/mcp-config.ts` is the one
   reading of that shape — Claude Desktop / Claude Code / Cursor (`mcpServers`), VS Code (`servers`), a bare
   name → entry map, or a README fragment missing its outer braces. The settings pane (paste, edit one

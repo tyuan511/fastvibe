@@ -191,6 +191,7 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineListMarketPackages, query),
       listMcpServers: (): Promise<McpServerStatus[]> => t.invoke(Ipc.engineListMcpServers),
       saveMcpServers: (configs: McpServerConfig[]): Promise<McpServerStatus[]> => t.invoke(Ipc.engineSaveMcpServers, { configs }),
+      reconnectMcpServer: (id: string): Promise<McpServerStatus[]> => t.invoke(Ipc.engineReconnectMcpServer, { id }),
       listSkills: (): Promise<SkillInfo[]> => t.invoke(Ipc.engineListSkills),
       createSkill: (draft: SkillDraft): Promise<SkillInfo[]> => t.invoke(Ipc.engineCreateSkill, draft),
       importSkill: (): Promise<SkillInfo[] | null> => t.invoke(Ipc.engineImportSkill),

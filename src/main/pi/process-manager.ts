@@ -2082,6 +2082,26 @@ export class PiProcessManager {
     void this.#scheduleMcpReload();
     return this.#mcp.list();
   }
+  /**
+   * 重新连接 one server: drop its connection, connect it again, and reload every live session so
+   * the new tool list reaches them. The other servers are not touched, and nothing is saved — so
+   * nothing is synced to an SSH Agent either. It is what a person reaches for when one server hung,
+   * was restarted or was fixed outside the app.
+   *
+   * Sessions are queued like a settings change queues them: an idle one is reloaded now (awaited, so
+   * the caller's spinner covers it), a running one when its reply settles, because reloading under a
+   * tool call would invalidate the extension context before the result reaches the model.
+   */
+  async reconnectMcpServer(id: string): Promise<McpServerStatus[]> {
+    await this.#mcp.reconnect(id);
+    this.#mcpVersion++;
+    for (const conversationId of this.#sessions.keys()) this.#pendingMcpReloads.add(conversationId);
+    await this.#scheduleMcpReload();
+    // A pass that was already running when this one asked is returned as it is and never saw the
+    // sessions queued just now: go once more for any idle session still waiting.
+    if ([...this.#pendingMcpReloads].some((conversationId) => this.#sessions.get(conversationId)?.session.isIdle)) await this.#scheduleMcpReload();
+    return this.#mcp.list();
+  }
   async listSkills(): Promise<SkillInfo[]> { return this.#skills.list(this.#cwd); }
   async createSkill(draft: SkillDraft): Promise<SkillInfo[]> { const skills = await this.#skills.create(this.#cwd, draft); await this.#reloadSkills(); return skills; }
   async importSkill(sourceDir: string): Promise<SkillInfo[]> { const skills = await this.#skills.importFrom(this.#cwd, sourceDir); await this.#reloadSkills(); return skills; }

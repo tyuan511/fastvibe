@@ -229,6 +229,7 @@ const ALLOWED = new Set<string>([
   Ipc.engineQueueReorder,
   Ipc.engineQueueResume,
   Ipc.engineQueueSendNow,
+  Ipc.engineReconnectMcpServer,
   Ipc.engineRemoveExtensionPackage,
   Ipc.engineRemoveSkill,
   Ipc.engineReplaceSteering,
