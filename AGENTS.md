@@ -3088,13 +3088,22 @@ timestamps always show.
   them. Every transcript draws it the same way: the main thread, 辅助对话, and 子 Agent.
 - **展开之后仍然限高，过程在折叠块内部滚动。** 一个长运行的过程可以有几十段思考与上百张工具卡，
   正文体的 `max-h` 曾经等于它们全部的高度：展开「用时 …」要看一眼刚才做了什么，就把这条回复留在屏幕上的
-  那部分答案顶到窗口之外——折叠的意义正好被抵消。`lib/process-body.ts` 的 `PROCESS_BODY_CAP`
-  (`min(20rem,40vh)`，rem 所以它跟着界面字号一起缩放) 是一处定义，四个能装下一整个运行的折叠体共用它：
-  `RunCollapse`、`ProcessOverflow`（长运行被截断的隐藏尾部）、`ToolGroupRow` 的工具批次（`ToolRow` 的
-  `scrollBody`）、就地展开的长提示词。`test/process-body-cap.test.ts` 钉住这几处都读同一个常量——
-  谁改成自己的数字就是悄悄取消了限高，typecheck 看不见。单个工具卡不套这一层：它展开的是一个本来就
-  自己限高的面板（终端 72、diff 80、参数与输出 60），再加一层只会多出一根永远用不上的滚动条。
-  滚动条用应用自己那根（见 滚动条），所以这里不许出现 `scrollbar-width` / `scrollbar-color`。
+  那部分答案顶到窗口之外——折叠的意义正好被抵消。`lib/process-body.ts` 的 `PROCESS_BODY_CAP` 是一处定义，
+  四个能装下一整个运行的折叠体共用它：`RunCollapse`、`ProcessOverflow`（长运行被截断的隐藏尾部）、
+  `ToolGroupRow` 的工具批次（`ToolRow` 的 `scrollBody`）、就地展开的长提示词。
+  - **上限是阅读区高度的一半，不是窗口的一半。** 阅读区 = 窗口减去标题栏与输入框，实测 913px 的窗口
+    只有 717px 可用；这个值在 CSS 里没有任何单位能从转写内部拿到，所以 `MessageList` 的 viewport 自己把它
+    写成 `--thread-height`（一个 ResizeObserver，窗口和输入框一变就重测），上限就是 `calc(var(--thread-height)/2)`。
+  - **只滚一层。** 有上限的折叠体可以套在另一个里（工具批次就住在「用时 …」里），两边都限高就是
+    「滚动条套滚动条」——用户抱怨的正是这个。所以每个被限高的 body 都带 `data-process-body` 标记，
+    `index.css` 里一条 `[data-process-body] [data-process-body]` 把里层那个的上限交还给外层：外层滚，
+    里层撑开。没被套住的 body 保留自己的上限，这才是「运行中、上面还没有折叠」时工具批次的界。
+    这条规则**必须在 `@layer` 之外**——`max-h-*` / `overflow-y-*` 是 Tailwind 工具类，写进 `@layer base` 会输。
+  - 单个工具卡不套这一层：它展开的是一个本来就自己限高的面板（终端 72、diff 80、参数与输出 60），
+    那限的是**一个输出的长度**，不是「一层折叠」，再包一层只会多出一根用不上的滚动条。
+  - `test/process-body-cap.test.ts` 钉住这几件事：四处都读同一个常量、都带标记、`--thread-height` 真的被
+    发布、CSS 规则存在且在 layer 外。typecheck 看不见其任何一项。
+  - 滚动条用应用自己那根（见 滚动条），所以这里不许出现 `scrollbar-width` / `scrollbar-color`。
 
 ## 连续工具折叠
 
@@ -3116,7 +3125,8 @@ A failed call is not counted on the summary line; the expanded row already marks
 A thought is its own block and
 splits the batch, the same way prose does (unless 折叠思考内容 says otherwise); it is not folded
 into the row. Expanding the row shows the calls — 一批工具在 `ToolRow` 里靠 `scrollBody` 拿到和
-「用时 …」同一个正文高度上限（`PROCESS_BODY_CAP`，见 折叠运行过程），批次再长也在这一行之下内部滚动。
+「用时 …」同一个正文高度上限（`PROCESS_BODY_CAP`，见 折叠运行过程），批次再长也在这一行之下内部滚动；
+而它套在「用时 …」里时，标记会让它把自己的上限交还给外层，于是一屏上只有一根滚动条。
 
 - **任何还在写的东西都不进折叠，它自己占一行。** 曾经在飞的那个调用就是折叠行自己的文字（「正在运行 …」
   加一个 spinner），于是一行在两种身份之间反复横跳：它一会儿报「现在在做什么」、一会儿报「已经做完了什么」，

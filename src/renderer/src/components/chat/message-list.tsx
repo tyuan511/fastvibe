@@ -510,6 +510,8 @@ export function MessageList({
   // rows, which is long after an effect keyed on a ref object would have run.
   const guardViewport = useNoOpWheelGuard();
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  /** Publishes `--thread-height` on the viewport in use; replaced when the node is. */
+  const threadHeightRef = useRef<ResizeObserver | null>(null);
   // The first message is not a conversation identity: it can be reused by a restored,
   // forked or otherwise reconciled transcript. Use the owner id when the caller has one,
   // so switching chats always resets the virtualizer's landing state.
@@ -627,6 +629,23 @@ export function MessageList({
     guardViewport(node);
     // A new scroller starts at the top: land again, or its first renders are the head.
     if (node && node !== viewportRef.current) setLandedThread(null);
+    threadHeightRef.current?.disconnect();
+    threadHeightRef.current = null;
+    if (node) {
+      // Half the reading area is what a fold's body may take (`PROCESS_BODY_CAP`). The
+      // transcript's height is the window minus its header and the composer, and no CSS unit
+      // reaches that from inside the column, so it is published on the viewport itself.
+      const write = (): void => {
+        const height = Math.round(node.clientHeight);
+        if (height > 0) node.style.setProperty("--thread-height", `${height}px`);
+      };
+      write();
+      if (typeof ResizeObserver !== "undefined") {
+        const observer = new ResizeObserver(write);
+        observer.observe(node);
+        threadHeightRef.current = observer;
+      }
+    }
     viewportRef.current = node;
     if (node) syncScrollState();
   }, [guardViewport, syncScrollState]);

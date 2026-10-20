@@ -609,6 +609,20 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
   background-color: var(--scrollbar-thumb-hover);
 }
 
+/* 折叠块的正文只滚一层。
+   `PROCESS_BODY_CAP` (lib/process-body.ts) bounds every transcript fold body that can hold a
+   whole run, and one of them can sit inside another — a 工具批次 lives inside the 「用时 …」
+   fold. Both capping is what drew a scrollbar around a scrollbar, so an inner body hands its
+   bound back to the outer one: the outer scrolls, the inner contributes its full height. A
+   body that is not nested keeps its own cap, which is what bounds a tool batch during a live
+   run, when there is no fold above it yet. Unlayered on purpose — `max-h-*` and
+   `overflow-y-*` are Tailwind utilities and a rule in `@layer base` loses to them, which is
+   also why the ScrollArea rules above sit outside the layers. */
+[data-process-body] [data-process-body] {
+  max-height: none;
+  overflow-y: visible;
+}
+
 /* Sidebar list edges ----------------------------------------------------------
    Base UI tracks hidden content at each edge, including after a resize or list
    update. Draw the borders over the scroll area so they never shift its layout. */

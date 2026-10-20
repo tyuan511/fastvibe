@@ -341,7 +341,7 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
           // One grid column sized by the text, so the footer stretches to that
           // width instead of shrinking to the word 「收起」.
           <div className="grid">
-            <div className={cn(PROCESS_BODY_CAP, "px-3 py-2")}>
+            <div data-process-body className={cn(PROCESS_BODY_CAP, "px-3 py-2")}>
               <MarkdownView ref={bodyRef} text={text} />
             </div>
             {overflows ? toggle : null}
@@ -445,7 +445,7 @@ function ProcessOverflow({
         />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className={cn("flex flex-col gap-2.5 pt-1", PROCESS_BODY_CAP)}>{children}</div>
+        <div data-process-body className={cn("flex flex-col gap-2.5 pt-1", PROCESS_BODY_CAP)}>{children}</div>
       </CollapsibleContent>
     </Collapsible>
   );

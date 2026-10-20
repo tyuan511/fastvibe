@@ -4,7 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon, Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PROCESS_BODY_CAP } from "@/lib/process-body";
+import { PROCESS_BODY_CAP, PROCESS_BODY_MARK } from "@/lib/process-body";
 import { cn } from "@/lib/utils";
 
 /**
@@ -72,7 +72,8 @@ export function ToolRow({
   /**
    * Cap the body and scroll it inside the fold. A batch of tools has no panel of its
    * own that is already bounded — it grows as long as the batch is — so expanding one
-   * used to push the reply off the screen. See `PROCESS_BODY_CAP`.
+   * used to push the reply off the screen. See `PROCESS_BODY_CAP`; the mark it carries
+   * with it is what stops a batch nested inside another capped body from scrolling twice.
    */
   scrollBody?: boolean;
   /** When set, the subject becomes a link (zcode opens the file viewer this way). */
@@ -113,6 +114,9 @@ export function ToolRow({
   };
 
   const bodyClass = cn("ml-2 flex flex-col gap-2 border-l border-border pl-3.5", scrollBody && PROCESS_BODY_CAP);
+  // Only a capped body is marked: the mark is what a nested body looks for to give its own
+  // bound up, and an uncapped one must not swallow the cap of anything inside it.
+  const bodyMark = scrollBody ? { [PROCESS_BODY_MARK]: "" } : undefined;
 
   const subjectNode =
     subject && onSubjectClick ? (
@@ -215,7 +219,7 @@ export function ToolRow({
           </CollapsibleTrigger>
         </div>
         <CollapsibleContent className="pt-2">
-          <div className={bodyClass}>{children}</div>
+          <div className={bodyClass} {...bodyMark}>{children}</div>
         </CollapsibleContent>
       </Collapsible>
     );
@@ -227,7 +231,7 @@ export function ToolRow({
         {head(true)}
       </CollapsibleTrigger>
       <CollapsibleContent className="pt-2">
-        <div className={bodyClass}>{children}</div>
+        <div className={bodyClass} {...bodyMark}>{children}</div>
       </CollapsibleContent>
     </Collapsible>
   );

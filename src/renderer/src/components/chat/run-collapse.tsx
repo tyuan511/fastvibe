@@ -96,10 +96,10 @@ export function RunCollapse({
         {/*
          * The run's process is the longest thing in a turn — one run can hold dozens of
          * thinking blocks and tool cards — and it used to be as tall as all of them. The
-         * body caps and scrolls inside (see `PROCESS_BODY_CAP`), so opening the fold to
-         * check what the run did never pushes the answer below the fold of the window.
+         * body caps at half the reading area and scrolls inside (see `PROCESS_BODY_CAP`),
+         * so opening the fold to check what the run did never pushes the answer off screen.
          */}
-        <div className={cn("flex flex-col gap-2.5 pt-3", PROCESS_BODY_CAP)}>{children}</div>
+        <div data-process-body className={cn("flex flex-col gap-2.5 pt-3", PROCESS_BODY_CAP)}>{children}</div>
       </CollapsibleContent>
     </Collapsible>
   );
