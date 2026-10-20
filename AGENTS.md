@@ -691,7 +691,9 @@ A project can own several local folders. `Project.cwd` stays the primary folder 
 
 - **Creating.** 添加本地项目 opens a dialog: a name (empty means the first folder's name) and an ordered folder list. The first folder is primary. `projects:pick-folder` is the native dialog and is denied remotely; `projects:create` / `add-folder` / `remove-folder` / `set-primary` are allowed.
 - **Primary change rekeys the project.** `conversation.project` and settings keyed by the old path (`projectDefaults`, sidebar fold lists) move with it. Existing chats keep their own `cwd`; only new chats use the new primary folder. The name follows the new folder's basename only when the user had not renamed the project.
-- **The agent is told on every turn.** A hidden `fastvibe-project-folders` extension appends absolute paths, which folder is the working directory, and whether each folder is a git repository. A one-folder project appends nothing. Delegated runs do not load the extension, so the same sentence is appended to their system prompt. Tools already accept absolute paths; there is no extra sandbox.
+- **The agent receives live folder context.** A hidden `fastvibe-project-folders` extension appends a context snapshot when absolute paths, the working directory, or git status change. An unchanged snapshot is reused from the compaction-aware session projection; a one-folder project removes old folder snapshots from requests. Delegated runs do not load the extension, so the same sentence is appended to their system prompt. Tools already accept absolute paths; there is no extra sandbox.
+- **The other folders' AGENTS.md and skills are named, not loaded** (`engine/project-folder-resources.ts`). The SDK walks only the session's `cwd`, so a second repository's rules and `.agents/skills` are invisible to it; loading them would put them into every request, and most turns never touch that folder. So the folder snapshot lists, under each other folder, its instruction files and its skills (name, a one-line description, the `SKILL.md` path), and tells the agent to read them only before it changes files there. Each folder walks up to its own repository root (a folder outside any repository is only itself, never up to `/`), and a directory on the session's own ancestor chain is skipped — the SDK already loaded it. The snapshot is re-read at every prompt, so a folder or skill added later appears on the next turn with no reload. Such a skill is not a `/skill:` command and is not in 设置 → 技能.
+- **`@` searches every folder.** `workspace:search-files` adds the project's other folders on the desktop (`otherProjectFolders`); their hits are named `<folder>/<path>`, ranked with the primary's, and a file reachable from two roots is listed once. The SSH Agent's handler is unchanged — a remote project has one folder.
 - **Git is per repository.** `projects:repos` resolves each folder with `git rev-parse --show-toplevel` and collapses folders that share a checkout. The Git pane shows a repository switcher only when there are two or more. Checkpoints record one HEAD per repository (`repos` on the checkpoint); older checkpoints still restore from the single `cwd` + `head`.
 
 ### 会话作用域（每一条引擎调用都要带 `conversationId`）
@@ -985,7 +987,7 @@ rather than highlighted (below).
 ### 变更视图
 
 `side-pane-git.tsx` 同时展示冲突、已暂存和未暂存文件，选择项包含路径和 diff 来源；同一文件可同时在暂存区和工作区。聊天里每轮的「已修改 N 个文件」卡片（`chat/file-chips.tsx`）是该轮工具自己的 patch，点击它（卡片上的文件行或「查看变更」）打开的是这个变更视图，不再是独立的修改记录面板；路径以绝对形式交给 `openGitDiff`，由 `selectGitChange` 落到真正包含它的分组（未暂存/已暂存/冲突），文件已提交或已回退时退回工作区的第一个改动。
-列表与目录树复用 `git-change-list.tsx`：`git-change-tree.ts` 只压缩单子目录链，分叉保留；行布局为文件名、固定操作槽、状态列，方向键和右键操作与点击一致。右上角仅保留列表/目录树切换（ListIcon / FolderTreeIcon），不显示文件筛选和全部折叠。历史列表在 `git-history.tsx`，与文件区之间可拖动调整高度。提交区由 `git-commit-form.tsx` 组成：输入框右侧 AI 生成、提交分体按钮及提交/修订/提交并推送/提交并同步菜单。提交只包含已暂存内容，Cmd/Ctrl+Enter 提交，多行草稿在切换仓库时保留。AI 有暂存内容时只读取 index；修订空文案沿用上次提交信息。提交成功即清空已提交草稿并刷新，后续 push/pull 失败单独报告；同步按提交 → 既有 ff-only 拉取 → 推送执行，不做强制推送。桌面与 SSH 共用 `commitGitChanges` 并都注册 AI 生成方法；修订走独立的 `workspace:git-amend`，旧 Agent 会明确拒绝未知方法，不能忽略 amend 参数后误做普通提交。
+列表与目录树复用 `git-change-list.tsx`：`git-change-tree.ts` 只压缩单子目录链，分叉保留；行布局为文件名、固定操作槽、状态列，方向键和右键操作与点击一致。右上角仅保留列表/目录树切换（ListIcon / FolderTreeIcon），不显示文件筛选和全部折叠。历史列表在 `git-history.tsx`，与文件区之间可拖动调整高度。提交区由 `git-commit-form.tsx` 组成：输入框右侧 AI 生成、提交分体按钮，菜单仅保留「提交」和「提交并推送」。有改动且无冲突即可直接提交，Cmd/Ctrl+Enter 同样执行；多行草稿在切换仓库时保留。两个操作与聊天顶部提交入口共用 `performGitCommit`：先暂存仓库全部改动，输入为空时基于 index 自动生成提交信息，再提交，唯一区别是是否追加推送。手动 AI 生成读取所有改动；生成期间输入框显示「正在生成提交信息…」，生成按钮显示 Spinner，失败保留原草稿。提交成功即清空已提交草稿并刷新，后续推送失败单独报告。桌面与 SSH 共用 `commitGitChanges`（底层仍只提交 index）并都注册 AI 生成方法；保留独立的 `workspace:git-amend` 兼容已有调用。
 `DiffView` 仍是唯一 diff 渲染器，默认统一（合并）视图，按用户操作切换并排，支持换行和 hunk 跳转；并排列只配对同一变更块内的增删行。变更视图加载后自动选中冲突/未暂存/已暂存文件，刷新和暂存尽量保留当前路径；目录与文件面板采用相同的宽度规则：默认 224px，最小 120px，最多占面板的 75%，复用标准 SplitHandle 拖动调宽，不因拖窄自动收起。有独立收起/展开按钮；所有宽度都在变更面板内与 diff 并排展示，不使用抽屉，也不按面板宽度自动收起。diff 始终保持挂载，不能以目录/差异两级视图互相替换；目录收起/展开不重置历史分支筛选。
 
 - `main/source-control.ts` 是桌面和 SSH Agent 共用的 Git 实现。新方法通过中立调用表和远程策略注册：`workspace:git-comparison`、`workspace:git-history`；`git-diff` 的可选 `revision` 只接受完整 commit hash。
@@ -2298,8 +2300,9 @@ Deliberately deferred. Plugin authors are expected to degrade via `ctx.mode` /
   `git apply` 验证过）。文件夹和基线一致且产物有效 = 不唤醒 agent。
 - **产物校验**：`MEMORY.md` 是文件、`memory_summary.md` 第一行恰好是 `v1`、没有符号链接（会被删掉）。不过关
   就报错、**不推进基线**，下一轮 agent 会再看到同一份差异。
-- **读取**：隐藏扩展在 `before_agent_start` 把 `read_path.md`（含摘要全文，上限 20,000 字符）追加到当轮系统提示，
-  不进转写。没有记忆工具，智能体用普通的 `read` / `grep`。
+- **读取**：隐藏扩展在 `before_agent_start` 把 `read_path.md` 的固定规则追加到当轮系统提示，摘要全文（上限
+  20,000 字符）则作为隐藏上下文快照持久化。内容变化才追加；从会话投影判断是否已存在，重载、分支和压缩后都能
+  正确复用或补回。关闭记忆或摘要消失时，后续请求过滤全部旧快照，原始转写仍保留。没有记忆工具，智能体用普通的 `read` / `grep`。
 - **使用次数靠引用块**：read_path 要求用了记忆的回复末尾带 `<oai-mem-citation>`，里面的 `rollout_ids`
   （就是对话 id）经 `MemoryManager.noteReply` 记一次使用，决定整合时谁留下。引用块对读者没用，
   `stripMemoryCitation`（`shared/memory-citation.ts`）在 Main 映射转写时和渲染层 markdown 里都会去掉，
@@ -2533,9 +2536,11 @@ node scripts/bench-session-open.mjs [轮数]  # 冷会话打开里「加载内�
   `[id, name, context, output, inputMask, efforts|null, cost|null]` tuples and `x` maps
   every normalized alias to an index, so runtime lookup is one `Map` hit (O(1)).
   `v: 2` added `cost`, `v: 3` the price ladder, `v: 4` dropped the feature bitmask the
-  UI no longer records. Older snapshots still decode — a v1 tuple just ends after
-  `efforts`, and the decoder reads the price slot by version so a stale bundled index
-  loses detail instead of misreading a retired field as prices.
+  UI no longer records, `v: 5` made the fold order-independent (see the folding rules
+  below; the tuple shape did not change, so a v4 reader still decodes it). Older
+  snapshots still decode — a v1 tuple just ends after `efforts`, and the decoder reads
+  the price slot by version so a stale bundled index loses detail instead of misreading
+  a retired field as prices.
 - `cost` is `[input, output, cacheRead, cacheWrite, tiers?]` per million tokens, `null`
   when the catalog has no non-zero price; `tiers` is the long-context ladder,
   `[[over, input, output, cacheRead, cacheWrite], …]` ascending, and absent for the
@@ -2543,21 +2548,51 @@ node scripts/bench-session-open.mjs [轮数]  # 冷会话打开里「加载内�
   single-threshold spelling and is only consulted when a model has no `tiers`. A tier
   row that omits a field (`cache_write` on most Anthropic models) keeps the entry price
   for that field rather than reading as free.
-- `scoreOf` weights capability double and uses the ladder as a last tie-break, so a
-  reseller that copied the base rate cannot displace the vendor entry that also knows
-  the ladder — the ladder only exists on the entry that can price a long request.
-  Where two entries still differ on price, models.dev lists the same model under many
-  resellers and the winner is whichever scores highest, so a base price is a
-  best-effort guess rather than a statement about the user's gateway.
+- **The fold is a total order, and that is the whole point.** The catalog lists one
+  model under every reseller that carries it — ~9000 entries for ~3600 ids — and they
+  disagree: the same id arrives with different context windows and prices that can
+  differ by more than 10×. Which entry wins is therefore a decision, not a detail. It
+  used to be made by iteration order: entries were scored, and an exact tie kept
+  whichever appeared first upstream, so a model's context window and **billing** moved
+  whenever models.dev re-sorted its provider list (36% of ids were tied, 541 of them
+  with different metadata; ~1000 of 5720 aliases could resolve differently). The order
+  now is: **the vendor's own entry** (`canonical_model_id`'s provider prefix — `anthropic`
+  for `anthropic/claude-sonnet-5-5`; a prefix match like `google-vertex` ranks next, but
+  **a subscription plan never gets that credit** — `xiaomi-token-plan-cn`,
+  `zhipuai-coding-plan`, `tencent-tokenhub` are a vendor's 包月 billing plan, not the vendor,
+  and a plan is not charged per token so its rate is not a list price; no
+  `canonical_model_id` prefix in the catalog is plan-shaped, so exact vendor matches are
+  untouched), then capability, then a complete price list, then the long-context ladder,
+  then the larger context window, then provider id and model id. The last two make it
+  total, so the same catalog always folds the same way. An id **no vendor publishes** (a
+  reseller-only release) therefore resolves by provider id alone: arbitrary, but stable
+  and the same on every machine and every hour. An entry with no price is dropped before
+  that comparison whenever some candidate has one — a $0 model bills every turn at zero.
+  `test/models-dev-index.test.ts` shuffles a catalog and asserts the fold is
+  byte-identical; keep that test when touching `scripts/models-dev-encode.mjs`.
+- **Aliases are claimed by tier, not by rank.** Every entry offers names that are not its
+  id (the last segment of `zai-org/GLM-5.3`, the display name, a date-stripped form), and
+  913 of them are claimed by more than one model. Handing an alias to whichever entry
+  ranked highest meant `llama3-3-70b` could resolve to `TEE/llama3-3-70b`'s neighbour
+  instead of the model literally called that. Claims are tiered — the alias *is* the
+  entry's key (0), its date-stripped form (1), the last segment of a namespaced id (2),
+  the display name (3) — and a lower tier always wins; inside a tier the same total order
+  applies.
 - Prices are not display-only. `cost` is written to `models.json`, where pi's
   `calculateCost` multiplies it by the turn's tokens; the ladder cannot be expressed
   there (pi prices a run with one rate), so `src/main/engine/pricing.ts` picks the tier
   from the request's prompt size whenever FastVibe reports money itself — the live
   composer stat and 统计 — and `models.json` keeps the entry rate.
-- Prices are never user-editable, so `hydrateModels` back-fills `cost`/`costTiers` from
-  the bundled catalog for any model that has none. Without that, a `providers.json`
-  written before pricing existed leaves `models.json` with no price and every turn is
-  billed at $0.
+- **A stored model's metadata is only a fallback, and only for ids the catalog does not
+  know.** `providers.json` keeps a copy of every field the catalog supplied, but that
+  copy is what the snapshot said on the day the model was added. `hydrateModels`
+  therefore re-derives context window, output ceiling, modalities, reasoning, thinking
+  levels and prices from the current catalog for every model the user has **not** tuned
+  (`edited`), which is also how a corrected fold reaches an install that already stored
+  the wrong winner's numbers. A tuned row is authoritative in every field, and an id the
+  catalog does not describe at all keeps what it had — the 128K/8K defaults
+  `enrichModel` substitutes are conservative guesses, and swapping a real context window
+  for them would make the window guard compact far too early.
 - `src/main/engine/models-dev.ts` reads the user-updated snapshot first
   (`models-dev.json` in the app data dir) and the bundled one second. The snapshot is
   refreshed hourly on the user's machine (`models-dev-refresh.ts`) and on demand from
@@ -2932,6 +2967,49 @@ everything that went wrong went wrong in that gap, on three layers at once.
 The reply that was cut keeps its 已中断 mark, as it does after 停止: it is where that reply
 stops. What must not appear is an interruption on the *new* turn, or a paused queue.
 
+## 报错行（`shared/assistant-error.ts` + `components/chat/error-notice.tsx`）
+
+失败的一轮回复显示的是一行结论 + 供应商的补充说明 + 可展开的原文 + 一键复制，而不是把 `errorMessage`
+整句塞进一个红气泡。真正要处理的是三句话的形状，而且每一种都是**布局**问题，不只是阅读问题：
+
+- 网关的失败是 `429: {"message":"…","id":"…","type":"insufficient_quota"}` —— 状态码粘着 JSON，转写里
+  又是最醒目的一行，读者得先解析它才能判断「该重试还是该加钱」。
+- SDK 的配置错误是三段话，最后一行是一个两空格缩进、`file:///Users/…` 开头的路径。
+- git / pnpm 的失败是一整段带缩进的调用栈。
+
+**不换行的长串会把整列撑宽。** `MessageContent` 是 `items-start`，没声明宽度的子元素按 fit-content
+量，而一段 200 字符的路径 min-content 宽度就是整段路径——于是转写的 `scrollWidth` 超过 `clientWidth`，
+整个会话栏横着滚。`break-words`（`overflow-wrap: break-word`）救不了：它只断开**会溢出自己行**的词，
+而 fit-content 的盒子没有可溢出的宽度。所以：
+
+- 卡片每一行都是 `wrap-anywhere`（Tailwind 4 的 `overflow-wrap: anywhere`，连 min-content 一起缩），
+  **不是** `wrap-break-word`。这一条是可量化的：1680 / 1200 / 400 三种视口下 `documentElement.scrollWidth
+  === clientWidth`，每张卡片自身 `scrollWidth === clientWidth`。
+- **一行一条。** `describeAssistantError` 把原文切成 `headline` + `body[]`：首句是结论，其余每行一条
+  （空行合并、缩进去掉），路径、URL、调用栈帧各自一行而不是粘在引导句后面。
+- **带长 token 的行用等宽小字**（`looksLikePath`：整行没有空格且像路径/URL，或行里有 ≥32 字符的子串是
+  路径/URL）。`at file:///Users/…/App.tsx:12:3` 与裸路径是同一个问题，所以整行一起变小，调用栈读起来像
+  调用栈而不是「正文里塞了一个巨长的词」。
+- **最多三行，其余在「查看详情」里**；详情块 `max-h-64 overflow-auto`，所以一百行也不会把转写顶走。
+  没有可展开内容（`Connection error.`）就不画这个控件——展开等于把同一句再说一遍。
+
+其余几条：
+
+- **只在渲染层拆，不改引擎。** `map-messages` 交给渲染层的仍是供应商原话；状态码、`type`/`code`、首句
+  和 pretty-print 后的原文都由 `describeAssistantError` 一次算出来。
+- **状态码只认三种写法**：开头 `429:`、括号里 `(429)`、SDK 的 `413 status code`。别的三位数是别人家的
+  行号（`test/assistant-error.test.ts` 钉住）。
+- **内容为空的状态码不冒充结论**：`413 status code (no body)` 的 headline 是空的，界面显示
+  「请求失败，没有返回更多信息。」，chip 仍然写 413。
+- **复制是常显的**，不是 hover 才出来：这是这个控件存在的理由，而触屏没有 hover。复制的是**原文**
+  （包含被 headline 省掉的分配建议和链接），因为那是要贴进工单的那一份；详情块本身也是 `select-text`。
+- **样式是描边卡片，不是填充红块**：`border-destructive/25` + `bg-destructive/5`，状态码与 code 用等宽小 chip。
+  失败的一轮只是转写里的一行，屏幕上最响的仍应是读者正在读的那段正文。
+- **重试状态的供应商原文同样 pretty-print**（`RetryStatus` 的展开区），但那里保持 `text-xs font-mono`，
+  因为它是运行过程的一部分而不是结论。
+- 预览：`mock.html?error=1` 依次是 429 配额、三段配置错误 + 长路径、调用栈、503、一个 400 字符无断点的
+  base64（撑宽那种）；`mock.html?error=plain` 是只有一句话、因此没有「查看详情」的错。
+
 ## 中止不是失败（`assistantStopVerdict`）
 
 一个被中止的运行有**两种**落盘形态，而它们对读者是同一件事，所以必须画成同一行：
@@ -3000,8 +3078,9 @@ timestamps always show.
 Consecutive quiet tools between two stretches of prose fold into one row, collapsed by
 default (`collapseToolRuns` in `src/renderer/src/lib/tool-run.ts`). While a call in the
 batch is in flight the line is that call's own description. Once the batch has settled
-and the reply has moved on to the next sentence, the line is a summary of at most five
-categories, in the order they first appeared: 命令 (shell calls only, always counted),
+and the reply has moved on to the next sentence, the line is a summary of at most six
+categories, in the order they first appeared: 思考 (only with 折叠思考内容, always counted),
+命令 (shell calls only, always counted),
 读取, 写入 (write / edit / delete), 搜索 (search / web / list), 工具 (MCP, browser,
 scripts, skills, anything else). One call inside a category names the file or query
 (「已读取 process-manager.ts」); several say how many (「已读取 3 个文件」).
@@ -3013,6 +3092,41 @@ A failed call is not counted on the summary line; the expanded row already marks
 A thought is its own block and
 splits the batch, the same way prose does; it is not folded into the row. Expanding
 the row shows the calls.
+
+- **Only a part the reader can see may break the batch.** `collapseToolRuns` drops a thinking
+  or text part that would render nothing — the same two rules 空的思考不占一行 and
+  模型输出的空白不占一整屏 apply (`thinkingTakesRow` / `blankTakesRow`). An invisible divider is
+  worse than none: a provider really does finish a reasoning block whose whole text is one
+  space (seen in a live transcript, sitting between two shell calls), and the reader got
+  「已运行 6 个命令」 plus 「已运行 2 个命令」 with nothing between them and no way to ask why.
+  The exception is the live tail — a blank thought that is the reply's last part still says
+  「正在思考」, so it still splits.
+
+- **折叠思考内容 (设置 → 偏好设置 → 对话, `settings.collapseThinking`, off by default) folds
+  thoughts into the batch they sit in.** `collapseToolRuns` then takes
+  `{ collapseThinking, streaming }`, a run's `items` are calls *and* thoughts, and the settled
+  line counts the thoughts as its own category (「已写入 App.tsx，运行 2 个命令，思考 1 次」 —
+  still in order of first appearance, still one 「已」). It is a *renderer* preference, so the
+  phone (Flutter) has no equivalent yet and keeps its own transcript rules.
+- **A thought only joins a batch that has a call in it.** The option folds thinking into the
+  tool summary; two thoughts with no call around them have no summary to join, so they keep
+  their own rows — otherwise the setting would hide reasoning behind a row that can only be
+  read by expanding it. A blank thought is neither counted nor does it split the batch, which
+  is 空的思考不占一行 said in the other direction.
+- **Live thinking keeps the animation it had outside the fold.** The run's last item is
+  `live` only when the reply is streaming and that thought is the reply's last part
+  (`ToolRun.liveThinking`); the row then prints 「正在思考」 in the same `animated-gradient-text`
+  shimmer and carries the same `ReasoningTicker` preview, through `ToolRow`'s `filler` slot —
+  the one element that may own the row's leftover width, which `context` would only truncate.
+  `partTakesRow`'s live-tail rule and `WorkingStatus`'s gate follow it, so a folded live thought
+  still suppresses the extra 「正在工作」 row.
+- **The expanded row prints the thoughts in order**, each as a 「思考」 mark over its text with
+  the reasoning body's own left rule — no second chevron, since the row *is* the fold.
+- **The caches know about it.** `groupParts` keys its per-message cache on the language, the
+  fold and `streaming`; `buildGroup` compares items by identity as well as tools, so a thought
+  that is still growing misses (its part is cloned per delta) and stops missing once it settles.
+- Preview: `mock.html?foldthink=1` (the settled line), `?live=1` (a reply left in flight with a
+  thought being written after its last call), `?live=1&foldthink=1` (the live folded row).
 
 Questions, todos, sub-agents, presented files and the task graph stay on
 their own line and break the run — the row is the status. A single tool is never folded;
@@ -3076,6 +3190,36 @@ through by reference.
   会让后面每一块各拿错一份时长。手机（Flutter）自己解析事件，这一行仍然会画——要一起收掉得去
   `apps/mobile_flutter` 那边做同一条判断。
 - 预览：`mock.html?thinking=blank`（在真实思考前塞一个空格块，最后一轮末尾再塞一个）。
+
+## 模型输出的空白不占一整屏（`lib/blank-output.ts`、`lib/chat/blank_output.dart`）
+
+远端模型退化时会交出一大段**没有内容但有高度**的输出，转写中间出现一千多像素的空白，读者只会以为卡住了。
+关键事实：**换行符不是元凶**。`remark-parse` 只把 ASCII 空格与行结束符当空白，`\n{40}` 渲染成空文档；
+能留下高度的是解析器看不见、浏览器认得的那些东西——`<br>`、`&nbsp;`、全角空格 `U+3000`、零宽字符（`U+200B`/`FEFF`）。
+`String.prototype.trim()` 会去掉 Zs 一类的但留下 Cf 一类，所以「有没有内容」也不能交给 `trim`。
+
+- **两条规则，都在渲染层。** `isBlankOutput` 判「这一块没有可读的东西」，`blankTakesRow` 让它在**不是活尾**时不占行
+  （活尾保留是故意的：模型开头先打几个换行是正常形状，那上空泡里闪的光标是运行还活着的唯一信号）。
+  `collapseBlankRuns` 把病态的连刷削成两个：`<br>`×60 → `<br><br>`，≥ 3 行纯不可见字符 → 普通空行（**不是删掉**，
+  所以两端的段落还是两段），一行里 ≥3 个连续不可见字符 → 一个空格。一个 `<br>`、一个 `&nbsp;` 原样留着：
+  那是有人真想要的排版。
+- **一条规则只住一处。** 折叠在 `MarkdownView` 开头做（切块之前），所以流式、重开转写、工具卡、文件预览、
+  release note 看到的是同一份 HTML；`thinking-row.ts` 的空思考判定也改成调用 `isBlankOutput`，
+  思考与正文不会对「空」各说各话。`message-row.tsx` 的 `partTakesRow` 统一回答「这个 part 占不占行」，
+  `fold` 的「回复有没有答案」也改成要**看得见**的 text——否则一段纯空白的尾巴会假装那是答案。
+- **不改写转写，也不改发给模型的字节。** 跟检查点/压缩同一道理：磁盘上的东西是事实，界面是呈现。
+  代价是那些空白 token 仍然计费，那是上游模型的问题，不是这里的。
+- **手机端是同一套规则的 Dart 版：`apps/mobile_flutter/lib/chat/blank_output.dart`。** 两边必须各写一份，
+  是因为两端用不同的引擎解析 Markdown：实测（`test/blank_output_test.dart` 量渲染高度，非猜）
+  `gpt_markdown` 把 `&nbsp;`、零宽字符刷成一屏（1120 / 866 px），但把全角空格 `U+3000` 当空行（66 px）——
+  正好和 `remark-parse` 相反（那边 U+3000 是内容，`&nbsp;` 在段内会被 HTML 折叠）。所以规则取**并集**，
+  不按计划只修当前看得到的那几种；两个文件保持一致比削规则值钱。接入点同样只一处：
+  `MarkdownView.build` 里 `collapseBlankRuns`，另加 `transcript.dart` 的 `_block` 用 `blankTakesRow(text, live && isLast)`
+  决是否占行（手机这端 `gpt_markdown` 还会在**软换行**处断行、并丢掉后面没有换行的内联 `<br>`，
+  所以上述实测形状都带 `\n`）。
+- 验证：`test/blank-output.test.ts` 跑**真的** markdown 管线（与 `markdown-html.test.ts` 同一做法），
+  钉住「`\n{40}` 本来就不渲染」这条前提，再钉住每种病态形状收敛以后的 `<br>` / `<p>` 个数。
+- 预览：`mock.html?blank=1`（最后一轮回复里刷 60 个 `<br>`、20 行全角空格和一段 `&nbsp;`）。
 
 ## 原生压缩的窗口保护（`engine/native-compaction.ts`）
 
@@ -3202,6 +3346,39 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 - 大转写按行读取，不按文件大小跳过；按文件大小和修改时间只重建变化会话的搜索索引，缓存受字符数与行数上限约束，按会话最近更新时间优先准入，冷文件扫描不淘汰更近期的缓存；超限文件只保留当前查询摘要和分支链接。另有有界查询备忘：文件未变时复用相同查询及无命中查询的收窄结果。
 - 后端不在归档过滤之前截断命中数；界面可选择「包括已归档对话」，按更新时间排列。命中携带可见消息的 `entryId`（工具输出指向所属回复），跳转复用 `stores/transcript-navigation.ts` 和虚拟列表的消息定位。
 - 搜索只沿当前分支读取正文；仍是大小写不敏感的字面子串，不做分词。
+
+## 技能调用的呈现（`shared/skill-invocation.ts`）
+
+`/skill:office 帮我写个周报` 会被引擎展开成**整份 SKILL.md**再落盘：
+`<skill name="…" location="…">\n正文\n</skill>` 后面接上用户自己写的话。那是给模型的说明书
+（3 KB 到 40 KB），不是读者写下的东西，所以转写里不展开它，只画一枚 badge（图标 + 「技能 名字」）
+加上用户自己的话。发送后的 badge **不可点**，hover 给一句说明；引擎那份正文一个字都不改，模型照旧读完整技能。
+
+- **两种拼写都要认。** 落盘的是展开后的块，而队列行、刚点发送画出来的那一行、`/handoff` 由 Main
+  补的第一条消息，都还是草稿形态 `/skill:name 正文`。`parseSkillInvocation` 同时读这两种，
+  所以同一轮在「刚发出」「重开转写」「手机」三处看起来一模一样。正则**锚定整条消息**：
+  一条只是*引用*了这段标记的回复不是技能调用，不能被折掉（`test/skill-invocation.test.ts` 钉住）。
+- **折叠发生在四个地方，`text` 从此只有用户的话。** Main 的投影（`engine/map-messages.ts`）折好
+  `text`、`parts` 并挂上 `message.skill`；渲染层三个建行点（`stores/session.ts` 的 `addUserMessage`、
+  `session-reducer.ts` 的 `optimisticQueuedTurn`、`apply-engine-event.ts` 的 `userRowFromEngine`）
+  用同一个 `skillDisplayOf` 折，否则乐观行会在本轮结束时被换成另一条长得不一样的行。
+  队列行（`components/chat/message-queue.tsx`）在渲染时折，因为队列里存的就是草稿原文。
+  好处顺带有一致的一条：`previewTranscript` 之后，大段技能正文根本不过 IPC，手机也只会看到那句话。
+- **编辑/复制/重试/历史召回要把命令放回去**（`skillCommandOf`）。行上的 `text` 已经没有 `/skill:` 了，
+  照着它重发就等于**悄悄丢掉这一轮依赖的技能**——引擎展开的是命令，不是这一行。
+- **标题与预览同理。** `promptPreview`（侧栏那一行）与 `session-title` 扩展都先折回命令形态，
+  否则一条技能说明会变成会话名。扩展是散文件、不能 import `@shared`，所以它自己抄了一份正则，
+  测试比对两处字面量一致（和 `present` 的扩展名清单同一个办法）。回复推荐反过来：只要用户那句话
+  （`stripSkillInvocation`），技能正文对「下一句他会问什么」没有信息量。
+- **badge 的 tooltip 用技能自己的 description**，来自 composer `/` 面板那份列表（`lib/skill-descriptions.ts`
+  的模块级缓存，App 每次 `listSkills` 写一次）；引擎在消息里只留了 `location`，所以列不出来的技能退回路径。
+- **输入框也是 badge。** `lib/skill-draft.ts` 保留完整命令作草稿，Textarea 只编辑正文；
+  不用会 trim 的消息解析器，以免吞掉输入中的空格和换行。光标和 `@` 文件选择按可见正文计数，
+  点击移除或在正文开头按 Backspace 取消技能。正在输入的名称不提前变成 badge，避免短名称截断长名称。
+- **手机端同样保留技能。** `ChatMessage.skill` 解码和 copy 都保留标识，用户行画 badge；
+  纯技能消息不画空泡，复制和再次使用通过 `promptText` 还原命令。旧服务端的展开块和本地乐观命令也折叠。
+- **侧边搜索仍读原始转写**，命中可能落在技能正文里。
+- 预览：`mock.html?skill=1`（一轮带话的技能调用、一轮只有 badge、队列里再来一条草稿形态）。
 
 ## 重试与文件回退（checkpoint）
 
@@ -3450,6 +3627,15 @@ locale charmap        →   US-ASCII
   和 Electron 初始化并行，`whenReady` 的第一件事就是等它——之后才有会话、终端、MCP 或窗口发来的 git 调用。shell 的
   条目合并在原有 PATH 前面，所以随后再调一次 `applyOfficeCliEnv()` 把内置 OfficeCLI 挪回最前（它会去重）。超时时
   连同 stdout 一起丢掉：被杀的 shell 留下的子进程可能还握着管道。无头 Agent 仍是同步的，它没有窗口在等。
+
+### 安装版里 node-pty 必须带补丁（`patches/node-pty.patch`）
+
+打包后 electron-builder 把整个 `node-pty` 包（含 `lib/*.js`）放进 `app.asar.unpacked`，Electron 解析 `require` 时
+`__dirname` 已经是 `…/app.asar.unpacked/…`。node-pty 的 `helperPath.replace('app.asar', 'app.asar.unpacked')`
+于是得到 `app.asar.unpacked.unpacked`，`spawn-helper` 找不到，`pty.fork` 报 `posix_spawnp failed.`——
+**dev 没有 asar，所以一切正常，只有安装包起不了终端**。补丁把三处 `replace` 改成
+`/app\.asar(?!\.unpacked)/`（`unixTerminal.js` 两处、`windowsConoutConnection.js` 一处）。
+升级 node-pty 时用 `pnpm patch node-pty` 重做；去掉补丁前先在打包产物里实测开终端。
 
 ### 回退路径（node-pty 不可用时）
 

@@ -151,6 +151,20 @@ Read `lib/chat/message.dart`, `live_events.dart`, `snapshot_sync.dart` and
   (A library is not the answer here: the whole Flutter ecosystem renders Markdown into a
   Column, and `gpt_markdown`'s lazy path — `SliverGptMarkdown` — needs a sliver host, which
   a one-row-per-message list is not. Row-level chunking sidesteps both.)
+- **A model's blank output is shortened before the parser sees it**
+  (`lib/chat/blank_output.dart`, the Flutter port of the desktop's
+  `src/renderer/src/lib/blank-output.ts`). A remote model degenerating into a run of
+  *contentless* lines — forty `<br>`s, forty `&nbsp;`s, twenty lines of zero-width
+  characters — filled the screen with vertical nothing: measured at 1120 / 1120 / 866 px
+  for what 「前文 + 后文」 costs 66 px. `MarkdownView` collapses such a run to two breaks and
+  `_AssistantRow._blockTakesRow` gives a settled blank prose block no row (the live tail
+  keeps one, with its gap: that empty bubble with the streaming caret is the proof the run
+  is still writing). Plain newlines are **not** the bug and the test pins that first —
+  `gpt_markdown` collapses them on its own. The two ports stay byte-for-byte equivalent
+  even where one engine does not currently need the rule, because the engines disagree:
+  `gpt_markdown` calls U+3000 blank and `remark-parse` does not, and it breaks a line at a
+  *soft* newline while dropping an inline `<br>` that has no newline after it. Keeping the
+  two files in step is worth more than trimming a rule.
 - **Older history has its own flight** (`HistoryPager`), so scrolling back never blocks
   the live path. `loadAll` drains it before a copy-all, which must never silently copy
   just the visible window.
