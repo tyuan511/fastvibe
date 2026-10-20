@@ -8,6 +8,23 @@ import { skillPromptText } from "../../shared/skill-invocation.ts";
  */
 const PLACEHOLDER_TITLES = new Set(["新会话", "新任务", "New chat", "New task"]);
 
+const PREVIEW_CHARS = 80;
+const TITLE_CHARS = 24;
+
+/**
+ * The head of `text` as a title, marked as a cut when the prompt had more to it.
+ *
+ * This is the title a chat wears until session-title names it — and, when that call
+ * never landed, for good. A silent head-cut reads as a complete name: 「重构登录的中间件」
+ * and 「重构登录的中间件还」 are indistinguishable, and the second is nonsense the reader
+ * has no way to question. The ellipsis says the sentence continues in the chat, and the
+ * last character gives way to it so the row stays within TITLE_CHARS.
+ */
+function titleFrom(prompt: string): string {
+  if (prompt.length <= TITLE_CHARS) return prompt;
+  return `${prompt.slice(0, TITLE_CHARS - 1).trimEnd()}…`;
+}
+
 /**
  * The title and preview a chat's first prompt gives it.
  *
@@ -27,11 +44,11 @@ export function promptPreview(
   // transcript, where that command has already been expanded into the whole SKILL.md.
   // Folding it back to the command keeps both paths writing the same row, and keeps a
   // skill's instructions out of the chat's name.
-  const prompt = skillPromptText(text);
-  const preview = prompt.trim().slice(0, 80);
+  const prompt = skillPromptText(text).trim();
+  const preview = prompt.slice(0, PREVIEW_CHARS);
   const named = Boolean(current.titleManual) || Boolean(current.title && !PLACEHOLDER_TITLES.has(current.title));
   return {
     preview,
-    title: named && current.title ? current.title : preview.slice(0, 24) || uiText("新会话", "New chat"),
+    title: (named && current.title ? current.title : titleFrom(prompt)) || uiText("新会话", "New chat"),
   };
 }
