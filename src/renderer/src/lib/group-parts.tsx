@@ -17,12 +17,6 @@ export type ToolGroup = {
   tools: ToolCallBlock[];
   /** How many thoughts this row hides — 0 unless 折叠思考内容 is on. */
   thoughts: number;
-  /**
-   * The thought being written right now. A call in flight is never in this row at all —
-   * it stands on its own line below the fold (see `collapseToolRuns`) — so a row is live
-   * exactly when it is writing a thought it swallowed.
-   */
-  liveThinking?: ThinkingPart;
 };
 
 export type RenderPart =
@@ -236,13 +230,13 @@ function sameItems(a: readonly RunItem[], b: readonly RunItem[]): boolean {
     const right = b[index];
     if (!left || !right || left.kind !== right.kind) return false;
     if (left.kind === "tool" && right.kind === "tool" && left.tool !== right.tool) return false;
-    if (left.kind === "thinking" && right.kind === "thinking" && (left.part !== right.part || left.live !== right.live)) return false;
+    if (left.kind === "thinking" && right.kind === "thinking" && left.part !== right.part) return false;
   }
   return true;
 }
 
 function buildGroup(
-  run: { id: string; items: RunItem[]; tools: ToolCallBlock[]; liveThinking?: ThinkingPart },
+  run: { id: string; items: RunItem[]; tools: ToolCallBlock[] },
   language: string,
   fold: boolean,
 ): ToolGroup {
@@ -261,7 +255,6 @@ function buildGroup(
     items: run.items,
     tools: run.tools,
     thoughts,
-    liveThinking: run.liveThinking,
   };
   if (first) builtGroups.set(first, { key, id: run.id, items: run.items, tools: run.tools, group });
   return group;

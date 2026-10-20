@@ -33,20 +33,14 @@ export function foldsIntoRun(name: string): boolean {
 
 export type RunItem =
   | { kind: "tool"; tool: ToolCallBlock }
-  /** `live` is set only on the thought still being written at the reply's tail. */
-  | { kind: "thinking"; part: ThinkingPart; live: boolean };
+  /** A thought that has finished. A thought still being written is never in a run. */
+  | { kind: "thinking"; part: ThinkingPart };
 
 export type ToolRun = {
   /** First call's id, so a later call in the same batch does not remount the row. */
   id: string;
   items: RunItem[];
   tools: ToolCallBlock[];
-  /**
-   * The thought this row is currently writing, when it is live on a thought rather than on
-   * a call. The row then shimmers 「正在思考」 exactly as an unfolded block does, instead of
-   * the call description it would otherwise print while the batch is in flight.
-   */
-  liveThinking?: ThinkingPart;
 };
 
 export type RunFoldOptions = {
@@ -73,6 +67,11 @@ export type CollapsedPart =
  * two, because the batch line had stopped being a live element for a token. Now the fold
  * only ever counts settled calls and grows as they land, and the one call that is running
  * stands on its own line below it, with its own spinner.
+ *
+ * `collapseThinking` does not lift that rule: a thought being written at the reply's tail
+ * (`live`) is split out exactly like a running call, so the row is never the place where
+ * something is happening. What the option decides is only where a thought goes *once it has
+ * finished* — into the batch's count, or on its own block.
  */
 export function collapseToolRuns(
   parts: MessagePart[],
@@ -90,13 +89,11 @@ export function collapseToolRuns(
       // Thoughts only: no call to fold them into, so each keeps its own block.
       for (const item of pending) if (item.kind === "thinking") output.push(item.part);
     } else if (tools.length >= 2 || thoughts > 0) {
-      const last = pending[pending.length - 1];
       output.push({
         kind: "run",
         id: `run:${tools[0].id}`,
         items: pending,
         tools,
-        liveThinking: last?.kind === "thinking" && last.live ? last.part : undefined,
       });
     } else if (tools[0]) {
       output.push({ kind: "tool", tool: tools[0] });
@@ -126,8 +123,8 @@ export function collapseToolRuns(
       output.push({ kind: "tool", tool });
       continue;
     }
-    if (foldThoughts && part.kind === "thinking") {
-      pending.push({ kind: "thinking", part, live });
+    if (foldThoughts && part.kind === "thinking" && !live) {
+      pending.push({ kind: "thinking", part });
       continue;
     }
     // Thinking, prose, and every other part sit outside the fold and split it.

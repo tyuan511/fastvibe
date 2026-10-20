@@ -704,9 +704,6 @@ function ChatMessageRowImpl({
   const liveTail =
     lastPart?.kind === "text" ||
     (showThinking && lastPart?.kind === "thinking") ||
-    // A swallowed thought that is still being written shimmers in the run's own line, which
-    // is a live element the same as the standalone block's would have been.
-    (lastPart?.kind === "group" && lastPart.group.liveThinking !== undefined) ||
     (lastPart?.kind === "compact" && lastPart.compact?.status === "running") ||
     message.tools.some((tool) => tool.status === "running");
   if (isUser && editing) {

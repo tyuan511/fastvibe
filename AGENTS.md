@@ -3097,8 +3097,9 @@ timestamps always show.
 ## 连续工具折叠
 
 Consecutive **settled** tools between two stretches of prose fold into one row, collapsed by
-default (`collapseToolRuns` in `src/renderer/src/lib/tool-run.ts`). A call still in flight is
-never folded — it stands on its own line below the fold (see the bullet below). Once the batch
+default (`collapseToolRuns` in `src/renderer/src/lib/tool-run.ts`). Nothing that is still being
+written is ever folded — neither a call in flight nor a thought in flight; each stands on its own
+line below the fold (see the bullet below), and joins it once it returns. Once the batch
 has settled and the reply has moved on to the next sentence, the line is a summary of at most six
 categories, in the order they first appeared: 思考 (only with 折叠思考内容, always counted),
 命令 (shell calls only, always counted),
@@ -3115,14 +3116,14 @@ splits the batch, the same way prose does (unless 折叠思考内容 says otherw
 into the row. Expanding the row shows the calls — 一批工具在 `ToolRow` 里靠 `scrollBody` 拿到和
 「用时 …」同一个正文高度上限（`PROCESS_BODY_CAP`，见 折叠运行过程），批次再长也在这一行之下内部滚动。
 
-- **在飞的那个调用不进折叠，它自己占一行。** 曾经它是折叠行自己的文字（「正在运行 …」加一个 spinner），
-  于是一行在两种身份之间反复横跳：它一会儿报「现在在做什么」、一会儿报「已经做完了什么」，而每跳一次
-  `liveTail` 就重判一次——「正在工作」那一行于是隔一会儿多出来、隔一会儿又没了，同一个状态在两个位置上闪。
-  现在折叠行只数已经落地的调用，正在跑的那一个站在它下面单独一行（并行调用就各站一行），跑完才归进折叠。
+- **任何还在写的东西都不进折叠，它自己占一行。** 曾经在飞的那个调用就是折叠行自己的文字（「正在运行 …」
+  加一个 spinner），于是一行在两种身份之间反复横跳：它一会儿报「现在在做什么」、一会儿报「已经做完了什么」，
+  而每跳一次 `liveTail` 就重判一次——「正在工作」那一行于是隔一会儿多出来、隔一会儿又没了，同一个状态在
+  两个位置上闪。现在折叠行只数已经落地的东西，在写的调用（并行就各一个）站在它下面单独一行，跑完才归进
+  折叠；`collapseThinking` 不开这个例外——一段还在写的思考同样站在自己那一行上（见下面「在写的思考」）。
   折叠行的 `persistKey` 是批次的**第一个**调用，所以下面的调用陆续落地时它不换身份、不重新挂载。
-  `liveTool` 和 `ToolGroup.running` 随这条规则一起删掉了：一个不会含有在飞调用的批次不需要「现在在做什么」
-  那一支。**不要把两件事混回一件**：被 折叠思考内容 吞进来的思考仍然可以就是这一行（见下面「Live thinking」），
-  那是那个开关的定义本身——它折的就是思考；调用不一样，调用只在它自己那一行上活。
+  `liveTool`、`ToolGroup.running`、`ToolRun.liveThinking` 和 `ToolRow` 的 `filler` 插槽都随这条规则删掉了：
+  一行既然永远不会是「正在发生的事」，就不需要为它准备的 spinner、ticker 与抢剩余宽度的位置。
   预览：`mock.html?batch=live`（把一批里的最后一个调用改回运行中）。
 
 - **Only a part the reader can see may break the batch.** `collapseToolRuns` drops a thinking
@@ -3145,20 +3146,22 @@ into the row. Expanding the row shows the calls — 一批工具在 `ToolRow` �
   their own rows — otherwise the setting would hide reasoning behind a row that can only be
   read by expanding it. A blank thought is neither counted nor does it split the batch, which
   is 空的思考不占一行 said in the other direction.
-- **Live thinking keeps the animation it had outside the fold.** The run's last item is
-  `live` only when the reply is streaming and that thought is the reply's last part
-  (`ToolRun.liveThinking`); the row then prints 「正在思考」 in the same `animated-gradient-text`
-  shimmer and carries the same `ReasoningTicker` preview, through `ToolRow`'s `filler` slot —
-  the one element that may own the row's leftover width, which `context` would only truncate.
-  `partTakesRow`'s live-tail rule and `WorkingStatus`'s gate follow it, so a folded live thought
-  still suppresses the extra 「正在工作」 row.
+- **在写的思考也自己一行，开关只决定它写完之后去哪。** `collapseThinking` 把思考折进批次，指的是
+  **已经写完**的那段：它进入计数（「已思考 2 次」）、展开后在行里按顺序印出来。而一段还在流的思考——
+  回复的最后一个 part 且本轮仍在跑（`streaming` 与它一起传进 `collapseToolRuns`）——和调用走同一条路：
+  `flush()` 掉它前面的批次，自己作为一个 `thinking` part 输出，于是它拿到普通 `ThinkingBlock` 的
+  「正在思考」闪烁与单行 ticker 预览，和没开这个开关时一模一样。`liveTail` 于是仍然只看「末尾是不是
+  一个 text / thinking part」，不需要为一个折进来的思考开口子。
 - **The expanded row prints the thoughts in order**, each as a 「思考」 mark over its text with
   the reasoning body's own left rule — no second chevron, since the row *is* the fold.
 - **The caches know about it.** `groupParts` keys its per-message cache on the language, the
-  fold and `streaming`; `buildGroup` compares items by identity as well as tools, so a thought
-  that is still growing misses (its part is cloned per delta) and stops missing once it settles.
-- Preview: `mock.html?foldthink=1` (the settled line), `?live=1` (a reply left in flight with a
-  thought being written after its last call), `?live=1&foldthink=1` (the live folded row).
+  fold and `streaming` — `streaming` because whether the tail thought is live is what decides
+  whether it sits in the row or on its own line; `buildGroup` compares items by identity as well
+  as tools, so a batch that is still gaining thoughts misses and stops missing once it settles.
+- Preview: `mock.html?foldthink=1` (the settled line, thoughts counted), `?live=1` (a reply left
+  in flight with a thought being written after its last call), `?live=1&foldthink=1` (the same,
+  with the finished calls above it counted — the live thought is still on its own line),
+  `?batch=live` (a call left in flight inside a batch).
 
 Questions, todos, sub-agents, presented files and the task graph stay on
 their own line and break the run — the row is the status. A single tool is never folded;

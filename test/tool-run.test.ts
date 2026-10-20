@@ -16,9 +16,9 @@ function thought(text: string): MessagePart {
   return { kind: "thinking", text };
 }
 
-function thinkItem(text: string, live = false): RunItem {
+function thinkItem(text: string): RunItem {
   const part: Extract<MessagePart, { kind: "thinking" }> = { kind: "thinking", text };
-  return { kind: "thinking", part, live };
+  return { kind: "thinking", part };
 }
 
 function partsOf(...items: Array<MessagePart | ToolCallBlock>): MessagePart[] {
@@ -272,15 +272,21 @@ test("a call in flight stands on its own line and does not become the batch row"
   assert.deepEqual(shape(after), ["b1", "b2+b3"]);
   assert.equal(after[1]?.kind === "run" ? after[1].id : "", "run:b2");
 
-  // A thought the option folded in is still allowed to be the live thing: the row shimmers
-  // 「正在思考」 for it, because 折叠思考内容 puts thinking *inside* the row by design.
+  // A thought being written is split out the same way, even with the option on: nothing
+  // that is still in flight is ever drawn *as* the batch line.
   const thought = collapse([tool("b1", "bash"), tool("b2", "bash"), { kind: "thinking", text: "writing" }], {
     collapseThinking: true,
     streaming: true,
   });
-  assert.deepEqual(shape(thought), ["b1+b2"]);
-  if (thought[0]?.kind !== "run") throw new Error("expected a run");
-  assert.equal(thought[0].liveThinking?.text, "writing");
+  assert.deepEqual(shape(thought), ["b1+b2", "thinking"]);
+  // …and once it finishes it joins the count.
+  assert.deepEqual(
+    shape(collapse([tool("b1", "bash"), tool("b2", "bash"), { kind: "thinking", text: "writing" }], {
+      collapseThinking: true,
+      streaming: false,
+    })),
+    ["b1+b2"],
+  );
 });
 
 /** A settled line in Chinese, spelled out so the 「已」 rule is visible in the assertion. */
@@ -363,21 +369,29 @@ test("a blank thought is not counted and does not split the batch", () => {
   assert.deepEqual(folded.map((part) => part.kind), ["run"]);
   if (folded[0]?.kind !== "run") throw new Error("expected a run");
   assert.equal(folded[0].items.length, 2);
-  assert.equal(folded[0].liveThinking, undefined);
 });
 
-test("only the tail thought of a streaming reply is live", () => {
-  const parts: Array<MessagePart | ToolCallBlock> = [tool("b1", "bash"), thought("still writing")];
-  const live = collapse(parts, { collapseThinking: true, streaming: true });
-  if (live[0]?.kind !== "run") throw new Error("expected a run");
-  assert.equal(live[0].liveThinking?.text, "still writing");
+test("a thought being written stands on its own line, with 折叠思考内容 on or off", () => {
+  const parts: Array<MessagePart | ToolCallBlock> = [tool("b1", "bash"), tool("b2", "bash"), thought("still writing")];
 
+  // On: the two calls fold, the live thought is its own block below them — the row never
+  // shimmers 「正在思考」 in place of its own count.
+  const live = collapse(parts, { collapseThinking: true, streaming: true });
+  assert.deepEqual(live.map((part) => (part.kind === "run" ? part.tools.map((t) => t.id).join("+") : part.kind)), [
+    "b1+b2",
+    "thinking",
+  ]);
+
+  // The same parts one token later, with the thought finished: it joins the line.
   const settled = collapse(parts, { collapseThinking: true, streaming: false });
   if (settled[0]?.kind !== "run") throw new Error("expected a run");
-  assert.equal(settled[0].liveThinking, undefined);
+  assert.equal(settled[0].items.length, 3);
 
   // A thought that is not the reply's last part is never live, streaming or not.
-  const middle = collapse([thought("done"), tool("b1", "bash")], { collapseThinking: true, streaming: true });
+  const middle = collapse([thought("done"), tool("b1", "bash"), tool("b2", "bash")], {
+    collapseThinking: true,
+    streaming: true,
+  });
   if (middle[0]?.kind !== "run") throw new Error("expected a run");
-  assert.equal(middle[0].liveThinking, undefined);
+  assert.equal(middle[0].items.length, 3);
 });

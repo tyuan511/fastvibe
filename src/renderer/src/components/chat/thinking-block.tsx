@@ -21,7 +21,7 @@ const TICKER_SLIDE_MAX = 72;
  *
  * Exported because a folded run line previews a live thought the same way.
  */
-export function tickerLine(text: string): string | null {
+function tickerLine(text: string): string | null {
   const line = text.replace(/\s+/gu, " ").trim();
   return line.length > 0 ? line : null;
 }
@@ -193,7 +193,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
  * Also drawn in the tool run's line when 折叠思考内容 has swallowed a thought that is
  * still being written — that row shows the same preview the standalone block does.
  */
-export function ReasoningTicker({ text }: { text: string }): JSX.Element {
+function ReasoningTicker({ text }: { text: string }): JSX.Element {
   const frameRef = useRef<HTMLSpanElement>(null);
   const trackRef = useRef<HTMLSpanElement>(null);
   const shiftRef = useRef(0);

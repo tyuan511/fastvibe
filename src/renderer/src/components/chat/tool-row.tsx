@@ -37,7 +37,6 @@ export function ToolRow({
   context,
   error,
   running = false,
-  filler,
   title,
   canToggle = true,
   showIcon = true,
@@ -80,13 +79,6 @@ export function ToolRow({
   onSubjectClick?: () => void;
   /** Extra chip rendered before the chevron, e.g. a diff stat. */
   trailing?: ReactNode;
-  /**
-   * A flexible element drawn right after the label, owning the leftover width of the row.
-   * Only the live reasoning preview uses it: it needs the space `context` would take, but
-   * it follows the tail of a growing line rather than truncating a static one. There is
-   * then no `context` to share the row with.
-   */
-  filler?: ReactNode;
   children?: ReactNode;
 }): JSX.Element {
   const hasDetail = Boolean(children);
@@ -156,7 +148,6 @@ export function ToolRow({
       >
         {label}
       </span>
-      {filler ? <span className="flex min-w-0 flex-1 items-center">{filler}</span> : null}
       {subjectNode}
       {/*
        * The trailing context owns the leftover width: it is the only flexible item,
