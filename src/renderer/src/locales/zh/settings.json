@@ -122,7 +122,7 @@
   "toolSearch": "工具搜索",
   "toolSearchDesc": "让模型按需查找并加载没有预先提供的工具",
   "collapseThinking": "折叠思考内容",
-  "collapseThinkingDesc": "把思考并入所在工具行，显示为「已思考 N 次」，正在思考时仍显示思考动画"
+  "collapseThinkingDesc": "把已写完的思考并入所在工具行，显示为「已思考 N 次」；正在写的思考仍单独一行"
  },
  "about": {
   "more": "更多",

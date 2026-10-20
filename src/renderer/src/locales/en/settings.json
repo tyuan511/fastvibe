@@ -122,7 +122,7 @@
   "toolSearch": "Tool search",
   "toolSearchDesc": "Let the model look up and load tools that are not provided up front",
   "collapseThinking": "Collapse thinking",
-  "collapseThinkingDesc": "Fold a thought into the tool line it belongs to, shown as \"Thought N times\"; the live thinking animation stays"
+  "collapseThinkingDesc": "Fold a finished thought into the tool line it belongs to, shown as \"Thought N times\"; one still being written keeps its own line"
  },
  "about": {
   "more": "More",
