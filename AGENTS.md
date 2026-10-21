@@ -962,6 +962,36 @@ rather than highlighted (below).
   only the unfinished line plus appended text is tokenized. There is no trailing
   debounce to starve a continuous stream; the HTML cache is byte-bounded and keyed
   by the exact `(language, code)`. Replacing/truncating code resets the tokenizer.
+- **A fenced block in a reply carries line numbers and its language's file icon**, so it reads
+  like the file it is: the header's glyph is the same vscode-icons mark the change chips and
+  the file tree draw, and the number column is the one `CodePreview` already uses beside a
+  previewed file. `lib/code-fence-icon.ts` maps a fence's language to a *representative file
+  name* (`x.ts`, `Dockerfile`) and lets `resolveFileIcon` pick the glyph — one source of marks,
+  not a second set. The fence word is folded through `resolveLanguage` first, so `py`, `golang`
+  and `python3` all land on a grammar id; **a language with no glyph in the table draws no icon
+  at all** rather than a blank page, and `test/code-fence-icon.test.ts` fails on a key that is
+  not a grammar id or a value the shipped manifest does not recognise (both degrade silently).
+  - **Numbers are one `whitespace-pre` box, not one node per line.** A fence re-renders on every
+    streamed flush, and a 600-line block would rebuild 600 number nodes each time to repeat
+    itself. The single text node lines up because nothing here wraps (the code column is
+    `overflow-x-auto`), so one logical line is one visual line at the shared `leading-5`.
+    A one-line fence draws no gutter, and a ```diff fence keeps `DiffView`'s own numbers, which
+    come from the hunk header rather than from counting rows.
+  - **The vertical viewport and the horizontal scroller are two elements.** `overflow-x: auto`
+    makes the *used* value of `overflow-y` `auto` as well, so putting `scrollClassName`
+    (`max-h-72 overflow-y-auto`, the codemode script) on the same box as the x-scroller scrolls
+    the code inside its own frame and leaves the numbers behind. The outer div is the y-axis,
+    the inner the x-axis.
+  - **`.code-shiki` is what owns the padding and the size, and it must reset both.**
+    `.chat-markdown pre` gives a code block `0.75rem` of vertical padding and
+    `.chat-markdown code` shrinks *every* `code` to `0.82em` — including the one Shiki nests in
+    the block's own `<pre>`. A 11.5px inline box on a 14px strut measures 21px per line while
+    the plain-text fallback and the gutter measure 20px, so numbers drifted off the code the
+    moment the grammar resolved. `padding: 0` and `font-size: inherit` on `.code-shiki pre/code`
+    (the same reset `.chat-editor .chat-editor-layer :is(pre, code)` already made for the
+    composer's highlight layer) leave the card as the one that pads.
+  - Preview: `mock.html?diff=1` — a ```diff fence, a multi-line ```ts fence with a blank line in
+    it, and a one-line ```bash fence, in one reply.
 - Markdown's `components` map must stay at module scope. Inline component functions
   remount the code block on every token, discarding the retained highlight and
   flashing plain text between highlighted frames. `pre` identifies block code,

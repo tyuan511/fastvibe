@@ -559,7 +559,7 @@ export const MATH_MESSAGES: ChatMessage[] = [
   },
 ];
 
-/** The reply the `?diff=1` preview shows: prose, a ```diff fence, then a normal fence. */
+/** The reply the `?diff=1` preview shows: prose, a ```diff fence, a numbered fence, a bare one. */
 const DIFF_FENCE_REPLY = `两处触发器共用一组类名，高度从 9 收到 8，宽度改成自适应：
 
 \`\`\`diff
@@ -576,10 +576,20 @@ const DIFF_FENCE_REPLY = `两处触发器共用一组类名，高度从 9 收到
 );
 \`\`\`
 
-普通代码块照旧高亮，不受影响：
+普通代码块照旧高亮，不受影响，另外带上行号与语言图标（空行也占一行）：
 
 \`\`\`ts
 const tintRows = false;
+
+export function useModelTint(enabled: boolean) {
+  return enabled ? "bg-muted/40" : "";
+}
+\`\`\`
+
+单行代码块不画行号：
+
+\`\`\`bash
+pnpm test
 \`\`\`
 `;
 
@@ -587,6 +597,9 @@ const tintRows = false;
  * `?diff=1` — a ```diff fence in a reply. The fence's own card already paints `bg-muted/40`,
  * so the diff rows must not lay a 10% tint over that (it reads as a muddy grey band); the
  * left rule and the +/- marker are what say 「added」 and 「removed」 here.
+ *
+ * The two fences after it are the other half of the same card: a multi-line one, whose gutter
+ * must survive the blank line inside it, and a single-line one, which draws no numbers at all.
  */
 export const DIFF_FENCE_MESSAGES: ChatMessage[] = [
   {

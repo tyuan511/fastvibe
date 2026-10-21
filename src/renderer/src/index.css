@@ -1316,15 +1316,28 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
 }
 
 /* Shiki renders a whole <pre class="shiki">; strip its chrome so the
-   surrounding card or preview panel keeps its own background and padding. */
+   surrounding card or preview panel keeps its own background and padding.
+   `padding` matters only inside `.chat-markdown`, whose own `pre` rule gives a code block
+   0.75rem of vertical padding: with the card's `py-2` on top of that, the first line of code
+   would sit 12px below the first line number. The card is the one that pads. */
 .code-shiki pre {
   margin: 0;
+  padding: 0;
   background: transparent !important;
   font-size: inherit;
   line-height: inherit;
 }
 .code-shiki code {
   font-family: inherit;
+  /*
+   * `.chat-markdown code` shrinks every `code` to 0.82em, and that reaches the `<code>` Shiki
+   * nests inside the block's own `<pre>`. A 11.5px inline box on a 14px strut makes each
+   * highlighted line 21px tall while the plain-text fallback (and the line-number gutter beside
+   * it) is 20px — so numbers drift off the code the moment the grammar resolves, and the
+   * transcript's code is `text-sm` by the type rules anyway. The composer's highlight layer
+   * already resets this in `.chat-editor .chat-editor-layer :is(pre, code)`.
+   */
+  font-size: inherit;
   font-variant-ligatures: none;
 }
 

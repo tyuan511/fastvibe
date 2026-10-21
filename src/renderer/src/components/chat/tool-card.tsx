@@ -263,10 +263,9 @@ function CodemodePanel({ tool, running }: { tool: ToolCallBlock; running: boolea
             {t("tools.script")}
             {options ? <span className="ml-2 font-mono font-normal">{options}</span> : null}
           </p>
-          {/* `chat-markdown` is what gives a fenced block the same padding it has in a reply. */}
-          <div className="chat-markdown text-sm">
-            <CodeBlock language="js" code={body} scrollClassName="max-h-72 overflow-y-auto" />
-          </div>
+          {/* The fence's own card carries the padding and the line numbers now, so this body
+              is drawn exactly as a fenced block in a reply — no `chat-markdown` wrapper needed. */}
+          <CodeBlock language="js" code={body} scrollClassName="max-h-72 overflow-y-auto" />
         </section>
       ) : null}
       {calls.length > 0 ? (

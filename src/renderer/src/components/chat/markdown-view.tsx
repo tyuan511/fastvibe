@@ -7,6 +7,8 @@ import { useValidatedMarkdownPaths } from "@/lib/markdown-path-validation";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { FileIcon } from "@/components/file-icon";
+import { codeFenceIconName } from "@/lib/code-fence-icon";
 import { PathLink } from "@/components/path-menu";
 import { useHighlightedCode } from "@/lib/highlight";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
@@ -34,6 +36,39 @@ import { InlineMediaItem } from "./inline-preview";
 /** Fence languages whose body is a diff, drawn by `DiffView` rather than Shiki. */
 const DIFF_LANGUAGES = new Set(["diff", "patch"]);
 const MAX_CODE_PREVIEW_CHARS = 24_000;
+
+/**
+ * The line-number column beside a fenced block.
+ *
+ * One box of `digits` characters plus its padding plus the 1px rule — the same arithmetic
+ * `DiffView` uses, and for the same reason: a `min-width` floor is exceeded by the rows that
+ * carry a number, so the rule between the gutter and the code would step in and out as the
+ * block grows. `overflow-hidden` on the cell keeps a long line from doing it either.
+ */
+const gutterWidth = (digits: number) => ({ width: `calc(${digits}ch + 0.75rem + 1px)` });
+
+/**
+ * Line numbers as one `whitespace-pre` box rather than one element per line.
+ *
+ * A reply's fence is re-rendered on every streamed flush, and a 600-line block would then
+ * rebuild 600 number nodes each time to say the same thing it said one token ago. One text
+ * node of `"1\n2\n…"` right-aligned in a fixed-width column puts a number on every line
+ * because nothing here wraps: the code column is `overflow-x-auto`, so one logical line is
+ * one visual line, and the two columns share `leading-5` and the same vertical padding.
+ */
+const MarkdownCodeGutter = memo(function MarkdownCodeGutter({ lines }: { lines: number }): JSX.Element {
+  const numbers = useMemo(() => Array.from({ length: lines }, (_, index) => index + 1).join("\n"), [lines]);
+  return (
+    <div
+      aria-hidden
+      style={gutterWidth(String(lines).length)}
+      className="shrink-0 select-none overflow-hidden whitespace-pre border-r border-border px-1.5 py-2 text-right font-mono text-xs leading-5 tabular-nums text-muted-foreground/60"
+    >
+      {numbers}
+    </div>
+  );
+});
+
 const MarkdownPathContext = createContext<ReadonlySet<string>>(new Set());
 
 export const CodeBlock = memo(function CodeBlock({ language, code, scrollClassName }: {
@@ -63,6 +98,12 @@ export const CodeBlock = memo(function CodeBlock({ language, code, scrollClassNa
   // block until the reader explicitly asks to see it all. This bounds both the
   // initial DOM and the work done by a streaming code fence.
   const html = useHighlightedCode(diff ? "" : displayCode, diff ? undefined : language);
+  // A one-line fence needs no number: the digit column would only push the snippet right.
+  // A diff brings its own gutter from `DiffView`, whose numbers come from the hunk header
+  // rather than from a count of rows.
+  const lines = displayCode.split("\n").length;
+  const numbered = !diff && lines > 1;
+  const icon = codeFenceIconName(language);
 
   async function copy(): Promise<void> {
     try {
@@ -77,7 +118,10 @@ export const CodeBlock = memo(function CodeBlock({ language, code, scrollClassNa
   return (
     <div className="my-2 overflow-hidden rounded-lg border border-border bg-muted/40">
       <div className="flex items-center justify-between border-b border-border px-2 py-1">
-        <span className="text-xs font-medium text-muted-foreground">{language || "code"}</span>
+        <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          {icon ? <FileIcon name={icon} className="size-3.5" /> : null}
+          <span className="truncate">{language || "code"}</span>
+        </span>
         <Button size="xs" variant="ghost" onClick={() => void copy()}>
           {copied ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} /> : <HugeiconsIcon strokeWidth={2} icon={Copy01Icon} />}
           {copied ? t("message.copied") : t("message.copy")}
@@ -86,12 +130,23 @@ export const CodeBlock = memo(function CodeBlock({ language, code, scrollClassNa
       {diff ? (
         <DiffView text={displayCode} className={cn("mt-0 rounded-none border-0 bg-transparent", scrollClassName)} />
       ) : (
-        <div className={cn("code-shiki overflow-x-auto text-sm leading-5", scrollClassName)}>
-          {html ? (
-            <div dangerouslySetInnerHTML={{ __html: html }} />
-          ) : (
-            <pre className="font-mono">{displayCode}</pre>
-          )}
+        /*
+         * Two boxes rather than one: the outer is the vertical viewport (`scrollClassName` caps
+         * the codemode script), the inner is the horizontal scroller. They cannot be the same
+         * element — `overflow-x: auto` makes the used value of `overflow-y` `auto` too, so one
+         * capped box would scroll the *code* inside its own frame and leave the numbers behind.
+         */
+        <div className={scrollClassName}>
+          <div className="code-shiki flex text-sm leading-5">
+            {numbered ? <MarkdownCodeGutter lines={lines} /> : null}
+            <div className="min-w-0 flex-1 overflow-x-auto px-3 py-2">
+              {html ? (
+                <div dangerouslySetInnerHTML={{ __html: html }} />
+              ) : (
+                <pre className="font-mono">{displayCode}</pre>
+              )}
+            </div>
+          </div>
         </div>
       )}
       {truncated ? (
