@@ -538,6 +538,12 @@ export function MessageList({
   // memo would otherwise keep serving the landing range.
   const [landedThread, setLandedThread] = useState<string | null>(null);
   const landing = landedThread !== threadId;
+  // The thread whose first measurements have been applied. Until then rows sit at positions
+  // computed from estimates while their real heights are still being read back, and a row
+  // measured taller than its estimate overlaps the one below it for the frames before the
+  // batched re-render moves that one down. The layer is hidden over exactly that window.
+  const [settledThread, setSettledThread] = useState<string | null>(null);
+  const settling = settledThread !== threadId;
   const virtualizerRef = useRef<ReturnType<typeof useVirtualizer<HTMLDivElement, Element>> | null>(null);
   const rangeExtractor = useCallback((range: Range): number[] => {
     if (!landing) return defaultRangeExtractor(range);
@@ -684,16 +690,33 @@ export function MessageList({
     // first frame and once again after that batch has committed; otherwise a switch
     // can retain the previous scroll offset or land at the old estimated height.
     let settleFrame = 0;
+    let revealFrame = 0;
+    // Mounted turns are stacked without overlap once every one has been measured and
+    // re-positioned; checked on the DOM because the virtualizer publishes sizes in batches.
+    const stacked = (): boolean => {
+      const nodes = Array.from(viewportRef.current?.querySelectorAll<HTMLElement>("[data-turn-index]") ?? [])
+        .sort((a, b) => a.offsetTop - b.offsetTop);
+      return nodes.every((node, i) => i === 0 || nodes[i - 1].offsetTop + nodes[i - 1].offsetHeight <= node.offsetTop + 1);
+    };
+    const reveal = (attempt: number): void => {
+      if (attempt < 12 && !stacked()) {
+        revealFrame = window.requestAnimationFrame(() => reveal(attempt + 1));
+        return;
+      }
+      setSettledThread(threadId);
+    };
     const frame = window.requestAnimationFrame(() => {
       if (followingRef.current) scrollToEnd();
       settleFrame = window.requestAnimationFrame(() => {
         // An explicit search/output jump or a user scroll wins over initial landing.
         if (followingRef.current) scrollToEnd();
+        reveal(0);
       });
     });
     return () => {
       window.cancelAnimationFrame(frame);
       if (settleFrame) window.cancelAnimationFrame(settleFrame);
+      if (revealFrame) window.cancelAnimationFrame(revealFrame);
     };
   }, [scrollToEnd, threadId, virtualizer]);
 
@@ -774,7 +797,7 @@ export function MessageList({
                    * turns placed directly in the content spanned the column's `px-6` and
                    * sat flush against the window edge — on a phone, against the glass.
                    */}
-                  <div className="relative" style={{ height: Math.max(totalSize, 1) }}>
+                  <div className="relative" style={{ height: Math.max(totalSize, 1), visibility: settling ? "hidden" : undefined }}>
                   {virtualRows.map((virtualRow) => {
                     const turn = turns[virtualRow.index];
                     if (!turn) return null;
@@ -783,6 +806,7 @@ export function MessageList({
                         key={virtualRow.key}
                         ref={virtualizer.measureElement}
                         data-index={virtualRow.index}
+                        data-turn-index=""
                         className={cn("absolute inset-x-0 pb-5 rounded-lg transition-colors", highlightedTurn === turn.id && "bg-warning/10")}
                         // `top`, never `transform: translateY`. The turn's prompt is
                         // `position: sticky`, and sticky is resolved against layout
