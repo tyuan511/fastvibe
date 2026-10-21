@@ -274,7 +274,7 @@
  "update": {
   "title": "Updates",
   "autoCheck": "Check for updates automatically",
-  "autoCheckDesc": "Check for new versions every 10 minutes after launch",
+  "autoCheckDesc": "Check for new versions every hour after launch",
   "check": "Check for updates",
   "idle": "Check against published releases",
   "disabled": "Dev builds do not check for updates",

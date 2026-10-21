@@ -18,12 +18,13 @@ const CHECK_DELAY_MS = 8_000;
 /**
  * Background re-checks after the launch one, for as long as the app runs.
  *
- * This is also the interval a *found* version is revisited on — see `update-refresh.ts`
- * for why an `available` notice is not simply left alone — so it wants to be far shorter
- * than the hour or so it takes a superseded release to matter. Ten minutes bounds how
- * long the screen can name a version that is no longer the newest.
+ * This is also the interval a *found* version is revisited on, so it bounds how long the
+ * screen can name a version that is no longer the newest. It no longer bounds how long a
+ * *stale install* can happen: 立即更新 re-reads the feed whenever the finding is older than
+ * `UPDATE_RECHECK_AFTER_MS` — see `update-refresh.ts` for why that guard exists. With that
+ * on the download path, an hour here costs only an out-of-date badge, not two restarts.
  */
-const CHECK_INTERVAL_MS = 10 * 60 * 1_000;
+const CHECK_INTERVAL_MS = 60 * 60 * 1_000;
 
 /**
  * Squirrel.Mac (electron-updater's native installer) only accepts a Developer ID
@@ -341,7 +342,7 @@ function backgroundCheck(): void {
 }
 
 /**
- * Background checks: once shortly after launch, then every 10 minutes for as long as
+ * Background checks: once shortly after launch, then every hour for as long as
  * the app runs. Called on every settings write, so the current preference wins when it
  * changes but an unchanged value leaves the running schedule (and its clock) alone.
  */

@@ -274,7 +274,7 @@
  "update": {
   "title": "更新",
   "autoCheck": "自动检查更新",
-  "autoCheckDesc": "启动后每 10 分钟检查一次新版本",
+  "autoCheckDesc": "启动后每小时检查一次新版本",
   "check": "检查更新",
   "idle": "从已发布的版本检查更新",
   "disabled": "开发构建不会检查更新",

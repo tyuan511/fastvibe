@@ -3797,11 +3797,17 @@ awake while an agent run is in flight **or the remote-access server is listening
 ## 自动更新（updater）
 
 `src/main/updater.ts` owns electron-updater. Background checks run once shortly after
-launch and then every 10 minutes, and they only ever *announce* a version: downloads are
-user-initiated (`autoDownload` is off), from the manual-check dialog or the small button
-to the right of the sidebar's 设置 row. The sidebar button and the dialog both read the
-same `update:state` stream (`AppUpdateState`), so 「download → progress → restart」 cannot
-disagree between them.
+launch and then every hour (`CHECK_INTERVAL_MS`), and they only ever *announce* a version:
+downloads are user-initiated (`autoDownload` is off), from the manual-check dialog or the
+small button to the right of the sidebar's 设置 row. The sidebar button and the dialog both
+read the same `update:state` stream (`AppUpdateState`), so 「download → progress → restart」
+cannot disagree between them.
+
+The hour is affordable because a stale *notice* is not a stale *install*: 立即更新 re-reads
+the feed whenever the version on screen was resolved more than `UPDATE_RECHECK_AFTER_MS`
+ago (`update-refresh.ts`), since `downloadUpdate()` otherwise downloads whatever the last
+check cached. Shortening the interval only bounded how long the badge could name a
+superseded release; it was never what kept the download correct.
 
 **`releaseNotes` is HTML, not markdown.** electron-updater's GitHub provider builds it
 from the releases **Atom feed** (`<content type="html">`), i.e. GitHub's already-rendered
