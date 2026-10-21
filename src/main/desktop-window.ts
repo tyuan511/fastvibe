@@ -97,8 +97,8 @@ export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => 
 
   window.on("ready-to-show", () => {
     markStartup("window-shown");
-    if (restored?.maximized) window.maximize();
-    window.show();
+    if (restored?.maximized) void revealMaximized(window);
+    else window.show();
   });
   window.on("resize", scheduleWindowStateSave);
   // The app leaving the foreground is a signal of its own: Main names the prompts still
@@ -150,6 +150,40 @@ export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => 
   mainWindow = window;
   windows.add(window);
   log.info("window opened");
+}
+
+/**
+ * `ready-to-show` means the page has painted at the size the window was created with —
+ * the restored *normal* size. Maximising there shows the window at once (Electron's
+ * `maximize()` always shows a hidden window), and the renderer only hears about the new
+ * size 15–30ms later, so the first frames on screen were the small layout stretched over
+ * the large window, then the whole workspace re-laying itself out: the resize people saw
+ * on every launch. So the window is maximised while fully transparent, and made opaque
+ * only once the page reports the maximised viewport and has painted a frame at it (~35ms).
+ * The window is not created at the work-area size instead: on macOS that leaves `zoom`
+ * no user frame to return to, and unmaximising does nothing. Linux ignores opacity and
+ * keeps the old behaviour.
+ */
+async function revealMaximized(window: BrowserWindow): Promise<void> {
+  window.setOpacity(0);
+  window.maximize();
+  const [width, height] = window.getContentSize();
+  try {
+    await window.webContents.executeJavaScript(`new Promise((resolve) => {
+      const deadline = performance.now() + 500;
+      const tick = () => {
+        if ((innerWidth === ${width} && innerHeight === ${height}) || performance.now() > deadline) {
+          requestAnimationFrame(() => resolve(undefined));
+        } else requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    })`);
+  } catch (error) {
+    log.warn(`maximized reveal: ${String(error)}`);
+  }
+  if (window.isDestroyed()) return;
+  window.setOpacity(1);
+  window.show();
 }
 
 function clampWindowDimension(value: number, minimum: number, available: number): number {
