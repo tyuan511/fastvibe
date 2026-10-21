@@ -1,19 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  DEFAULT_PROXY_SETTINGS, proxySettingsOf, assertProxySettings, chromiumProxyConfig,
-  validProxyHost, validProxyPort, proxyUrlFromResolution, isProxyLoopback, mergeSettingsPreservingProxy,
+  DEFAULT_PROXY_SETTINGS, LEGACY_PROXY_KEYS, proxySettingsOf, assertProxySettings, chromiumProxyConfig,
+  validProxyHost, validProxyPort, normalizeProxyUrl, proxyUrlOf, proxyUrlFromResolution, isProxyLoopback,
+  mergeSettingsPreservingProxy,
 } from "../src/shared/proxy.ts";
 
 test("proxy defaults are disabled, and malformed preferences cannot enable them", () => {
   assert.deepEqual(proxySettingsOf({}), DEFAULT_PROXY_SETTINGS);
   assert.equal(DEFAULT_PROXY_SETTINGS.proxyEnabled, false);
   assert.deepEqual(chromiumProxyConfig(DEFAULT_PROXY_SETTINGS), { mode: "direct" });
-  assert.deepEqual(proxySettingsOf({ proxyEnabled: "true", proxyMode: "bad", proxyProtocol: "bad", proxyHost: "http://evil", proxyPort: "8080" }), DEFAULT_PROXY_SETTINGS);
+  assert.deepEqual(proxySettingsOf({ proxyEnabled: "true", proxyMode: "bad", proxyUrl: 8080 }), DEFAULT_PROXY_SETTINGS);
+});
+
+test("the address an earlier build wrote in three fields still routes", () => {
+  const legacy = { proxyEnabled: true, proxyMode: "custom", proxyProtocol: "socks5", proxyHost: "proxy.example.invalid", proxyPort: 1080 };
+  assert.equal(proxyUrlOf(legacy), "socks5://proxy.example.invalid:1080");
+  assert.deepEqual(chromiumProxyConfig(proxySettingsOf(legacy)).proxyRules, "socks5://proxy.example.invalid:1080");
+  assert.equal(proxyUrlOf({ ...legacy, proxyProtocol: "http" }), "http://proxy.example.invalid:1080");
+  // Half a legacy config is no config: it must not invent an address out of one part.
+  assert.equal(proxyUrlOf({ proxyEnabled: true, proxyMode: "custom", proxyHost: "proxy.example.invalid" }), null);
+  assert.throws(() => assertProxySettings({ proxyEnabled: true, proxyMode: "custom", proxyHost: "proxy.example.invalid" }), /Invalid proxy/);
+  // Once the new field is there it wins outright, garbage included: a half-typed address
+  // must not resurrect the parts an older build left beside it in the same object.
+  assert.equal(proxyUrlOf({ ...legacy, proxyUrl: "http://" }), null);
+  assert.deepEqual([...LEGACY_PROXY_KEYS], ["proxyProtocol", "proxyHost", "proxyPort"]);
 });
 
 test("an unrelated save from a stale client cannot disable or restore another client's proxy", () => {
-  const enabled = { ...DEFAULT_PROXY_SETTINGS, proxyEnabled: true, proxyMode: "custom" as const, proxyPort: 1080 };
+  const enabled = { ...DEFAULT_PROXY_SETTINGS, proxyEnabled: true, proxyMode: "custom" as const, proxyUrl: "http://127.0.0.1:1080" };
   const stale = { ...DEFAULT_PROXY_SETTINGS, themeMode: "dark" };
   assert.deepEqual(mergeSettingsPreservingProxy(enabled, stale), { ...enabled, themeMode: "dark" });
   // An old enabled snapshot cannot undo an explicit reset either.
@@ -22,30 +37,54 @@ test("an unrelated save from a stale client cannot disable or restore another cl
 
 test("system and custom modes produce explicit Chromium rules, including IPv6", () => {
   assert.deepEqual(chromiumProxyConfig(proxySettingsOf({ proxyEnabled: true })), { mode: "system" });
-  for (const proxyProtocol of ["http", "socks5"] as const) {
-    const settings = { proxyEnabled: true, proxyMode: "custom", proxyProtocol, proxyHost: "[::1]", proxyPort: 1080 };
+  for (const scheme of ["http", "https", "socks5", "socks5h"] as const) {
+    const settings = { proxyEnabled: true, proxyMode: "custom", proxyUrl: `${scheme}://[::1]:1080` };
     assert.doesNotThrow(() => assertProxySettings(settings));
     assert.deepEqual(chromiumProxyConfig(proxySettingsOf(settings)), {
-      mode: "fixed_servers", proxyRules: `${proxyProtocol}://[::1]:1080`, proxyBypassRules: "localhost;127.0.0.1;[::1]",
+      mode: "fixed_servers", proxyRules: `${scheme}://[::1]:1080`, proxyBypassRules: "localhost;127.0.0.1;[::1]",
     });
     assert.deepEqual(chromiumProxyConfig(proxySettingsOf({ ...settings, proxyEnabled: false })), { mode: "direct" });
   }
 });
 
+test("an address keeps what a person typed, and drops nothing but the scheme's case", () => {
+  // `URL` answers port "" for a port equal to its scheme's default, so parsing by hand is
+  // what keeps `:80` in the rule instead of quietly letting Chromium guess.
+  assert.equal(normalizeProxyUrl("HTTP://Proxy.Example.INVALID:80"), "http://Proxy.Example.INVALID:80");
+  assert.equal(normalizeProxyUrl("http://h:80"), "http://h:80");
+  assert.equal(normalizeProxyUrl("socks5://[2001:db8::1]:1080"), "socks5://[2001:db8::1]:1080");
+  // The port may be left off; the scheme's own then applies, in Chromium and in Node alike.
+  assert.equal(normalizeProxyUrl("http://proxy.corp"), "http://proxy.corp");
+});
+
+test("an address rejects credentials, paths, rule injection, other schemes and bad ports", () => {
+  for (const url of [
+    undefined, null, 8080, "", "   ", "http:// ", " http://h:1", "h:8080", "proxy.example.invalid:8080",
+    "http://user:pass@proxy.invalid:8080", "http://proxy.invalid:8080/path", "http://proxy.invalid:8080?x=1",
+    "http://proxy.invalid:8080#x", "http://proxy.invalid:8080;DIRECT", "http://a,http://b",
+    "http://proxy.invalid:0", "http://proxy.invalid:99999", "http://proxy.invalid:abc", "http://[::gg]:1",
+    "ftp://proxy.invalid:21", "socks4://proxy.invalid:1080", "http://:8080",
+  ]) {
+    assert.equal(normalizeProxyUrl(url), null, String(url));
+    assert.throws(() => assertProxySettings({ proxyEnabled: true, proxyMode: "custom", proxyUrl: url }), /Invalid proxy/);
+  }
+  assert.doesNotThrow(() => assertProxySettings({ proxyEnabled: false, proxyMode: "custom", proxyUrl: "garbage" }));
+  assert.doesNotThrow(() => assertProxySettings({ proxyEnabled: true, proxyMode: "system" }));
+});
+
 test("hosts and ports reject URLs, credentials, rule injection and malformed IPv6", () => {
+  // Still the rules behind an address's host part, and behind reading a legacy settings
+  // file — so they stay pinned here even though the pane only asks for one field now.
   for (const host of ["localhost", "proxy.example.invalid", "PROXY.example.invalid", "127.0.0.1", "[::1]", "[2001:db8::1]"]) assert.equal(validProxyHost(host), true, host);
   for (const host of [undefined, null, 123, "", " proxy.invalid", "proxy.invalid ", "proxy.invalid\n", "http://proxy.invalid", "user:pass@proxy.invalid", "proxy.invalid:80", "proxy.invalid/path", "proxy.invalid?x", "proxy.invalid#x", "proxy.invalid;DIRECT", "proxy.invalid,other", "http=proxy.invalid", "proxy\\evil", "::1", "[::gg]", "[::1]:80"]) {
     assert.equal(validProxyHost(host), false, String(host));
-    assert.throws(() => assertProxySettings({ ...DEFAULT_PROXY_SETTINGS, proxyEnabled: true, proxyMode: "custom", proxyHost: host }), /Invalid proxy/);
+    if (typeof host === "string") assert.equal(normalizeProxyUrl(`http://${host}:8080`), null, host);
   }
   for (const port of [1, 80, 65535]) assert.equal(validProxyPort(port), true);
   for (const port of [undefined, null, "80", "80;DIRECT", 0, -1, 65536, 1.5, NaN, Infinity]) {
     assert.equal(validProxyPort(port), false, String(port));
-    assert.throws(() => assertProxySettings({ ...DEFAULT_PROXY_SETTINGS, proxyEnabled: true, proxyMode: "custom", proxyPort: port }), /Invalid proxy/);
+    assert.equal(proxyUrlOf({ proxyHost: "proxy.example.invalid", proxyPort: port }), null, String(port));
   }
-  assert.throws(() => assertProxySettings({ ...DEFAULT_PROXY_SETTINGS, proxyEnabled: true, proxyMode: "custom", proxyProtocol: "https" }), /Invalid proxy/);
-  assert.doesNotThrow(() => assertProxySettings({ proxyEnabled: false, proxyMode: "custom" }));
-  assert.doesNotThrow(() => assertProxySettings({ proxyEnabled: true, proxyMode: "system" }));
 });
 
 test("only loopback literals and localhost bypass the proxy, never 127-prefixed domains", () => {

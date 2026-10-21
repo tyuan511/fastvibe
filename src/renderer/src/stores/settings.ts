@@ -15,7 +15,7 @@ import { DEFAULT_AUTO_ARCHIVE_DAYS, isAutoArchiveDays } from "@shared/auto-archi
 import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "@/lib/shortcuts";
 
-import { DEFAULT_PROXY_SETTINGS, proxySettingsOf, type ProxySettings } from "@shared/proxy";
+import { DEFAULT_PROXY_SETTINGS, LEGACY_PROXY_KEYS, proxySettingsOf, type ProxySettings } from "@shared/proxy";
 
 const KEY = "fastvibe.settings";
 
@@ -222,13 +222,17 @@ const DEFAULTS: AppSettings = {
  * Keys an earlier build wrote that nothing reads any more (the permission modes, the
  * rules they remembered, and the retired interface-font pick). Dropped on load, so the
  * next save no longer carries them.
+ *
+ * The three proxy parts are here too: `proxyUrl` above is what a settings object carries
+ * now, and the leftovers are folded into it on the way. Keeping them around would let an
+ * older build — which reads host and port — disagree with the address this one applies.
  */
-const REMOVED_KEYS = ["permissionMode", "defaultPermissionMode", "fullAccessConfirmed", "permissionAlways", "computerAllowedApps", "uiFont", "smallModel"] as const;
+const REMOVED_KEYS = ["permissionMode", "defaultPermissionMode", "fullAccessConfirmed", "permissionAlways", "computerAllowedApps", "uiFont", "smallModel", ...LEGACY_PROXY_KEYS] as const;
 
 /** Drop malformed persisted theme values so a stale id can never crash the app. */
 function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   const next = { ...parsed };
-  if (Object.keys(DEFAULT_PROXY_SETTINGS).some((key) => key in parsed)) {
+  if ([...Object.keys(DEFAULT_PROXY_SETTINGS), ...LEGACY_PROXY_KEYS].some((key) => key in parsed)) {
     Object.assign(next, proxySettingsOf(parsed));
   }
   for (const key of REMOVED_KEYS) delete (next as Record<string, unknown>)[key];
