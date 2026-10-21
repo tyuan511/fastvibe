@@ -240,9 +240,7 @@
   "files": {
     "edited_one": "Edited {{count}} file",
     "edited_other": "Edited {{count}} files",
-    "review": "View changes",
-    "noDiff": "No diff to show",
-    "officeChanged": "This is an Office document, so there is no line diff. Open it to see the layout."
+    "review": "View changes"
   },
   "preview": {
     "reveal": "Show in Finder",

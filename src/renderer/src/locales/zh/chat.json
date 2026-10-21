@@ -240,9 +240,7 @@
   "files": {
     "edited_one": "已修改 {{count}} 个文件",
     "edited_other": "已修改 {{count}} 个文件",
-    "review": "查看变更",
-    "noDiff": "没有可显示的 diff",
-    "officeChanged": "这是 Office 文档，没有逐行差异。打开可看排版。"
+    "review": "查看变更"
   },
   "preview": {
     "reveal": "在访达中显示",

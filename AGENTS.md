@@ -975,7 +975,20 @@ rather than highlighted (below).
   invented index beside pi's real number — and a fragment with neither (what a model
   usually writes by hand) renders unnumbered rather than misnumbered. Shiki is out of
   the loop for these: its CSS-variables theme maps nothing for `markup.inserted` /
-  `markup.deleted`, so a `diff` fence came out flat and monochrome.
+  `markup.deleted`, so a `diff` fence came out flat and monochrome. **A row is a row, not a
+  span of prose**: each line is a `<code>`, and a ```diff fence is not a `<pre>`, so
+  `.chat-markdown :not(pre) > code` (the inline chip — rounded, `--code-inline-bg`,
+  0.1em/0.35em padding) used to wrap every row in a grey box, leaving the row's own tint
+  visible only as a rim around it and its text shifted off the gutter. The rule excludes
+  `.diff-line` (`index.css`), and `DiffView` puts that class on the row's `<code>`. Preview:
+  `mock.html?diff=1`.
+  **The two gutter columns are a fixed width, border included** (`GUTTER_CELL` +
+  `gutterWidth`). They were `min-width` boxes that left the 1px `border-r` out of the sum, so a
+  blank cell sat at the floor while a cell with a number grew past it — the rule between the
+  gutter and the code stepped a pixel in and out on exactly the rows next to a change. A floor
+  can always be exceeded by content, so both cells now carry the same padding *and* the same
+  1px border (transparent on the first, so one line is drawn), and `overflow-hidden` stops a
+  number wider than the box.
   **Every line wraps and nothing scrolls sideways**, in every surface: the transcript's
   tool cards and hover previews are narrow, and a long line that overflows puts the part
   worth reading off-screen with no hint it exists. There used to be a `wrap` prop (off by
@@ -1639,17 +1652,50 @@ one reverted before the next prompt). The divider is therefore tied to the reply
 Only `models.json` is written; the `models.yml` / `config.yml` pair from the old RPC
 engine is gone because the SDK never read them.
 
+## 轻量模型（`engine/light-model.ts`，设置 → 模型与默认）
+
+一个 `settings.lightModel`（provider + id），管四类轻量请求：会话标题（`session-title` 扩展）、AI 提交信息
+（`generateCommitMessage`）、回复推荐（`#suggestNext`）、长期记忆（`#backgroundModel` 的阶段 1 与整合 agent）。
+**默认留空 = 跟随会话模型**，也就是这个设置存在之前的行为；新装的用户一个额外请求都不会多发，也不会因为
+「要选一个」而被卡在首次运行路上。
+
+- **一条规则，四个调用点**：`lightModelFor(registry, readLightModel(paths), session.model)`。选不中就不换——
+  pin 的供应商被删了、模型被 同步模型 撤了、这个安装没有那家的 key（`hasConfiguredAuth` 说不行），一律退回原来那个模型。
+  旁路不值得抛错：代价是一轮没有标题，而报错的代价是整个界面卡住。坏掉的 pin 由 设置 → 模型与默认 那行显示成
+  「（已不可用）」，让人自己看得见、改得掉，而不是在日志里找。
+- **`#lightModel` 只挑模型，不判可用性**：调用方照旧自己校验（提交信息仍然抛「还没有可用的模型」，回复推荐仍然静默返回）。
+  新增一个轻量调用点时这一步不能省，否则「没有可用模型」这件事会换个地方炸。
+- **记忆是唯一没有「会话模型」可跟的**：`#backgroundModel` 的顺序是 记忆自己的 pin → 轻量模型 → 默认模型 →
+  当前活动对话的模型 → 第一个能鉴权的模型。`memory.modelDefault` 那行文案因此从「跟随默认模型」改成「跟随轻量模型」。
+- **标题在扩展里，而扩展是散文件、不能 import `@shared`**：Main 把 pin 挂在 `ctx.ui.lightModel()`
+  （`#extensionUi`，每次调用现读 settings，所以改完不用重载会话），扩展自己 `ctx.modelRegistry.find` +
+  `hasConfiguredAuth`。宿主不是 FastVibe（pi CLI、测试 harness）时这座桥不存在，`lightModel?.()` 直接退回 `ctx.model`。
+- **一个形状**：那行的选择框是 `DefaultModelSelect`，触发器与菜单和 `ModelThinkingSelect` 的设置态共用
+  `SETTINGS_MODEL_TRIGGER`（`model-thinking-select.tsx`）+ `DropdownMenuCheckboxItem`。同一组里挨着的两行
+  长得不一样，读起来就是两个功能而不是两个选择。这个常量的形状是**量出来的**：`h-8`（2rem，和 shadcn
+  `SelectTrigger`、默认 `Button` 以及同一张卡片里的「管理」按钮同高——早先的 `min-h-9 py-2` 是为了让换行的
+  标签长高，而标签是 `truncate` 的，它只让行尾比正文高）、`w-fit` + `sm:max-w-64`（钉死宽度要么截断
+  provider/model id，要么让行尾参差不齐）。子 Agent 与按项目默认模型那两处 `surface="settings"` 一起跟着变。
+
+- **故意不动的东西**：压缩摘要、`/handoff`、子 agent 与 DAG 任务仍用对话自己的模型——前者要整段上下文才编得出来，
+  后两者是用户明确交出去的活，不是「顺手帮个忙」。想扩进来先想清楚这条界线。
+- 验证：`test/light-model.test.ts` 钉住退回规则与 `readLightModel` 对半写坏值的处理；`test/session-title.test.ts`
+  用真 SDK 跑「pin 生效」与「pin 解析不到时退回」，并钉住**对话本身仍留在原模型上**（旁路搬家不能把用户的会话一起搬走）。
+
 ## 回复推荐（`engine/reply-suggestion.ts`，`PiProcessManager.#suggestNext`）
 
-一轮回复结束后，用该对话自己的模型猜用户下一句，画成 composer 的 placeholder，输入框为空时按 Tab 填入。
+一轮回复结束后，用轻量模型（未设置时就是该对话自己的模型）猜用户下一句，画成 composer 的 placeholder，输入框为空时按 Tab 填入。
 设置 → 偏好设置 → 对话 → 回复推荐（`settings.replySuggestions`，默认开；Main 只在 `=== false` 时关）。
 
 - **只在「正常收尾的文字回复」后生成**：`agent_settled` 且结论不是 error/stopped/handoff，不是辅助对话、不是定时任务，
   且最后一条是 `stopReason: "stop"` 的助手文字（`suggestionMaterial`）。停在工具调用、失败、被截断都不猜。
   只给模型最后一轮的用户消息和回复的**尾部**（回复被截去前面，因为下一句是接着结尾说的）。
-- **没有单独的「小模型」设置**：试过（标题、提交信息、回复推荐各自可指定一个更快的模型）又移除了——实测回复推荐的延迟取决于
-  所选路线是否让模型思考，而不是模型大小（同一个 deepseek，FastVibe 中转站 0/12 思考、custom-qwen 12/12 思考），一个只让用户多做一次选择
-  却不保证更快的设置不值得留。所有旁路请求都用该对话自己的模型；`settings.smallModel` 在加载时被当作已移除的键丢掉。
+- **用哪个模型**：`#suggestNext` 走 `#lightModel(session.model)`，即 设置 → 模型与默认 里的「轻量模型」（见
+  ## 轻量模型），没 pin 就是该对话自己的模型。**`FASTVIBE_SUGGEST_MODE=cache` 例外，永远用对话自己的模型**：
+  那条请求赌的是前缀缓存，换一个模型等于把缓存丢掉重来。延迟仍然取决于所选路线是否让模型思考，而不是模型大小
+  （同一个 deepseek，FastVibe 中转站 0/12 思考、custom-qwen 12/12 思考），所以这个设置省的是钱和噪音，不是必然的秒数。
+  早先试过「标题、提交信息、回复推荐各自选一个」（`settings.smallModel`，已随 `d9ac5d8` 移除），三个下拉只让用户多点两次，
+  现在是一个共享的 pin。
 - **旁路，不能影响运行**：fire-and-forget，15s 超时，异常全吞（composer 照常显示原 placeholder）。
 - **从那条回复结束的那一刻开始，不等整轮 settle**（`message_end` 且 `stopReason: "stop"`，仅 `fresh` 模式）：settle 可能还要等压缩或重试。
   起得早意味着此时运行还开着，所以结果照常发布，由 composer 的「没在运行」条件在 settle 前不画它；运行继续（续跑、排队消息）则
@@ -2292,7 +2338,7 @@ Deliberately deferred. Plugin authors are expected to degrade via `ctx.mode` /
 
 ## 长期记忆（`engine/memory*.ts`，详见 `docs/memory.md`）
 
-照搬 Codex 的文件式记忆（`codex-rs/memories`），**一个开关加一个模型选项**（设置 → 长期记忆，默认关；模型留空 = 跟随默认模型，阶段 1 和阶段 2 共用，Codex 是分开的两项；选的模型不可用时回退到默认模型）。关 = 不读、
+照搬 Codex 的文件式记忆（`codex-rs/memories`），**一个开关加一个模型选项**（设置 → 长期记忆，默认关；模型留空 = 跟随轻量模型，阶段 1 和阶段 2 共用，Codex 是分开的两项；选的模型不可用时按 轻量模型 → 默认模型 → 活动对话的模型 依次退回）。关 = 不读、
 不写、不注入；文件留在磁盘上，直到用户点「清除」。原来的三种模式（默认 / 语义 / JEV 增强，SQLite + embedding +
 关系图）已整体移除，`removeLegacyMemory` 在启动时删掉遗留的 `memory.sqlite` 和模型缓存。
 

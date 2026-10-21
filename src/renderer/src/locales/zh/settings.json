@@ -4,7 +4,7 @@
   "enable": "启用长期记忆",
   "model": "整理用的模型",
   "modelDesc": "读取对话和汇总记忆时使用的模型。",
-  "modelDefault": "跟随默认模型",
+  "modelDefault": "跟随轻量模型",
   "enableDesc": "对话安静一段时间后，整理出其中值得长期记住的内容，之后的对话会参考。",
   "dataTitle": "记忆库",
   "status": "整理状态",
@@ -163,6 +163,11 @@
   "followLast": "跟随上次使用",
   "unavailable": "{{label}}（已不可用）",
   "empty": "还没有可用的模型"
+ },
+ "lightModel": {
+  "title": "轻量模型",
+  "desc": "会话标题、提交信息、回复推荐、记忆提取等小任务使用。",
+  "followSession": "跟随会话模型"
  },
  "projectDefaults": {
   "title": "按项目设置默认模型",

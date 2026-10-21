@@ -17,6 +17,7 @@ import { ProviderIcon } from "@/components/provider-icon";
 import type { FastVibeModel, NativeProviderConfig, ProviderConfig, ProviderModel } from "@shared/types";
 import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
+import { DefaultModelSelect } from "./default-model-select";
 import { OAuthLoginDialog, type OAuthTarget } from "./oauth-login-dialog";
 import { GatewayCredentialDialog } from "./gateway-credential-dialog";
 import { EMPTY_ADD, type AddState, type PickerState } from "./providers-settings-types";
@@ -152,6 +153,19 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
               ariaLabel={t("defaultModel.title")}
               emptyModelLabel={t("defaultModel.followLast")}
               inheritModelLabel={t("defaultModel.followLast")}
+            />
+          }
+        />
+        <SettingsRow
+          title={t("lightModel.title")}
+          description={t(models.length ? "lightModel.desc" : "defaultModel.emptyHint")}
+          control={
+            <DefaultModelSelect
+              models={models}
+              value={settings.lightModel}
+              emptyLabel={t("lightModel.followSession")}
+              ariaLabel={t("lightModel.title")}
+              onChange={(model) => updateSettings({ lightModel: model })}
             />
           }
         />

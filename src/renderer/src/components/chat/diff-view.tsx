@@ -31,17 +31,32 @@ const MARKER_STYLE: Record<DiffRowKind, string> = {
   skip: "",
 };
 
+/**
+ * The two number columns, and the width they must share.
+ *
+ * A column is a *fixed* width, not a `min-width`: a floor lets the column that also
+ * carries `border-r` grow to its own content — `2ch` of digits plus `0.75rem` of padding
+ * plus that 1px border — on rows that carry a number, while a blank row stayed at the
+ * floor. The two columns then differed by a pixel on exactly the rows next to a change,
+ * and the rule between the gutter and the code stepped in and out down the whole diff.
+ *
+ * So both columns are one box: same padding, same 1px border (`border-r` is transparent on
+ * the first, so only one line is drawn), and a width that counts all three. `overflow-hidden`
+ * keeps a number wider than the box from doing what `min-width` did.
+ */
+const GUTTER_CELL = "shrink-0 select-none overflow-hidden px-1.5 text-right tabular-nums border-r";
+const gutterWidth = (width: number) => ({ width: `calc(${width}ch + 0.75rem + 1px)` });
+
 /** The two number columns: `old` is blank on an added line and `new` on a removed
  *  one, exactly as a unified diff reads. Header rows carry neither. */
 function Gutter({ row, width }: { row: DiffRow; width: number }): JSX.Element {
-  const cell = "shrink-0 select-none px-1.5 text-right tabular-nums";
-  const size = { minWidth: `calc(${width}ch + 0.75rem)` };
+  const size = gutterWidth(width);
   return (
     <>
-      <span aria-hidden style={size} className={cn(cell, "text-muted-foreground/40")}>
+      <span aria-hidden style={size} className={cn(GUTTER_CELL, "border-transparent text-muted-foreground/40")}>
         {row.oldNumber ?? ""}
       </span>
-      <span aria-hidden style={size} className={cn(cell, "border-r border-border text-muted-foreground/60")}>
+      <span aria-hidden style={size} className={cn(GUTTER_CELL, "border-border text-muted-foreground/60")}>
         {row.newNumber ?? ""}
       </span>
     </>
@@ -115,7 +130,7 @@ export const DiffView = memo(function DiffView({
           <span aria-hidden className={cn("w-4 shrink-0 text-center select-none", MARKER_STYLE[row.kind])}>
             {row.marker}
           </span>
-          <code className="block min-w-0 flex-1 px-2 whitespace-pre-wrap break-all">{row.text || " "}</code>
+          <code className="diff-line block min-w-0 flex-1 px-2 whitespace-pre-wrap break-all">{row.text || " "}</code>
         </div>
       ))}
       {hidden > 0 ? (
@@ -136,8 +151,8 @@ function SplitCell({ row, other, side, width }: { row?: DiffRow; other?: DiffRow
   const range = changed && other ? changedRange(row.text, other.text) : undefined;
   return (
     <div className={cn("flex min-w-0 border-l-2 border-l-transparent first:border-r first:border-r-border", row ? ROW_STYLE[row.kind] : "bg-muted/40")}>
-      {width > 0 ? <span aria-hidden className="shrink-0 border-r border-border px-1.5 text-right text-muted-foreground/60 select-none" style={{ minWidth: `calc(${width}ch + 0.75rem)` }}>{(side === "old" ? row?.oldNumber : row?.newNumber) ?? ""}</span> : null}
-      <code className="block min-w-0 flex-1 px-2 whitespace-pre-wrap break-all">
+      {width > 0 ? <span aria-hidden style={gutterWidth(width)} className={cn(GUTTER_CELL, "border-border text-muted-foreground/60")}>{(side === "old" ? row?.oldNumber : row?.newNumber) ?? ""}</span> : null}
+      <code className="diff-line block min-w-0 flex-1 px-2 whitespace-pre-wrap break-all">
         {range && row ? <>{row.text.slice(0, range[0])}<span className={row.kind === "added" ? "bg-success/25" : "bg-destructive/25"}>{row.text.slice(range[0], range[1])}</span>{row.text.slice(range[1])}</> : row?.text || " "}
       </code>
     </div>

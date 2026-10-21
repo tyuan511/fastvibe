@@ -73,6 +73,13 @@ export type AppSettings = ProxySettings & {
    * rewrites them to the last used model on every switch.
    */
   defaultModel?: EngineModel;
+  /**
+   * 轻量模型: the model short side jobs run on — a chat's title, a commit subject, the
+   * next-message guess, memory extraction. Absent means "follow each chat's own model",
+   * which is what all four did before this row existed; a pin this install cannot
+   * authenticate falls back the same way (`engine/light-model.ts`).
+   */
+  lightModel?: EngineModel;
   /** Per-project model and reasoning defaults, keyed by the project's stable cwd. */
   projectDefaults?: Record<string, ProjectModelDefault>;
   /**
@@ -234,6 +241,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isFontSize(next.uiFontSize)) delete next.uiFontSize;
   if (!isThinkingLevel(next.thinkingLevel)) delete next.thinkingLevel;
   if (!isEngineModel(next.defaultModel)) delete next.defaultModel;
+  if (!isEngineModel(next.lightModel)) delete next.lightModel;
   if (!isProjectDefaultMap(next.projectDefaults)) delete next.projectDefaults;
   if (!isFiniteNumber(next.sidebarWidth)) delete next.sidebarWidth;
   if (typeof next.sidebarCollapsed !== "boolean") delete next.sidebarCollapsed;

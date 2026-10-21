@@ -5,17 +5,14 @@ import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
 import { collectChangedFiles, type ChangedFile } from "@/lib/changed-files";
 import { DiffStatBadge } from "@/components/chat/diff-stat";
-import { DiffView } from "@/components/chat/diff-view";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
 import { FileIcon } from "@/components/file-icon";
 import { displayProjectPath, projectFolderPaths } from "@shared/project-folders";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
-import { officeFormatOf } from "@shared/office";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -59,7 +56,6 @@ function FileRow({
   onOpen: (file: ChangedFile) => void;
 }): JSX.Element {
   const { t } = useTranslation("chat");
-  const [previewOpen, setPreviewOpen] = useState(false);
   const label = fileLabel(file.path, cwd);
   const { name, directory } = splitLabel(label);
   const absolute = (): string => {
@@ -71,75 +67,48 @@ function FileRow({
     if (result && result.ok === false) toast.error(t("preview.pathMissing"));
   };
   return (
-    <HoverCard open={previewOpen} onOpenChange={setPreviewOpen}>
-      <ContextMenu onOpenChange={(next) => { if (next) setPreviewOpen(false); }}>
-        <ContextMenuTrigger
-          render={
-            <HoverCardTrigger
-              delay={300}
-              closeDelay={150}
-              render={
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPreviewOpen(false);
-                    onOpen(file);
-                  }}
-                  className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none data-open:bg-muted"
-                />
-              }
-            />
-          }
-        >
-          <FileIcon name={name} />
-          <span className="min-w-0 shrink truncate text-sm text-foreground" title={label}>{name}</span>
-          {directory ? (
-            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70">{directory}</span>
-          ) : (
-            <span className="min-w-0 flex-1" />
-          )}
-          <DiffStatBadge added={file.added} removed={file.removed} />
-        </ContextMenuTrigger>
-        <ContextMenuContent className="w-48">
-          <ContextMenuItem onClick={() => void useSessionStore.getState().openPreview(absolute())}>
-            {t("preview.pathPreview")}
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => void reveal()}>{t("preview.pathReveal")}</ContextMenuItem>
-          <ContextMenuItem onClick={() => void navigator.clipboard?.writeText(absolute())}>
-            {t("preview.pathCopy")}
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-      <HoverCardContent
-        side="top"
-        align="start"
-        alignOffset={0}
-        sideOffset={8}
-        data-overlay-surface
-        className="overlay-surface flex max-h-[min(30rem,var(--available-height))] w-[min(48rem,var(--available-width))] flex-col overflow-hidden rounded-xl border border-border bg-popover/95 p-0 shadow-lg"
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <button
+            type="button"
+            onClick={() => onOpen(file)}
+            className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          />
+        }
       >
-        <div className="flex shrink-0 items-center gap-2.5 border-b border-border px-3 py-2">
-          <FileIcon name={name} />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium" title={file.path}>{file.path}</span>
-          <DiffStatBadge added={file.added} removed={file.removed} />
-        </div>
-        {file.diff ? (
-          <DiffView text={file.diff} className="mt-0 min-h-0 max-h-none rounded-none border-0" />
+        <FileIcon name={name} />
+        <span className="min-w-0 shrink truncate text-sm text-foreground" title={label}>{name}</span>
+        {directory ? (
+          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70">{directory}</span>
         ) : (
-          <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {t(officeFormatOf(file.path) ? "files.officeChanged" : "files.noDiff")}
-          </p>
+          <span className="min-w-0 flex-1" />
         )}
-      </HoverCardContent>
-    </HoverCard>
+        <DiffStatBadge added={file.added} removed={file.removed} />
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-48">
+        <ContextMenuItem onClick={() => void useSessionStore.getState().openPreview(absolute())}>
+          {t("preview.pathPreview")}
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => void reveal()}>{t("preview.pathReveal")}</ContextMenuItem>
+        <ContextMenuItem onClick={() => void navigator.clipboard?.writeText(absolute())}>
+          {t("preview.pathCopy")}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
 /**
  * One turn's writes: one compact header line naming how many files changed and the
  * line totals, then the paths — five rows tall at most, the rest reached by scrolling
- * inside the card. Hover previews the turn's own diff; a path (or 查看变更) opens the
- * file in the 变更 view.
+ * inside the card. A path (or 查看变更) opens the file in the 变更 view.
+ *
+ * A row used to answer a 300ms hover with its own diff popup — the turn's patch for that
+ * file, in a `48rem` card that covered the reply while it was up. Two views of the same
+ * change, one of them transient: a hover that opened it misread a pointer crossing the
+ * list as a question, and the answer had to be dismissed before the transcript could be
+ * read again. The card's job is to point at the change, so the click does the work.
  *
  * The header carries no glyph of its own — every row below it is already marked by
  * its file icon, so a leading 32px box only made the card taller than its content.
@@ -197,10 +166,15 @@ export function TurnFileChips({ files, className }: { files: ChangedFile[]; clas
          * box, so the old `px-1.5` wrapper parked the bar 6px off the card's right edge — a
          * bar floating in the middle of the row ends rather than one hugging the frame. Every
          * row keeps its position (the bar still takes its 11px out of the content box) and the
-         * bar lands against the edge. The bottom gap stays outside the scroller, or it would
+         * bar lands against the edge. The gaps stay outside the scroller, or they would
          * be scrolled content and cut the fifth row of a five-file list.
+         *
+         * The top one is its own gap rather than the first row's `py-1.5`: that padding is the
+         * air *between* rows, so with neither the header's rule sat directly on a row's top
+         * edge — the list read as a table body under a header instead of as one card's fold,
+         * and a hovered first row tinted hard against the rule.
          */}
-        <div className="pb-1.5">
+        <div className="pt-1.5 pb-1.5">
           <div className="max-h-40 overflow-y-auto">
             <div className="px-1.5">
               {/*

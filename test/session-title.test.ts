@@ -43,19 +43,37 @@ async function harness(options: {
   refusesThinkingOff?: boolean;
   /** Install FastVibe's guard on the runtime, as `PiProcessManager` does on start-up. */
   guard?: boolean;
-}): Promise<{ session: AgentSession; titleCalls: () => number; close: () => void }> {
+  /**
+   * What the host's `ctx.ui.lightModel()` answers — 轻量模型 (设置 → 模型), the same bridge
+   * `PiProcessManager.#extensionUi` injects for a real session.
+   */
+  lightModel?: { provider: string; id: string };
+  /** The model the conversation itself is on (default: the chat's only model, `scripted`). */
+  chatModel?: string;
+}): Promise<{ session: AgentSession; titleCalls: () => number; titleModels: () => string[]; chatModels: () => string[]; close: () => void }> {
   const dir = mkdtempSync(join(tmpdir(), "session-title-"));
-  const faux = createFauxCore({ api: options.api ?? "faux-api", provider: "faux", models: [{ id: "scripted", reasoning: options.api !== undefined }] });
+  const faux = createFauxCore({
+    api: options.api ?? "faux-api",
+    provider: "faux",
+    models: [{ id: "scripted", reasoning: options.api !== undefined }, { id: "cheap", reasoning: false }],
+  });
   let titleCalls = 0;
+  const titleModels: string[] = [];
+  const chatModels: string[] = [];
   // A factory per call: which request it is decides the reply, so the test does not
   // depend on whether the title call or the agent's own request reaches the provider first.
   faux.setResponses(
     Array.from(
       { length: 8 },
       () =>
-      (context: Context, _request: unknown, _state: unknown, model: { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }) => {
-        if (!isTitleRequest(context)) return fauxAssistantMessage("done");
+      (context: Context, _request: unknown, _state: unknown, model: { id?: string; reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }) => {
+        if (!isTitleRequest(context)) {
+          // The pin must not move the conversation itself — only the side job.
+          chatModels.push(model.id ?? "");
+          return fauxAssistantMessage("done");
+        }
         titleCalls += 1;
+        titleModels.push(model.id ?? "");
         if (options.refusesThinkingOff && model.reasoning && model.thinkingLevelMap?.off !== null) return errorReply(THINKING_OFF_REFUSAL);
         return options.title(titleCalls);
       },
@@ -84,6 +102,17 @@ async function harness(options: {
         contextWindow: 100_000,
         maxTokens: 4096,
       },
+      {
+        // The 轻量模型 of this test install: a second model on the same provider, so it is
+        // authenticated the same way and only the choice can differ.
+        id: "cheap",
+        name: "cheap",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000,
+        maxTokens: 4096,
+      },
     ],
   });
 
@@ -103,13 +132,18 @@ async function harness(options: {
     cwd,
     agentDir,
     modelRuntime: runtime,
-    model: runtime.getModel("faux", "scripted"),
+    model: runtime.getModel("faux", options.chatModel ?? "scripted"),
     sessionManager: SessionManager.inMemory(),
     settingsManager,
     resourceLoader,
   });
-  await session.bindExtensions({ mode: "rpc" });
-  return { session, titleCalls: () => titleCalls, close: () => session.dispose() };
+  await session.bindExtensions({
+    mode: "rpc",
+    // The host's bridge. `#extensionUi` in `src/main/pi/process-manager.ts` carries
+    // `lightModel`; a host without it leaves the title on the conversation's own model.
+    uiContext: { lightModel: () => options.lightModel } as never,
+  });
+  return { session, titleCalls: () => titleCalls, titleModels: () => titleModels, chatModels: () => chatModels, close: () => session.dispose() };
 }
 
 const PROMPT = "帮我修复登录流程里那个偶发的重定向问题";
@@ -246,6 +280,40 @@ test("a chat on a model whose endpoint refuses pi's thinking-off parameter still
     await h.session.prompt(PROMPT);
     assert.equal(await waitFor(() => h.session.sessionName === "修复登录重定向"), true);
     assert.equal(h.titleCalls(), 2, "refused once, then asked again without the field");
+  } finally {
+    h.close();
+  }
+});
+
+test("a pinned 轻量模型 names the chat; the conversation stays on its own model", async () => {
+  // The whole point of the setting: four side jobs (title, commit subject, the
+  // next-message guess, memory extraction) that need little of a model's window. Moving
+  // them must not move the chat the user is actually reading.
+  const h = await harness({
+    lightModel: { provider: "faux", id: "cheap" },
+    title: () => fauxAssistantMessage("修复登录重定向"),
+  });
+  try {
+    await h.session.prompt(PROMPT);
+    assert.equal(await waitFor(() => h.session.sessionName === "修复登录重定向"), true);
+    assert.deepEqual(h.titleModels(), ["cheap"], "the title ran on the pin");
+    assert.deepEqual(h.chatModels(), ["scripted"], "the reply did not");
+  } finally {
+    h.close();
+  }
+});
+
+test("a pin this install cannot resolve leaves the title on the conversation's model", async () => {
+  // Provider deleted, or 同步模型 dropped the model: 轻量模型 is a preference, not a hard
+  // requirement, and a chat without a name is the worse outcome.
+  const h = await harness({
+    lightModel: { provider: "faux", id: "gone" },
+    title: () => fauxAssistantMessage("修复登录重定向"),
+  });
+  try {
+    await h.session.prompt(PROMPT);
+    assert.equal(await waitFor(() => h.session.sessionName === "修复登录重定向"), true);
+    assert.deepEqual(h.titleModels(), ["scripted"], "the conversation's own model answered instead");
   } finally {
     h.close();
   }

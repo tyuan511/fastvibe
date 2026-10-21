@@ -10,9 +10,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
  * FastVibe's built-in session title — names a new conversation from the first
  * user prompt via a short, fire-and-forget model call (`pi.setSessionName`).
  *
- * Already-named sessions (manual rename, `/name`, parallel runs, side chats)
- * are left alone. A transient failure is retried under the engine's own retry
- * policy; a session this never manages to title keeps the truncated-prompt
+ * Already-named sessions (manual rename, `/name`, parallel runs, side chats) are left
+ * alone. The request runs on 轻量模型 (设置 → 模型) when the host reports a pin this install
+ * can authenticate, else on the model the conversation is on. A transient failure is
+ * retried under the engine's own retry policy; a session this never manages to title
+ * keeps the truncated-prompt
  * fallback the host set. One shot per session is the budget: a later message
  * must not rename a chat the first one already spoke for.
  */
@@ -23,6 +25,31 @@ const TITLE_TIMEOUT_MS = 20_000;
 
 /** Mirrors `SETTINGS_DEFAULTS.retry` in the SDK, for an install that stored none. */
 const DEFAULT_RETRY: RetryPolicy = { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxAgentDelayMs: 60_000 };
+
+/**
+ * The host bridge FastVibe injects on `ctx.ui` (`FastVibeExtensionUIContext` in
+ * `src/main/pi/process-manager.ts`). Optional because a host that is not FastVibe — the
+ * pi CLI, a test harness — binds the SDK's own UI context and has no pin to hand out.
+ */
+type LightModelHost = {
+  /** 轻量模型 (设置 → 模型): the model short side jobs run on, when the user pinned one. */
+  lightModel?(): { provider: string; id: string } | undefined;
+};
+
+/**
+ * Which model names this chat: the 轻量模型 the user pinned for side jobs, when this
+ * install can still authenticate it, else the model the conversation is on — which is
+ * what every title did before the pin existed. A pin whose provider was deleted, or whose
+ * model was dropped by 同步模型, falls back rather than costing the chat its title.
+ */
+function titleModel(ctx: ExtensionContext): ExtensionContext["model"] {
+  const pinned = (ctx.ui as unknown as LightModelHost).lightModel?.();
+  if (pinned) {
+    const model = ctx.modelRegistry.find(pinned.provider, pinned.id);
+    if (model && ctx.modelRegistry.hasConfiguredAuth(model)) return model;
+  }
+  return ctx.model;
+}
 
 const INSTRUCTIONS = [
   "You name chat sessions. Reply with a title only.",
@@ -182,7 +209,7 @@ export default function sessionTitle(pi: ExtensionAPI): void {
     // The call is fire-and-forget, so nothing may escape it: a chat closed or replaced
     // while the title was generating makes `ctx` stale, and its getters throw.
     try {
-      const model = ctx.model;
+      const model = titleModel(ctx);
       if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) return;
       const policy = retryPolicy(pi);
       // The initial attempt plus the engine's retry budget — the same policy its own

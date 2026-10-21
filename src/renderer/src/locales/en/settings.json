@@ -4,7 +4,7 @@
   "enable": "Enable long-term memory",
   "model": "Model for memory",
   "modelDesc": "Reads conversations and consolidates memory with this model.",
-  "modelDefault": "Follow the default model",
+  "modelDefault": "Follow the lightweight model",
   "enableDesc": "Once a conversation has been quiet for a while, keep what is worth remembering and let later conversations use it.",
   "dataTitle": "Memory",
   "status": "Status",
@@ -163,6 +163,11 @@
   "followLast": "Follow last used",
   "unavailable": "{{label}} (unavailable)",
   "empty": "No models available yet"
+ },
+ "lightModel": {
+  "title": "Lightweight model",
+  "desc": "Runs small jobs: chat titles, commit subjects, reply suggestions and memory extraction.",
+  "followSession": "Follow the chat's model"
  },
  "projectDefaults": {
   "title": "Project-specific defaults",

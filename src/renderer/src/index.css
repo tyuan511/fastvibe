@@ -852,7 +852,15 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
   font-size: 0.82em;
 }
 
-.chat-markdown :not(pre) > code {
+/*
+ * `:not(.diff-line)`: a diff row is a `<code>` per line, and a ```diff fence is not a
+ * `<pre>`, so this rule used to reach every row of `DiffView` and wrap it in a rounded
+ * grey chip with its own padding — a box inside a box, and the row's own tint
+ * (`bg-destructive/10` on a removed line) showed only as a rim around that chip. A row is
+ * a row, not a span of prose: excluding it here leaves its `px-2` and its transparent
+ * background alone, so the row's colour runs the full width.
+ */
+.chat-markdown :not(pre) > code:not(.diff-line) {
   border-radius: 0.3rem;
   background: var(--code-inline-bg);
   padding: 0.1em 0.35em;

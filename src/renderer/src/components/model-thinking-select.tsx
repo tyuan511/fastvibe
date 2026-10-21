@@ -35,6 +35,22 @@ function providerLabel(model: FastVibeModel): string {
   return model.providerName || model.provider.replace(/^custom-/, "");
 }
 
+/**
+ * The trigger every model picker in a settings pane draws, so the rows of one group are
+ * the same control: 会话模型, 轻量模型 and the memory picker sit a row apart, and two
+ * shapes there read as two different features rather than two choices of one kind.
+ *
+ * `h-8` is the height the rest of the panes already answer with — the shadcn `SelectTrigger`
+ * and the default `Button` are both 2rem, and 管理 beside these rows is one of them. The
+ * `min-h-9` + `py-2` this replaced only existed to let a wrapped label grow, and the label
+ * truncates, so it grew nothing: it just made the row's right end taller than its text.
+ *
+ * `w-fit` with a ceiling, not a fixed width — the label is a provider/model id, and a
+ * pinned `w-56` either truncates it or leaves the row's right end ragged.
+ */
+export const SETTINGS_MODEL_TRIGGER =
+  "h-8 w-fit min-w-0 max-w-full shrink justify-between gap-1 rounded-lg px-2.5 font-normal text-muted-foreground sm:max-w-64";
+
 export function ModelThinkingSelect({
   models,
   model,
@@ -142,9 +158,7 @@ export function ModelThinkingSelect({
             aria-label={ariaLabel}
             className={cn(
               "min-w-0 justify-between gap-1 font-normal text-muted-foreground",
-              surface === "settings"
-                ? "h-auto min-h-9 w-fit max-w-full shrink rounded-lg py-2 sm:max-w-64"
-                : "h-7 max-w-40 shrink rounded-full px-2 @min-[22rem]/composer:max-w-80",
+              surface === "settings" ? SETTINGS_MODEL_TRIGGER : "h-7 max-w-40 shrink rounded-full px-2 @min-[22rem]/composer:max-w-80",
               className,
             )}
           >

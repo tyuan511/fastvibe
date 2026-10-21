@@ -559,6 +559,57 @@ export const MATH_MESSAGES: ChatMessage[] = [
   },
 ];
 
+/** The reply the `?diff=1` preview shows: prose, a ```diff fence, then a normal fence. */
+const DIFF_FENCE_REPLY = `两处触发器共用一组类名，高度从 9 收到 8，宽度改成自适应：
+
+\`\`\`diff
+--- a/src/renderer/src/components/model-thinking-select.tsx
++++ b/src/renderer/src/components/model-thinking-select.tsx
+@@ -18,7 +18,7 @@ export const SETTINGS_MODEL_TRIGGER = cn(
+-  "h-auto min-h-9 w-fit max-w-full shrink rounded-lg py-2 sm:max-w-64",
++  "h-8 w-fit min-w-0 max-w-full shrink rounded-lg px-2.5 sm:max-w-64",
+   "justify-start text-sm font-medium",
+@@ -30,3 +30,4 @@
+   surface === "settings" && "bg-transparent",
++  // The chevron is the only affordance that says 「可改」.
+   "text-muted-foreground"
+);
+\`\`\`
+
+普通代码块照旧高亮，不受影响：
+
+\`\`\`ts
+const tintRows = false;
+\`\`\`
+`;
+
+/**
+ * `?diff=1` — a ```diff fence in a reply. The fence's own card already paints `bg-muted/40`,
+ * so the diff rows must not lay a 10% tint over that (it reads as a muddy grey band); the
+ * left rule and the +/- marker are what say 「added」 and 「removed」 here.
+ */
+export const DIFF_FENCE_MESSAGES: ChatMessage[] = [
+  {
+    id: "msg-diff-u",
+    role: "user",
+    text: "模型选择那个改动具体动了哪些 className？给我看 diff。",
+    tools: [],
+    parts: [{ kind: "text", text: "模型选择那个改动具体动了哪些 className？给我看 diff。" }],
+    createdAt: NOW - 41_000,
+  },
+  {
+    id: "msg-diff-a",
+    role: "assistant",
+    text: DIFF_FENCE_REPLY,
+    tools: [],
+    parts: [{ kind: "text", text: DIFF_FENCE_REPLY }],
+    createdAt: NOW - 40_000,
+    completedAt: NOW - 38_000,
+  },
+];
+
+
+
 /**
  * `?dag=1` — the 「创建子任务」 call whose batch the harness's DAG fixture already holds (T-0001 to
  * T-0003), so the card the transcript draws for it can be looked at without a real run: one header

@@ -103,7 +103,8 @@ import {
   scanImportCandidates,
   scanImportSources,
 } from "../engine/import/runner";
-import { readAppSettings, readDefaultModel, readPreferredModelSettings } from "../engine/runtime-settings";
+import { readAppSettings, readDefaultModel, readLightModel, readPreferredModelSettings } from "../engine/runtime-settings";
+import { lightModelFor, pinnedLightModel } from "../engine/light-model";
 import { canTurnThinkingOff, installThinkingOffGuard, modelWithoutThinkingOff, retryWithoutThinkingOff, roomForThinking, suggestionMaxTokens, willSendThinkingOff, withThinkingOff, withThinkingOffFallback } from "../engine/thinking-off";
 import { SUGGESTION_SYSTEM, buildCacheContext, buildSuggestionPrompt, cleanSuggestion, readSuggestionStream, suggestionMaterial, suggestionModeOf, withFinalMessage } from "../engine/reply-suggestion";
 import { submitPrompt } from "../engine/prompt-submission";
@@ -261,6 +262,12 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
   listWorktrees(): Promise<GitWorktreeInfo[]>;
   /** FastVibe's own settings, for the built-in `app-config` extension (`src/main/app-config.ts`). */
   appConfig(request: AppConfigHostRequest): Promise<AppConfigHostResult>;
+  /**
+   * The 轻量模型 pin (设置 → 模型), read per call so a settings change reaches the next
+   * title without a session reload. The built-in `session-title` extension asks for it
+   * and falls back to `ctx.model` when it is unset or unusable.
+   */
+  lightModel(): EngineModel | undefined;
   /** The DAG of sub-agent tasks, for the built-in `dag` extension (`src/main/dag-tools.ts`). */
   dag(request: DagHostRequest, signal?: AbortSignal): Promise<DagHostResult>;
   schedules(request: ScheduleHostRequest): Promise<unknown>;
@@ -2773,9 +2780,10 @@ export class PiProcessManager {
     return this.#modelsCache ?? [];
   }
   /**
-   * The model background work (memory) runs on: the user's default model, else the one
-   * the active chat is on, else whatever this install can authenticate. It belongs to no
-   * conversation, so it must not depend on one being open.
+   * The model background work (memory) runs on: the model the user chose for memory,
+   * else 轻量模型, else the default model, else the one the active chat is on, else
+   * whatever this install can authenticate. It belongs to no conversation, so it must
+   * not depend on one being open.
    */
   #backgroundModel(pinned?: EngineModel): ReturnType<ModelRegistry["find"]> {
     const registry = this.#models;
@@ -2783,6 +2791,10 @@ export class PiProcessManager {
     // A model the user chose for the job, when it can still be authenticated; else the usual order.
     const chosen = pinned ? registry.find(pinned.provider, pinned.id) : undefined;
     if (chosen && registry.hasConfiguredAuth(chosen)) return chosen;
+    // Memory is the one lightweight job with no conversation to follow, so the 轻量模型
+    // pin is what "no opinion" means here and the default model comes after it.
+    const light = pinnedLightModel(registry, readLightModel(this.#paths));
+    if (light) return light;
     const preferred = readDefaultModel(this.#paths);
     const activeId = this.#catalog.activeId;
     const active = activeId ? this.#sessions.get(activeId)?.session.model : undefined;
@@ -2794,10 +2806,21 @@ export class PiProcessManager {
   }
 
   /**
-   * 回复推荐: guess the user's next message once a reply has finished, on the conversation's model.
-   * the conversation's own model. Fire-and-forget — nothing here may fail the run that just ended, and a
-   * guess that arrives late (the user already sent something, the chat was deleted) is
-   * dropped rather than shown.
+   * 轻量模型 (设置 → 模型): the model a short side job runs on — a chat's title, a commit
+   * subject, the next-message guess, memory extraction. The pin when this install can
+   * still authenticate it, else the model of the chat that asked, which is what every one
+   * of them did before the setting existed. A pin that went away mid-session is not worth
+   * failing a title over, so it silently falls back rather than raising.
+   */
+  #lightModel(sessionModel?: ReturnType<ModelRegistry["find"]>): ReturnType<ModelRegistry["find"]> {
+    return lightModelFor(this.#models ?? undefined, readLightModel(this.#paths), sessionModel);
+  }
+
+  /**
+   * 回复推荐: guess the user's next message once a reply has finished, on 轻量模型 when one
+   * is pinned and the conversation's own model otherwise. Fire-and-forget — nothing here may
+   * fail the run that just ended, and a guess that arrives late (the user already sent
+   * something, the chat was deleted) is dropped rather than shown.
    */
   #suggestNext(conversationId: string, final?: unknown): void {
     if (readAppSettings(this.#paths).replySuggestions === false) return;
@@ -2807,7 +2830,10 @@ export class PiProcessManager {
     const material = suggestionMaterial(final ? withFinalMessage(session.messages, final) : session.messages);
     if (!material) return;
     const mode = suggestionModeOf(process.env.FASTVIBE_SUGGEST_MODE);
-    const model = session.model;
+    // `cache` replays the conversation's own next request, so its prefix only holds on
+    // that model — guessing on 轻量模型 there would throw the cached prompt away. `fresh`
+    // (the default) is a standalone request and can run wherever the user pinned.
+    const model = mode === "cache" ? session.model : this.#lightModel(session.model);
     if (!model || !registry.hasConfiguredAuth(model)) return;
     this.#dropSuggestion(conversationId);
     if (final) this.#suggestionEarly.add(conversationId);
@@ -2967,7 +2993,7 @@ export class PiProcessManager {
     const registry = this.#models;
     if (!registry) throw new Error(uiText("模型尚未就绪", "Model is not ready"));
     const { session } = await this.#sessionFor(conversationId);
-    const model = session.model;
+    const model = this.#lightModel(session.model);
     if (!model || !registry.hasConfiguredAuth(model)) {
       throw new Error(uiText("还没有可用的模型", "No model is available"));
     }
@@ -5512,6 +5538,7 @@ export class PiProcessManager {
       listWorktrees: () => this.#listGitWorktrees(conversationId),
       appConfig: (request) =>
         this.#appConfigHost ? this.#appConfigHost(request) : Promise.resolve({ ok: false, error: uiText("当前宿主不支持修改 FastVibe 设置", "This host cannot change FastVibe settings") }),
+      lightModel: () => readLightModel(this.#paths),
       schedules: async (request) => {
         switch (request.action) {
           case "list": return this.listSchedules();

@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { THINKING_EFFORT_LEVELS, type EngineModel, type ProjectModelDefault, type ThinkingLevel } from "@shared/types";
+// A relative path rather than the `@shared` alias, so `node --test` can load this module
+// (the alias resolves only for the bundler) — same reason `reply-suggestion.ts` does it.
+import { THINKING_EFFORT_LEVELS, type EngineModel, type ProjectModelDefault, type ThinkingLevel } from "../../shared/types.ts";
 import type { FastVibePaths } from "./paths";
 
 /** Settings that are safe to read from both Electron Main and a headless Agent. */
@@ -30,6 +32,19 @@ export function readAppSettings(paths: FastVibePaths): PersistedSettings {
 
 export function readDefaultModel(paths: FastVibePaths): EngineModel | undefined {
   return readPreferredModelSettings(paths).model;
+}
+
+/**
+ * 轻量模型 (设置 → 模型与默认): the model short side jobs are asked to do — a chat's
+ * title, a commit subject, the next-message guess, memory extraction.
+ *
+ * Unset means no opinion and each job runs on the conversation's own model, which is
+ * what they all did before this row existed. Nothing is written until the user picks,
+ * so a fresh install sends no extra provider traffic and pays nothing it did not pay
+ * before. See `engine/light-model.ts` for how a pin is turned into a model.
+ */
+export function readLightModel(paths: FastVibePaths): EngineModel | undefined {
+  return readEngineModel(readAppSettings(paths).lightModel);
 }
 
 /**

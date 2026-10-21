@@ -45,7 +45,7 @@ export function MemorySettings({ models }: { models: FastVibeModel[] }): JSX.Ele
         } />
         <Row title={t("memory.model")} description={t("memory.modelDesc")} control={
           // `null`, not `undefined`: an undefined key does not survive the remote client's JSON.
-          <DefaultModelSelect models={models} value={state.config.model} emptyLabel={t("memory.modelDefault")} className="w-56" onChange={(model: EngineModel | undefined) => act(() => window.fastvibe.memory.setConfig({ model: model ?? null }))} />
+          <DefaultModelSelect models={models} value={state.config.model} emptyLabel={t("memory.modelDefault")} ariaLabel={t("memory.model")} onChange={(model: EngineModel | undefined) => act(() => window.fastvibe.memory.setConfig({ model: model ?? null }))} />
         } />
       </Group>
       <Group title={t("memory.dataTitle")}>

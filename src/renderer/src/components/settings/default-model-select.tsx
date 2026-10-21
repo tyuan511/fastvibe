@@ -2,11 +2,12 @@ import { useMemo, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowDown01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
@@ -14,10 +15,9 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
 import { ProviderIcon } from "@/components/provider-icon";
+import { SETTINGS_MODEL_TRIGGER } from "@/components/model-thinking-select";
 import { providerLabel } from "@/lib/provider-label";
-import { cn } from "@/lib/utils";
 import type { EngineModel, FastVibeModel } from "@shared/types";
 
 function modelKey(model: EngineModel): string {
@@ -25,32 +25,28 @@ function modelKey(model: EngineModel): string {
 }
 
 /**
- * Picks the provider/model a new conversation starts on.
+ * Picks a provider/model with no reasoning level beside it — 轻量模型 and the memory
+ * picker, both of which ask for work that deliberately does not think.
  *
- * Mirrors the composer's model menu (provider submenus) so the two read the same,
- * and never shows the internal `custom-` provider namespace. "跟随上次使用" clears
- * the pin and hands the choice back to the engine.
+ * The trigger and the menu are the ones `ModelThinkingSelect` draws in a settings pane
+ * (shared `SETTINGS_MODEL_TRIGGER`, checkbox rows), because these pickers sit in the same
+ * group directly under 会话模型: two shapes one row apart read as two different features.
+ * "跟随…" clears the pin and hands the choice back to whatever the caller falls through to.
  */
 export function DefaultModelSelect({
   models,
   value,
   onChange,
   emptyLabel,
-  className,
-  wrapLabel,
-  required,
+  ariaLabel,
 }: {
   models: FastVibeModel[];
   value?: EngineModel;
   onChange: (model: EngineModel | undefined) => void;
   /** Label for an unpinned value when the caller has a different fallback semantic. */
   emptyLabel?: string;
-  /** Optional trigger width/layout for dense settings surfaces. */
-  className?: string;
-  /** Keep a long provider/model label readable instead of truncating it. */
-  wrapLabel?: boolean;
-  /** Offer no way back to the unpinned value, for a caller that cannot run without a model. */
-  required?: boolean;
+  /** Names the control for a screen reader; the row's own title is the right string. */
+  ariaLabel?: string;
 }): JSX.Element {
   const { t } = useTranslation("settings");
   const groups = useMemo(() => {
@@ -87,25 +83,25 @@ export function DefaultModelSelect({
           <Button
             variant="outline"
             size="sm"
-            className={cn("w-44 justify-between gap-1.5 font-normal", className, wrapLabel && "h-auto min-h-9 py-2")}
+            aria-label={ariaLabel}
+            className={SETTINGS_MODEL_TRIGGER}
           >
-            <span className={cn(wrapLabel ? "break-all text-left leading-5" : "truncate")}>{label}</span>
-            <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{label}</span>
+            <HugeiconsIcon strokeWidth={2} icon={ArrowDown01Icon} className="size-3 shrink-0" />
           </Button>
         }
       />
       <DropdownMenuContent align="end" className="min-w-52">
-        {required ? null : (
-          <>
-            <DropdownMenuItem onClick={() => onChange(undefined)}>
-              <span className="min-w-0 flex-1 truncate">{emptyLabel ?? t("defaultModel.followLast")}</span>
-              <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
-                {value ? null : <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-4" />}
-              </span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-          </>
-        )}
+        <DropdownMenuCheckboxItem
+          checked={!value}
+          closeOnClick
+          onCheckedChange={() => {
+            if (value) onChange(undefined);
+          }}
+        >
+          {emptyLabel ?? t("defaultModel.followLast")}
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
         {models.length === 0 ? (
           // A label is Base UI's `Menu.GroupLabel`: bare, it throws
           // (`MenuGroupContext is missing`) and takes the whole app down.
@@ -130,17 +126,16 @@ export function DefaultModelSelect({
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent align="start" side="right" className="min-w-52">
                 {group.models.map((item) => (
-                  <DropdownMenuItem
+                  <DropdownMenuCheckboxItem
                     key={modelKey(item)}
-                    onClick={() => onChange({ provider: item.provider, id: item.id })}
+                    checked={modelKey(item) === selected}
+                    closeOnClick
+                    onCheckedChange={() => {
+                      if (modelKey(item) !== selected) onChange({ provider: item.provider, id: item.id });
+                    }}
                   >
-                    <span className="min-w-0 flex-1 truncate">{item.name || item.id}</span>
-                    <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
-                      {modelKey(item) === selected ? (
-                        <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-4" />
-                      ) : null}
-                    </span>
-                  </DropdownMenuItem>
+                    <span className="truncate">{item.name || item.id}</span>
+                  </DropdownMenuCheckboxItem>
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
