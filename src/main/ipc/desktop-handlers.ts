@@ -11,6 +11,7 @@ import { VERSION as piVersion } from "@earendil-works/pi-coding-agent";
 import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
 import { broadcast } from "./broadcast";
 import { registerEngineIpc } from "./engine-handlers";
+import { refreshApplicationMenu, syncMenuBindings } from "../app-menu";
 import { handle, type CallerContext } from "./registry";
 import { registerBrowserWorkspaceIpc } from "./browser-workspace";
 import { readFilePreview } from "../engine/file-preview";
@@ -593,6 +594,10 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   });
   handle(Ipc.windowIsMaximized, (_payload: void, ctx) => ctx.window?.isMaximized() ?? false);
 
+  // The macOS menu bar takes its keys from this window's 快捷键 bindings and answers with
+  // the commands it registered, so the page knows which chords not to handle a second time.
+  handle(Ipc.menuSync, (payload: { bindings?: unknown }) => ({ ids: syncMenuBindings(payload?.bindings) }));
+
   handle(Ipc.settingsGet, () => readAppSettings(getFastVibePaths()));
   const commitSettings = async (payload: Record<string, unknown>, ctx: CallerContext) => {
     assertProxySettings(payload);
@@ -603,6 +608,8 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     catch (error) { await networkProxy?.apply(previous); throw error; }
     applyNativeTheme(payload);
     applyLanguages(payload);
+    // The menu's labels are Main's, read at build time: 界面语言 is a write like any other.
+    refreshApplicationMenu();
     applyKeepAwake(payload);
     // 代码模式 / 工具搜索 reach a session only when it reloads.
     if (toolModeSettingsChanged(previous, payload)) void engine.refreshToolModes().catch(() => undefined);
@@ -641,6 +648,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     catch (error) { await networkProxy?.apply(previous); throw error; }
     applyNativeTheme({});
     applyLanguages({});
+    refreshApplicationMenu();
     applyKeepAwake({});
     if (toolModeSettingsChanged(previous, {})) void engine.refreshToolModes().catch(() => undefined);
     if (previous.computerEnabled === true) syncComputerComponent(false);

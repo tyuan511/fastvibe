@@ -23,6 +23,9 @@ function capabilityOf(method: string): AppCapability | null {
   if (method.startsWith("update:")) return "native";
   if (method.startsWith("account:")) return "native";
   if (method.startsWith("window:")) return "native";
+  // The macOS menu bar is desktop chrome too: a headless server has no menu to draw, and
+  // a phone's chord edits belong to its own copy of 快捷键 rather than to this machine.
+  if (method.startsWith("menu:")) return "native";
   if (method.startsWith("browser:")) return "browser";
   if (method.startsWith("computer:")) return "native";
   if (method.startsWith("system:")) return "native";

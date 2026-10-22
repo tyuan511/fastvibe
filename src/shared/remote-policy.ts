@@ -51,6 +51,11 @@ const DENIED = new Map<string, string>([
   [Ipc.windowToggleMaximize, "\u8fdc\u7a0b\u5ba2\u6237\u7aef\u6ca1\u6709\u7a97\u53e3"],
   [Ipc.windowClose, "\u8fdc\u7a0b\u5ba2\u6237\u7aef\u6ca1\u6709\u7a97\u53e3"],
   [Ipc.windowIsMaximized, "\u8fdc\u7a0b\u5ba2\u6237\u7aef\u6ca1\u6709\u7a97\u53e3"],
+  // The menu bar is this machine's desktop chrome. A phone's chord edits belong to its own
+  // copy of 快捷键, and rewriting the Mac's menu from across the network is not something
+  // anybody asked for — and a menu that answered a remote client would be one the person
+  // sitting at the machine never chose.
+  [Ipc.menuSync, "远程客户端没有这台电脑的菜单栏"],
   [Ipc.updateCheck, "\u5e94\u7528\u66f4\u65b0\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],
   [Ipc.updateDownload, "\u5e94\u7528\u66f4\u65b0\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],
   [Ipc.updateInstall, "\u5b89\u88c5\u66f4\u65b0\u4f1a\u9000\u51fa\u5e94\u7528\uff0c\u53ea\u80fd\u5728\u672c\u673a\u8fdb\u884c"],

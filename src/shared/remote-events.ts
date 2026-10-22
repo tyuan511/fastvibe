@@ -42,6 +42,8 @@ export function classifyRemotePush(channel: string): RemotePushKind {
     channel === Ipc.updateState ||
     channel === Ipc.accountState ||
     channel === Ipc.windowState ||
+    // Desktop chrome: Main's menu bar, delivered to the window that owns it.
+    channel === Ipc.menuAction ||
     channel === Ipc.providersOAuthEvent ||
     channel === Ipc.browserRequest ||
     channel === Ipc.computerComponentState ||

@@ -1,4 +1,5 @@
 import type { OfficialState } from "./official";
+import type { MenuBindings, MenuCommandId } from "./menu-commands.ts";
 export const Ipc = {
   engineGetStatus: "engine:get-status",
   engineStart: "engine:start",
@@ -217,6 +218,10 @@ export const Ipc = {
   windowClose: "window:close",
   windowIsMaximized: "window:is-maximized",
   windowState: "window:state",
+  /** The macOS menu bar: an item the OS handled, told to the window that owns it. */
+  menuAction: "menu:action",
+  /** The window's effective 快捷键 bindings, handed to Main so the menu can register them. */
+  menuSync: "menu:sync",
   settingsGet: "settings:get",
   settingsGetSync: "settings:get-sync",
   settingsSet: "settings:set",
@@ -447,6 +452,17 @@ export type TerminalDataEvent = { id: string; data?: string; exited?: boolean };
  * window-manager key), so the renderer cannot derive this from its own clicks.
  */
 export type WindowChromeState = { maximized: boolean };
+
+/**
+ * The native menu bar and the keys it took.
+ *
+ * `menu:sync` carries the bindings the 快捷键 pane resolved; Main answers with the commands
+ * whose accelerators it registered, because a menu accelerator is consumed before the page
+ * sees the key and a command handled twice is a toggle that does nothing.
+ */
+export type MenuAction = { id: MenuCommandId };
+export type MenuSyncPayload = { bindings: MenuBindings };
+export type MenuSyncResult = { ids: MenuCommandId[] };
 
 export type PromptRequest = {
   message: string;

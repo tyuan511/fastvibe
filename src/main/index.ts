@@ -44,6 +44,7 @@ import { applyPendingInstall, registerUpdater, scheduleUpdateCheck } from "./upd
 import { registerAccount } from "./account";
 import { PiProcessManager } from "./pi/process-manager";
 import { applyAppIcon, createDesktopWindow } from "./desktop-window";
+import { installApplicationMenu } from "./app-menu";
 import { watchUnreadBadge } from "./dock-badge";
 import { registerDesktopIpc } from "./ipc/desktop-handlers";
 import { registerDagIpc } from "./ipc/dag-handlers";
@@ -486,6 +487,10 @@ app.whenReady().then(async () => {
   // inside the bridge — which would make the bridge and the flow import each other.
   app.once("will-quit", () => cancelGrantFlow());
   applyAppIcon();
+  // The Mac's menu bar is the only place 设置 is reachable from besides the sidebar, and
+  // until now there was nothing there but Electron's default. Windows / Linux draw their
+  // own title bar, so nothing is installed there.
+  installApplicationMenu(() => windows);
   if (process.platform === "darwin") {
     const stopBadge = watchUnreadBadge(gateway.aggregate(engine.listWorkspace()), (text) => app.dock?.setBadge(text));
     app.once("will-quit", stopBadge);

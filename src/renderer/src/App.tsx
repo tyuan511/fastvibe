@@ -85,7 +85,9 @@ import type {
 import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
 import { TASKS_PATH, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
 import { useSidePaneStore } from "@/stores/side-pane";
-import { useAppShortcuts, useShortcutLabel } from "@/lib/use-shortcuts";
+import { useAppShortcuts, useNativeMenuActions, useShortcutLabel } from "@/lib/use-shortcuts";
+import { onShortcutRecordingChange, type ShortcutHandler, type ShortcutId } from "@/lib/shortcuts";
+import { syncNativeMenu } from "@/lib/native-menu";
 import { archiveConversations, archivedIdList, restoreConversations, useArchivedIds } from "@/stores/archive";
 import { AUTO_ARCHIVE_SWEEP_MS, sweepAutoArchive } from "@/lib/auto-archive";
 import { useStable } from "@/lib/use-stable";
@@ -430,7 +432,7 @@ export function App(): JSX.Element {
     return true;
   }
 
-  useAppShortcuts({
+  const shortcutCommands: Partial<Record<ShortcutId, ShortcutHandler>> = {
     commandPalette: () => setCommandOpen((open) => !open),
     settings: () => {
       if (!settingsOpen) navigate("/settings/general");
@@ -450,7 +452,7 @@ export function App(): JSX.Element {
       setComposerFocus((value) => value + 1);
     },
     send: (event) => {
-      const target = event.target;
+      const target = event?.target;
       if (target instanceof HTMLElement) {
         const tag = target.tagName;
         if (tag === "INPUT" || tag === "SELECT" || target.isContentEditable) return false;
@@ -483,7 +485,31 @@ export function App(): JSX.Element {
     },
     toggleSidebar: () => setSidebarCollapsed(!sidebarCollapsed),
     toggleSidePane: () => togglePane(),
+  };
+
+  useAppShortcuts(shortcutCommands);
+  // The Mac's menu bar runs the same commands. Its items arrive as ids with no key event,
+  // and 关于 / 快捷键 are rows that only the menu has — they are panes, so navigation is
+  // all there is to them.
+  useNativeMenuActions({
+    ...shortcutCommands,
+    about: () => {
+      setCommandOpen(false);
+      navigate("/settings/about");
+    },
+    shortcutSettings: () => {
+      setCommandOpen(false);
+      navigate("/settings/shortcuts");
+    },
   });
+
+  // Hand the menu the chords this pane resolved, and let go of them while a new one is
+  // being captured — see `lib/native-menu.ts`.
+  const shortcutOverrides = settings.shortcuts;
+  useEffect(() => {
+    void syncNativeMenu();
+  }, [shortcutOverrides]);
+  useEffect(() => onShortcutRecordingChange(() => void syncNativeMenu()), []);
 
   useEffect(() => {
     if (status.state !== "ready") return;

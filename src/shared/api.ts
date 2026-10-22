@@ -575,6 +575,19 @@ export function createFastVibeApi(t: ApiTransport) {
       onState: (listener: (state: WindowChromeState) => void): (() => void) => t.subscribe(Ipc.windowState, listener),
     },
     /**
+     * The native macOS menu bar. Its items are Main's, but the keys belong to this app's
+     * 快捷键 pane, so the window hands its effective bindings over and takes back the
+     * commands whose accelerators the menu registered — those keys never reach the page.
+     * Anywhere there is no menu (Windows, Linux, the preview harness) the answer is empty
+     * and the page keeps handling every chord.
+     */
+    menu: {
+      sync: (bindings: import("@shared/menu-commands").MenuBindings): Promise<import("@shared/ipc").MenuSyncResult> =>
+        t.invoke(Ipc.menuSync, { bindings }),
+      onAction: (listener: (action: import("@shared/ipc").MenuAction) => void): (() => void) =>
+        t.subscribe(Ipc.menuAction, listener),
+    },
+    /**
      * The FastVibe account (app.fastvibe.dev). `login` returns as soon as the browser is
      * open; the outcome arrives through `onState`, because a person completes it elsewhere.
      */

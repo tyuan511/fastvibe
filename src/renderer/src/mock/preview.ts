@@ -1187,6 +1187,13 @@ const api = {
     isMaximized: async () => false,
     onState: () => () => undefined,
   },
+  // The menu bar is Main's, and a browser tab has none: answering with no commands keeps
+  // the preview on the same path a Windows or Linux window takes, where the page itself
+  // handles every chord.
+  menu: {
+    sync: async () => ({ ids: [] }),
+    onAction: () => () => undefined,
+  },
   stats: {
     usage: async () => ({ ...USAGE, conversations: USAGE.models.map((model, index) => ({ ...model, sessionId: `fixture-${index}`, conversationId: fixtureConversations[index]?.id, title: fixtureConversations[index]?.title, project: fixtureConversations[index]?.project })) }),
   },

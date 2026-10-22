@@ -135,6 +135,9 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "computer:start-grant-flow",
     "engine:export-html",
     "engine:import-skill",
+    // 设置 › 快捷键 on a phone writes the phone's own copy; the Mac's menu bar belongs to
+    // the machine sitting in front of it, and nothing in this UI offers that call.
+    "menu:sync",
     "office:watch-start",
     "office:watch-stop",
     "projects:add",

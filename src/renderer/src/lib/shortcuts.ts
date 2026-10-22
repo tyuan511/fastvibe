@@ -60,7 +60,12 @@ const SHORTCUT_IDS = new Set<string>(SHORTCUT_CATALOG.map((item) => item.id));
 const DEFAULT_BY_ID = new Map(SHORTCUT_CATALOG.map((item) => [item.id, item.default]));
 
 export type ShortcutOverrides = Partial<Record<ShortcutId, string | null>>;
-export type ShortcutHandler = (event: KeyboardEvent) => boolean | void;
+/**
+ * `null` when the command came from the menu bar rather than the keyboard: a menu item has
+ * no key event to hand over, and only `send` looks at one (it declines when the caret is in
+ * a field that owns Enter).
+ */
+export type ShortcutHandler = (event: KeyboardEvent | null) => boolean | void;
 
 export type KeyChord = {
   key: string;
@@ -107,12 +112,29 @@ const MODIFIER_KEYS = new Set(["meta", "control", "ctrl", "alt", "shift", "hyper
 
 let recordingDepth = 0;
 
+/**
+ * Who watches the chord recorder.
+ *
+ * While a chord is being captured, every key must reach the page: the recorder listens in
+ * the capture phase and `preventDefault`s what it catches. A native menu accelerator is
+ * consumed before the page ever sees the keypress, so the menu has to let go of its keys for
+ * the duration — that is what the watchers tell Main to do.
+ */
+const recordingListeners = new Set<() => void>();
+
+export function onShortcutRecordingChange(listener: () => void): () => void {
+  recordingListeners.add(listener);
+  return () => void recordingListeners.delete(listener);
+}
+
 export function beginShortcutRecording(): void {
   recordingDepth += 1;
+  for (const listener of recordingListeners) listener();
 }
 
 export function endShortcutRecording(): void {
   recordingDepth = Math.max(0, recordingDepth - 1);
+  for (const listener of recordingListeners) listener();
 }
 
 export function isShortcutRecording(): boolean {

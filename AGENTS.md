@@ -1426,6 +1426,33 @@ must not slide under them.
   the window API) renders the whole thing in a browser — how the layout was checked without a
   Windows machine.
 
+## macOS 菜单栏（`src/main/app-menu.ts`）
+
+只有 macOS 装菜单栏。Windows / Linux 的窗口是自己画的标题栏（上面那一节），原生菜单栏会盖在
+那一行上，所以那两个平台仍然只有渲染层的快捷键分发器。
+
+- **存在的理由是「设置」在 Mac 上根本没有入口。** 实测 Electron 44 的默认菜单：app 菜单只有
+  About / Services / Hide / Quit，**没有 Preferences 行也没有 ⌘,**；View 里倒是带了重新加载和
+  开发者工具。现在 app 菜单是 关于 FastVibe / 设置… / Services / 隐藏 / 退出，文件·视图·窗口·帮助
+  都是产品自己的命令（关于、快捷键… 只是导航到设置面板，官网走 `shell.openExternal`）。
+  重新加载 / 强制重新加载 / 开发者工具只在 `!app.isPackaged` 时画。
+- **标签是 Main 的（`uiText`），按键是渲染层的。** 角色项保留 Electron 自己的本地化（跟随系统
+  语言），自定义标签跟随 界面语言，所以 `commitSettings` / `settingsClear` 在 `applyLanguages` 之后
+  调 `refreshApplicationMenu()`。窗口把 `resolveBindings()` 的结果经 `menu:sync`（`native` 能力、
+  远程拒绝）交给 Main，Main 注册之后**回答它接管了哪些命令**，渲染层把那几个 id 从自己的分发器里
+  跳过 —— 菜单的 accelerator 在按键到达页面前就被系统吃掉，一个命令答两次就是一个开关被拨回原地。
+  没有菜单的平台（Windows / Linux / `mock.html` 预览 / 远程被拒）回答空集合，页面照旧全管。
+- **录制新快捷键时菜单必须松手。** `beginShortcutRecording` / `end` 会通知监听者（`onShortcutRecordingChange`），
+  于是同步发出去的是空绑定；否则正在录的那一个键会被菜单吃掉，`设置 → 快捷键` 就再也录不进任何
+  已被占用的组合。
+- **`chordToAccelerator` 是白名单，不是转写。** 实测 `Menu.buildFromTemplate` 对 `Cmd+Foo`、`Cmd++`、
+  `Cmd+Nonexistent-Key` 一律照收并原样回显 —— 校验不存在，界面只会显示一个永远按不出来的快捷键。
+  没有修饰键的 chord（裸 `escape` / `enter` / `tab`）一律返回 `null`：那是菜单里最糟的一种抢键。
+- **`menu:action` 和 `window:state` 一样直接 `webContents.send`**（目标是聚焦窗口，退到第一个活着的），
+  不进广播中枢：它只属于这台机器的窗口，远程端没有要它的；`remote-events.ts` 仍把它列进 `drop` 说明意图。
+- 验证：`test/menu-commands.test.ts` 钉住映射表、sanitize 的取舍，以及除了 关于 / 快捷键… 之外每个菜单
+  命令都必须出现在 `SHORTCUT_CATALOG` 里（否则菜单会提供一个没人能执行的条目）。
+
 ## Providers
 
 供应商列表与其他设置共用 `SettingsGroup` 外框，各供应商作为无间距的折叠行，内部使用细分隔线。供应商名称右侧的重命名图标在 hover / 键盘聚焦时显示，点击后直接原位编辑左侧名称，Enter / 失焦保存、Escape 取消；删除和启用开关位于标题栏右侧，收起时也能操作。整行标题栏可展开或收起，编辑控件独立于展开与拖动触发区。余额作为展开区内独立的一项，承接金额刷新、上游识别和面板凭据配置，不在标题栏重复显示。
