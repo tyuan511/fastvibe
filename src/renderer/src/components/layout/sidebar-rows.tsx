@@ -429,8 +429,13 @@ export function DraggableProject({
                   chats read as one column. Gone wherever the buttons are shown: hover, keyboard
                   focus, the ⋯ menu open. On touch those buttons are always shown, so the marks
                   step into the flow beside them rather than covering them — a phone still gets
-                  to see which folders have work. */}
-              {runningTasks > 0 || unreadTasks > 0 ? (
+                  to see which folders have work.
+
+                  Only while the folder is collapsed: expanded, every chat that is running or
+                  waiting to be read sits below with its own mark in that very column, so an
+                  aggregate above them repeats what the rows already say — on touch too, where
+                  the rows are drawn the same way. */}
+              {!open && (runningTasks > 0 || unreadTasks > 0) ? (
                 <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center group-hover/project:hidden group-focus-within/project:hidden group-has-[[data-slot=dropdown-menu-trigger][aria-expanded=true]]/project:hidden pointer-coarse:static pointer-coarse:flex">
                   {unreadTasks > 0 ? <UnreadDot label={t("sidebar.unreadChats", { count: unreadTasks })} /> : null}
                   {runningTasks > 0 ? (

@@ -3024,10 +3024,14 @@ Without the re-serve, switching away and back mid-compaction lost it until the s
   在动、还在等人的会话不是「读者已经读完」的会话）。圆点不会丢：除了打开会话没有东西清它，所以运行标记一下
   去它就自己回来。项目文件夹行聚合同样的两个标记，**且允许同时出现**（它们来自不同会话，藏掉任何一个都是
   假信息）：里面有运行中的就画 `RunningMark`，有未读的就画圆点。
+- **文件夹的标记只在收起时画**（`!open && (runningTasks > 0 || unreadTasks > 0)`）。展开着的时候，那些
+  正在跑、那些没人读的会话就列在下面的行里，各自在最右列（同一个 `size-6` 列）带着自己的 spinner 和圆点，
+  文件夹再来一份聚合只是把同一件事说两遍。触屏同理 —— 下面的行在那儿也照画，所以 `pointer-coarse` 不例外。
+  收起时子行看不见，聚合才是文件夹行唯一能说的话。
 - **与 hover 的关系**：文件夹行原本就用 `opacity-0` 预留了操作按钮的位置，所以标记是**绝对定位画在那块位置
   之上**而不是插进 flex 流 —— 行尾宽度不变，项目名不会跟着 hover 抖；hover、键盘聚焦、⋯ 菜单展开
   （`group-has-[[data-slot=dropdown-menu-trigger][aria-expanded=true]]/project:hidden`，不能只写 `has-[[aria-expanded=true]]`：
-  展开/收起的 `CollapsibleTrigger` 也带这个属性，那样一个展开着的文件夹就永远看不见标记）时标记消失，
+  展开/收起的 `CollapsibleTrigger` 也带这个属性，那样一个刚点过的文件夹就永远看不见标记）时标记消失，
   操作图标出现。触屏上操作按钮是常显的，所以标记 `pointer-coarse:static` 退回流里站在它们旁边 ——
   手机上照样看得见哪个文件夹有活。两个行共用一个 `size-6` 最右列，所以会话的圆点、会话的 spinner 和
   文件夹的标记读起来是一根对齐的柱子。
