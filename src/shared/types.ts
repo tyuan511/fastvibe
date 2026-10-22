@@ -535,6 +535,39 @@ export type SkillDraft = {
   body: string;
 };
 
+/**
+ * One result from the skills.sh search index. The index carries no description — only
+ * the slug, the source it lives in and how many times it has been installed — so a
+ * description is fetched on demand (`SkillMarketDetail`) rather than per search.
+ */
+export type SkillMarketEntry = {
+  /** `<source>/<skillId>`, the key the site uses for one skill. */
+  id: string;
+  /** `owner/repo` for a GitHub source; a bare host for the handful of others. */
+  source: string;
+  skillId: string;
+  name: string;
+  installs: number;
+  pageUrl: string;
+  /** True when FastVibe can install it itself (a GitHub `owner/repo`). */
+  installable: boolean;
+};
+
+export type SkillMarketDetail = { description: string; pageUrl: string };
+
+/** What to install: a search result narrowed to one skill inside one source. */
+export type SkillMarketTarget = {
+  source: string;
+  skillId: string;
+  /** Replace an existing skill of the same name. Only FastVibe's own copy can be replaced. */
+  overwrite?: boolean;
+};
+
+export type SkillMarketInstallResult = {
+  skills: SkillInfo[];
+  installed: { name: string; source: string; files: number; skipped: number };
+};
+
 export type FilePreview =
   | { kind: "image"; path: string; name: string; mimeType: string; size: number }
   | { kind: "pdf"; path: string; name: string; mimeType: string; size: number }

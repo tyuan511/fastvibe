@@ -26,6 +26,9 @@ import {
   PROVIDERS,
   SESSION,
   SKILLS,
+  SKILL_MARKET,
+  SKILL_MARKET_DETAILS,
+  skillMarketInstallFixture,
   STATS,
   TREE,
   USAGE,
@@ -719,6 +722,9 @@ function mockMessage(zh: string, en: string): string {
  * create / rename / delete stubs changed. A directory is copied out of the fixture the first
  * time something is edited inside it, so a rename visibly moves a row with no filesystem.
  */
+/** 安装 writes here, so 已安装 / 覆盖安装 is a real state change in the preview. */
+let marketSkills = [...SKILLS];
+
 const mutableTree = new Map<string, DirEntry[]>();
 
 function mutableEntries(dir: string): DirEntry[] {
@@ -780,10 +786,31 @@ const api = {
       await new Promise((resolve) => setTimeout(resolve, 900));
       return MCP_SERVERS;
     },
-    listSkills: async () => SKILLS,
-    createSkill: async () => SKILLS,
-    importSkill: async () => SKILLS,
-    removeSkill: async () => SKILLS,
+    listSkills: async () => marketSkills,
+    createSkill: async () => marketSkills,
+    importSkill: async () => marketSkills,
+    removeSkill: async () => marketSkills,
+    searchSkillMarket: async (query: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 420));
+      const needle = query.trim().toLowerCase();
+      if (needle.length < 2) throw new Error("至少输入 2 个字符");
+      return SKILL_MARKET.filter(
+        (entry) => entry.name.toLowerCase().includes(needle) || entry.source.toLowerCase().includes(needle),
+      );
+    },
+    skillMarketDetail: async (target: { source: string; skillId: string }) => ({
+      description: SKILL_MARKET_DETAILS[`${target.source}/${target.skillId}`] ?? "",
+      pageUrl: `https://www.skills.sh/${target.source}/${target.skillId}`,
+    }),
+    installMarketSkill: async (target: { source: string; skillId: string }) => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const entry = SKILL_MARKET.find((item) => item.source === target.source && item.skillId === target.skillId);
+      if (!entry) throw new Error("技能市场里找不到这个技能");
+      if (!entry.installable) throw new Error("这个来源不是 GitHub 仓库，请在 skills.sh 页面查看安装方式");
+      const result = skillMarketInstallFixture(entry, marketSkills);
+      marketSkills = result.skills;
+      return result;
+    },
     importSources: async () => IMPORT_SOURCES,
     importCandidates: async (source: ImportSourceId) =>
       IMPORT_CANDIDATES.filter((candidate) => candidate.source === source).map((candidate) => ({
@@ -1745,6 +1772,31 @@ if (pane === "files" || pane === "preview" || pane === "git") {
       }
     });
   }, 400);
+}
+
+if (dialog === "skills-market") {
+  // 设置 → 技能 → 「从 skills.sh 安装」, with one sample query typed so the shot shows
+  // results, an 已安装 row and a host that cannot be installed rather than an empty box.
+  window.location.hash = "#/settings/skills";
+  const clickByText = (text: string): boolean => {
+    const target = [...document.querySelectorAll<HTMLElement>("button")].find((node) =>
+      (node.textContent ?? "").includes(text),
+    );
+    target?.click();
+    return Boolean(target);
+  };
+  const typed = params.get("q") ?? "design";
+  window.setTimeout(() => clickByText("市场") || clickByText("Marketplace"), 700);
+  // The dialog mounts after that click, so the field only exists on the next tick.
+  window.setTimeout(() => {
+    const field = [...document.querySelectorAll<HTMLInputElement>("input")].find((node) =>
+      node.closest('[role="dialog"]'),
+    );
+    if (!field) return;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    setter?.call(field, typed);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  }, 1100);
 }
 
 if (dialog === "market") {

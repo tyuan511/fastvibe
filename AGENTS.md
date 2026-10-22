@@ -1895,6 +1895,51 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
 `skill-creator` 的「技能写到哪里」一节把这件事写成了一条硬规则：**先问用户全局还是项目，再动手写**，
 不能默认往 `.agents/` 里塞。
 
+### 从 skills.sh 搜索并安装（`engine/skills-market.ts`，设置 → 技能）
+
+技能市场这一步以前只存在于 `find-skills` 这个技能里：让模型去 shell 一句 `npx skills add`。
+现在 设置 → 技能 自己就能搜、自己就能装，装完的行和手写的技能完全一样——同一个列表、同一个删除按
+钮。三个方法（`engine:search-skill-market` / `engine:skill-market-detail` / `engine:install-skill-market`）
+都进中立调用表，桌面与 SSH Agent 注册同一份，也都允许远程调用：整条路上没有一个本地对话框，手机
+因此比 `导入` 反而多做得了事。
+
+那一行的控件因此是 **搜索 / 刷新 / Skill 市场 / 导入**：`导入` 从 ⋯ 菜单提到了一级按钮，手写技能的
+`新建` 入口去掉了。`engine:create-skill` / `SkillManager.create` 留着，但**现在没有任何调用方**——方法
+本身能建一个技能，只是界面上没有按钮了；要恢复入口就在同一行加回一个，要真删就连着方法、通道和策略
+条目一起删，别只删一半留一个没人调的入口。
+
+- **不再走 `npx skills`，是有意为之。** 那句话要 Node 工具链在 PATH 上（安装版里不成立），要在终端
+  里盯着它跑完，而且它的 `--agent` 落点 FastVibe 未必读得到：`universal` 的全局目录是
+  `~/.config/agents/skills`，`pi` / `codex` 才是 `~/.agents/skills`。自己取归档、自己写盘，换来的是
+  一个可测的函数和一条不会骗人的成功提示。
+- **`skillId` 不是仓库里的目录名。** skills.sh 发布的是 SKILL.md 的 `name:`，`vercel-labs/agent-skills`
+  就把 `react-best-practices/` 这个目录以 `vercel-react-best-practices` 的名字发布。所以安装先读归档
+  里每个 SKILL.md 的 frontmatter 再比名字，退回目录名；**匹配不上就说清仓库里有哪些**，因为「找不到」
+  和「这个仓库根本没有技能」是两件事，而后者才是真的没有。
+- **同名技能不会被悄悄盖掉。** SDK 按名字去重、先到先得，静默写第二份等于一次假装成功的安装；
+  所以只有当已有那一份是 FastVibe 自己装的（`removable`）才允许覆盖，内置 / 项目 / 用户自己
+  `~/.agents/skills` 里的一律拒绝并说明原因。覆盖是「先搬开、再改名、失败搬回来」，一次装坏不会
+  留下一个空目录。
+- **只有 GitHub 的 `owner/repo` 装得了。** 索引里也返回裸域名来源（`developer.paddle.com`、
+  `skills.volces.com`），这类行画成「该来源需在网页上安装」而不是一个注定失败的按钮；`a/b/c` 这种
+  三段路径同样拒绝，不猜。
+- **不 shell out `tar`。** `cua-driver-install.ts` 那么做是有先例的，但那条路只在 macOS。一次安装会
+  跑在 Linux 无头 Agent 和 Windows 上，那里「有没有 tar」不是能赌的 yes；Node 自带 zlib，而 tar 里
+  真需要的那几种记录（POSIX `prefix` 字段——实测 GitHub 的归档就用它拼超过 100 字符的路径、GNU `L`
+  长名、PAX `path=`）加起来不到 200 行，就是 `engine/gzip-tar.ts`。它只交出表头和被点名的字节，
+  **从不写盘**：链接是一种要被看见、然后跳过的类型，而不是一个可以照抄的文件。
+- **上限写在动手之前。** 下载 48 MiB（GitHub 的源码归档实测 0.8–4 MiB）、单技能 400 个文件 /
+  24 MiB、解包总量另有上限；归档里的每个路径都要过 `safeRelativePath`，`..` 段一律拒绝（哪怕它折回来
+  还在目录内——源码归档不该有这种段，放宽它只是给构造出来的归档多一条路）。
+- **搜索索引没有说明文字**，只有 slug、来源和安装数，所以说明是点开那一行时才去取一次
+  `<meta name="description">`，不是给三十行各发一个请求。搜索结果按查询缓存 5 分钟，重新搜索按钮带
+  `refresh` 越过去——安装数这种东西，用户就是想再看一次。
+- **装完走 `#reloadSkills()`**，和 新建 / 导入 同一条路：空闲会话立刻重载，正在回复的那一条等它 settle。
+- `fastvibe_config_*` 因此多了 `skills.market_search`（读）与 `skills.market_install`（写），智能体也
+  能用同一句话装技能，不必再借终端。内置技能 `find-skills` 已改成先荐这条路。
+- 预览：`mock.html?dialog=skills-market#/settings/skills`（`&q=paddle` 看不可安装来源那一行，
+  `&lang=en` 看英文不溢出）。
+
 - **Built-ins** — `goal.ts` is FastVibe's own replacement for the `pi-goal-x`
   package (deliberately not bundled as a dependency). Only `/goal` is registered.
   There is no plan mode: the harness plans on its own.

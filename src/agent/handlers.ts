@@ -27,7 +27,7 @@ import { clearAppSettings, invalidateAppSettingsCache, readAppSettings, writeApp
 import { toolModeSettingsChanged } from "../main/engine/tool-modes";
 import { writeAgentConfig } from "../main/engine/runtime-config";
 import type { GitBranch, GitDiffSource, GitStatus } from "@shared/ipc";
-import type { ProviderModel, UsageRange, McpServerConfig, SkillDraft, SubagentDraft } from "@shared/types";
+import type { ProviderModel, UsageRange, McpServerConfig, SkillDraft, SkillMarketTarget, SubagentDraft } from "@shared/types";
 import type { AgentRuntime } from "./runtime";
 
 import { commitGitChanges, readGitDiff, readGitComparison, readGitHistory, stageGitFiles, unstageGitFiles, discardGitFiles } from "../main/source-control";
@@ -78,6 +78,13 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineListSkills, () => engine.listSkills());
   handle(Ipc.engineCreateSkill, (payload: SkillDraft) => engine.createSkill(payload));
   handle(Ipc.engineRemoveSkill, (payload: { name: string }) => engine.removeSkill(payload.name));
+  // A skills.sh search, its detail page and an install are all plain calls on this
+  // machine — no dialog, no desktop — so the headless Agent answers them like the desktop.
+  handle(Ipc.engineSearchSkillMarket, (payload: { query: string; refresh?: boolean }) =>
+    engine.searchSkillMarket(payload.query, payload.refresh),
+  );
+  handle(Ipc.engineSkillMarketDetail, (payload: SkillMarketTarget) => engine.skillMarketDetail(payload));
+  handle(Ipc.engineInstallSkillMarket, (payload: SkillMarketTarget) => engine.installMarketSkill(payload));
   handle(Ipc.engineGetSubagents, (payload?: { conversationId?: string }) => engine.getSubagents(payload?.conversationId));
   handle(Ipc.engineListAgentConfigs, () => engine.getAgentConfigs());
   handle(Ipc.engineSaveAgentConfig, (payload: SubagentDraft) => engine.saveAgentConfig(payload));

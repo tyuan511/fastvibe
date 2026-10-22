@@ -14,6 +14,8 @@ import type {
   ProviderConfig,
   SessionStats,
   SkillInfo,
+  SkillMarketEntry,
+  SkillMarketInstallResult,
   SlashCommand,
   ToolCallBlock,
   UsageStats,
@@ -819,6 +821,85 @@ export const SKILLS: SkillInfo[] = [
   },
 ];
 
+/**
+ * What skills.sh answers. Real shapes from `GET /api/search`: the index carries the
+ * slug, the source it lives in and an install count — and no description, so the row
+ * that wants one has to ask for it (see `skillMarketDetail`).
+ */
+export const SKILL_MARKET: SkillMarketEntry[] = [
+  {
+    id: "vercel-labs/agent-skills/vercel-react-best-practices",
+    source: "vercel-labs/agent-skills",
+    skillId: "vercel-react-best-practices",
+    name: "vercel-react-best-practices",
+    installs: 825_430,
+    pageUrl: "https://www.skills.sh/vercel-labs/agent-skills/vercel-react-best-practices",
+    installable: true,
+  },
+  {
+    id: "anthropics/skills/frontend-design",
+    source: "anthropics/skills",
+    skillId: "frontend-design",
+    name: "frontend-design",
+    installs: 1_015_978,
+    pageUrl: "https://www.skills.sh/anthropics/skills/frontend-design",
+    installable: true,
+  },
+  {
+    id: "pbakaus/impeccable/design-mobile-apps",
+    source: "pbakaus/impeccable",
+    skillId: "design-mobile-apps",
+    name: "design-mobile-apps",
+    installs: 957_948,
+    pageUrl: "https://www.skills.sh/pbakaus/impeccable/design-mobile-apps",
+    installable: true,
+  },
+  {
+    id: "mattpocock/skills/jest-testing",
+    source: "mattpocock/skills",
+    skillId: "jest-testing",
+    name: "jest-testing",
+    installs: 42_106,
+    pageUrl: "https://www.skills.sh/mattpocock/skills/jest-testing",
+    installable: true,
+  },
+  {
+    // The name `frontend-design` already sits in SKILLS above: this row is what the
+    // pane must draw as 已安装 / 覆盖安装 rather than starting a second copy.
+    id: "somebody-else/skills/frontend-design",
+    source: "somebody-else/skills",
+    skillId: "frontend-design",
+    name: "frontend-design",
+    installs: 5_318,
+    pageUrl: "https://www.skills.sh/somebody-else/skills/frontend-design",
+    installable: true,
+  },
+  {
+    // A bare host is not a GitHub repository — listed, but installed by hand on the page.
+    id: "developer.paddle.com/paddle-webhooks",
+    source: "developer.paddle.com",
+    skillId: "paddle-webhooks",
+    name: "paddle-webhooks",
+    installs: 2_160,
+    pageUrl: "https://www.skills.sh/developer.paddle.com/paddle-webhooks",
+    installable: false,
+  },
+];
+
+/** The description a row gets when the reader clicks it. */
+export const SKILL_MARKET_DETAILS: Record<string, string> = {
+  "vercel-labs/agent-skills/vercel-react-best-practices":
+    "React and Next.js performance optimization guidelines from Vercel Engineering.",
+  "anthropics/skills/frontend-design":
+    "Create distinctive, production-grade frontend interfaces with high design quality.",
+  "pbakaus/impeccable/design-mobile-apps":
+    "Mobile app UI patterns: safe areas, thumb reach, bottom sheets and platform chrome.",
+  "mattpocock/skills/jest-testing":
+    "Write focused Jest tests: what to mock, what to leave alone, and how to name a case.",
+  "somebody-else/skills/frontend-design": "Another take on frontend design guidance.",
+  "developer.paddle.com/paddle-webhooks": "",
+};
+
 export const INSTALLED_PACKAGES: ExtensionPackage[] = [
   { source: "builtin:goal", scope: "user", builtin: true, loaded: true, commands: 1, tools: 1 },
   { source: "builtin:todo", scope: "user", builtin: true, loaded: true, commands: 0, tools: 1 },
@@ -1234,3 +1315,24 @@ export const IMPORT_CANDIDATES: ImportCandidate[] = [
     imported: false,
   },
 ];
+
+/** The path shape 设置 → 技能 already draws, so an installed row is not a special case. */
+const PREVIEW_SKILLS_DIR = "/Users/dev/FastVibe/runtime/engine/agent/skills";
+
+/** What 安装 answers in the preview: a row that looks exactly like a hand-written skill. */
+export function skillMarketInstallFixture(entry: SkillMarketEntry, skills: SkillInfo[]): SkillMarketInstallResult {
+  const installed: SkillInfo = {
+    name: entry.skillId,
+    description: SKILL_MARKET_DETAILS[entry.id] ?? `Installed from ${entry.source}.`,
+    filePath: `${PREVIEW_SKILLS_DIR}/${entry.skillId}/SKILL.md`,
+    baseDir: `${PREVIEW_SKILLS_DIR}/${entry.skillId}`,
+    scope: "user",
+    source: "fastvibe",
+    removable: true,
+  };
+  const rest = skills.filter((skill) => skill.name !== installed.name);
+  return {
+    skills: [installed, ...rest],
+    installed: { name: installed.name, source: entry.source, files: 14, skipped: 0 },
+  };
+}

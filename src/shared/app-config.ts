@@ -12,6 +12,10 @@ export const APP_CONFIG_CATALOG = {
   "remote.status": { kind: "read", summary: "远程访问的当前状态：局域网监听、官方连接（同账号手机能否发现这台电脑）和已连接的手机" },
   "ssh.hosts": { kind: "read", summary: "FastVibe 里保存的和 ~/.ssh/config 里发现的 SSH 主机（不含密码）" },
   "mcp.list": { kind: "read", summary: "MCP 服务器配置与连接状态" },
+  "skills.market_search": {
+    kind: "read",
+    summary: "在 skills.sh 搜索技能；input: { query }。返回 slug、来源仓库与安装次数（没有说明文字）",
+  },
   "settings.get": { kind: "read", summary: "settings.json 里的界面与对话偏好" },
 
   "remote.set_password": { kind: "write", summary: "设置远程访问密码：用户在输入框里填写，不经过模型，input 不需要任何字段" },
@@ -22,6 +26,11 @@ export const APP_CONFIG_CATALOG = {
     summary: "新增或按 id 替换一个 MCP 服务器；input: { server: { id, name, enabled?, transport: \"stdio\"|\"http\", command?, args?, env?, url? } }",
   },
   "mcp.remove": { kind: "write", summary: "按 id 删除一个 MCP 服务器；input: { id }" },
+  "skills.market_install": {
+    kind: "write",
+    summary:
+      "从 skills.sh 装一个技能到本机全局技能目录（新会话立即可用）；input: { source, skillId, overwrite? }。同名技能不会被动别人的那一份",
+  },
   "settings.set": { kind: "write", summary: "合并写入 settings.json；input: { patch: {...} }。远程访问、代理相关键会被拒绝" },
 } as const satisfies Record<string, { kind: "read" | "write"; summary: string }>;
 

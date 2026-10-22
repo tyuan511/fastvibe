@@ -3,32 +3,16 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  Add01Icon,
   Delete02Icon,
   Folder01Icon,
-  Loading03Icon,
   MagicWand02Icon,
-  MoreHorizontalIcon,
   RefreshIcon,
   Search01Icon,
+  Store01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Empty,
   EmptyDescription,
@@ -36,25 +20,21 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { IconButton } from "@/components/icon-button";
-import type { SkillDraft, SkillInfo } from "@shared/types";
-
-const EMPTY_DRAFT: SkillDraft = { name: "", description: "", body: "" };
+import { SkillsMarketDialog } from "@/components/settings/skills-market-dialog";
+import type { SkillInfo } from "@shared/types";
 
 export function SkillsSettings(): JSX.Element {
   const { t } = useTranslation("settings");
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [query, setQuery] = useState("");
-  const [draft, setDraft] = useState<SkillDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [market, setMarket] = useState(false);
 
   async function refresh(): Promise<void> {
     try {
@@ -68,11 +48,6 @@ export function SkillsSettings(): JSX.Element {
     void refresh();
   }, []);
 
-  function patchDraft(next: Partial<SkillDraft>): void {
-    setDraft((current) => (current ? { ...current, ...next } : current));
-  }
-
-  const valid = Boolean(draft && draft.name.trim() && draft.description.trim());
   const needle = query.trim().toLowerCase();
   const visible = needle
     ? skills.filter(
@@ -80,20 +55,6 @@ export function SkillsSettings(): JSX.Element {
           skill.name.toLowerCase().includes(needle) || skill.description.toLowerCase().includes(needle),
       )
     : skills;
-
-  async function submit(): Promise<void> {
-    if (!draft || !valid) return;
-    setSaving(true);
-    try {
-      setSkills(await window.fastvibe.engine.createSkill(draft));
-      setDraft(null);
-      toast.success(t("skills.addDone", { name: draft.name.trim() }));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("skills.addFailed"));
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function importSkill(): Promise<void> {
     // A folder dialog, on the host's screen. 新建 beside it writes through a call and
@@ -124,16 +85,12 @@ export function SkillsSettings(): JSX.Element {
     }
   }
 
-  function openCreate(): void {
-    setDraft({ ...EMPTY_DRAFT });
-  }
-
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <span className="text-sm font-medium">{t("skills.installed", { count: skills.length })}</span>
-        <div className="flex items-center gap-1.5">
-          <InputGroup className="h-8 w-56 rounded-full">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+          <InputGroup className="h-8 w-56 max-w-full rounded-full">
             <InputGroupAddon>
               <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
             </InputGroupAddon>
@@ -143,18 +100,6 @@ export function SkillsSettings(): JSX.Element {
               onChange={(event) => setQuery(event.target.value)}
             />
           </InputGroup>
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<Button size="icon-sm" variant="outline" />}>
-              <HugeiconsIcon strokeWidth={2} icon={MoreHorizontalIcon} />
-              <span className="sr-only">{t("skills.more")}</span>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem disabled={saving} onClick={() => void importSkill()}>
-                <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
-                {t("skills.importFolder")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
           <IconButton
             label={t("skills.refresh")}
             size="icon-sm"
@@ -164,9 +109,13 @@ export function SkillsSettings(): JSX.Element {
           >
             <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} />
           </IconButton>
-          <Button size="sm" disabled={saving} onClick={openCreate}>
-            <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
-            {t("skills.create")}
+          <Button size="sm" variant="outline" disabled={saving} onClick={() => setMarket(true)}>
+            <HugeiconsIcon strokeWidth={2} icon={Store01Icon} />
+            {t("skills.market")}
+          </Button>
+          <Button size="sm" variant="outline" disabled={saving} onClick={() => void importSkill()}>
+            <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} />
+            {t("skills.import")}
           </Button>
         </div>
       </div>
@@ -195,13 +144,11 @@ export function SkillsSettings(): JSX.Element {
         </Empty>
       )}
 
-      <AddSkillDialog
-        draft={draft}
-        saving={saving}
-        valid={valid}
-        onPatch={patchDraft}
-        onClose={() => setDraft(null)}
-        onSubmit={() => void submit()}
+      <SkillsMarketDialog
+        open={market}
+        installed={skills}
+        onClose={() => setMarket(false)}
+        onInstalled={(result) => setSkills(result.skills)}
       />
     </div>
   );
@@ -235,77 +182,5 @@ function SkillCard({ skill, onRemove }: { skill: SkillInfo; onRemove: () => void
         </ItemActions>
       ) : null}
     </Item>
-  );
-}
-
-function AddSkillDialog({
-  draft,
-  saving,
-  valid,
-  onPatch,
-  onClose,
-  onSubmit,
-}: {
-  draft: SkillDraft | null;
-  saving: boolean;
-  valid: boolean;
-  onPatch: (next: Partial<SkillDraft>) => void;
-  onClose: () => void;
-  onSubmit: () => void;
-}): JSX.Element {
-  const { t } = useTranslation("settings");
-  return (
-    <Dialog open={draft !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{t("skills.dialogTitle")}</DialogTitle>
-          <DialogDescription>{t("skills.dialogDesc")}</DialogDescription>
-        </DialogHeader>
-
-        {draft ? (
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>{t("skills.name")}</Label>
-              <Input
-                autoFocus
-                value={draft.name}
-                placeholder="my-skill"
-                onChange={(event) => onPatch({ name: event.target.value })}
-              />
-              <p className="text-xs text-muted-foreground">{t("skills.nameHint")}</p>
-            </div>
-            <div className="space-y-1.5">
-              <Label>{t("skills.description")}</Label>
-              <Textarea
-                value={draft.description}
-                placeholder={t("skills.descriptionPlaceholder")}
-                className="min-h-16 resize-y"
-                onChange={(event) => onPatch({ description: event.target.value })}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>{t("skills.instructions")}</Label>
-              <Textarea
-                value={draft.body}
-                placeholder={t("skills.instructionsPlaceholder")}
-                className="min-h-32 resize-y"
-                onChange={(event) => onPatch({ body: event.target.value })}
-              />
-            </div>
-          </div>
-        ) : null}
-
-
-        <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={onClose}>
-            {t("skills.cancel")}
-          </Button>
-          <Button disabled={!valid || saving} onClick={onSubmit}>
-            {saving ? <HugeiconsIcon strokeWidth={2} icon={Loading03Icon} className="size-3.5 animate-spin" /> : null}
-            {t("skills.add")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

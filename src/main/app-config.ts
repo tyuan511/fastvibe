@@ -1,6 +1,6 @@
 import { dispatch, type CallerContext } from "./ipc/registry.ts";
 import { Ipc } from "../shared/ipc.ts";
-import type { McpServerConfig, McpServerStatus } from "../shared/types.ts";
+import type { McpServerConfig, McpServerStatus, SkillMarketInstallResult } from "../shared/types.ts";
 import { APP_CONFIG_CATALOG, isAppConfigAction, type AppConfigAction, type AppConfigHostRequest, type AppConfigHostResult } from "../shared/app-config.ts";
 
 /**
@@ -67,6 +67,24 @@ const ACTIONS: Record<AppConfigAction, Run> = {
   "remote.status": () => call(Ipc.remoteGetState),
   "ssh.hosts": readHosts,
   "mcp.list": () => call(Ipc.engineListMcpServers),
+  // skills.sh 的两步：搜索是只读，安装写一个目录。安装只回一句话的总结，
+  // 因为整份技能列表对这个旁路没有任何信息量，而且它很大。
+  "skills.market_search": async (input) => {
+    const query = typeof input.query === "string" ? input.query : "";
+    if (query.trim().length < 2) throw new Error("query 至少 2 个字符");
+    return call(Ipc.engineSearchSkillMarket, { query });
+  },
+  "skills.market_install": async (input) => {
+    const source = typeof input.source === "string" ? input.source.trim() : "";
+    const skillId = typeof input.skillId === "string" ? input.skillId.trim() : "";
+    if (!source || !skillId) throw new Error("需要 source 与 skillId，两者都来自 skills.market_search 的结果");
+    const result = await call<SkillMarketInstallResult>(Ipc.engineInstallSkillMarket, {
+      source,
+      skillId,
+      overwrite: input.overwrite === true,
+    });
+    return { installed: result.installed.name, files: result.installed.files, skipped: result.installed.skipped };
+  },
   "settings.get": () => call(Ipc.settingsGet),
 
   "remote.set_password": async (input) => {

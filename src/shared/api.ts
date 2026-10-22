@@ -51,6 +51,10 @@ import type {
   McpServerStatus,
   SkillDraft,
   SkillInfo,
+  SkillMarketDetail,
+  SkillMarketEntry,
+  SkillMarketInstallResult,
+  SkillMarketTarget,
   BrowserImportResult,
   BrowserProfileInfo,
   BrowserRequest,
@@ -196,6 +200,12 @@ export function createFastVibeApi(t: ApiTransport) {
       createSkill: (draft: SkillDraft): Promise<SkillInfo[]> => t.invoke(Ipc.engineCreateSkill, draft),
       importSkill: (): Promise<SkillInfo[] | null> => t.invoke(Ipc.engineImportSkill),
       removeSkill: (name: string): Promise<SkillInfo[]> => t.invoke(Ipc.engineRemoveSkill, { name }),
+      searchSkillMarket: (query: string, refresh?: boolean): Promise<SkillMarketEntry[]> =>
+        t.invoke(Ipc.engineSearchSkillMarket, { query, refresh }),
+      skillMarketDetail: (target: SkillMarketTarget): Promise<SkillMarketDetail> =>
+        t.invoke(Ipc.engineSkillMarketDetail, target),
+      installMarketSkill: (target: SkillMarketTarget): Promise<SkillMarketInstallResult> =>
+        t.invoke(Ipc.engineInstallSkillMarket, target),
       getSubagents: (conversationId?: string): Promise<SubagentInfo[]> =>
         t.invoke(Ipc.engineGetSubagents, { conversationId }),
       listAgentConfigs: (): Promise<SubagentConfig[]> => t.invoke(Ipc.engineListAgentConfigs),

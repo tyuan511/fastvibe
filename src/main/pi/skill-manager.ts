@@ -1,11 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { DefaultResourceLoader, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
-import type { SkillDraft, SkillInfo } from "@shared/types";
+import type { SkillDraft, SkillInfo, SkillMarketInstallResult, SkillMarketTarget } from "@shared/types";
+import { stageMarketSkill } from "../engine/skills-market";
 import { builtinSkillPaths } from "./extension-manager";
 
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** Where a skills.sh download is unpacked before it is moved into `skills/`. */
+const MARKET_STAGING_DIR = "market-staging";
+/** A market install that died halfway leaves a staging tree; nobody is coming for it. */
+const STALE_STAGING_MS = 12 * 60 * 60 * 1000;
 
 export class SkillManager {
   #agentDir: string;
@@ -79,6 +85,86 @@ export class SkillManager {
     if (!skill.removable) throw new Error("只能删除 FastVibe 中添加的技能");
     await rm(skill.baseDir, { recursive: true, force: true });
     return this.list(cwd);
+  }
+
+  /**
+   * Install a skill straight from skills.sh.
+   *
+   * The download and the archive walk happen in a staging directory beside the skills
+   * themselves, and only a complete, verified skill is moved into place — so a killed
+   * connection or a repository that turns out not to hold the skill leaves the existing
+   * list exactly as it was.
+   */
+  async installFromMarket(cwd: string, target: SkillMarketTarget): Promise<SkillMarketInstallResult> {
+    const root = join(this.#agentDir, MARKET_STAGING_DIR);
+    await this.#sweepStaleStaging(root);
+    const staging = join(root, randomUUID());
+    try {
+      const staged = await stageMarketSkill(target, staging);
+      const skills = await this.installStaged(cwd, staged, { replace: Boolean(target.overwrite) });
+      return { skills, installed: { name: staged.name, source: target.source, files: staged.files, skipped: staged.skipped } };
+    } finally {
+      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Put a staged skill into FastVibe's own skills directory.
+   *
+   * A name that already exists is refused unless the caller asked to replace it **and*
+   * the existing copy is ours. The SDK dedupes skills by name and keeps whichever it
+   * loaded first, so quietly writing a second copy of a name is how an install becomes a
+   * no-op that reports success — and a built-in, a project's, or the user's own
+   * `~/.agents/skills` entry is not something this app owns.
+   */
+  async installStaged(
+    cwd: string,
+    staged: { dir: string; name: string },
+    options: { replace: boolean },
+  ): Promise<SkillInfo[]> {
+    const skills = await this.list(cwd);
+    const dest = join(this.#skillsDir, staged.name);
+    const clash = skills.find((item) => item.name === staged.name || item.baseDir === dest);
+    if (clash) {
+      if (!clash.removable) throw new Error(`已有同名技能 ${staged.name}，它不是 FastVibe 装的，不会被覆盖`);
+      if (!options.replace) throw new Error(`技能 ${staged.name} 已存在，可选择覆盖安装`);
+    }
+    await mkdir(this.#skillsDir, { recursive: true });
+    if (!clash) {
+      // A directory an interrupted install left behind is not a skill the list knows
+      // about; it must not make the retry impossible.
+      if (existsSync(dest)) await rm(dest, { recursive: true, force: true });
+      await rename(staged.dir, dest);
+      return this.list(cwd);
+    }
+    const backup = `${dest}.replacing-${Date.now()}`;
+    await rename(dest, backup);
+    try {
+      await rename(staged.dir, dest);
+    } catch (error) {
+      await rename(backup, dest).catch(() => undefined);
+      throw error;
+    }
+    await rm(backup, { recursive: true, force: true }).catch(() => undefined);
+    return this.list(cwd);
+  }
+
+  /** Best effort: an abandoned staging tree costs a few megabytes on the data volume. */
+  async #sweepStaleStaging(root: string): Promise<void> {
+    let names: string[];
+    try {
+      names = await readdir(root);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const path = join(root, name);
+      try {
+        if (Date.now() - (await stat(path)).mtimeMs > STALE_STAGING_MS) await rm(path, { recursive: true, force: true });
+      } catch {
+        // Somebody else is mid-install in that directory; leaving it is the right answer.
+      }
+    }
   }
 }
 

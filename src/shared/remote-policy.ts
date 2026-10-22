@@ -214,6 +214,10 @@ const ALLOWED = new Set<string>([
   Ipc.engineImportSources,
   Ipc.engineSyncPiConfig,
   Ipc.engineInstallExtensionPackage,
+  // skills.sh 的搜索、详情页与安装都是对这台电脑的普通读写，和新建技能、保存 MCP 同级。
+  Ipc.engineInstallSkillMarket,
+  Ipc.engineSearchSkillMarket,
+  Ipc.engineSkillMarketDetail,
   Ipc.engineListExtensionPackages,
   Ipc.engineListMarketPackages,
   Ipc.engineListMcpServers,

@@ -9,27 +9,41 @@ This skill helps you discover and install skills from the open agent skills ecos
 
 ## 你运行在 FastVibe 里（读这一节，它改写了下面的安装命令）
 
-This skill was written for Claude Code and other harnesses. **One thing about it is wrong here and will silently do nothing: the default install target.** Everything else works as written. Fix that one thing before you run anything.
+This skill was written for Claude Code and other harnesses. Two things are different here: **FastVibe 自己能搜能装**，而且下面那条 `npx` 命令的默认落点你读不到。
 
-### `-g -y` 不够，必须加 `--agent universal`
+### 先走应用内置的那条路，不要先开终端
 
-`npx skills add` 默认只装到 `claude-code` / `opencode` / `codex` 的目录（`~/.claude/skills` 等）。**FastVibe 不读那些目录**——它读的是 `~/.agents/skills`（全局）和 `<项目>/.agents/skills`（项目）。所以默认命令会报「已安装」，然后你在 FastVibe 里找不到它。
+搜索与安装都是调用表里的方法，经 `fastvibe_config_apply` 就能用：
 
-正确的写法是显式指定 universal 这个 target（已实测）：
-
-```bash
-# 全局：~/.agents/skills，这台机器上每个项目都能用
-npx skills add <owner/repo@skill> -g -y --agent universal
-
-# 项目：<当前目录>/.agents/skills，跟代码一起提交
-npx skills add <owner/repo@skill> -y --agent universal
+```text
+fastvibe_config_get  { action: "overview" }              # 先看有哪些动作
+fastvibe_config_apply { action: "skills.market_search",  input: { query: "react" } }
+fastvibe_config_apply { action: "skills.market_install", input: { source: "vercel-labs/agent-skills", skillId: "vercel-react-best-practices" } }
 ```
 
-- `--agent universal` 是那个把落点指到 `.agents/skills` 的开关（`--agent '*'` 也会包含它，但会顺带写一堆用不上的目录）。
-- 默认那三个 agent 的目录（`~/.claude/skills`、`~/.codex/skills` 等）FastVibe 一律读不到；如果用户本来就同时用 Claude Code，不加 `--agent` 也只会装到那边，对 FastVibe 仍然无效。
-- **全局还是项目要问用户**，不要自己定。区别很实在：项目级在 `<仓库>/.agents/skills`，**通常会跟代码一起提交**，团队克隆下去就都有；全局则在 `~/.agents/skills`，只在这台机器上生效。参考 `skill-creator` 那一节问法。
-- **装完告诉用户怎么让它生效**：技能列表在会话开始时读，新技能通常要开新会话才进工具列表；但 设置 → 技能 的刷新按钮能立刻确认它确实落地了。
-- 装之前在 设置 → 技能 里看一眼有没有同名技能：**同名时用户的版本会胜出，不会报错**，所以装重复的名字等于没装。
+- 搜索只回 slug、来源仓库和安装数，**没有说明文字**；要看说明就普通地读一眼 skills.sh 那个页，或者先装上看 设置 → 技能 那一行。
+- 装完就生效：空闲会话会立刻重载，不必让用户开新对话。确认它落地看 设置 → 技能。
+- 只能装 GitHub 的 `owner/repo`。索引里也会出裸域名来源（`developer.paddle.com` 一类），那些只能回到下面的 `npx` 或让用户在页面上自己装。
+- 同名技能**不会被静默覆盖**：已有那一份不是 FastVibe 装的就会报错。要用户真的想换，才带 `overwrite: true` 重试（那只替换应用自己装的那一份）。
+- 界面上同样的事在 设置 → 技能 → 「Skill 市场」，用户自己点就能完成；先把这条路告诉用户比替他点一下更合适。
+
+### 真的要用命令行时：`--agent universal` 装到 FastVibe 读不到的地方
+
+`npx skills add` 默认只装到 `claude-code` / `opencode` / `codex` 的目录（`~/.claude/skills` 等），**FastVibe 不读那些目录**，所以默认命令会报「已安装」而你在应用里找不到它。
+
+但 `universal` 也不是答案：按 skills CLI 自己的 agent 表（已实测 v1.7.4），`universal` 的全局目录是 `~/.config/agents/skills`，只有 `pi` / `codex` 这类才是 `~/.agents/skills`。项目级倒都是 `<cwd>/.agents/skills`。所以：
+
+```bash
+# 全局：~/.agents/skills（这台机器上每个项目都能用）
+npx skills add <owner/repo> --skill <skill-name> -g -y --agent pi
+
+# 项目：<当前目录>/.agents/skills，跟代码一起提交
+npx skills add <owner/repo> --skill <skill-name> -y --agent universal
+```
+
+- **全局还是项目要问用户**，不要自己定。项目级在 `<仓库>/.agents/skills`，**通常会跟代码一起提交**，团队克隆下去就都有；全局只在这台机器上生效。
+- 装完告诉用户怎么确认：技能列表在会话开始时读，新会话才会进工具列表；设置 → 技能 的刷新按钮能立刻看到它落到了哪里。
+- 装前先确认没有同名技能（`skills.market_search` 不行时用 设置 → 技能 看一眼）：**同名时用户的版本会胜出，不会报错**，所以装重复的名字等于没装。
 
 ### 其余部分照原文做
 
@@ -122,13 +136,25 @@ Learn more: https://skills.sh/vercel-labs/agent-skills/react-best-practices
 
 ### Step 6: Offer to Install
 
-If the user wants to proceed, install it **into a directory FastVibe actually reads** — the `--agent universal` flag is not optional here (see the section at the top):
+**FastVibe installs this one itself** — do not reach for the terminal first:
 
-```bash
-npx skills add <owner/repo@skill> -g -y --agent universal
+```text
+fastvibe_config_apply { action: "skills.market_install", input: { source: "<owner/repo>", skillId: "<skill-name>" } }
 ```
 
-The `-g` flag installs globally (`~/.agents/skills`), `-y` skips confirmation prompts, and `--agent universal` is what puts it somewhere FastVibe can see. Without `-g`, the same command lands in `<cwd>/.agents/skills` for the current project instead — ask the user which of the two they want.
+That writes the skill into the directory 设置 → 技能 owns, tells you how many files landed, reloads
+the idle sessions so it is callable in this conversation, and refuses to overwrite a same-named skill
+it does not own. It only works for a GitHub `owner/repo` source; for a bare host (`developer.paddle.com`
+and friends) the row cannot be installed and the user has to follow their own page.
+
+Ask **global or project** before you fall back to the CLI, and use the flags from the section at the top
+(`--agent pi` for a global install FastVibe can read — `universal` writes `~/.config/agents/skills`, which
+it cannot):
+
+```bash
+npx skills add <owner/repo> --skill <skill-name> -g -y --agent pi   # 全局 ~/.agents/skills
+npx skills add <owner/repo> --skill <skill-name> -y --agent universal  # 项目 <cwd>/.agents/skills
+```
 
 ## Common Skill Categories
 

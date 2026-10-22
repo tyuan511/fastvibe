@@ -32,6 +32,10 @@ export const Ipc = {
   engineCreateSkill: "engine:create-skill",
   engineImportSkill: "engine:import-skill",
   engineRemoveSkill: "engine:remove-skill",
+  /** skills.sh: the search index, one skill's own description, and a one-click install. */
+  engineSearchSkillMarket: "engine:search-skill-market",
+  engineSkillMarketDetail: "engine:skill-market-detail",
+  engineInstallSkillMarket: "engine:install-skill-market",
   engineGetSubagents: "engine:get-subagents",
   engineListAgentConfigs: "engine:list-agent-configs",
   engineSaveAgentConfig: "engine:save-agent-config",

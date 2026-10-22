@@ -49,6 +49,10 @@ import type {
   SessionStats,
   SkillDraft,
   SkillInfo,
+  SkillMarketDetail,
+  SkillMarketEntry,
+  SkillMarketInstallResult,
+  SkillMarketTarget,
   SlashCommand,
   SubagentInfo,
   ThinkingTiming,
@@ -87,6 +91,7 @@ import { runtimeContextExtension } from "../engine/runtime-context";
 import { lastRequestUsage, turnTokens } from "../engine/turn-usage";
 import { conversationStats } from "../engine/conversation-stats";
 import { promptPreview } from "../engine/prompt-preview";
+import { fetchMarketSkillDetail, searchMarketSkills } from "../engine/skills-market";
 import { searchConversationContent } from "../engine/conversation-search";
 import { prepareTranscriptForOpen, readTranscriptPrompt, transcriptPrompt, writeTranscriptEntries } from "../engine/transcript-file";
 import { openSessionFile } from "../engine/session-open";
@@ -2138,6 +2143,24 @@ export class PiProcessManager {
   async createSkill(draft: SkillDraft): Promise<SkillInfo[]> { const skills = await this.#skills.create(this.#cwd, draft); await this.#reloadSkills(); return skills; }
   async importSkill(sourceDir: string): Promise<SkillInfo[]> { const skills = await this.#skills.importFrom(this.#cwd, sourceDir); await this.#reloadSkills(); return skills; }
   async removeSkill(name: string): Promise<SkillInfo[]> { const skills = await this.#skills.remove(this.#cwd, name); await this.#reloadSkills(); return skills; }
+
+  /**
+   * skills.sh, without the `npx skills` detour: search the index, read one skill's own
+   * description, install it into the directory 设置 → 技能 owns.
+   *
+   * Search and the detail page are reads the pane asks for; the install is the one that
+   * touches disk, and it reloads the idle sessions exactly like 新建 / 导入 do, so an
+   * installed skill is callable in this conversation rather than only in the next one.
+   */
+  async searchSkillMarket(query: string, refresh?: boolean): Promise<SkillMarketEntry[]> {
+    return searchMarketSkills(query, { refresh: Boolean(refresh) });
+  }
+  async skillMarketDetail(target: SkillMarketTarget): Promise<SkillMarketDetail> { return fetchMarketSkillDetail(target); }
+  async installMarketSkill(target: SkillMarketTarget): Promise<SkillMarketInstallResult> {
+    const result = await this.#skills.installFromMarket(this.#cwd, target);
+    await this.#reloadSkills();
+    return result;
+  }
 
   /**
    * Other agents on this machine that FastVibe can pull sessions from (设置 → 导入).

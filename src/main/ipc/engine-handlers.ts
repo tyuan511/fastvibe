@@ -133,6 +133,11 @@ export function registerEngineIpc(engine: PiProcessManager): void {
     return engine.importSkill(result.filePaths[0]);
   });
   handle(Ipc.engineRemoveSkill, async (payload: { name: string }) => engine.removeSkill(payload.name));
+  handle(Ipc.engineSearchSkillMarket, async (payload: { query: string; refresh?: boolean }) =>
+    engine.searchSkillMarket(payload.query, payload.refresh),
+  );
+  handle(Ipc.engineSkillMarketDetail, async (payload: import("@shared/types").SkillMarketTarget) => engine.skillMarketDetail(payload));
+  handle(Ipc.engineInstallSkillMarket, async (payload: import("@shared/types").SkillMarketTarget) => engine.installMarketSkill(payload));
 
   handle(Ipc.engineGetSubagents, async (payload?: { conversationId?: string }) => {
     return engine.getSubagents(payload?.conversationId);
