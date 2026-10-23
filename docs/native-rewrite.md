@@ -407,6 +407,13 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 - 已知风险：genai 的 Responses 流式解析要求 `response.completed` 里有 `model` 字段，缺了会**静默丢掉工具调用**（只打 warn）。
   离线测试用的 SSE 是手写的，不是录制的；**真实供应商验证用 `cargo run -p fv-provider --example live`**（密钥走 `FV_API_KEY`）。
 
+**真实验证（2026-10-23，FastVibe 中转站 `deepseek-v4.1-flash`）**：`chat` 与 `responses` 两种协议都跑通了完整回合
+（工具调用 → 结果 → 续答，用量含缓存读取），经 `fastvibe-server` 端到端（stdio）也通，重启后目录、转写和快照都恢复。观察到的事实：
+
+- 该中转站的 `responses` 协议会流出思考文本，但**不返回 `encrypted_content`**，所以思考块没有签名；没有签名的思考不回放（见上），第二轮仍能引用第一轮的内容。
+- `chat` 协议加了 `reasoning_effort` 也没有流出 `reasoning_content`：这个模型走 chat 路由时不输出思考。
+- 手写的 SSE 夹具与真实流在这两个协议上没有分歧；Anthropic 与 Gemini 仍只有手写夹具。
+
 **存储（`fv-store`）**：`fastvibe.db`（目录，`PRAGMA user_version` 迁移、0600、`auto_vacuum` 先于 WAL、高版本拒绝打开）+
 `sessions/<id>.jsonl`（只追加，首行 header，之后每行一条消息并用 `parentId` 串成链）。写入跟着 agent 的 `Committed` 事件走：
 消息进入历史的那一刻就落盘（`sync_data`），崩溃最多丢当前这一条，写到一半的末行读取时跳过、下次追加前补换行。
