@@ -120,6 +120,9 @@ pub struct ThreadIdParams {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadResumeResponse {
     pub thread: Thread,
+    /// How full the conversation's context window is, when it can be told.
+    #[serde(default)]
+    pub token_usage: Option<TokenUsage>,
     pub turns: Vec<Turn>,
     pub seq: u64,
     pub running: bool,
@@ -161,6 +164,11 @@ pub enum Item {
     Error {
         id: ItemId,
         message: String,
+    },
+    /// The conversation was summarized to make room; everything before this is no longer
+    /// sent to the model (but is still shown).
+    ContextCompaction {
+        id: ItemId,
     },
 }
 
@@ -474,4 +482,12 @@ pub struct ThreadModelParams {
     pub thread_id: ThreadId,
     pub model: Option<String>,
     pub thinking: Option<ThinkingLevel>,
+}
+
+/// How much of the model's context window the conversation takes. Summarizing starts at 90%.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsage {
+    pub used: u64,
+    pub window: u64,
 }

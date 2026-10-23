@@ -49,13 +49,42 @@ pub fn classify(err: &genai::Error) -> Classified {
         },
         _ => (false, None),
     };
+    let message = message_of(err);
     Classified {
         error: ModelError {
-            message: message_of(err),
+            overflow: !retryable && is_overflow(&message),
+            message,
             retryable,
         },
         retry_after: after,
     }
+}
+
+/// Whether a refusal says the request was larger than the model's window. Providers have no
+/// common code for it, so this reads their words. A rate limit that talks about tokens (429)
+/// is not it: waiting helps that, summarizing does not.
+fn is_overflow(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    if m.starts_with("429") || m.starts_with('5') {
+        return false;
+    }
+    if m.starts_with("413") {
+        return true;
+    }
+    [
+        "context_length_exceeded",
+        "maximum context length",
+        "context length",
+        "context window",
+        "prompt is too long",
+        "input is too long",
+        "too many tokens",
+        "token count",
+        "reduce the length of the messages",
+        "exceeds the maximum number of tokens",
+    ]
+    .iter()
+    .any(|p| m.contains(p))
 }
 
 /// The provider's body when there is one (it says *why*), else genai's description.

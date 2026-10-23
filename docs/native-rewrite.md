@@ -482,6 +482,23 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 - 还没做：模型元数据（上下文窗口、价格、是否看图——要等 models.dev 快照，现在 `supportsImages` 默认 true、窗口为空）、
   把 `ProviderUpsert` 的 OAuth 登录式供应商、命令行 `--protocol` 等参数现在只是没配供应商时的后备。
 
+**上下文压缩（`fv-agent::compact`，`thread/compact/start`）**：照 codex 的内联压缩（`rust-v0.46.0` 的 `codex/compact.rs`）做，提示词和桥接文案取自它的模板（Apache-2.0）。
+
+- **触发**：每次请求前，用「provider 报告的上一次请求用量 + 其后新增内容的估算（4 字节一个 token）」判断，达到窗口的 **90%** 就先压缩；
+  窗口取 `Model::context_window()`（来自 `ModelInfo.contextWindow`），不知道时按 128k。provider 报「请求超窗」（`ModelError.overflow`，按各家的措辞识别：
+  `context_length_exceeded`、`prompt is too long`、`token count … exceeds`、413 等；429 的 token 限流**不算**，那是等一等的事）时也压缩一次再重试，
+  压缩后仍然超窗就如实失败，不循环。
+- **做法**：让同一个模型按 codex 的「写给下一位 agent 的备忘录」提示写摘要（不带工具），历史换成一条 `Message::Compaction { user_messages, summary }`。
+  模型看到的是**一条用户消息**：用户原话（累计，超过约 2 万 token 时取头尾、截中间）+ 摘要。因为 `user_messages` 随每次压缩累计，**用户的原话压缩多少次都留着**。
+  摘要请求自己超窗时，和 codex 一样**从最旧的消息开始丢再问**（每次丢完重新规整，孤儿工具结果不留）。
+- **落盘与恢复**：`Compaction` 是转写里追加的一行，之前的消息**全部还在**（界面照常显示，中间画一条「已压缩上下文」分隔）；
+  重启后 `effective_history`（最后一条 `Compaction` 起）才是送给模型的历史。内存里的历史与重启后重建的一致，有测试钉住。
+- **失败与停止**：摘要失败或用户停止，历史**原样不动**（只发 `CompactionFailed` 收起进行中的条目），自动压缩失败时该回合失败并说明原因。
+- **手动**：`thread/compact/start` 是一个独立的回合（`turn/started` → 压缩条目 → `turn/completed`），可 `turn/interrupt`；线程忙返回 `THREAD_BUSY`，没有历史返回「nothing to summarize」。
+- **上下文环**：每次请求后发 `thread/tokenUsage/updated {used, window}`（带 `seq` 的线程事件），`thread/resume` 的回复里也带一份。
+- **真实验证**（`deepseek-v4.1-flash`，窗口设成 5000）：几轮长回复后自动压缩多次触发，最后问「项目叫什么、最爱的颜色、灯塔管理员是谁」仍答对。
+- 注意：窗口很小时系统提示与工具说明本身占 ~2.8k token，所以会每轮都压缩；真实窗口（128k 以上）下不会。还没做的是 Electron 版那套「按被拒绝的请求学习实际容量、缩小触发阈值」的自适应，以及按提供方的真实窗口（models.dev）填 `contextWindow`。
+
 **存储（`fv-store`）**：`fastvibe.db`（目录，`PRAGMA user_version` 迁移、0600、`auto_vacuum` 先于 WAL、高版本拒绝打开）+
 `sessions/<id>.jsonl`（只追加，首行 header，之后每行一条消息并用 `parentId` 串成链）。写入跟着 agent 的 `Committed` 事件走：
 消息进入历史的那一刻就落盘（`sync_data`），崩溃最多丢当前这一条，写到一半的末行读取时跳过、下次追加前补换行。

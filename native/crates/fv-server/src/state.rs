@@ -106,7 +106,9 @@ impl ServerState {
                 Vec::new()
             }
         };
+        // The thread is drawn in full; the model is sent only what follows the last summary.
         let turns = turns_from_history(&history);
+        let history = fv_core::effective_history(&history);
         let rt = Arc::new(ThreadRuntime::restored(
             thread_id.to_string(),
             history,

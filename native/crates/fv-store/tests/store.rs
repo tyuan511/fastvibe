@@ -255,6 +255,7 @@ fn history_becomes_turns_with_tool_results_filled_in() {
             Item::AgentMessage { .. } => "agent",
             Item::ToolCall { .. } => "tool",
             Item::Error { .. } => "error",
+            Item::ContextCompaction { .. } => "compaction",
         })
         .collect();
     // The blank thinking block draws nothing.
@@ -440,4 +441,54 @@ fn an_unreadable_credentials_file_is_an_error_not_an_empty_one() {
         std::fs::read_to_string(dir.path().join("data/credentials.json")).unwrap(),
         "{ not json"
     );
+}
+
+#[test]
+fn a_compaction_is_a_divider_between_turns_and_hides_nothing() {
+    let messages = vec![
+        user("first"),
+        assistant(vec![ContentBlock::Text { text: "one".into() }]),
+        Message::Compaction {
+            user_messages: vec!["first".into()],
+            summary: "s".into(),
+        },
+        user("second"),
+        assistant(vec![ContentBlock::Text { text: "two".into() }]),
+    ];
+    let turns = turns_from_history(&messages);
+    // What was said before the summary is still drawn; the model just stops seeing it.
+    assert_eq!(turns.len(), 3);
+    assert!(matches!(&turns[0].items[0], Item::UserMessage { text, .. } if text == "first"));
+    assert!(matches!(
+        &turns[1].items[..],
+        [Item::ContextCompaction { .. }]
+    ));
+    assert!(matches!(&turns[2].items[0], Item::UserMessage { text, .. } if text == "second"));
+}
+
+#[test]
+fn a_compaction_survives_the_transcript_and_picks_the_models_view() {
+    use fv_core::effective_history;
+    let dir = tempfile::tempdir().unwrap();
+    let store = TranscriptStore::new(dir.path().join("sessions")).unwrap();
+    let compaction = Message::Compaction {
+        user_messages: vec!["a".into()],
+        summary: "s".into(),
+    };
+    store
+        .append(
+            "t1",
+            &[
+                user("a"),
+                assistant(vec![ContentBlock::Text { text: "b".into() }]),
+            ],
+        )
+        .unwrap();
+    store
+        .append("t1", &[compaction.clone(), user("c")])
+        .unwrap();
+
+    let all = store.read("t1").unwrap().messages;
+    assert_eq!(all.len(), 4, "the transcript keeps everything");
+    assert_eq!(effective_history(&all), vec![compaction, user("c")]);
 }

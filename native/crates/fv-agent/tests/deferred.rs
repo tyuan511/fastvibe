@@ -189,6 +189,7 @@ async fn pictures_follow_all_the_tool_results_of_their_batch() {
                 }
             }
             Message::ToolImages { .. } => "images",
+            Message::Compaction { .. } => "compaction",
         })
         .collect();
     assert_eq!(

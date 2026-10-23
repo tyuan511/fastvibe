@@ -127,6 +127,9 @@ async fn a_plain_answer_streams_blocks_then_completes() {
             AgentEvent::MessageDone(_) => "message",
             AgentEvent::ToolResult { .. } => "result",
             AgentEvent::Committed(_) => "committed",
+            AgentEvent::CompactionStarted { .. }
+            | AgentEvent::CompactionDone { .. }
+            | AgentEvent::CompactionFailed { .. } => "compaction",
         })
         .collect();
     // The thinking block closes before the text one opens; "hello there" streams as two words.
@@ -557,6 +560,7 @@ fn normalize_fills_gaps_and_drops_strays() {
                 call_id, is_error, ..
             } => format!("result:{call_id}:{is_error}"),
             Message::ToolImages { call_id, .. } => format!("images:{call_id}"),
+            Message::Compaction { .. } => "compaction".into(),
         })
         .collect();
     assert_eq!(

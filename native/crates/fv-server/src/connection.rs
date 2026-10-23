@@ -221,7 +221,9 @@ async fn dispatch(
             for request in state.pending_prompts(&params.thread_id) {
                 followups.push(crate::prompt::request_frame(&request));
             }
+            let token_usage = crate::providers::token_usage(state, &thread, &params.thread_id);
             to_value(ThreadResumeResponse {
+                token_usage,
                 thread,
                 turns,
                 seq,
@@ -255,6 +257,35 @@ async fn dispatch(
                 cancel,
             );
             to_value(TurnStartResponse { turn_id })
+        }
+        ClientRequest::ThreadCompactStart { params, .. } => {
+            state
+                .thread(&params.thread_id)?
+                .ok_or_else(|| ErrorObject::new(code::INVALID_PARAMS, "thread not found"))?;
+            let rt = state.runtime(&params.thread_id);
+            // Busy is the more useful answer: a first turn in flight has no history yet.
+            if rt.is_running() {
+                return Err(ErrorObject::new(
+                    code::THREAD_BUSY,
+                    "a turn is already running in this thread",
+                ));
+            }
+            if rt.history().is_empty() {
+                return Err(ErrorObject::new(
+                    code::INVALID_PARAMS,
+                    "there is nothing to summarize yet",
+                ));
+            }
+            rt.subscribe(conn);
+            let turn_id = uuid::Uuid::new_v4().to_string();
+            let cancel = rt.begin(state, &turn_id).await.ok_or_else(|| {
+                ErrorObject::new(
+                    code::THREAD_BUSY,
+                    "a turn is already running in this thread",
+                )
+            })?;
+            crate::turn::spawn_compaction(state.clone(), rt, params.thread_id, turn_id, cancel);
+            to_value(Empty {})
         }
         ClientRequest::ThreadModelSet { params, .. } => to_value(ThreadStartResponse {
             thread: crate::providers::set_thread_model(state, params)?,

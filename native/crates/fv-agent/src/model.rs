@@ -27,6 +27,9 @@ pub struct ModelError {
     /// Whether asking again might work (429, 5xx, a dropped connection). The provider layer
     /// retries these itself before the error ever reaches the loop.
     pub retryable: bool,
+    /// The request was larger than the model's context window. Asking again as it is cannot
+    /// work; summarizing the conversation can.
+    pub overflow: bool,
 }
 
 impl ModelError {
@@ -34,6 +37,15 @@ impl ModelError {
         Self {
             message: message.into(),
             retryable: false,
+            overflow: false,
+        }
+    }
+
+    pub fn context_overflow(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+            overflow: true,
         }
     }
 }
@@ -52,6 +64,11 @@ pub trait Model: Send + Sync {
     /// when it cannot.
     fn supports_images(&self) -> bool {
         true
+    }
+
+    /// The context window in tokens, when it is known.
+    fn context_window(&self) -> Option<u32> {
+        None
     }
 
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>>;

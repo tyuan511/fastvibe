@@ -31,6 +31,17 @@ pub enum AgentEvent {
     /// gets written to the transcript: persisting from here, rather than from the finished
     /// history, means a crash loses at most the message being written.
     Committed(Message),
+    /// The conversation is being summarized to make room.
+    CompactionStarted {
+        id: String,
+    },
+    CompactionDone {
+        id: String,
+        summary: String,
+    },
+    CompactionFailed {
+        id: String,
+    },
     ToolResult {
         call_id: String,
         name: String,

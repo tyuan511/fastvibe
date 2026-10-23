@@ -26,6 +26,7 @@ pub enum Step {
 pub struct ScriptedModel {
     replies: Mutex<VecDeque<Vec<Step>>>,
     pub requests: Mutex<Vec<ModelRequest>>,
+    window: Option<u32>,
 }
 
 impl ScriptedModel {
@@ -33,7 +34,14 @@ impl ScriptedModel {
         Self {
             replies: Mutex::new(replies.into_iter().collect()),
             requests: Mutex::default(),
+            window: None,
         }
+    }
+
+    /// Say how big this model's context window is, so a conversation can be made to outgrow it.
+    pub fn with_window(mut self, tokens: u32) -> Self {
+        self.window = Some(tokens);
+        self
     }
 
     pub fn requests(&self) -> Vec<ModelRequest> {
@@ -42,6 +50,10 @@ impl ScriptedModel {
 }
 
 impl Model for ScriptedModel {
+    fn context_window(&self) -> Option<u32> {
+        self.window
+    }
+
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>> {
         self.requests.lock().unwrap().push(request);
         let steps = self.replies.lock().unwrap().pop_front().unwrap_or_else(|| {
@@ -68,6 +80,7 @@ impl Model for ScriptedModel {
 pub struct Reply {
     steps: Vec<Step>,
     content: Vec<ContentBlock>,
+    input_tokens: Option<u64>,
 }
 
 impl Reply {
@@ -121,6 +134,20 @@ impl Reply {
         self.steps
     }
 
+    /// The input size the provider reports for this request.
+    pub fn input_tokens(mut self, n: u64) -> Self {
+        self.input_tokens = Some(n);
+        self
+    }
+
+    /// Ends the stream with the provider's "context window exceeded" refusal.
+    pub fn then_overflow(mut self) -> Vec<Step> {
+        self.steps.push(Step::Fail(ModelError::context_overflow(
+            "This model's maximum context length was exceeded.",
+        )));
+        self.steps
+    }
+
     pub fn then_fail(mut self, message: &str) -> Vec<Step> {
         self.steps.push(Step::Fail(ModelError::fatal(message)));
         self.steps
@@ -140,7 +167,7 @@ impl Reply {
             content: self.content,
             stop,
             usage: Usage {
-                input_tokens: 10,
+                input_tokens: self.input_tokens.unwrap_or(10),
                 output_tokens: 5,
                 ..Usage::default()
             },

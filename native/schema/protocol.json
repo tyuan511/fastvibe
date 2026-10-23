@@ -567,6 +567,26 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "thread/compact/start",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "thread/model/set",
             "type": "string"
           },
@@ -962,6 +982,23 @@
               "message"
             ],
             "type": "object"
+          },
+          {
+            "description": "The conversation was summarized to make room; everything before this is no longer\nsent to the model (but is still shown).",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "const": "contextCompaction",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -1245,6 +1282,37 @@
         "type": "object"
       },
       "ThreadEvent7": {
+        "description": "How much of the model's context window the conversation takes. Summarizing starts at 90%.",
+        "properties": {
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "used": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "used",
+          "window"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent8": {
         "description": "A request to the client has been answered or withdrawn (by whichever client got there\nfirst, or because the turn was stopped); every other client takes its prompt down.",
         "properties": {
           "requestId": {
@@ -1481,11 +1549,27 @@
       {
         "properties": {
           "method": {
-            "const": "serverRequest/resolved",
+            "const": "thread/tokenUsage/updated",
             "type": "string"
           },
           "params": {
             "$ref": "#/$defs/ThreadEvent7"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "serverRequest/resolved",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent8"
           }
         },
         "required": [

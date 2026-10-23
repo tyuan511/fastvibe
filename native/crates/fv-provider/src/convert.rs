@@ -32,6 +32,17 @@ pub fn to_chat_request(request: &ModelRequest, model_label: &str, images_ok: boo
                 pictures.extend(picture_parts(name, images, images_ok));
             }
             Message::User { text } => chat = chat.append_message(ChatMessage::user(text.clone())),
+            // `normalize` has turned these into user messages already; this is only for a caller
+            // that did not use it.
+            Message::Compaction {
+                user_messages,
+                summary,
+            } => {
+                chat = chat.append_message(ChatMessage::user(Message::compaction_text(
+                    user_messages,
+                    summary,
+                )));
+            }
             Message::Assistant(a) => {
                 if let Some(m) = assistant_message(a, model_label) {
                     chat = chat.append_message(m);

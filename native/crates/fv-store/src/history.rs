@@ -59,6 +59,17 @@ pub fn turns_from_history(messages: &[Message]) -> Vec<Turn> {
             }
             // Pictures a tool returned; the tool's item already shows what it did.
             Message::ToolImages { .. } => {}
+            // A divider where the conversation was summarized. The messages before it are
+            // still in the transcript, and still drawn: only the model stops seeing them.
+            Message::Compaction { .. } => {
+                let turn = format!("t{}", turns.len());
+                turns.push(Turn {
+                    id: turn.clone(),
+                    items: vec![Item::ContextCompaction {
+                        id: format!("{turn}i0"),
+                    }],
+                });
+            }
             Message::ToolResult {
                 call_id,
                 content,

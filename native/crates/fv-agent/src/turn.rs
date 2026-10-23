@@ -65,10 +65,30 @@ pub async fn run_turn(
     // Reads run side by side; a write waits for them and then runs alone. One lock for the
     // whole turn, shared by every batch, as in codex's `tools/parallel.rs`.
     let lock = Arc::new(RwLock::new(()));
+    // A request that was refused for being too large is answered by one summary; if that does
+    // not help, asking again would only repeat it.
+    let mut summarized_for_overflow = false;
 
     loop {
         if cancel.is_cancelled() {
             return TurnOutcome::Interrupted;
+        }
+        // Make room before the window is full, not after the provider has refused the request.
+        if crate::compact::needs_compaction(ctx, history) {
+            match crate::compact::compact(ctx, history, events, cancel).await {
+                Ok(()) => {}
+                Err(crate::compact::CompactError::Interrupted) => return TurnOutcome::Interrupted,
+                Err(crate::compact::CompactError::Failed(e)) => {
+                    return TurnOutcome::Failed(format!(
+                        "The conversation is full and could not be summarized: {e}"
+                    ));
+                }
+            }
+            if crate::compact::needs_compaction(ctx, history) {
+                return TurnOutcome::Failed(
+                    "The conversation is too large to continue, even after summarizing it.".into(),
+                );
+            }
         }
         let request = ModelRequest {
             system: ctx.system.clone(),
@@ -122,7 +142,25 @@ pub async fn run_turn(
                 }
                 return TurnOutcome::Interrupted;
             }
-            Sampled::Failed { partial, error } => {
+            Sampled::Failed {
+                partial: None,
+                overflow: true,
+                ..
+            } if !summarized_for_overflow => {
+                summarized_for_overflow = true;
+                match crate::compact::compact(ctx, history, events, cancel).await {
+                    Ok(()) => continue,
+                    Err(crate::compact::CompactError::Interrupted) => {
+                        return TurnOutcome::Interrupted;
+                    }
+                    Err(crate::compact::CompactError::Failed(e)) => {
+                        return TurnOutcome::Failed(format!(
+                            "The conversation is too large for the model and could not be summarized: {e}"
+                        ));
+                    }
+                }
+            }
+            Sampled::Failed { partial, error, .. } => {
                 if let Some(m) = partial {
                     commit(history, events, Message::Assistant(m));
                 }
@@ -138,6 +176,8 @@ enum Sampled {
     Failed {
         partial: Option<AssistantMessage>,
         error: String,
+        /// The request was larger than the model's window.
+        overflow: bool,
     },
 }
 
@@ -164,6 +204,7 @@ async fn sample(
                 return Sampled::Failed {
                     partial: blocks.partial(),
                     error: "The model's response ended before it was complete.".into(),
+                    overflow: false,
                 };
             }
             Some(Err(e)) => {
@@ -171,6 +212,7 @@ async fn sample(
                 return Sampled::Failed {
                     partial: blocks.partial(),
                     error: e.message,
+                    overflow: e.overflow,
                 };
             }
             Some(Ok(ModelEvent::Text(d))) => blocks.delta(Open::Text, d),

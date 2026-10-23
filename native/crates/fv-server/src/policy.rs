@@ -18,6 +18,7 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::ThreadUnsubscribe { .. }
             | ClientRequest::TurnStart { .. }
             | ClientRequest::TurnInterrupt { .. }
+            | ClientRequest::ThreadCompactStart { .. }
             | ClientRequest::ThreadModelSet { .. }
             | ClientRequest::ProviderList { .. }
             | ClientRequest::ProviderUpsert { .. }

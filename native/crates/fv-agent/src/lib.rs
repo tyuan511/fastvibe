@@ -5,6 +5,7 @@
 //! behind [`Tool`]. The loop knows nothing about threads, clients or storage: it appends to a
 //! history it is handed and reports what happens on an event channel.
 
+mod compact;
 mod event;
 mod history;
 mod model;
@@ -14,6 +15,10 @@ mod turn;
 
 pub mod testing;
 
+pub use compact::{
+    CompactError, DEFAULT_CONTEXT_WINDOW, SUMMARIZATION_PROMPT, compact, context_used,
+    context_window, needs_compaction,
+};
 pub use event::{AgentEvent, BlockKind};
 pub use history::normalize;
 pub use model::{Model, ModelError, ModelEvent, ModelRequest};

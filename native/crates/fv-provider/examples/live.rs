@@ -129,7 +129,10 @@ async fn main() {
                     calls += 1;
                     println!("  tool {name}({arguments}) -> {output} (error: {is_error})");
                 }
-                AgentEvent::Committed(_) => {}
+                AgentEvent::Committed(_)
+                | AgentEvent::CompactionStarted { .. }
+                | AgentEvent::CompactionDone { .. }
+                | AgentEvent::CompactionFailed { .. } => {}
                 AgentEvent::MessageDone(m) => {
                     println!("  request done: stop={:?} usage={:?}", m.stop, m.usage)
                 }

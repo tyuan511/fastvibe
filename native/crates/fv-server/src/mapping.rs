@@ -19,6 +19,7 @@ enum Kind {
 /// Remembers which block is which, since a delta names only its block's id.
 pub struct EventMapper {
     turn_id: String,
+    window: u64,
     kinds: HashMap<String, Kind>,
     /// Tool calls whose arguments are known (set when the block is done) but whose item
     /// completes only when the result arrives.
@@ -26,9 +27,10 @@ pub struct EventMapper {
 }
 
 impl EventMapper {
-    pub fn new(turn_id: String) -> Self {
+    pub fn new(turn_id: String, window: u64) -> Self {
         Self {
             turn_id,
+            window,
             kinds: HashMap::new(),
             calls: HashMap::new(),
         }
@@ -105,7 +107,32 @@ impl EventMapper {
                     Vec::new()
                 }
             },
-            AgentEvent::MessageDone(_) | AgentEvent::Committed(_) => Vec::new(),
+            // The provider's count of that request, plus the reply: what the next request starts from.
+            AgentEvent::MessageDone(m) => {
+                let u = &m.usage;
+                let used =
+                    u.input_tokens + u.cache_read_tokens + u.cache_write_tokens + u.output_tokens;
+                if used == 0 {
+                    return Vec::new();
+                }
+                vec![LogEvent::TokenUsage {
+                    used,
+                    window: self.window,
+                }]
+            }
+            AgentEvent::Committed(_) => Vec::new(),
+            AgentEvent::CompactionStarted { id } => vec![LogEvent::ItemStarted {
+                turn_id,
+                item: Item::ContextCompaction { id },
+            }],
+            // A failed one is closed too, so no client is left showing it in progress; the
+            // turn reports the failure itself.
+            AgentEvent::CompactionDone { id, .. } | AgentEvent::CompactionFailed { id } => {
+                vec![LogEvent::ItemCompleted {
+                    turn_id,
+                    item: Item::ContextCompaction { id },
+                }]
+            }
             AgentEvent::ToolResult {
                 call_id,
                 name,

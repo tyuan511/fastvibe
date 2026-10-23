@@ -50,7 +50,16 @@ pub fn normalize(history: &[Message]) -> Vec<Message> {
                         })
                         .collect();
                 }
-                out.push(other.clone());
+                match other {
+                    // What a compaction replaced is shown to the model as one user message.
+                    Message::Compaction {
+                        user_messages,
+                        summary,
+                    } => out.push(Message::User {
+                        text: Message::compaction_text(user_messages, summary),
+                    }),
+                    _ => out.push(other.clone()),
+                }
             }
         }
     }

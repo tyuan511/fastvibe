@@ -379,6 +379,7 @@ pub fn resolve(
     config.thinking = thinking.map(thinking_level);
     config.max_output_tokens = model.max_output_tokens;
     config.images = model.supports_images;
+    config.context_window = model.context_window;
     GenaiModel::new(config)
         .map(|m| Arc::new(m) as Arc<dyn Model>)
         .map_err(|e| e.message)
@@ -420,4 +421,15 @@ pub fn set_thread_model(
     state.store.db.put_thread(&thread).map_err(internal)?;
     state.broadcast(ServerNotification::CatalogChanged(CatalogChanged {}));
     Ok(thread)
+}
+
+/// How full a thread's context window is, for a client that has just opened it.
+pub fn token_usage(state: &ServerState, thread: &Thread, thread_id: &str) -> Option<TokenUsage> {
+    let model = model_for(state, thread);
+    let history = state.runtime(thread_id).history();
+    let used = fv_agent::context_used(&history);
+    (used > 0).then(|| TokenUsage {
+        used,
+        window: fv_agent::context_window(model.as_ref()),
+    })
 }

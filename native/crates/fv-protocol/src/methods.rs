@@ -70,6 +70,7 @@ client_requests! {
     ThreadUnsubscribe => "thread/unsubscribe": ThreadIdParams => Empty,
     TurnStart => "turn/start": TurnStartParams => TurnStartResponse,
     TurnInterrupt => "turn/interrupt": ThreadIdParams => Empty,
+    ThreadCompactStart => "thread/compact/start": ThreadIdParams => Empty,
     ThreadModelSet => "thread/model/set": ThreadModelParams => ThreadStartResponse,
     ProviderList => "provider/list": Empty => ProviderListResponse,
     ProviderUpsert => "provider/upsert": ProviderUpsertParams => ProviderUpsertResponse,
@@ -99,6 +100,7 @@ notifications!(ServerNotification {
     ReasoningDelta => "item/reasoning/delta": ThreadEvent<Delta>,
     ToolCallArgumentsDelta => "item/toolCall/argumentsDelta": ThreadEvent<Delta>,
     TurnPlanUpdated => "turn/plan/updated": ThreadEvent<PlanUpdated>,
+    ThreadTokenUsageUpdated => "thread/tokenUsage/updated": ThreadEvent<TokenUsage>,
     ServerRequestResolved => "serverRequest/resolved": ThreadEvent<RequestResolved>,
 });
 

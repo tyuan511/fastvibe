@@ -77,6 +77,10 @@ impl ThreadRuntime {
         (g.log.turns.clone(), g.log.seq, g.log.running)
     }
 
+    pub fn is_running(&self) -> bool {
+        self.inner.lock().unwrap().running.is_some()
+    }
+
     pub fn loaded_tools(&self) -> fv_agent::LoadedTools {
         self.inner.lock().unwrap().loaded.clone()
     }

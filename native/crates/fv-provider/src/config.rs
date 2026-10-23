@@ -43,6 +43,8 @@ pub struct ModelConfig {
     /// Whether the model can look at images. Without it, a picture a tool returns is replaced
     /// by a sentence, and `view_image` says it is not allowed.
     pub images: bool,
+    /// The context window in tokens, when known; conversations are summarized before it fills.
+    pub context_window: Option<u32>,
 }
 
 impl ModelConfig {
@@ -64,6 +66,7 @@ impl ModelConfig {
             headers: Vec::new(),
             max_retries: 5,
             images: true,
+            context_window: None,
         }
     }
 }

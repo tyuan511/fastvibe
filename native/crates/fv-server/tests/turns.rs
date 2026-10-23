@@ -174,6 +174,7 @@ async fn a_turn_streams_its_items_in_order_with_contiguous_sequence_numbers() {
             "item/agentMessage/delta",
             "item/agentMessage/delta",
             "item/completed",
+            "thread/tokenUsage/updated", // how full the window is after that request
             "turn/completed",
             "thread/status/changed", // idle, strictly after the completion
         ]

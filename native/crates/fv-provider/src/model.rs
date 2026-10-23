@@ -88,6 +88,10 @@ impl Model for GenaiModel {
         self.config.images
     }
 
+    fn context_window(&self) -> Option<u32> {
+        self.config.context_window
+    }
+
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>> {
         let client = self.client.clone();
         let options = self.options();

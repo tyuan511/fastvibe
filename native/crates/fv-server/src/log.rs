@@ -42,6 +42,11 @@ pub enum LogEvent {
         error: Option<String>,
     },
     Running(bool),
+    /// How full the context window is after a request.
+    TokenUsage {
+        used: u64,
+        window: u64,
+    },
     PlanUpdated {
         turn_id: TurnId,
         explanation: Option<String>,
@@ -66,7 +71,8 @@ pub fn item_id(item: &Item) -> &str {
         | Item::AgentMessage { id, .. }
         | Item::Reasoning { id, .. }
         | Item::ToolCall { id, .. }
-        | Item::Error { id, .. } => id,
+        | Item::Error { id, .. }
+        | Item::ContextCompaction { id } => id,
     }
 }
 
@@ -175,6 +181,9 @@ impl ThreadLog {
                 status,
                 error
             })),
+            LogEvent::TokenUsage { used, window } => {
+                ServerNotification::ThreadTokenUsageUpdated(ev!(TokenUsage { used, window }))
+            }
             LogEvent::PlanUpdated {
                 turn_id,
                 explanation,
