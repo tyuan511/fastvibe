@@ -8,6 +8,7 @@
 mod event;
 mod history;
 mod model;
+mod prompt;
 mod tool;
 mod turn;
 
@@ -16,5 +17,6 @@ pub mod testing;
 pub use event::{AgentEvent, BlockKind};
 pub use history::normalize;
 pub use model::{Model, ModelError, ModelEvent, ModelRequest};
+pub use prompt::base_instructions;
 pub use tool::{Tool, ToolCtx, ToolOutput, ToolRegistry, ToolSpec};
 pub use turn::{AgentContext, TurnOutcome, run_turn};

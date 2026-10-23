@@ -2194,6 +2194,7 @@ dependencies = [
  "fv-protocol",
  "fv-provider",
  "fv-store",
+ "fv-tools",
  "serde",
  "serde_json",
  "tempfile",
@@ -2221,6 +2222,22 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "fv-tools"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "fv-agent",
+ "libc",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

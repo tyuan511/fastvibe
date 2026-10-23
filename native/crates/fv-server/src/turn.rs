@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use fv_agent::{AgentEvent, TurnOutcome, run_turn};
+use fv_agent::{AgentContext, AgentEvent, TurnOutcome, base_instructions, run_turn};
 use fv_protocol::types::{Item, TurnStatus};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -72,12 +72,29 @@ async fn drive(
     )
     .await;
 
+    // Each conversation works in its own directory, and tells the model so.
+    let cwd = state
+        .thread(&thread_id)
+        .ok()
+        .flatten()
+        .and_then(|t| t.cwd)
+        .map(std::path::PathBuf::from);
+    let ctx = AgentContext {
+        // The base instructions, then whatever the server was configured to add.
+        system: format!(
+            "{}{}",
+            base_instructions(cwd.as_deref()),
+            state.agent.system
+        ),
+        cwd,
+        ..state.agent.clone()
+    };
     let first_prompt = text.clone();
     let mut history = rt.history();
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut mapper = EventMapper::new(turn_id.clone());
     let outcome = {
-        let run = run_turn(&state.agent, &mut history, text, &tx, &cancel);
+        let run = run_turn(&ctx, &mut history, text, &tx, &cancel);
         tokio::pin!(run);
         loop {
             tokio::select! {

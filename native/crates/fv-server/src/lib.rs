@@ -18,3 +18,18 @@ pub use state::ServerState;
 
 /// What `initialize` reports as the server's version.
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The agent every server runs: the given model, and all of the built-in tools. `main` and the
+/// tests both build it here, so what the tests exercise is what ships.
+pub fn agent_with_builtin_tools(
+    model: std::sync::Arc<dyn fv_agent::Model>,
+) -> fv_agent::AgentContext {
+    let mut tools = fv_agent::ToolRegistry::new();
+    fv_tools::register_builtin(&mut tools);
+    fv_agent::AgentContext {
+        model,
+        tools: std::sync::Arc::new(tools),
+        system: String::new(),
+        cwd: None,
+    }
+}

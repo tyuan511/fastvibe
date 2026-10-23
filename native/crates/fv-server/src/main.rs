@@ -9,8 +9,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use fv_agent::Model;
 use fv_agent::testing::{EchoModel, NoModel};
-use fv_agent::{AgentContext, Model, ToolRegistry};
 use fv_protocol::types::ClientOrigin;
 use fv_provider::{GenaiModel, ModelConfig, Protocol, ThinkingLevel};
 use fv_server::{ServerState, UnixServer, serve_connection};
@@ -101,12 +101,7 @@ async fn main() {
         (false, None, None, None) => Arc::new(NoModel),
         _ => usage(),
     };
-    let agent = AgentContext {
-        model,
-        tools: Arc::new(ToolRegistry::new()),
-        system: String::new(),
-        cwd: None,
-    };
+    let agent = fv_server::agent_with_builtin_tools(model);
     let state = Arc::new(
         ServerState::new(data_dir.clone(), agent)
             .unwrap_or_else(|e| fail(format!("cannot open {}: {e}", data_dir.display()))),

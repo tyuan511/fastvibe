@@ -441,7 +441,11 @@ async fn history_carries_over_between_turns() {
     assert_eq!(requests[1].messages.len(), 3);
     assert!(matches!(&requests[1].messages[0], fv_core::Message::User { text } if text == "q1"));
     assert!(matches!(&requests[1].messages[2], fv_core::Message::User { text } if text == "q2"));
-    assert_eq!(requests[1].system, "sys");
+    assert!(
+        requests[1].system.starts_with("You are FastVibe") && requests[1].system.ends_with("sys"),
+        "{}",
+        requests[1].system
+    );
 
     // And a later resume shows both turns.
     let snap = c

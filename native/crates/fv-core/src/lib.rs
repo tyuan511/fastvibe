@@ -6,7 +6,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ContentBlock {
     Text {
         text: String,
@@ -98,7 +102,11 @@ impl AssistantMessage {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "role", rename_all = "camelCase")]
+#[serde(
+    tag = "role",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Message {
     User {
         text: String,

@@ -14,6 +14,7 @@ use crate::history::normalize;
 use crate::model::{Model, ModelEvent, ModelRequest};
 use crate::tool::{ToolCtx, ToolRegistry};
 
+#[derive(Clone)]
 pub struct AgentContext {
     pub model: Arc<dyn Model>,
     pub tools: Arc<ToolRegistry>,

@@ -133,7 +133,7 @@
 | `fv-provider` | 模型层：genai 之上的适配（见 3.3） | genai、tokio |
 | `fv-store` | 数据目录、SQLite（会话目录、队列、DAG、定时任务、检查点、思考耗时、记忆、用量）、JSONL 转写、凭据（0600） | rusqlite |
 | `fv-agent` | 回合循环、工具注册与派发、系统提示词、AGENTS.md / 技能、历史规范化、压缩 | fv-provider、fv-store |
-| `fv-tools` | 内置工具，以 codex-rs `core/src/tools` 为基准移植（见 3.4）：read_file / list_dir / grep_files / apply_patch / shell / update_plan / request_user_input / view_image / tool_search / code_mode / web_search，加 FastVibe 自有的 present / conversation_search / worktree / dag / schedule | portable-pty、ignore |
+| `fv-tools` | 内置工具，照 codex-rs `core/src/tools` 移植（见 3.4）：已有 `exec_command`、`apply_patch`；其余按 3.4 的清单逐个做 | portable-pty |
 | `fv-engine` | 会话外的服务：排队、检查点、子 agent、DAG、记忆、MCP（`rmcp`）、定时任务、回复推荐、标题 | fv-agent、rmcp |
 | `fv-workspace` | Git、文件树、文件搜索、终端（`alacritty_terminal` 的 pty 与网格）、OfficeCLI | alacritty_terminal |
 | `fv-transport` | stdio / unix socket / ws / WebRTC、设备令牌、mDNS、背压、心跳 | tokio-tungstenite、mdns-sd |
@@ -210,35 +210,38 @@ Zed 的 provider crate（GPL-3.0-or-later，不能用）、codex 的 `codex-api`
 
 ### 3.4 工具
 
-**总原则：所有内置工具以 codex-rs 的实现为准**（`core/src/tools/`：`registry`、`router`、`spec`、`parallel`、`handlers/*`，
-以及 `apply-patch`、`mcp` 相关 crate）。codex 有对应实现的，直接对照移植它的参数模式、执行语义、输出截断、错误文案、
-取消与超时处理，不再沿用 pi 版本的工具行为；工具的 JSON schema 和提示词也以 codex 为起点，FastVibe 只在必须的地方改
-（见下表「偏离」列）。移植时记录对应的 codex 文件与提交，保留 Apache-2.0 的 NOTICE，升级时可对照上游。
-codex 没有的工具才自己写，且沿用 codex 的 handler 抽象（`ToolHandler` + 注册表 + 读写锁并行）。
+**工具集就是 codex 现有的那几个，直接照它实现，不再延续 Electron 版（pi）的旧工具。** 以 codex-rs `core/src/tools/` 为准
+（`registry`、`router`、`parallel`、`handlers/*`，以及 `apply-patch`、`mcp` 相关 crate）：参数形状、执行语义、输出截断、错误文案、
+取消与超时都对照移植，JSON schema 与说明文字也以它为起点。移植时在 `NOTICE.md` 记下来源文件与标签，保留 Apache-2.0；
+codex 的现行版若绑定了它自己的内部 crate，就取最近一个自包含的标签（`apply_patch` 用的是 `rust-v0.46.0`）。
+**读文件、列目录、搜索都不做专用工具**：codex 主线已经删掉了 `read_file` / `list_dir` / `grep_files`，一律走 shell。
 
-| 工具 | codex 对应 | 偏离 / 说明 |
+下表按 codex 主线 `handlers/` 的清单列出（名称开工前逐个对照源码核实）：
+
+| 工具 | codex 对应 | 状态 / 说明 |
 | --- | --- | --- |
-| 读文件 / 列目录 / 搜索 | `handlers/read_file`、`list_dir`、`grep_files` | 按 codex 的分页、缩进感知读取与输出上限；FastVibe 的 `read` 并入 `read_file` 的语义 |
-| 改文件 | `apply-patch` crate + `handlers/apply_patch` | **以 apply_patch 为唯一的编辑工具**，不再单独做 `write` / `edit`（新建 = Add File，整文件替换 = Delete + Add）。vendor `parser` / `seek_sequence` / `invocation`，只依赖 `similar`，保留 NOTICE；变更事件映射为 `FileChange` item |
-| shell | `handlers/shell`、`unified_exec`（含 `write_stdin` 的会话式进程） | 进程组、超时、取消、输出首尾截断、长命令转后台并可轮询；FastVibe 不做审批与沙箱，所以去掉 `with_escalated_permissions` / sandbox policy 那一层 |
-| todo | `handlers/plan`（`update_plan`） | 工具名与参数用 codex 的；状态仍存在工具结果 `details` 里以便随分支重建 |
-| question | `request_user_input` | 对应协议里的 `item/question/request`；多问题分页沿用 codex 的参数形状 |
-| 看图 | `handlers/view_image` | 对应「工具图片落盘 + 引用」；`present` 在它之上扩展视频 / HTML / Office |
-| MCP | `handlers/mcp` + `rmcp` | 工具命名、结果转换、`isError` 处理照 codex；连接管理保持每引擎一次、所有会话共享；`direct / deferred` 两种暴露方式（见 tool_search） |
-| tool_search | codex 的 `tool_search`（BM25） | 按 codex 的检索与「延迟声明」流程 |
-| 代码模式 | codex 的 `code_mode` / `js_repl` | 以 codex 的沙箱、`tools.<name>()` 绑定和输出规则为准，取代原来的 QuickJS 自研方案；是否复用其 V8 / QuickJS 选型，M4 开工前对照上游定 |
-| web_search | codex 的 `web_search` | 由模型端托管的搜索工具时直接透传；仅在 Responses 协议下激活 |
-| subagent | codex 的 `multi_agents`（spawn / wait / close agent 等） | 角色、并行与链式沿用 codex 的 agent 控制模型；FastVibe 的角色文件与模型继承规则叠加其上 |
-| 以下 codex 没有，自己写 | — | `dag_*`（调度、写入范围、等待释放名额）、`present`、`conversation_search`、`worktree`、app config、`browser_*` / `computer_*`、`schedule_*`；`browser_*` / `computer_*` 由 server 发 `item/tool/call`、`fv-gui` 执行，没有 GUI 连接时不激活 |
+| `exec_command`、`write_stdin` | `shell_spec` / `unified_exec`：命令可转后台，返回 session id，再用 `write_stdin` 写入或轮询；可选 pty | `exec_command` 已做（跑到结束或超时）；会话式进程与 `write_stdin` 随 pty / 终端面板一起做。去掉沙箱与审批那一层（`with_escalated_permissions` 等） |
+| `apply_patch` | `apply-patch` crate | 已做。唯一的编辑工具（新建 = Add File，整文件替换 = Delete + Add）；与 codex 的差异：全部能应用才写盘 |
+| `update_plan` | `plan` | 待做。清单状态存在工具结果里，随分支重建 |
+| `request_user_input` | `request_user_input` | 待做。对应协议的 `item/question/request`，多问题分页沿用它的参数形状 |
+| `view_image` | `view_image` | 待做。图片落盘、转写只存引用，请求前按预算回填 |
+| MCP 工具与资源 | `mcp`、`mcp_resource`（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`），`rmcp` | 待做。每引擎连一次、所有会话共享 |
+| `tool_search` | `tool_search` | 待做。延迟声明的工具先搜后用 |
+| 子 agent | `multi_agents`（`spawn_agent`、`send_input`、`wait`、`close_agent`、`resume_agent`） | 待做。进程内起一次性会话，沿用它的 agent 控制模型 |
+| 代码模式 | `code_mode`（执行与 `wait`） | 待做。沙箱、`tools.<name>()` 绑定和输出规则以它为准，运行时选型开工前对照上游定 |
+| `web_search` | 模型端托管的搜索 | 待做。仅在 Responses 协议下透传 |
+| 其它小工具 | `get_context_remaining`、`new_context_window`，`sleep`、`current_time` 等 | 按需。`request_permissions`、插件安装类不做（没有审批，也没有插件系统） |
 
-执行层同样照搬 codex：`ToolRegistry` 按名字派发，`ToolRouter` 从模型输出构造调用，`parallel.rs` 的读写锁让只读工具并发、
-改动类工具串行；工具声明是否 `supports_parallel_tool_calls` 由 handler 自己声明。
+**不再做的旧工具**（Electron 版有、codex 没有）：`present`、`dag_*`、`conversation_search`、`worktree`、`schedule_*`、
+`browser_*` / `computer_*`、app config 工具，以及 `read` / `write` / `edit` / `ls` / `grep` / `find`。界面需要区分「读取 / 搜索 / 写入」
+这类类别时，按**命令内容**识别（`cat`、`sed -n`、`rg`、`grep`、`ls`…），不靠工具名；Windows 上的等价命令做 Windows 时再处理。
+协议里的 `item/tool/call`（服务端请求客户端执行的工具）保留，对应 codex 的动态工具，将来要接 GUI 能力时用得上。
 
-**这一点对其它章节的影响**：`fv-tools` 的工具清单随上表调整；检查点的「写入前捕获」要挂在 apply_patch 与 shell 的
-变更事件上（codex 的 patch 在应用前已解析出受影响文件，天然适合）；3.2 的历史规范化已经是 codex 做法，保持不变。
+执行层同样照搬 codex：`ToolRegistry` 按名字派发，`parallel.rs` 的读写锁让只读工具并发、改动类工具串行，工具自己声明是否支持并行调用。
+检查点的「写入前捕获」挂在 `apply_patch` 与 shell 的变更事件上（patch 在应用前已解析出受影响文件，天然适合）。
 
-`goal`、`handoff`、会话标题、输出语言、项目多文件夹上下文、记忆读取，这些原来是 pi 扩展，
-改为引擎内的「回合钩子」（`before_turn` / `after_message` / `on_settled`），不再有插件 API。
+会话标题、输出语言、AGENTS.md / 技能的发现、长期记忆这类**回合钩子**，也参照 codex 的同类机制（`agents_md.rs`、`memories`）取舍，
+不再有插件 API；`goal`、`handoff` 这些 pi 扩展功能不再作为目标，需要时再单独评估。
 
 ### 3.5 系统提示词
 
@@ -414,13 +417,32 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 - `chat` 协议加了 `reasoning_effort` 也没有流出 `reasoning_content`：这个模型走 chat 路由时不输出思考。
 - 手写的 SSE 夹具与真实流在这两个协议上没有分歧；Anthropic 与 Gemini 仍只有手写夹具。
 
+**内置工具（`fv-tools`）**：`apply_patch`、`exec_command`，参数形状、限制和输出格式照 codex
+（来源与改动逐项记在 `crates/fv-tools/NOTICE.md`，Apache-2.0）。
+
+- **`apply_patch`**：vendor 了 `rust-v0.46.0` 的 parser 与 `seek_sequence`（连同它们的上游测试），因为现行版已绑定 codex 自己的路径库。
+  与 codex 的**一处行为差异**：补丁先对每个文件在内存里算出结果（后一个 hunk 能看到前一个的修改），**全部成功才写盘**，
+  codex 是边算边写，失败时留下一半。接受相对路径（相对线程工作目录）和绝对路径；没有工作目录时相对路径直接拒绝，不猜。
+  codex 的 freeform（自定义工具语法）形式 genai 表达不了，所以用 JSON 函数 `{input}`，也容忍模型直接传裸字符串或 `<<'EOF'` 包装。
+- **`exec_command`**：进程组启动，超时或调用被丢弃（用户停止回合）时杀掉**整个进程组**；两路输出按到达顺序合并；
+  内存里只留头 2 MiB 加尾 2 MiB，给模型的部分用 codex 的 `truncate_middle` 按 token 预算（默认 10000，4 字节一个）截中间；
+  命令退出后只再等 300 ms 收尾，后台进程握着管道不会挂住调用。
+  **与 codex 的差异**：命令跑到结束或超时（默认 120 s），没有「超过 `yield_time_ms` 返回 session id、再用 `write_stdin` 轮询」；
+  那一套要 pty，随终端面板一起做。因此基础提示词里写明「不要用它起服务或 watcher」。
+- 每个线程用自己的工作目录（`Thread.cwd`），基础提示词 `fv_agent::base_instructions` 自写（不照搬 codex 的），说明工具用法与工作目录。
+- **真实验证**：FastVibe 中转站的 `deepseek-v4.1-flash`，`responses` 与 `chat` 两种协议下都完成了
+  「新建文件 → 修改文件 → 运行验证 → 汇报」，以及「列目录 → 找关键字 → 读文件」（后一项是在还有 `read_file` / `grep_files` 时测的；去掉专用工具、全走 `exec_command` 后重测见下）。
+- 这一轮顺手抓到并修了两处：`Item` 与 `Message` / `ContentBlock` 的枚举变体字段是 snake_case（`is_error`），
+  与其它协议类型的 camelCase 不一致，会让手机端的类型对不上，现用 `rename_all_fields` 统一；
+  `main` 里工具没注册上，是因为替换没匹配却没有断言——现在 server 的 agent 由 `agent_with_builtin_tools` 一处构造，主程序与测试共用。
+
 **存储（`fv-store`）**：`fastvibe.db`（目录，`PRAGMA user_version` 迁移、0600、`auto_vacuum` 先于 WAL、高版本拒绝打开）+
 `sessions/<id>.jsonl`（只追加，首行 header，之后每行一条消息并用 `parentId` 串成链）。写入跟着 agent 的 `Committed` 事件走：
 消息进入历史的那一刻就落盘（`sync_data`），崩溃最多丢当前这一条，写到一半的末行读取时跳过、下次追加前补换行。
 重启后线程的历史从转写读回，`turns_from_history` 用位置派生 id（`t3`、`t3i7`）重建快照，所以同一份转写总得到同样的 id。
 首个提示词的第一行（最多 60 字）作为线程标题。
 
-尚未做：重试之外的恢复（压缩、排队消息、steer）、内置工具、provider 配置经协议下发（目前只有命令行 `--protocol/--base-url/--model-id`，密钥走 `FV_API_KEY`）、
+尚未做：重试之外的恢复（压缩、排队消息、steer）、内置工具里的 todo / question / present 等、provider 配置经协议下发（目前只有命令行 `--protocol/--base-url/--model-id`，密钥走 `FV_API_KEY`）、
 失败的回合在重启后不再显示错误项（错误没有对应的消息）。
 
 ## 8. 风险

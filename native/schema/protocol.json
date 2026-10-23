@@ -1,188 +1,52 @@
 {
-  "clientRequest": {
+  "clientNotification": {
+    "$defs": {
+      "Empty": {
+        "type": "object"
+      }
+    },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "ClientRequest",
-    "description": "A request from a client, with its `id` and typed `params`.",
     "oneOf": [
       {
-        "type": "object",
         "properties": {
           "method": {
-            "type": "string",
-            "const": "initialize"
-          },
-          "id": {
-            "$ref": "#/$defs/RequestId"
+            "const": "initialized",
+            "type": "string"
           },
           "params": {
-            "$ref": "#/$defs/InitializeParams"
+            "$ref": "#/$defs/Empty"
           }
         },
         "required": [
           "method",
-          "id",
           "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "thread/list"
-          },
-          "id": {
-            "$ref": "#/$defs/RequestId"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadListParams"
-          }
-        },
-        "required": [
-          "method",
-          "id",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "thread/start"
-          },
-          "id": {
-            "$ref": "#/$defs/RequestId"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadStartParams"
-          }
-        },
-        "required": [
-          "method",
-          "id",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "thread/resume"
-          },
-          "id": {
-            "$ref": "#/$defs/RequestId"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadIdParams"
-          }
-        },
-        "required": [
-          "method",
-          "id",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "thread/unsubscribe"
-          },
-          "id": {
-            "$ref": "#/$defs/RequestId"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadIdParams"
-          }
-        },
-        "required": [
-          "method",
-          "id",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "turn/start"
-          },
-          "id": {
-            "$ref": "#/$defs/RequestId"
-          },
-          "params": {
-            "$ref": "#/$defs/TurnStartParams"
-          }
-        },
-        "required": [
-          "method",
-          "id",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "turn/interrupt"
-          },
-          "id": {
-            "$ref": "#/$defs/RequestId"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadIdParams"
-          }
-        },
-        "required": [
-          "method",
-          "id",
-          "params"
-        ]
+        ],
+        "type": "object"
       }
     ],
+    "title": "ClientNotification"
+  },
+  "clientRequest": {
     "$defs": {
-      "RequestId": {
-        "anyOf": [
-          {
-            "type": "integer",
-            "format": "int64"
-          },
-          {
-            "type": "string"
-          }
-        ]
-      },
-      "InitializeParams": {
-        "type": "object",
+      "ClientCapabilities": {
         "properties": {
-          "clientInfo": {
-            "$ref": "#/$defs/ClientInfo"
+          "experimentalApi": {
+            "default": false,
+            "description": "Accept methods and notifications marked experimental.",
+            "type": "boolean"
           },
-          "protocolVersion": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "capabilities": {
-            "$ref": "#/$defs/ClientCapabilities",
-            "default": {
-              "experimentalApi": false,
-              "optOutNotifications": []
-            }
+          "optOutNotifications": {
+            "default": [],
+            "description": "Notification methods this client does not want.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
-        "required": [
-          "clientInfo",
-          "protocolVersion"
-        ]
+        "type": "object"
       },
       "ClientInfo": {
-        "type": "object",
         "properties": {
           "name": {
             "type": "string"
@@ -194,45 +58,67 @@
         "required": [
           "name",
           "version"
+        ],
+        "type": "object"
+      },
+      "InitializeParams": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/$defs/ClientCapabilities",
+            "default": {
+              "experimentalApi": false,
+              "optOutNotifications": []
+            }
+          },
+          "clientInfo": {
+            "$ref": "#/$defs/ClientInfo"
+          },
+          "protocolVersion": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clientInfo",
+          "protocolVersion"
+        ],
+        "type": "object"
+      },
+      "RequestId": {
+        "anyOf": [
+          {
+            "format": "int64",
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          }
         ]
       },
-      "ClientCapabilities": {
-        "type": "object",
+      "ThreadIdParams": {
         "properties": {
-          "experimentalApi": {
-            "description": "Accept methods and notifications marked experimental.",
-            "type": "boolean",
-            "default": false
-          },
-          "optOutNotifications": {
-            "description": "Notification methods this client does not want.",
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "default": []
+          "threadId": {
+            "type": "string"
           }
-        }
+        },
+        "required": [
+          "threadId"
+        ],
+        "type": "object"
       },
       "ThreadListParams": {
-        "type": "object",
         "properties": {
           "includeArchived": {
-            "type": "boolean",
-            "default": false
+            "default": false,
+            "type": "boolean"
           }
-        }
+        },
+        "type": "object"
       },
       "ThreadStartParams": {
-        "type": "object",
         "properties": {
           "cwd": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "project": {
             "type": [
               "string",
               "null"
@@ -244,552 +130,212 @@
               "string",
               "null"
             ]
-          }
-        }
-      },
-      "ThreadIdParams": {
-        "type": "object",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ]
-      },
-      "TurnStartParams": {
-        "type": "object",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "text": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId",
-          "text"
-        ]
-      }
-    }
-  },
-  "clientNotification": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "ClientNotification",
-    "oneOf": [
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "initialized"
-          },
-          "params": {
-            "$ref": "#/$defs/Empty"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      }
-    ],
-    "$defs": {
-      "Empty": {
-        "type": "object"
-      }
-    }
-  },
-  "serverNotification": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "ServerNotification",
-    "oneOf": [
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "thread/started"
-          },
-          "params": {
-            "$ref": "#/$defs/Thread"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "catalog/changed"
-          },
-          "params": {
-            "$ref": "#/$defs/CatalogChanged"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "turn/started"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadEvent"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "turn/completed"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadEvent2"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "thread/status/changed"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadEvent3"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "item/started"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadEvent4"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "item/completed"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadEvent4"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "item/agentMessage/delta"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadEvent5"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "item/reasoning/delta"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadEvent5"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "item/toolCall/argumentsDelta"
-          },
-          "params": {
-            "$ref": "#/$defs/ThreadEvent5"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      }
-    ],
-    "$defs": {
-      "Thread": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "cwd": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "project": {
             "type": [
               "string",
               "null"
             ]
-          },
-          "createdAt": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "updatedAt": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "archived": {
-            "type": "boolean"
-          },
-          "unread": {
-            "type": "boolean"
           }
         },
-        "required": [
-          "id",
-          "title",
-          "createdAt",
-          "updatedAt",
-          "archived",
-          "unread"
-        ]
-      },
-      "CatalogChanged": {
         "type": "object"
       },
-      "ThreadEvent": {
-        "type": "object",
+      "TurnStartParams": {
         "properties": {
-          "threadId": {
+          "text": {
             "type": "string"
           },
-          "seq": {
-            "description": "Monotonic per thread.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "turnId": {
+          "threadId": {
             "type": "string"
           }
         },
         "required": [
           "threadId",
-          "seq",
-          "turnId"
-        ]
-      },
-      "ThreadEvent2": {
-        "type": "object",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "seq": {
-            "description": "Monotonic per thread.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "turnId": {
-            "type": "string"
-          },
-          "status": {
-            "$ref": "#/$defs/TurnStatus"
-          },
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "threadId",
-          "seq",
-          "turnId",
-          "status"
-        ]
-      },
-      "TurnStatus": {
-        "oneOf": [
-          {
-            "type": "string",
-            "enum": [
-              "completed",
-              "failed"
-            ]
-          },
-          {
-            "description": "Stopped by the user (`turn/interrupt`). Not a failure.",
-            "type": "string",
-            "const": "interrupted"
-          }
-        ]
-      },
-      "ThreadEvent3": {
-        "description": "`running` is true from the moment a turn is accepted until it has fully settled.",
-        "type": "object",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "seq": {
-            "description": "Monotonic per thread.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "running": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "threadId",
-          "seq",
-          "running"
-        ]
-      },
-      "ThreadEvent4": {
-        "type": "object",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "seq": {
-            "description": "Monotonic per thread.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "turnId": {
-            "type": "string"
-          },
-          "item": {
-            "$ref": "#/$defs/Item"
-          }
-        },
-        "required": [
-          "threadId",
-          "seq",
-          "turnId",
-          "item"
-        ]
-      },
-      "Item": {
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "userMessage"
-              },
-              "id": {
-                "type": "string"
-              },
-              "text": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "id",
-              "text"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "agentMessage"
-              },
-              "id": {
-                "type": "string"
-              },
-              "text": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "id",
-              "text"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "reasoning"
-              },
-              "id": {
-                "type": "string"
-              },
-              "text": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "id",
-              "text"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "toolCall"
-              },
-              "id": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "arguments": true,
-              "output": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "is_error": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "type",
-              "id",
-              "name",
-              "arguments",
-              "is_error"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "error"
-              },
-              "id": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "id",
-              "message"
-            ]
-          }
-        ]
-      },
-      "ThreadEvent5": {
-        "type": "object",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          },
-          "seq": {
-            "description": "Monotonic per thread.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "turnId": {
-            "type": "string"
-          },
-          "itemId": {
-            "type": "string"
-          },
-          "delta": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId",
-          "seq",
-          "turnId",
-          "itemId",
-          "delta"
-        ]
+          "text"
+        ],
+        "type": "object"
       }
-    }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "A request from a client, with its `id` and typed `params`.",
+    "oneOf": [
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "initialize",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/InitializeParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/list",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadListParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/start",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadStartParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/resume",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/unsubscribe",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "turn/start",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TurnStartParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "turn/interrupt",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "ClientRequest"
   },
   "message": {
+    "$defs": {
+      "ErrorObject": {
+        "properties": {
+          "code": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "data": true,
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "RequestId": {
+        "anyOf": [
+          {
+            "format": "int64",
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "Message",
-    "description": "One frame on the wire, before its method is looked at.",
     "anyOf": [
       {
-        "type": "object",
         "properties": {
           "id": {
             "$ref": "#/$defs/RequestId"
@@ -804,10 +350,10 @@
         "required": [
           "id",
           "method"
-        ]
+        ],
+        "type": "object"
       },
       {
-        "type": "object",
         "properties": {
           "method": {
             "type": "string"
@@ -818,10 +364,10 @@
         },
         "required": [
           "method"
-        ]
+        ],
+        "type": "object"
       },
       {
-        "type": "object",
         "properties": {
           "id": {
             "$ref": "#/$defs/RequestId"
@@ -831,53 +377,507 @@
         "required": [
           "id",
           "result"
-        ]
+        ],
+        "type": "object"
       },
       {
-        "type": "object",
         "properties": {
-          "id": {
-            "$ref": "#/$defs/RequestId"
-          },
           "error": {
             "$ref": "#/$defs/ErrorObject"
+          },
+          "id": {
+            "$ref": "#/$defs/RequestId"
           }
         },
         "required": [
           "id",
           "error"
-        ]
+        ],
+        "type": "object"
       }
     ],
+    "description": "One frame on the wire, before its method is looked at.",
+    "title": "Message"
+  },
+  "serverNotification": {
     "$defs": {
-      "RequestId": {
-        "anyOf": [
+      "CatalogChanged": {
+        "type": "object"
+      },
+      "Item": {
+        "oneOf": [
           {
-            "type": "integer",
-            "format": "int64"
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "const": "userMessage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "text"
+            ],
+            "type": "object"
           },
           {
-            "type": "string"
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "const": "agentMessage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "const": "reasoning",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "text"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "arguments": true,
+              "id": {
+                "type": "string"
+              },
+              "isError": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "output": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "toolCall",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "name",
+              "arguments",
+              "isError"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "const": "error",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "message"
+            ],
+            "type": "object"
           }
         ]
       },
-      "ErrorObject": {
-        "type": "object",
+      "Thread": {
         "properties": {
-          "code": {
-            "type": "integer",
-            "format": "int64"
+          "archived": {
+            "type": "boolean"
           },
-          "message": {
+          "createdAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
             "type": "string"
           },
-          "data": true
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "unread": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "format": "int64",
+            "type": "integer"
+          }
         },
         "required": [
-          "code",
-          "message"
+          "id",
+          "title",
+          "createdAt",
+          "updatedAt",
+          "archived",
+          "unread"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent": {
+        "properties": {
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "turnId"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent2": {
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/$defs/TurnStatus"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "turnId",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent3": {
+        "description": "`running` is true from the moment a turn is accepted until it has fully settled.",
+        "properties": {
+          "running": {
+            "type": "boolean"
+          },
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "running"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent4": {
+        "properties": {
+          "item": {
+            "$ref": "#/$defs/Item"
+          },
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "turnId",
+          "item"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent5": {
+        "properties": {
+          "delta": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "turnId",
+          "itemId",
+          "delta"
+        ],
+        "type": "object"
+      },
+      "TurnStatus": {
+        "oneOf": [
+          {
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "interrupted",
+            "description": "Stopped by the user (`turn/interrupt`). Not a failure.",
+            "type": "string"
+          }
         ]
       }
-    }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "properties": {
+          "method": {
+            "const": "thread/started",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Thread"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "catalog/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CatalogChanged"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "turn/started",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "turn/completed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent2"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "thread/status/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent3"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "item/started",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent4"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "item/completed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent4"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "item/agentMessage/delta",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent5"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "item/reasoning/delta",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent5"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "item/toolCall/argumentsDelta",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent5"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "ServerNotification"
   }
 }
