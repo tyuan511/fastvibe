@@ -171,14 +171,14 @@ async fn dispatch(
             })
         }
         ClientRequest::ThreadList { params, .. } => to_value(ThreadListResponse {
-            threads: state.threads(params.include_archived),
+            threads: state.threads(params.include_archived)?,
         }),
         ClientRequest::ThreadStart { params, .. } => to_value(ThreadStartResponse {
-            thread: state.create_thread(params.cwd, params.project),
+            thread: state.create_thread(params.cwd, params.project)?,
         }),
         ClientRequest::ThreadResume { params, .. } => {
             let thread = state
-                .thread(&params.thread_id)
+                .thread(&params.thread_id)?
                 .ok_or_else(|| ErrorObject::new(code::INVALID_PARAMS, "thread not found"))?;
             // Subscribing and reading the snapshot are one step: nothing can happen to the
             // thread in between that the client would then see twice or not at all.
@@ -196,7 +196,7 @@ async fn dispatch(
         }
         ClientRequest::TurnStart { params, .. } => {
             state
-                .thread(&params.thread_id)
+                .thread(&params.thread_id)?
                 .ok_or_else(|| ErrorObject::new(code::INVALID_PARAMS, "thread not found"))?;
             let rt = state.runtime(&params.thread_id);
             // The caller sees its own turn without having to resume first.

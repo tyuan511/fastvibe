@@ -71,6 +71,15 @@ impl ThreadLog {
         }
     }
 
+    pub fn with_turns(thread_id: ThreadId, turns: Vec<Turn>) -> Self {
+        Self {
+            thread_id,
+            turns,
+            seq: 0,
+            running: false,
+        }
+    }
+
     fn turn_mut(&mut self, turn_id: &str) -> Option<&mut Turn> {
         self.turns.iter_mut().find(|t| t.id == turn_id)
     }

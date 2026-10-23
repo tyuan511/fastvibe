@@ -124,12 +124,14 @@ async fn a_plain_answer_streams_blocks_then_completes() {
             AgentEvent::BlockDone { .. } => "done",
             AgentEvent::MessageDone(_) => "message",
             AgentEvent::ToolResult { .. } => "result",
+            AgentEvent::Committed(_) => "committed",
         })
         .collect();
     // The thinking block closes before the text one opens; "hello there" streams as two words.
     assert_eq!(
         kinds,
         [
+            "committed", // the user's message
             "start-thinking",
             "delta",
             "done",
@@ -137,8 +139,52 @@ async fn a_plain_answer_streams_blocks_then_completes() {
             "delta",
             "delta",
             "done",
-            "message"
+            "message",
+            "committed" // the reply
         ]
+    );
+}
+
+#[tokio::test]
+async fn committed_events_are_exactly_the_history_in_order() {
+    // Tool results are committed in call order, whatever order they finished in, and a stopped
+    // reply is committed as far as it got: what gets written to disk is what the next request sees.
+    let model = ScriptedModel::new([
+        Reply::new()
+            .tool("slow", "read", json!({"n": 1}))
+            .tool("fast", "read", json!({"n": 2}))
+            .done(),
+        Reply::new().text("partial ").then_hang(),
+    ]);
+    let (ctx, _) = agent(
+        model,
+        vec![Slow {
+            name: "read",
+            delay: Duration::from_millis(30),
+            mutates: false,
+        }],
+    );
+    let cancel = CancellationToken::new();
+    let stopper = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        stopper.cancel();
+    });
+    let r = run(&ctx, &cancel).await;
+    assert_eq!(r.outcome, TurnOutcome::Interrupted);
+    let committed: Vec<Message> = r
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Committed(m) => Some(m.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(committed, r.history);
+    assert_eq!(
+        r.history.len(),
+        5,
+        "user, assistant, two results, the stopped reply"
     );
 }
 
@@ -202,6 +248,7 @@ async fn a_tool_call_that_only_appears_in_the_final_message_is_still_announced()
         }],
         stop: StopReason::ToolUse,
         usage: Default::default(),
+        model: None,
     };
     let first = vec![fv_agent::testing::Step::Event(fv_agent::ModelEvent::Done(
         message,
@@ -478,6 +525,7 @@ fn normalize_fills_gaps_and_drops_strays() {
             content,
             stop: StopReason::ToolUse,
             usage: Default::default(),
+            model: None,
         })
     };
     let result = |id: &str| Message::ToolResult {

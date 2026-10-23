@@ -11,8 +11,14 @@ pub enum ContentBlock {
     Text {
         text: String,
     },
+    /// `signature` is the provider's opaque proof of the thought (Anthropic's signature,
+    /// OpenAI's encrypted reasoning, Gemini's thought signature). It has to be sent back
+    /// unchanged for the model to keep its reasoning across tool calls, and only to the
+    /// model that produced it.
     Thinking {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     ToolCall {
         id: String,
@@ -53,6 +59,9 @@ pub struct AssistantMessage {
     pub stop: StopReason,
     #[serde(default)]
     pub usage: Usage,
+    /// Which model wrote it (`provider/model`). Thinking signatures are only valid for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 pub struct ToolCallRef<'a> {

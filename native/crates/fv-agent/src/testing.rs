@@ -78,8 +78,10 @@ impl Reply {
     pub fn thinking(mut self, text: &str) -> Self {
         self.steps
             .push(Step::Event(ModelEvent::Thinking(text.into())));
-        self.content
-            .push(ContentBlock::Thinking { text: text.into() });
+        self.content.push(ContentBlock::Thinking {
+            text: text.into(),
+            signature: None,
+        });
         self
     }
 
@@ -142,6 +144,7 @@ impl Reply {
                 output_tokens: 5,
                 ..Usage::default()
             },
+            model: None,
         };
         self.steps.push(Step::Event(ModelEvent::Done(message)));
         self.steps
@@ -173,6 +176,7 @@ impl Model for EchoModel {
             content: vec![ContentBlock::Text { text: reply }],
             stop: StopReason::Stop,
             usage: Usage::default(),
+            model: None,
         })));
         ScriptedModel::new([steps]).stream(request)
     }

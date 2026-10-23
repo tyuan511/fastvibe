@@ -1,4 +1,4 @@
-use fv_core::{AssistantMessage, ContentBlock};
+use fv_core::{AssistantMessage, ContentBlock, Message};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +27,10 @@ pub enum AgentEvent {
     },
     /// One model request finished (carries its usage).
     MessageDone(AssistantMessage),
+    /// A message was added to the history, in the order the history has it. This is what
+    /// gets written to the transcript: persisting from here, rather than from the finished
+    /// history, means a crash loses at most the message being written.
+    Committed(Message),
     ToolResult {
         call_id: String,
         name: String,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use fv_agent::{TurnOutcome, run_turn};
+use fv_agent::{AgentEvent, TurnOutcome, run_turn};
 use fv_protocol::types::{Item, TurnStatus};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -72,6 +72,7 @@ async fn drive(
     )
     .await;
 
+    let first_prompt = text.clone();
     let mut history = rt.history();
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut mapper = EventMapper::new(turn_id.clone());
@@ -82,6 +83,7 @@ async fn drive(
             tokio::select! {
                 biased;
                 Some(event) = rx.recv() => {
+                    persist(&state, &thread_id, &event);
                     for e in mapper.map(event) {
                         rt.publish(&state, e).await;
                     }
@@ -92,6 +94,7 @@ async fn drive(
     };
     // Events sent in the last instant before the loop returned.
     while let Ok(event) = rx.try_recv() {
+        persist(&state, &thread_id, &event);
         for e in mapper.map(event) {
             rt.publish(&state, e).await;
         }
@@ -126,8 +129,16 @@ async fn drive(
         },
     )
     .await;
-    state.touch_thread(&thread_id);
+    state.touch_thread(&thread_id, Some(&first_prompt));
     // "Running" ends only now, after the completion event: a client that sees the thread idle
     // has already seen everything the turn did.
     rt.end(&state).await;
+}
+
+/// Messages reach the transcript as the agent adds them to its history, not when the turn ends:
+/// a crash then loses the message being written and nothing before it.
+fn persist(state: &ServerState, thread_id: &str, event: &AgentEvent) {
+    if let AgentEvent::Committed(message) = event {
+        state.persist(thread_id, message);
+    }
 }

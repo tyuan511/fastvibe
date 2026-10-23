@@ -56,7 +56,7 @@ async fn start(model: Option<ScriptedModel>) -> Harness {
         system: "sys".into(),
         cwd: None,
     };
-    let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent));
+    let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
     let sock = dir.path().join("s.sock");
     tokio::spawn(UnixServer::bind(state, &sock).await.unwrap().run());
     Harness {

@@ -42,6 +42,18 @@ impl ThreadRuntime {
         }
     }
 
+    /// A runtime for a thread that already has a transcript.
+    pub fn restored(thread_id: ThreadId, history: Vec<Message>, turns: Vec<Turn>) -> Self {
+        Self {
+            inner: Mutex::new(Inner {
+                log: ThreadLog::with_turns(thread_id, turns),
+                history,
+                subscribers: HashSet::new(),
+                running: None,
+            }),
+        }
+    }
+
     pub fn subscribe(&self, conn: ConnId) {
         self.inner.lock().unwrap().subscribers.insert(conn);
     }

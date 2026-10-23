@@ -92,7 +92,7 @@ impl EventMapper {
                         item: Item::AgentMessage { id, text },
                     }]
                 }
-                ContentBlock::Thinking { text } => {
+                ContentBlock::Thinking { text, .. } => {
                     vec![LogEvent::ItemCompleted {
                         turn_id,
                         item: Item::Reasoning { id, text },
@@ -105,7 +105,7 @@ impl EventMapper {
                     Vec::new()
                 }
             },
-            AgentEvent::MessageDone(_) => Vec::new(),
+            AgentEvent::MessageDone(_) | AgentEvent::Committed(_) => Vec::new(),
             AgentEvent::ToolResult {
                 call_id,
                 name,

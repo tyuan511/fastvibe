@@ -40,7 +40,7 @@ async fn start() -> Harness {
 
 async fn start_with(agent: AgentContext) -> Harness {
     let dir = tempfile::tempdir().unwrap();
-    let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent));
+    let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
     let server = UnixServer::bind(state.clone(), &dir.path().join("run/server.sock"))
         .await
         .unwrap();
@@ -254,7 +254,8 @@ async fn raw_exchange(state: Arc<ServerState>, lines: &[&str]) -> Vec<serde_json
 
 #[tokio::test]
 async fn malformed_and_unknown_frames_get_the_right_errors() {
-    let state = Arc::new(ServerState::new(std::env::temp_dir(), idle_agent()));
+    let dir = tempfile::tempdir().unwrap();
+    let state = Arc::new(ServerState::new(dir.path().to_path_buf(), idle_agent()).unwrap());
     let replies = raw_exchange(
         state,
         &[
@@ -285,7 +286,7 @@ async fn socket_is_private_and_a_second_server_is_refused() {
     assert_eq!(dir_mode, 0o700, "directory mode");
 
     let second = UnixServer::bind(
-        Arc::new(ServerState::new(h.dir.path().to_path_buf(), idle_agent())),
+        Arc::new(ServerState::new(h.dir.path().to_path_buf(), idle_agent()).unwrap()),
         &sock,
     )
     .await;
@@ -300,7 +301,7 @@ async fn a_stale_socket_file_is_replaced() {
     let stale = std::os::unix::net::UnixListener::bind(&sock).unwrap();
     drop(stale);
     assert!(sock.exists());
-    let state = Arc::new(ServerState::new(dir.path().to_path_buf(), idle_agent()));
+    let state = Arc::new(ServerState::new(dir.path().to_path_buf(), idle_agent()).unwrap());
     UnixServer::bind(state, &sock)
         .await
         .expect("stale socket is taken over");
@@ -308,7 +309,8 @@ async fn a_stale_socket_file_is_replaced() {
 
 #[tokio::test]
 async fn in_memory_pipe_serves_like_any_transport() {
-    let state = Arc::new(ServerState::new(std::env::temp_dir(), idle_agent()));
+    let dir = tempfile::tempdir().unwrap();
+    let state = Arc::new(ServerState::new(dir.path().to_path_buf(), idle_agent()).unwrap());
     let (client_io, server_io) = tokio::io::duplex(1 << 16);
     let (sr, sw) = tokio::io::split(server_io);
     tokio::spawn(serve_connection(state, ClientOrigin::Ssh, sr, sw));

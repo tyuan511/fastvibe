@@ -37,6 +37,12 @@ fn emit(events: &Events, event: AgentEvent) {
     let _ = events.send(event);
 }
 
+/// Add a message to the history and announce it.
+fn commit(history: &mut Vec<Message>, events: &Events, message: Message) {
+    emit(events, AgentEvent::Committed(message.clone()));
+    history.push(message);
+}
+
 /// Run one user turn to the end: append the user's message, then alternate model requests and
 /// tool batches until the model answers without asking for tools.
 ///
@@ -50,7 +56,7 @@ pub async fn run_turn(
     events: &Events,
     cancel: &CancellationToken,
 ) -> TurnOutcome {
-    history.push(Message::User { text: user_text });
+    commit(history, events, Message::User { text: user_text });
     // Reads run side by side; a write waits for them and then runs alone. One lock for the
     // whole turn, shared by every batch, as in codex's `tools/parallel.rs`.
     let lock = Arc::new(RwLock::new(()));
@@ -71,7 +77,7 @@ pub async fn run_turn(
                     .tool_calls()
                     .map(|c| (c.id.to_string(), c.name.to_string(), c.arguments.clone()))
                     .collect();
-                history.push(Message::Assistant(message));
+                commit(history, events, Message::Assistant(message));
                 match stop {
                     StopReason::Error { message } => return TurnOutcome::Failed(message),
                     StopReason::Aborted => return TurnOutcome::Interrupted,
@@ -86,14 +92,20 @@ pub async fn run_turn(
                     return TurnOutcome::Completed;
                 }
                 let results = execute_calls(ctx, calls, &lock, events, cancel).await;
-                history.extend(results);
+                for r in results {
+                    commit(history, events, r);
+                }
             }
             Sampled::Aborted(partial) => {
-                history.extend(partial.map(Message::Assistant));
+                if let Some(m) = partial {
+                    commit(history, events, Message::Assistant(m));
+                }
                 return TurnOutcome::Interrupted;
             }
             Sampled::Failed { partial, error } => {
-                history.extend(partial.map(Message::Assistant));
+                if let Some(m) = partial {
+                    commit(history, events, Message::Assistant(m));
+                }
                 return TurnOutcome::Failed(error);
             }
         }
@@ -216,7 +228,10 @@ impl<'a> Blocks<'a> {
         if let Some((id, kind, text)) = self.open.take() {
             let block = match kind {
                 Open::Text => ContentBlock::Text { text },
-                Open::Thinking => ContentBlock::Thinking { text },
+                Open::Thinking => ContentBlock::Thinking {
+                    text,
+                    signature: None,
+                },
             };
             self.done.push(block.clone());
             emit(self.events, AgentEvent::BlockDone { id, block });
@@ -278,6 +293,7 @@ impl<'a> Blocks<'a> {
             content: self.done.clone(),
             stop: StopReason::Aborted,
             usage: Default::default(),
+            model: None,
         })
     }
 }

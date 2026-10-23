@@ -1,0 +1,22 @@
+[package]
+name = "fv-provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fv-core = { path = "../fv-core" }
+fv-agent = { path = "../fv-agent" }
+genai = "=0.7.0"
+reqwest = { version = "0.13", default-features = false }
+futures-util.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio-util.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+
+[lints]
+workspace = true

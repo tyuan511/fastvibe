@@ -393,7 +393,28 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 - 慢订阅者超过 5 秒没腾出位置就被踢出该线程（`seq` 出现缺口，重新 `thread/resume` 即可），不拖累其他客户端。
 - `thread/start` 与 `turn/start` 自动订阅调用者；没有订阅的连接收不到线程事件。
 
-尚未做：真实 provider、`fv-store`（目录与转写目前只在内存）、转写落盘、重试、压缩、排队消息、steer、内置工具。
+**Provider（`fv-provider`，genai 0.7.0 锁精确版本）**：
+
+- 一个 `GenaiModel` 对应一个配置好的模型，协议、端点、密钥都由我们给 genai 的 `ServiceTargetResolver`，不让它按模型名猜适配器、不读环境变量。
+- **genai 的 base URL 要带版本段**（它只在后面拼 `messages` / `chat/completions` / `models/…`），和 pi 的客户端相反，所以
+  `engine_base_url` 重新翻译：Anthropic 补 `/v1`（用户已给的 `…/v4` 保留），Google 把 `/v1` 换成 `/v1beta`，OpenAI 两种原样，一律补尾斜杠。
+- 思考签名（Anthropic signature、Responses encrypted_content、Gemini thought signature）存在 `ContentBlock::Thinking.signature`，
+  回放时**只发给写它的那个模型**（`AssistantMessage.model`），换模型后丢弃，否则上游会拒绝。
+- 用量：genai 的 `prompt_tokens` 含缓存，换算成 FastVibe 的「不含缓存的输入」，缓存命中率才有意义。
+- **重试**：429 / 5xx / 408 / 409 / 断线，在**还没有任何内容到达之前**按指数退避加抖动重发（默认最多 5 次，优先用 `retry-after`）；
+  有内容之后的失败交给调用方，不重放半条回复。genai 把 HTTP 错误放在流的第一个有意义的元素里（`Start` 先于状态码到达），所以先读到那一个再决定。
+  `WebStream` 包着真正的错误，必须拆开判断，否则 401 也会被当成可重试。
+- 已知风险：genai 的 Responses 流式解析要求 `response.completed` 里有 `model` 字段，缺了会**静默丢掉工具调用**（只打 warn）。
+  离线测试用的 SSE 是手写的，不是录制的；**真实供应商验证用 `cargo run -p fv-provider --example live`**（密钥走 `FV_API_KEY`）。
+
+**存储（`fv-store`）**：`fastvibe.db`（目录，`PRAGMA user_version` 迁移、0600、`auto_vacuum` 先于 WAL、高版本拒绝打开）+
+`sessions/<id>.jsonl`（只追加，首行 header，之后每行一条消息并用 `parentId` 串成链）。写入跟着 agent 的 `Committed` 事件走：
+消息进入历史的那一刻就落盘（`sync_data`），崩溃最多丢当前这一条，写到一半的末行读取时跳过、下次追加前补换行。
+重启后线程的历史从转写读回，`turns_from_history` 用位置派生 id（`t3`、`t3i7`）重建快照，所以同一份转写总得到同样的 id。
+首个提示词的第一行（最多 60 字）作为线程标题。
+
+尚未做：重试之外的恢复（压缩、排队消息、steer）、内置工具、provider 配置经协议下发（目前只有命令行 `--protocol/--base-url/--model-id`，密钥走 `FV_API_KEY`）、
+失败的回合在重启后不再显示错误项（错误没有对应的消息）。
 
 ## 8. 风险
 
