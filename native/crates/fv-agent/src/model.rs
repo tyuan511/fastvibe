@@ -48,5 +48,11 @@ impl std::error::Error for ModelError {}
 
 /// A model the loop can sample. Dropping the stream cancels the request.
 pub trait Model: Send + Sync {
+    /// Whether the model can look at images. A tool that returns one (`view_image`) refuses
+    /// when it cannot.
+    fn supports_images(&self) -> bool {
+        true
+    }
+
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>>;
 }

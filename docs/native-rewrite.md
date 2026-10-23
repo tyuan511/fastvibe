@@ -224,9 +224,9 @@ codex 的现行版若绑定了它自己的内部 crate，就取最近一个自�
 | `apply_patch` | `apply-patch` crate | 已做。唯一的编辑工具（新建 = Add File，整文件替换 = Delete + Add）；与 codex 的差异：全部能应用才写盘 |
 | `update_plan` | `plan` | 已做。工具只校验形状并回 `Plan updated`；清单在调用参数里，server 额外发 `turn/plan/updated`（整张清单，不是差量）给在看的客户端 |
 | `request_user_input` | `request_user_input` | 已做。工具把回合停住，server 向客户端发 `item/question/request`（服务端请求），回答作为工具结果（codex 的 JSON 形状）；客户端总是加一个自由输入的 Other |
-| `view_image` | `view_image` | 待做。图片落盘、转写只存引用，请求前按预算回填 |
+| `view_image` | `view_image` | 已做。大图先缩小再发（长边 > 2000px 或 > 1 MB → 1568px，有透明保留 PNG，否则 JPEG）；图片落盘，转写只存路径 |
 | MCP 工具与资源 | `mcp`、`mcp_resource`（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`），`rmcp` | 待做。每引擎连一次、所有会话共享 |
-| `tool_search` | `tool_search` | 待做。延迟声明的工具先搜后用 |
+| `tool_search` | `tool_search` | 已做（BM25）。codex 靠 Responses API 自带的延迟加载，这里改为通用做法：延迟工具不进请求，搜到才声明；暂时没有延迟工具（MCP 之后才有），此时它自己也不出现在请求里 |
 | 子 agent | `multi_agents`（`spawn_agent`、`send_input`、`wait`、`close_agent`、`resume_agent`） | 待做。进程内起一次性会话，沿用它的 agent 控制模型 |
 | 代码模式 | `code_mode`（执行与 `wait`） | 待做。沙箱、`tools.<name>()` 绑定和输出规则以它为准，运行时选型开工前对照上游定 |
 | `web_search` | 模型端托管的搜索 | 待做。仅在 Responses 协议下透传 |
@@ -449,6 +449,18 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
   `register_builtin` 同样漏过一次，现在有 `tests/registry.rs` 钉住注册清单（按名字排序），不会再静默。
 - **真实验证**（`deepseek-v4.1-flash`，`responses`）：模型先 `update_plan` 列 2 步，再 `request_user_input` 问文件名（选项 `a.txt (Recommended)` / `b.txt`），
   收到回答 `b.txt` 后用 `apply_patch` 建了 `b.txt`，并把计划更新为全部完成。
+
+**图片（`view_image`）与延迟工具（`tool_search`）**：
+
+- **图片放在哪**：provider 的工具结果只能是字符串（genai 的 `ToolResponse` 如此，OpenAI chat 的工具消息也不能带图），
+  所以图片作为新的消息 `ToolImages` **紧跟在这一批全部工具结果之后**，转成一条用户消息；若插在两个工具结果中间，OpenAI 会因工具消息被打断而拒绝。
+  四种协议的请求形状都有测试：chat 的 `image_url` data URL、responses 的 `input_image`、anthropic 的 `image` block、gemini 的 `inline_data`。
+- **转写只存路径**：内存里是 base64，`persist` 落盘前由 `ImageStore` 写成 `tool-images/<会话>/<id>.<ext>`（0600/0700），转写行里是 `File{path}`；
+  重启后请求构建时再读文件。文件没了就换成一句「图片已不可用」，不丢整条请求。这是吸取 Electron 版 82 MB 转写的教训。
+- **模型看不了图**：`Model::supports_images()` → `ToolCtx.vision`；`view_image` 用 codex 原话拒绝，已有的图片换成一句说明。命令行 `--no-images`。
+- **延迟工具**：`Tool::deferred()` 的工具不出现在请求里，也不能被调用（报「not loaded yet，先用 tool_search」）；`tool_search` 搜到后写进线程的
+  `LoadedTools`，之后整个线程都继续声明它们（提示词缓存友好）。重启后需要重新搜索（未持久化）。
+- **真实验证**（`deepseek-v4.1-flash`，`chat`）：模型 `view_image` 一张纯红 PNG，答「整张图是纯红色」；第一次给错路径时自己查目录后改正。
 
 **存储（`fv-store`）**：`fastvibe.db`（目录，`PRAGMA user_version` 迁移、0600、`auto_vacuum` 先于 WAL、高版本拒绝打开）+
 `sessions/<id>.jsonl`（只追加，首行 header，之后每行一条消息并用 `parentId` 串成链）。写入跟着 agent 的 `Committed` 事件走：

@@ -23,7 +23,7 @@ enum Listen {
 fn usage() -> ! {
     eprintln!(
         "usage: fastvibe-server --data-dir DIR [--listen unix|stdio]\n\
-         \x20      [--model echo | --protocol chat|responses|anthropic|google --base-url URL --model-id ID [--thinking minimal|low|medium|high|xhigh|max]]"
+         \x20      [--model echo | --protocol chat|responses|anthropic|google --base-url URL --model-id ID [--thinking minimal|low|medium|high|xhigh|max] [--no-images]]"
     );
     std::process::exit(2)
 }
@@ -60,6 +60,7 @@ async fn main() {
     let mut data_dir = None;
     let mut listen = Listen::Unix;
     let mut echo = false;
+    let mut no_images = false;
     let (mut proto, mut base_url, mut model_id, mut level) = (None, None, None, None);
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -78,6 +79,7 @@ async fn main() {
             "--base-url" => base_url = Some(value()),
             "--model-id" => model_id = Some(value()),
             "--thinking" => level = Some(thinking(&value())),
+            "--no-images" => no_images = true,
             _ => usage(),
         }
     }
@@ -95,6 +97,7 @@ async fn main() {
                 &key,
             );
             config.thinking = level;
+            config.images = !no_images;
             Arc::new(GenaiModel::new(config).unwrap_or_else(|e| fail(e)))
         }
         // No provider: every turn fails, saying so.

@@ -57,6 +57,8 @@ pub fn turns_from_history(messages: &[Message]) -> Vec<Turn> {
                     }
                 }
             }
+            // Pictures a tool returned; the tool's item already shows what it did.
+            Message::ToolImages { .. } => {}
             Message::ToolResult {
                 call_id,
                 content,

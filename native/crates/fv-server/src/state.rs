@@ -119,10 +119,18 @@ impl ServerState {
     /// Write a message to the thread's transcript. A failure is reported, not fatal: the turn
     /// carries on, and the message is still in memory for the next request.
     pub fn persist(&self, thread_id: &str, message: &fv_core::Message) {
+        // Pictures go to files; the transcript line keeps their paths.
+        let message = match self.store.images.externalize(thread_id, message) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("cannot store a picture of {thread_id}: {e}");
+                return;
+            }
+        };
         if let Err(e) = self
             .store
             .transcripts
-            .append(thread_id, std::slice::from_ref(message))
+            .append(thread_id, std::slice::from_ref(&message))
         {
             eprintln!("cannot write the transcript of {thread_id}: {e}");
         }

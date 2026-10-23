@@ -27,6 +27,7 @@ futures-util.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
 fv-client = { path = "../fv-client" }
 tempfile = "3"
 

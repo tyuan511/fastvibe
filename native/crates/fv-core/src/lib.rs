@@ -118,6 +118,14 @@ pub enum Message {
         content: String,
         is_error: bool,
     },
+    /// Pictures a tool returned (`view_image`). Providers cannot carry an image inside a tool
+    /// result, so these follow the results of the batch they came from; a message of this kind
+    /// is only ever placed after tool results.
+    ToolImages {
+        call_id: String,
+        name: String,
+        images: Vec<ImagePart>,
+    },
 }
 
 /// One choice offered with a question.
@@ -151,4 +159,22 @@ pub struct Answers {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnswerList {
     pub answers: Vec<String>,
+}
+
+/// A picture, by where its bytes are.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePart {
+    /// `image/png`, `image/jpeg`, …
+    pub mime: String,
+    pub source: ImageSource,
+}
+
+/// In memory an image is its base64 bytes; on disk it is a file next to the transcript, so a
+/// transcript stays small however many screenshots a conversation has seen.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ImageSource {
+    Base64 { data: String },
+    File { path: String },
 }

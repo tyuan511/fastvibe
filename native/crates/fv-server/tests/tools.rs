@@ -136,7 +136,8 @@ async fn a_turn_can_write_read_and_run_in_the_threads_directory() {
             "apply_patch",
             "exec_command",
             "request_user_input",
-            "update_plan"
+            "update_plan",
+            "view_image"
         ]
     );
     assert!(

@@ -6,6 +6,7 @@ use fv_agent::ToolRegistry;
 fn every_builtin_tool_is_registered_under_its_codex_name() {
     let mut registry = ToolRegistry::new();
     fv_tools::register_builtin(&mut registry);
+    // `tool_search` is registered too, but only offered once something is deferred.
     let names: Vec<String> = registry.specs().into_iter().map(|s| s.name).collect();
     assert_eq!(
         names,
@@ -13,7 +14,8 @@ fn every_builtin_tool_is_registered_under_its_codex_name() {
             "apply_patch",
             "exec_command",
             "request_user_input",
-            "update_plan"
+            "update_plan",
+            "view_image"
         ]
     );
     for spec in registry.specs() {

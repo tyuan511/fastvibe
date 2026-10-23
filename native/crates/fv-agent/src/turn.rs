@@ -22,6 +22,8 @@ pub struct AgentContext {
     pub cwd: Option<PathBuf>,
     /// Where a tool's questions go; absent when no client can answer.
     pub ui: Option<Arc<dyn crate::UserInput>>,
+    /// The deferred tools this conversation has loaded (see `tool_search`).
+    pub loaded: crate::LoadedTools,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,7 +73,7 @@ pub async fn run_turn(
         let request = ModelRequest {
             system: ctx.system.clone(),
             messages: normalize(history),
-            tools: ctx.tools.specs(),
+            tools: ctx.tools.specs_for(&ctx.loaded),
         };
         match sample(ctx, request, events, cancel).await {
             Sampled::Done(message) => {
@@ -95,8 +97,23 @@ pub async fn run_turn(
                     return TurnOutcome::Completed;
                 }
                 let results = execute_calls(ctx, calls, &lock, events, cancel).await;
-                for r in results {
-                    commit(history, events, r);
+                // Results first, in call order; then any pictures they returned, as providers
+                // want them (a tool message must not be separated from its call).
+                let mut pictures = Vec::new();
+                for (result, images) in results {
+                    if let Message::ToolResult { call_id, name, .. } = &result
+                        && !images.is_empty()
+                    {
+                        pictures.push(Message::ToolImages {
+                            call_id: call_id.clone(),
+                            name: name.clone(),
+                            images,
+                        });
+                    }
+                    commit(history, events, result);
+                }
+                for message in pictures {
+                    commit(history, events, message);
                 }
             }
             Sampled::Aborted(partial) => {
@@ -307,21 +324,33 @@ async fn execute_calls(
     lock: &Arc<RwLock<()>>,
     events: &Events,
     cancel: &CancellationToken,
-) -> Vec<Message> {
+) -> Vec<(Message, Vec<fv_core::ImagePart>)> {
     // `join_all` polls in order, so locks are requested in call order; the lock is fair, so a
     // write queued behind earlier reads waits for them and later reads wait for it.
     let runs = calls.into_iter().map(|(call_id, name, arguments)| {
-        let tool = ctx.tools.get(&name);
+        // A deferred tool the model has not found yet is not there to be called.
+        let tool = ctx.tools.get(&name).filter(|t| !t.deferred() || ctx.loaded.contains(&name));
         let lock = lock.clone();
         let cancel = cancel.clone();
         let cwd = ctx.cwd.clone();
         let ui = ctx.ui.clone();
+        let vision = ctx.model.supports_images();
+        let registry = ctx.tools.clone();
+        let loaded = ctx.loaded.clone();
         let events = events.clone();
         async move {
-            let (content, is_error) = match tool {
-                None => (format!("Unknown tool: {name}"), true),
+            let (content, is_error, images) = match tool {
+                None => (unknown_tool(&name, &registry), true, Vec::new()),
                 Some(tool) => {
-                    let tool_ctx = ToolCtx { cancel: cancel.clone(), cwd, call_id: call_id.clone(), ui };
+                    let tool_ctx = ToolCtx {
+                        cancel: cancel.clone(),
+                        cwd,
+                        call_id: call_id.clone(),
+                        ui,
+                        vision,
+                        registry,
+                        loaded,
+                    };
                     let args = arguments.clone();
                     let run = async {
                         // Held across the call; dropped when it finishes or is stopped.
@@ -334,13 +363,13 @@ async fn execute_calls(
                     };
                     tokio::select! {
                         biased;
-                        _ = cancel.cancelled() => ("Stopped by the user before it finished.".to_string(), true),
-                        out = run => (out.content, out.is_error),
+                        _ = cancel.cancelled() => ("Stopped by the user before it finished.".to_string(), true, Vec::new()),
+                        out = run => (out.content, out.is_error, out.images),
                     }
                 }
             };
             emit(&events, AgentEvent::ToolResult { call_id: call_id.clone(), name: name.clone(), arguments, output: content.clone(), is_error });
-            Message::ToolResult { call_id, name, content, is_error }
+            (Message::ToolResult { call_id, name, content, is_error }, images)
         }
     });
     join_all(runs).await
@@ -350,4 +379,12 @@ async fn execute_calls(
 enum Guard {
     Read(tokio::sync::OwnedRwLockReadGuard<()>),
     Write(tokio::sync::OwnedRwLockWriteGuard<()>),
+}
+
+fn unknown_tool(name: &str, registry: &ToolRegistry) -> String {
+    if registry.deferred_specs().iter().any(|t| t.name == name) {
+        format!("Tool `{name}` is not loaded yet. Find it with tool_search first.")
+    } else {
+        format!("Unknown tool: {name}")
+    }
 }

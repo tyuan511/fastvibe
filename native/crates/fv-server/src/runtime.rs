@@ -19,6 +19,8 @@ struct Inner {
     history: Vec<Message>,
     subscribers: HashSet<ConnId>,
     running: Option<(TurnId, CancellationToken)>,
+    /// Deferred tools found with `tool_search`; they stay offered for the rest of the thread.
+    loaded: fv_agent::LoadedTools,
 }
 
 /// Everything about one thread that exists only while the server runs: its subscribers, the
@@ -38,6 +40,7 @@ impl ThreadRuntime {
                 history: Vec::new(),
                 subscribers: HashSet::new(),
                 running: None,
+                loaded: Default::default(),
             }),
         }
     }
@@ -50,6 +53,7 @@ impl ThreadRuntime {
                 history,
                 subscribers: HashSet::new(),
                 running: None,
+                loaded: Default::default(),
             }),
         }
     }
@@ -71,6 +75,10 @@ impl ThreadRuntime {
         let mut g = self.inner.lock().unwrap();
         g.subscribers.insert(conn);
         (g.log.turns.clone(), g.log.seq, g.log.running)
+    }
+
+    pub fn loaded_tools(&self) -> fv_agent::LoadedTools {
+        self.inner.lock().unwrap().loaded.clone()
     }
 
     pub fn history(&self) -> Vec<Message> {

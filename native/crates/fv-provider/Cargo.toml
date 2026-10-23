@@ -9,12 +9,14 @@ publish.workspace = true
 fv-core = { path = "../fv-core" }
 fv-agent = { path = "../fv-agent" }
 genai = "=0.7.0"
+base64 = "0.22"
 reqwest = { version = "0.13", default-features = false }
 futures-util.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+tempfile = "3"
 tokio-util.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 

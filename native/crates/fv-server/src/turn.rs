@@ -90,6 +90,8 @@ async fn drive(
             state.agent.system
         ),
         cwd,
+        // Deferred tools found earlier in this thread are still on offer.
+        loaded: rt.loaded_tools(),
         // Questions the agent asks go to whoever is watching this thread.
         ui: Some(std::sync::Arc::new(ThreadUserInput {
             state: state.clone(),

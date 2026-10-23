@@ -2173,12 +2173,14 @@ dependencies = [
 name = "fv-provider"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
  "fv-agent",
  "fv-core",
  "genai",
  "reqwest",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]
@@ -2195,6 +2197,7 @@ dependencies = [
  "fv-provider",
  "fv-store",
  "fv-tools",
+ "image",
  "serde",
  "serde_json",
  "tempfile",
@@ -2207,6 +2210,7 @@ dependencies = [
 name = "fv-store"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "fv-core",
  "fv-protocol",
  "rusqlite",
@@ -2228,9 +2232,11 @@ dependencies = [
 name = "fv-tools"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
  "fv-agent",
  "fv-core",
+ "image",
  "libc",
  "serde",
  "serde_json",

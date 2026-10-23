@@ -33,5 +33,6 @@ pub fn agent_with_builtin_tools(
         system: String::new(),
         cwd: None,
         ui: None,
+        loaded: Default::default(),
     }
 }

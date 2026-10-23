@@ -3,13 +3,13 @@
 use std::collections::HashSet;
 
 use fv_agent::{ModelRequest, ToolSpec};
-use fv_core::{AssistantMessage, ContentBlock, Message, StopReason, Usage};
+use fv_core::{AssistantMessage, ContentBlock, ImagePart, ImageSource, Message, StopReason, Usage};
 use genai::chat::{
-    ChatMessage, ChatRequest, ContentPart, MessageContent, StopReason as GenaiStop, StreamEnd,
-    Tool, ToolCall, ToolResponse, Usage as GenaiUsage,
+    Binary, ChatMessage, ChatRequest, ContentPart, MessageContent, StopReason as GenaiStop,
+    StreamEnd, Tool, ToolCall, ToolResponse, Usage as GenaiUsage,
 };
 
-pub fn to_chat_request(request: &ModelRequest, model_label: &str) -> ChatRequest {
+pub fn to_chat_request(request: &ModelRequest, model_label: &str, images_ok: bool) -> ChatRequest {
     let mut chat = ChatRequest::default();
     if !request.system.is_empty() {
         chat = chat.with_system(request.system.clone());
@@ -17,8 +17,20 @@ pub fn to_chat_request(request: &ModelRequest, model_label: &str) -> ChatRequest
     if !request.tools.is_empty() {
         chat = chat.with_tools(request.tools.iter().map(to_tool).collect::<Vec<_>>());
     }
+    // Pictures tool calls returned wait here until the run of tool results they follow ends:
+    // a provider wants every tool message right after the call, so the pictures go in one
+    // user turn after all of them.
+    let mut pictures: Vec<ContentPart> = Vec::new();
     for message in &request.messages {
+        if !matches!(message, Message::ToolImages { .. }) && !pictures.is_empty() {
+            chat = chat.append_message(ChatMessage::user(MessageContent::from_parts(
+                std::mem::take(&mut pictures),
+            )));
+        }
         match message {
+            Message::ToolImages { name, images, .. } => {
+                pictures.extend(picture_parts(name, images, images_ok));
+            }
             Message::User { text } => chat = chat.append_message(ChatMessage::user(text.clone())),
             Message::Assistant(a) => {
                 if let Some(m) = assistant_message(a, model_label) {
@@ -37,7 +49,38 @@ pub fn to_chat_request(request: &ModelRequest, model_label: &str) -> ChatRequest
             }
         }
     }
+    if !pictures.is_empty() {
+        chat = chat.append_message(ChatMessage::user(MessageContent::from_parts(pictures)));
+    }
     chat
+}
+
+/// What a tool's pictures become in the request. A file that has gone away, or a model that
+/// cannot see, leaves a sentence saying so rather than nothing: the model should know
+/// something was there.
+fn picture_parts(tool: &str, images: &[ImagePart], images_ok: bool) -> Vec<ContentPart> {
+    use base64::Engine;
+    if !images_ok {
+        return vec![ContentPart::Text(format!(
+            "[The `{tool}` tool returned an image, but this model cannot see images.]"
+        ))];
+    }
+    let mut parts = vec![ContentPart::Text(format!(
+        "Image returned by the `{tool}` tool:"
+    ))];
+    for image in images {
+        let data = match &image.source {
+            ImageSource::Base64 { data } => Some(data.clone()),
+            ImageSource::File { path } => std::fs::read(path)
+                .ok()
+                .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)),
+        };
+        parts.push(match data {
+            Some(data) => ContentPart::Binary(Binary::from_base64(image.mime.clone(), data, None)),
+            None => ContentPart::Text("[The image is no longer available.]".into()),
+        });
+    }
+    parts
 }
 
 fn to_tool(spec: &ToolSpec) -> Tool {

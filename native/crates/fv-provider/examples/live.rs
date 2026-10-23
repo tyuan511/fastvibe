@@ -99,6 +99,7 @@ async fn main() {
         system: "You are a careful assistant. Use the add tool for arithmetic.".into(),
         cwd: None,
         ui: None,
+        loaded: Default::default(),
     };
 
     let (tx, mut rx) = mpsc::unbounded_channel();

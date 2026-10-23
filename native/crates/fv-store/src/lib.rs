@@ -7,10 +7,12 @@
 
 mod db;
 mod history;
+mod images;
 mod transcript;
 
 pub use db::{Db, StoreError};
 pub use history::turns_from_history;
+pub use images::ImageStore;
 pub use transcript::{Loaded, TranscriptStore};
 
 use std::path::Path;
@@ -19,6 +21,7 @@ use std::path::Path;
 pub struct Store {
     pub db: Db,
     pub transcripts: TranscriptStore,
+    pub images: ImageStore,
 }
 
 impl Store {
@@ -27,6 +30,7 @@ impl Store {
         Ok(Self {
             db: Db::open(&data_dir.join("fastvibe.db"))?,
             transcripts: TranscriptStore::new(data_dir.join("sessions"))?,
+            images: ImageStore::new(data_dir.join("tool-images"))?,
         })
     }
 }

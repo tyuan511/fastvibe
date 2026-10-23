@@ -84,13 +84,18 @@ impl GenaiModel {
 }
 
 impl Model for GenaiModel {
+    fn supports_images(&self) -> bool {
+        self.config.images
+    }
+
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>> {
         let client = self.client.clone();
         let options = self.options();
         let label = self.config.label.clone();
         let model_id = self.config.model_id.clone();
         let max_retries = self.config.max_retries;
-        let chat = Arc::new(to_chat_request(&request, &label));
+        let images_ok = self.config.images;
+        let chat = Arc::new(to_chat_request(&request, &label, images_ok));
 
         let opened = open_with_retry(client, model_id, chat, options, max_retries);
         stream::once(opened)

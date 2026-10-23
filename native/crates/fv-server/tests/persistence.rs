@@ -59,6 +59,7 @@ async fn run(dir: &Path, name: &str, model: ScriptedModel) -> Run {
         system: String::new(),
         cwd: None,
         ui: None,
+        loaded: Default::default(),
     };
     let state = Arc::new(ServerState::new(dir.to_path_buf(), agent).unwrap());
     let sock = dir.join(format!("{name}.sock"));

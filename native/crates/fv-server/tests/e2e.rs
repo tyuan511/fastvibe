@@ -23,6 +23,7 @@ fn agent_with(model: Arc<dyn Model>) -> AgentContext {
         system: String::new(),
         cwd: None,
         ui: None,
+        loaded: Default::default(),
     }
 }
 

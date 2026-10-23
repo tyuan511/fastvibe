@@ -54,6 +54,7 @@ fn agent(model: ScriptedModel, tools: Vec<Slow>) -> (AgentContext, Arc<ScriptedM
             system: "sys".into(),
             cwd: None,
             ui: None,
+            loaded: Default::default(),
         },
         model,
     )
@@ -381,6 +382,7 @@ async fn results_stay_in_call_order_even_when_they_finish_out_of_order() {
         system: String::new(),
         cwd: None,
         ui: None,
+        loaded: Default::default(),
     };
     let r = run(&ctx, &CancellationToken::new()).await;
     assert_eq!(
@@ -554,6 +556,7 @@ fn normalize_fills_gaps_and_drops_strays() {
             Message::ToolResult {
                 call_id, is_error, ..
             } => format!("result:{call_id}:{is_error}"),
+            Message::ToolImages { call_id, .. } => format!("images:{call_id}"),
         })
         .collect();
     assert_eq!(

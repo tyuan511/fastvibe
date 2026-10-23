@@ -40,6 +40,9 @@ pub struct ModelConfig {
     pub headers: Vec<(String, String)>,
     /// How many times a request that failed before producing anything is repeated.
     pub max_retries: u32,
+    /// Whether the model can look at images. Without it, a picture a tool returns is replaced
+    /// by a sentence, and `view_image` says it is not allowed.
+    pub images: bool,
 }
 
 impl ModelConfig {
@@ -60,6 +63,7 @@ impl ModelConfig {
             max_output_tokens: None,
             headers: Vec::new(),
             max_retries: 5,
+            images: true,
         }
     }
 }
