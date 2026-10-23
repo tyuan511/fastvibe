@@ -82,7 +82,14 @@ async fn drive(
         .and_then(|t| t.cwd)
         .map(std::path::PathBuf::from);
     let (withdrawn_tx, mut withdrawn_rx) = mpsc::unbounded_channel();
+    // The conversation's own model, or the default one; a model that cannot be used fails
+    // the turn with the reason, rather than the turn not starting at all.
+    let model = match state.thread(&thread_id).ok().flatten() {
+        Some(thread) => crate::providers::model_for(&state, &thread),
+        None => state.agent.model.clone(),
+    };
     let ctx = AgentContext {
+        model,
         // The base instructions, then whatever the server was configured to add.
         system: format!(
             "{}{}",

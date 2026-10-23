@@ -28,6 +28,31 @@
   },
   "clientRequest": {
     "$defs": {
+      "ApiProtocol": {
+        "description": "The wire format a provider speaks.",
+        "oneOf": [
+          {
+            "const": "chat",
+            "description": "OpenAI Chat Completions, and everything that imitates it.",
+            "type": "string"
+          },
+          {
+            "const": "responses",
+            "description": "OpenAI Responses.",
+            "type": "string"
+          },
+          {
+            "const": "anthropic",
+            "description": "Anthropic Messages.",
+            "type": "string"
+          },
+          {
+            "const": "google",
+            "description": "Google Gemini.",
+            "type": "string"
+          }
+        ]
+      },
       "ClientCapabilities": {
         "properties": {
           "experimentalApi": {
@@ -61,6 +86,47 @@
         ],
         "type": "object"
       },
+      "Empty": {
+        "type": "object"
+      },
+      "FetchModelsParams": {
+        "description": "Ask a provider which models it has: a saved one (`provider_id`, using its stored key) or one\nnot saved yet (`protocol`, `base_url`, `api_key`).",
+        "properties": {
+          "apiKey": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "baseUrl": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApiProtocol"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "providerId": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "InitializeParams": {
         "properties": {
           "capabilities": {
@@ -85,6 +151,152 @@
         ],
         "type": "object"
       },
+      "ModelDefaults": {
+        "properties": {
+          "model": {
+            "description": "`provider/model` used by a conversation that names none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ModelInfo": {
+        "properties": {
+          "contextWindow": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "What the provider calls it.",
+            "type": "string"
+          },
+          "maxOutputTokens": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApiProtocol"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "This model's own protocol, when it differs from its provider's."
+          },
+          "supportsImages": {
+            "default": true,
+            "description": "Whether it can look at images.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "ProviderIdParams": {
+        "properties": {
+          "providerId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerId"
+        ],
+        "type": "object"
+      },
+      "ProviderReorderParams": {
+        "description": "The providers in the order they should be listed; one left out goes to the end.",
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "type": "object"
+      },
+      "ProviderUpsertParams": {
+        "description": "Create a provider (no `id`) or replace one. The key is write-only: absent keeps the stored\none, an empty string clears it, anything else replaces it.",
+        "properties": {
+          "apiKey": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "models": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ModelInfo"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protocol": {
+            "$ref": "#/$defs/ApiProtocol"
+          }
+        },
+        "required": [
+          "name",
+          "protocol",
+          "baseUrl"
+        ],
+        "type": "object"
+      },
       "RequestId": {
         "anyOf": [
           {
@@ -95,6 +307,18 @@
             "type": "string"
           }
         ]
+      },
+      "ThinkingLevel": {
+        "description": "How hard the model is asked to think. There is deliberately no \"off\".",
+        "enum": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "type": "string"
       },
       "ThreadIdParams": {
         "properties": {
@@ -114,6 +338,33 @@
             "type": "boolean"
           }
         },
+        "type": "object"
+      },
+      "ThreadModelParams": {
+        "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
         "type": "object"
       },
       "ThreadStartParams": {
@@ -136,6 +387,17 @@
               "string",
               "null"
             ]
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingLevel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "type": "object"
@@ -298,6 +560,186 @@
           "params"
         ],
         "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/model/set",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadModelParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "provider/list",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "provider/upsert",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ProviderUpsertParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "provider/delete",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ProviderIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "provider/reorder",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ProviderReorderParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "provider/fetchModels",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/FetchModelsParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "model/list",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "model/defaults/get",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "model/defaults/set",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ModelDefaults"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
       }
     ],
     "title": "ClientRequest"
@@ -402,6 +844,9 @@
   "serverNotification": {
     "$defs": {
       "CatalogChanged": {
+        "type": "object"
+      },
+      "Empty": {
         "type": "object"
       },
       "Item": {
@@ -554,6 +999,18 @@
           }
         ]
       },
+      "ThinkingLevel": {
+        "description": "How hard the model is asked to think. There is deliberately no \"off\".",
+        "enum": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "type": "string"
+      },
       "Thread": {
         "properties": {
           "archived": {
@@ -572,11 +1029,30 @@
           "id": {
             "type": "string"
           },
+          "model": {
+            "default": null,
+            "description": "`provider/model` this conversation uses; the default model when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "project": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingLevel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "title": {
             "type": "string"
@@ -834,6 +1310,22 @@
           },
           "params": {
             "$ref": "#/$defs/CatalogChanged"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "providers/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
           }
         },
         "required": [

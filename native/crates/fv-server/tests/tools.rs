@@ -75,6 +75,7 @@ async fn a_turn_can_write_read_and_run_in_the_threads_directory() {
             cwd: Some(work.path().display().to_string()),
             project: None,
             model: None,
+            thinking: None,
         })
         .await
         .unwrap()

@@ -71,6 +71,11 @@ pub struct Thread {
     pub updated_at: i64,
     pub archived: bool,
     pub unread: bool,
+    /// `provider/model` this conversation uses; the default model when absent.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub thinking: Option<ThinkingLevel>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -86,13 +91,15 @@ pub struct ThreadListResponse {
     pub threads: Vec<Thread>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartParams {
     pub cwd: Option<String>,
     pub project: Option<String>,
     /// `provider/model`; the server's default when absent.
     pub model: Option<String>,
+    #[serde(default)]
+    pub thinking: Option<ThinkingLevel>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -306,4 +313,165 @@ pub struct UserInputResponse {
 #[serde(rename_all = "camelCase")]
 pub struct RequestResolved {
     pub request_id: RequestId,
+}
+
+// ---- providers and models
+
+/// The wire format a provider speaks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ApiProtocol {
+    /// OpenAI Chat Completions, and everything that imitates it.
+    Chat,
+    /// OpenAI Responses.
+    Responses,
+    /// Anthropic Messages.
+    Anthropic,
+    /// Google Gemini.
+    Google,
+}
+
+/// How hard the model is asked to think. There is deliberately no "off".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ThinkingLevel {
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    /// What the provider calls it.
+    pub id: String,
+    pub name: Option<String>,
+    /// This model's own protocol, when it differs from its provider's.
+    #[serde(default)]
+    pub protocol: Option<ApiProtocol>,
+    /// Whether it can look at images.
+    #[serde(default = "default_true")]
+    pub supports_images: bool,
+    #[serde(default)]
+    pub context_window: Option<u32>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// A provider as clients see it. The API key is never part of it: `has_key` says one is set.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderInfo {
+    pub id: String,
+    pub name: String,
+    pub protocol: ApiProtocol,
+    pub base_url: String,
+    pub has_key: bool,
+    pub enabled: bool,
+    pub models: Vec<ModelInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderListResponse {
+    pub providers: Vec<ProviderInfo>,
+}
+
+/// Create a provider (no `id`) or replace one. The key is write-only: absent keeps the stored
+/// one, an empty string clears it, anything else replaces it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUpsertParams {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    pub protocol: ApiProtocol,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub models: Vec<ModelInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUpsertResponse {
+    pub provider: ProviderInfo,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderIdParams {
+    pub provider_id: String,
+}
+
+/// The providers in the order they should be listed; one left out goes to the end.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderReorderParams {
+    pub ids: Vec<String>,
+}
+
+/// Ask a provider which models it has: a saved one (`provider_id`, using its stored key) or one
+/// not saved yet (`protocol`, `base_url`, `api_key`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchModelsParams {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub protocol: Option<ApiProtocol>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchModelsResponse {
+    pub models: Vec<ModelInfo>,
+}
+
+/// One model a conversation can use.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelEntry {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub model: ModelInfo,
+    /// `provider_id/model_id`: what a conversation stores to name it.
+    pub label: String,
+}
+
+/// The models of every enabled provider that has a key, in provider order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelListResponse {
+    pub models: Vec<ModelEntry>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDefaults {
+    /// `provider/model` used by a conversation that names none.
+    pub model: Option<String>,
+    pub thinking: Option<ThinkingLevel>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadModelParams {
+    pub thread_id: ThreadId,
+    pub model: Option<String>,
+    pub thinking: Option<ThinkingLevel>,
 }

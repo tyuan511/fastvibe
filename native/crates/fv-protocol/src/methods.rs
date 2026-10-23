@@ -70,6 +70,15 @@ client_requests! {
     ThreadUnsubscribe => "thread/unsubscribe": ThreadIdParams => Empty,
     TurnStart => "turn/start": TurnStartParams => TurnStartResponse,
     TurnInterrupt => "turn/interrupt": ThreadIdParams => Empty,
+    ThreadModelSet => "thread/model/set": ThreadModelParams => ThreadStartResponse,
+    ProviderList => "provider/list": Empty => ProviderListResponse,
+    ProviderUpsert => "provider/upsert": ProviderUpsertParams => ProviderUpsertResponse,
+    ProviderDelete => "provider/delete": ProviderIdParams => Empty,
+    ProviderReorder => "provider/reorder": ProviderReorderParams => ProviderListResponse,
+    ProviderFetchModels => "provider/fetchModels": FetchModelsParams => FetchModelsResponse,
+    ModelList => "model/list": Empty => ModelListResponse,
+    ModelDefaultsGet => "model/defaults/get": Empty => ModelDefaults,
+    ModelDefaultsSet => "model/defaults/set": ModelDefaults => ModelDefaults,
 }
 
 notifications!(ClientNotification {
@@ -79,6 +88,8 @@ notifications!(ClientNotification {
 notifications!(ServerNotification {
     ThreadStarted => "thread/started": Thread,
     CatalogChanged => "catalog/changed": CatalogChanged,
+    // A provider or the default model changed; model pickers read `model/list` again.
+    ProvidersChanged => "providers/changed": Empty,
     TurnStarted => "turn/started": ThreadEvent<TurnRef>,
     TurnCompleted => "turn/completed": ThreadEvent<TurnCompleted>,
     ThreadStatusChanged => "thread/status/changed": ThreadEvent<ThreadStatus>,

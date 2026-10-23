@@ -140,6 +140,7 @@ async fn threads_are_created_listed_and_announced_to_every_client() {
             cwd: Some("/tmp/p".into()),
             project: None,
             model: None,
+            thinking: None,
         })
         .await
         .unwrap()
@@ -180,6 +181,7 @@ async fn resume_subscribes_and_disconnect_unsubscribes() {
             cwd: None,
             project: None,
             model: None,
+            thinking: None,
         })
         .await
         .unwrap()

@@ -17,7 +17,18 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::ThreadResume { .. }
             | ClientRequest::ThreadUnsubscribe { .. }
             | ClientRequest::TurnStart { .. }
-            | ClientRequest::TurnInterrupt { .. } => true,
+            | ClientRequest::TurnInterrupt { .. }
+            | ClientRequest::ThreadModelSet { .. }
+            | ClientRequest::ProviderList { .. }
+            | ClientRequest::ProviderUpsert { .. }
+            | ClientRequest::ProviderDelete { .. }
+            | ClientRequest::ProviderReorder { .. }
+            | ClientRequest::ModelList { .. }
+            | ClientRequest::ModelDefaultsGet { .. }
+            | ClientRequest::ModelDefaultsSet { .. } => true,
+            // Fetching a provider's model list makes this machine request an address the
+            // caller chose: a lever a remote client does not need.
+            ClientRequest::ProviderFetchModels { .. } => false,
         },
     }
 }

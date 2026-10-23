@@ -86,6 +86,7 @@ async fn a_viewed_picture_is_a_file_on_disk_and_survives_a_restart() {
                 cwd: Some(work.path().display().to_string()),
                 project: None,
                 model: None,
+                thinking: None,
             })
             .await
             .unwrap()
@@ -191,6 +192,7 @@ async fn a_picture_that_is_not_one_is_an_error_and_stores_nothing() {
             cwd: Some(work.path().display().to_string()),
             project: None,
             model: None,
+            thinking: None,
         })
         .await
         .unwrap()

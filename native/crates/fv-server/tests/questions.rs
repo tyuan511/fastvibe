@@ -97,6 +97,7 @@ async fn new_thread(c: &Client) -> String {
         cwd: None,
         project: None,
         model: None,
+        thinking: None,
     })
     .await
     .unwrap()

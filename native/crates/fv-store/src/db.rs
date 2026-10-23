@@ -2,8 +2,9 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Mutex;
 
-use fv_protocol::types::Thread;
+use fv_protocol::types::{ApiProtocol, ModelInfo, Thread};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -61,7 +62,30 @@ const MIGRATIONS: &[&str] = &[
          data       TEXT NOT NULL
      );
      CREATE INDEX conversations_updated ON conversations(updated_at DESC);",
+    // 2: model providers (their API keys are NOT here: they live in `credentials.json`) and a
+    // small key-value table for settings such as the default model.
+    "CREATE TABLE providers (
+         id       TEXT PRIMARY KEY,
+         position INTEGER NOT NULL,
+         data     TEXT NOT NULL
+     );
+     CREATE TABLE settings (
+         key   TEXT PRIMARY KEY,
+         value TEXT NOT NULL
+     );",
 ];
+
+/// A provider as stored: everything but its key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredProvider {
+    pub id: String,
+    pub name: String,
+    pub protocol: ApiProtocol,
+    pub base_url: String,
+    pub enabled: bool,
+    pub models: Vec<ModelInfo>,
+}
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -139,6 +163,93 @@ impl Db {
             .unwrap()
             .execute("DELETE FROM conversations WHERE id = ?1", params![id])?
             > 0)
+    }
+
+    pub fn list_providers(&self) -> Result<Vec<StoredProvider>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT data FROM providers ORDER BY position, id")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+    }
+
+    pub fn get_provider(&self, id: &str) -> Result<Option<StoredProvider>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let data: Option<String> = conn
+            .query_row(
+                "SELECT data FROM providers WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(data.map(|d| serde_json::from_str(&d)).transpose()?)
+    }
+
+    /// Create a provider (at the end of the list) or replace one (keeping its place).
+    pub fn put_provider(&self, provider: &StoredProvider) -> Result<(), StoreError> {
+        let data = serde_json::to_string(provider)?;
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO providers (id, position, data)
+             VALUES (?1, COALESCE((SELECT MAX(position) + 1 FROM providers), 0), ?2)
+             ON CONFLICT(id) DO UPDATE SET data = ?2",
+            params![provider.id, data],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_provider(&self, id: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM providers WHERE id = ?1", params![id])?
+            > 0)
+    }
+
+    /// Put the providers in this order; ones not named keep their relative order after them.
+    pub fn reorder_providers(&self, ids: &[String]) -> Result<(), StoreError> {
+        let current: Vec<String> = self.list_providers()?.into_iter().map(|p| p.id).collect();
+        let mut order: Vec<&String> = ids.iter().filter(|i| current.contains(i)).collect();
+        for id in &current {
+            if !order.contains(&id) {
+                order.push(id);
+            }
+        }
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        for (position, id) in order.into_iter().enumerate() {
+            tx.execute(
+                "UPDATE providers SET position = ?1 WHERE id = ?2",
+                params![position as i64, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Set a setting; `None` removes it.
+    pub fn set_setting(&self, key: &str, value: Option<&str>) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        match value {
+            Some(v) => conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
+                params![key, v],
+            )?,
+            None => conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?,
+        };
+        Ok(())
     }
 
     /// Flush the write-ahead log into the main file; for a clean shutdown.

@@ -8,6 +8,7 @@ mod log;
 mod mapping;
 mod policy;
 mod prompt;
+mod providers;
 mod runtime;
 mod state;
 mod turn;

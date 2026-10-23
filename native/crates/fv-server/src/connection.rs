@@ -200,7 +200,12 @@ async fn dispatch(
             threads: state.threads(params.include_archived)?,
         }),
         ClientRequest::ThreadStart { params, .. } => {
-            let thread = state.create_thread(params.cwd, params.project)?;
+            if let Some(label) = &params.model {
+                crate::providers::resolve(state, label, None)
+                    .map_err(|m| ErrorObject::new(code::INVALID_PARAMS, m))?;
+            }
+            let thread =
+                state.create_thread(params.cwd, params.project, params.model, params.thinking)?;
             // Whoever starts a thread is watching it.
             state.runtime(&thread.id).subscribe(conn);
             to_value(ThreadStartResponse { thread })
@@ -250,6 +255,28 @@ async fn dispatch(
                 cancel,
             );
             to_value(TurnStartResponse { turn_id })
+        }
+        ClientRequest::ThreadModelSet { params, .. } => to_value(ThreadStartResponse {
+            thread: crate::providers::set_thread_model(state, params)?,
+        }),
+        ClientRequest::ProviderList { .. } => to_value(crate::providers::list(state)?),
+        ClientRequest::ProviderUpsert { params, .. } => {
+            to_value(crate::providers::upsert(state, params)?)
+        }
+        ClientRequest::ProviderDelete { params, .. } => {
+            crate::providers::delete(state, &params.provider_id)?;
+            to_value(Empty {})
+        }
+        ClientRequest::ProviderReorder { params, .. } => {
+            to_value(crate::providers::reorder(state, &params.ids)?)
+        }
+        ClientRequest::ProviderFetchModels { params, .. } => {
+            to_value(crate::providers::fetch_models(state, params).await?)
+        }
+        ClientRequest::ModelList { .. } => to_value(crate::providers::model_list(state)?),
+        ClientRequest::ModelDefaultsGet { .. } => to_value(crate::providers::read_defaults(state)?),
+        ClientRequest::ModelDefaultsSet { params, .. } => {
+            to_value(crate::providers::set_defaults(state, params)?)
         }
         ClientRequest::TurnInterrupt { params, .. } => {
             // Stopping a thread that is not running is not an error: the user's intent is met.

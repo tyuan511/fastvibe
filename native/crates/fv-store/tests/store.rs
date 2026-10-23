@@ -15,6 +15,8 @@ fn thread(id: &str, updated_at: i64) -> Thread {
         updated_at,
         archived: false,
         unread: false,
+        model: None,
+        thinking: None,
     }
 }
 
@@ -27,7 +29,7 @@ fn the_database_is_private_versioned_and_reopens_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fastvibe.db");
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 1);
+    assert_eq!(db.schema_version().unwrap(), 2);
     db.put_thread(&thread("a", 5)).unwrap();
     assert_eq!(mode(&path), 0o600);
     // The write-ahead log files are written by SQLite; they must not be wider than the database.
@@ -39,7 +41,7 @@ fn the_database_is_private_versioned_and_reopens_cleanly() {
     }
     drop(db);
     let again = Db::open(&path).unwrap();
-    assert_eq!(again.schema_version().unwrap(), 1);
+    assert_eq!(again.schema_version().unwrap(), 2);
     assert_eq!(again.get_thread("a").unwrap().unwrap().title, "thread a");
 }
 
@@ -52,7 +54,7 @@ fn a_database_from_a_newer_build_is_refused_untouched() {
     match Db::open(&path) {
         Err(StoreError::TooNew {
             found: 99,
-            known: 1,
+            known: 2,
         }) => {}
         other => panic!("{:?}", other.err()),
     }
@@ -275,4 +277,167 @@ fn the_store_opens_both_halves_on_one_directory() {
     let again = Store::open(&dir.path().join("data")).unwrap();
     assert_eq!(again.db.list_threads(false).unwrap().len(), 1);
     assert_eq!(again.transcripts.read("a").unwrap().messages.len(), 1);
+}
+
+fn provider(id: &str, name: &str) -> fv_store::StoredProvider {
+    use fv_protocol::types::{ApiProtocol, ModelInfo};
+    fv_store::StoredProvider {
+        id: id.into(),
+        name: name.into(),
+        protocol: ApiProtocol::Chat,
+        base_url: "https://x/v1".into(),
+        enabled: true,
+        models: vec![ModelInfo {
+            id: "m1".into(),
+            name: Some("Model One".into()),
+            protocol: None,
+            supports_images: true,
+            context_window: Some(128_000),
+            max_output_tokens: None,
+        }],
+    }
+}
+
+#[test]
+fn providers_keep_their_order_and_their_place_when_edited() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("fastvibe.db")).unwrap();
+    for (id, name) in [("a", "A"), ("b", "B"), ("c", "C")] {
+        db.put_provider(&provider(id, name)).unwrap();
+    }
+    let ids = |db: &Db| {
+        db.list_providers()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&db), ["a", "b", "c"]);
+
+    // Editing keeps the place.
+    let mut b = provider("b", "Renamed");
+    b.enabled = false;
+    db.put_provider(&b).unwrap();
+    assert_eq!(ids(&db), ["a", "b", "c"]);
+    assert_eq!(db.get_provider("b").unwrap().unwrap().name, "Renamed");
+
+    // Reordering names some; the rest follow in their old order; unknown ids are ignored.
+    db.reorder_providers(&["c".into(), "ghost".into()]).unwrap();
+    assert_eq!(ids(&db), ["c", "a", "b"]);
+
+    assert!(db.delete_provider("a").unwrap());
+    assert!(!db.delete_provider("a").unwrap());
+    assert_eq!(ids(&db), ["c", "b"]);
+    // A new one goes to the end, whatever was deleted.
+    db.put_provider(&provider("d", "D")).unwrap();
+    assert_eq!(ids(&db), ["c", "b", "d"]);
+}
+
+#[test]
+fn settings_are_a_small_key_value_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("fastvibe.db")).unwrap();
+    assert_eq!(db.get_setting("default_model").unwrap(), None);
+    db.set_setting("default_model", Some("relay/m1")).unwrap();
+    db.set_setting("default_model", Some("relay/m2")).unwrap();
+    assert_eq!(
+        db.get_setting("default_model").unwrap().as_deref(),
+        Some("relay/m2")
+    );
+    db.set_setting("default_model", None).unwrap();
+    assert_eq!(db.get_setting("default_model").unwrap(), None);
+}
+
+#[test]
+fn a_database_from_before_providers_is_upgraded_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fastvibe.db");
+    // What schema 1 looked like, with a conversation in it.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE conversations (id TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL);
+         CREATE INDEX conversations_updated ON conversations(updated_at DESC);",
+    )
+    .unwrap();
+    let old = serde_json::json!({"id":"old","title":"from v1","cwd":null,"project":null,"createdAt":1,"updatedAt":2,"archived":false,"unread":false});
+    conn.execute(
+        "INSERT INTO conversations VALUES ('old', 2, 0, ?1)",
+        [old.to_string()],
+    )
+    .unwrap();
+    conn.pragma_update(None, "user_version", 1).unwrap();
+    drop(conn);
+
+    let db = Db::open(&path).unwrap();
+    assert_eq!(db.schema_version().unwrap(), 2);
+    let t = db.get_thread("old").unwrap().expect("the old conversation");
+    assert_eq!(
+        (t.title.as_str(), t.model, t.thinking),
+        ("from v1", None, None),
+        "new fields default"
+    );
+    db.put_provider(&provider("a", "A")).unwrap();
+}
+
+#[test]
+fn credentials_are_private_replaced_whole_and_removed_with_the_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("data")).unwrap();
+    let file = dir.path().join("data/credentials.json");
+
+    assert_eq!(store.credentials.get("relay").unwrap(), None);
+    assert!(!store.credentials.has("relay").unwrap());
+    store.credentials.set("relay", "sk-secret-1").unwrap();
+    store.credentials.set("other", "sk-secret-2").unwrap();
+    assert_eq!(mode(&file), 0o600);
+    assert_eq!(
+        store.credentials.get("relay").unwrap().as_deref(),
+        Some("sk-secret-1")
+    );
+
+    // A key is replaced, not appended.
+    store.credentials.set("relay", "sk-secret-3").unwrap();
+    assert_eq!(
+        store.credentials.get("relay").unwrap().as_deref(),
+        Some("sk-secret-3")
+    );
+
+    // Nothing is left half-written beside it.
+    let names: Vec<_> = std::fs::read_dir(file.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
+
+    store.credentials.remove("relay").unwrap();
+    store.credentials.remove("relay").unwrap();
+    assert!(!store.credentials.has("relay").unwrap());
+    assert_eq!(
+        store.credentials.get("other").unwrap().as_deref(),
+        Some("sk-secret-2")
+    );
+
+    // The database never learns a key.
+    store.db.put_provider(&provider("other", "Other")).unwrap();
+    store.db.checkpoint().unwrap();
+    let raw = std::fs::read(dir.path().join("data/fastvibe.db")).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&raw).contains("sk-secret"),
+        "a key reached the database"
+    );
+}
+
+#[test]
+fn an_unreadable_credentials_file_is_an_error_not_an_empty_one() {
+    // Treating it as empty would let the next write destroy keys nobody could read.
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("data")).unwrap();
+    std::fs::write(dir.path().join("data/credentials.json"), "{ not json").unwrap();
+    assert!(store.credentials.get("relay").is_err());
+    assert!(store.credentials.set("relay", "k").is_err());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("data/credentials.json")).unwrap(),
+        "{ not json"
+    );
 }

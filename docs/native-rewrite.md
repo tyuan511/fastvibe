@@ -462,6 +462,26 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
   `LoadedTools`，之后整个线程都继续声明它们（提示词缓存友好）。重启后需要重新搜索（未持久化）。
 - **真实验证**（`deepseek-v4.1-flash`，`chat`）：模型 `view_image` 一张纯红 PNG，答「整张图是纯红色」；第一次给错路径时自己查目录后改正。
 
+**供应商与模型配置（经协议，`provider/*`、`model/*`）**：
+
+- **方法**：`provider/list`、`provider/upsert`、`provider/delete`、`provider/reorder`、`provider/fetchModels`、`model/list`、`model/defaults/get|set`、
+  `thread/model/set`；变更后广播 `providers/changed`，各客户端重读 `model/list`。会话的模型是 `provider_id/model_id`，存在 `Thread.model` / `Thread.thinking` 上。
+- **密钥只写不读**：`ProviderInfo` 没有密钥字段，只有 `hasKey`；`upsert` 的 `apiKey` 缺省 = 保留原值、空串 = 清除、其它 = 替换。
+  密钥在 `credentials.json`（0600，临时文件 + fsync + rename 整体替换，**读不出来就报错而不是当空文件**，否则下一次写入会毁掉没人读过的密钥），
+  数据库里没有，协议里没有任何方法返回；删除供应商时一并删掉它的密钥，以及指向它的默认模型。测试直接扫数据库字节和响应 JSON 里有没有密钥。
+- **模型怎么选**：会话自己的 → 默认的 → 还没配任何供应商时用服务器启动时给的那个（命令行或测试）；配了供应商却没选，回合以
+  「No model is selected…」失败，而不是猜一个。模型不可用（供应商没了、被关、没密钥、模型不在列表里）同样让**回合失败并说明原因**，不是断连；
+  设置时（`thread/start`、`thread/model/set`、`model/defaults/set`）会先校验，不可用的直接拒绝。
+- **协议判定**：模型自己的 `protocol` 优先，否则按 id 推断（`claude-*` → Anthropic、`gemini-*` → Google，供应商已说那个协议则不改）。
+- **拉模型列表**（`provider/fetchModels`）：已存的供应商用它的密钥，表单里新输入的密钥优先，没存的供应商用传来的协议、地址、密钥；
+  三类接口（OpenAI 风格 `/models`、Anthropic `/v1/models`、Google `/v1beta/models`，过滤掉不能 `generateContent` 的），兼容中转站的 `{models:[]}` 与裸数组形状。
+  **远程连接一律拒绝这个方法**（它会让本机去请求调用方指定的地址）；其余 provider 方法远程可用。
+- **存储**：schema 迁移到 2（`providers`、`settings` 两张表，旧库原地升级，旧会话新字段取默认）。
+- **真实验证**（FastVibe 中转站）：不带任何模型参数启动 → 拉到 40 个模型 → 保存 → 设默认 `fastvibe/deepseek-v4.1-flash` + high → 重启后新建会话直接跑通一轮；
+  响应里没有密钥，`credentials.json` 为 0600，数据库字节里没有密钥。
+- 还没做：模型元数据（上下文窗口、价格、是否看图——要等 models.dev 快照，现在 `supportsImages` 默认 true、窗口为空）、
+  把 `ProviderUpsert` 的 OAuth 登录式供应商、命令行 `--protocol` 等参数现在只是没配供应商时的后备。
+
 **存储（`fv-store`）**：`fastvibe.db`（目录，`PRAGMA user_version` 迁移、0600、`auto_vacuum` 先于 WAL、高版本拒绝打开）+
 `sessions/<id>.jsonl`（只追加，首行 header，之后每行一条消息并用 `parentId` 串成链）。写入跟着 agent 的 `Committed` 事件走：
 消息进入历史的那一刻就落盘（`sync_data`），崩溃最多丢当前这一条，写到一半的末行读取时跳过、下次追加前补换行。

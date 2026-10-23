@@ -182,6 +182,16 @@ impl Model for EchoModel {
     }
 }
 
+/// A model that cannot be used, and says why, in the turn's own words.
+pub struct FailingModel(pub String);
+
+impl Model for FailingModel {
+    fn stream(&self, _: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>> {
+        let message = self.0.clone();
+        stream::once(async move { Err(ModelError::fatal(message)) }).boxed()
+    }
+}
+
 /// The model of a server nobody has configured: every request says so.
 pub struct NoModel;
 

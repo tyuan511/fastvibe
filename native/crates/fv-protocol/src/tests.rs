@@ -154,3 +154,36 @@ fn plan_updates_use_snake_case_statuses() {
     assert_eq!(v["method"], "turn/plan/updated");
     assert_eq!(v["params"]["plan"][0]["status"], "in_progress");
 }
+
+#[test]
+fn a_provider_never_carries_its_key() {
+    let p = types::ProviderInfo {
+        id: "relay".into(),
+        name: "Relay".into(),
+        protocol: types::ApiProtocol::Chat,
+        base_url: "https://x/v1".into(),
+        has_key: true,
+        enabled: true,
+        models: vec![],
+    };
+    let v = serde_json::to_value(&p).unwrap();
+    assert_eq!(v["hasKey"], true);
+    assert!(
+        v.get("apiKey").is_none(),
+        "a key field exists on what is sent to clients"
+    );
+
+    // On the way in the key is optional (absent keeps the stored one).
+    let upsert: types::ProviderUpsertParams = serde_json::from_value(
+        json!({"name": "R", "protocol": "responses", "baseUrl": "https://x"}),
+    )
+    .unwrap();
+    assert_eq!(upsert.api_key, None);
+    assert!(upsert.enabled && upsert.models.is_empty());
+}
+
+#[test]
+fn model_info_defaults_to_seeing_images() {
+    let m: types::ModelInfo = serde_json::from_value(json!({"id": "m", "name": null})).unwrap();
+    assert!(m.supports_images && m.protocol.is_none());
+}

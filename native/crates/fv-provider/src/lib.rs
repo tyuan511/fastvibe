@@ -10,9 +10,11 @@ mod config;
 mod convert;
 mod error;
 mod model;
+mod models_list;
 mod url;
 
 pub use config::{ModelConfig, Protocol, ThinkingLevel};
 pub use error::classify;
 pub use model::GenaiModel;
+pub use models_list::{FetchedModel, fetch_models};
 pub use url::{engine_base_url, infer_protocol};

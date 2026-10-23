@@ -119,6 +119,7 @@ async fn new_thread(c: &Client) -> String {
         cwd: Some("/work".into()),
         project: None,
         model: None,
+        thinking: None,
     })
     .await
     .unwrap()

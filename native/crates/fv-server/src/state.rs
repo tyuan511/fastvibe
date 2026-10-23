@@ -170,6 +170,8 @@ impl ServerState {
         &self,
         cwd: Option<String>,
         project: Option<String>,
+        model: Option<String>,
+        thinking: Option<fv_protocol::types::ThinkingLevel>,
     ) -> Result<Thread, ErrorObject> {
         let now = now_ms();
         let thread = Thread {
@@ -181,6 +183,8 @@ impl ServerState {
             updated_at: now,
             archived: false,
             unread: false,
+            model,
+            thinking,
         };
         self.store.db.put_thread(&thread).map_err(internal)?;
         self.broadcast(ServerNotification::ThreadStarted(thread.clone()));
