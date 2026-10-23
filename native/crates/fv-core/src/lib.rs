@@ -119,3 +119,36 @@ pub enum Message {
         is_error: bool,
     },
 }
+
+/// One choice offered with a question.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+/// A question the agent asks the user (`request_user_input`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Question {
+    /// Stable identifier the answer is filed under.
+    pub id: String,
+    /// A short heading (12 characters or fewer).
+    pub header: String,
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+    /// The client offers a free-form "Other" answer besides the options.
+    #[serde(default)]
+    pub is_other: bool,
+}
+
+/// What the user chose or typed for each question, by question id.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Answers {
+    pub answers: std::collections::BTreeMap<String, AnswerList>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerList {
+    pub answers: Vec<String>,
+}

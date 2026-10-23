@@ -1,7 +1,11 @@
 //! Thread → Turn → Item, and the parameter/response types of the methods.
 
 use schemars::JsonSchema;
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+
+use crate::jsonrpc::RequestId;
 
 pub type ThreadId = String;
 pub type TurnId = String;
@@ -223,4 +227,83 @@ pub struct TurnCompleted {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStatus {
     pub running: bool,
+}
+
+// ---- the plan (update_plan)
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanStep {
+    pub step: String,
+    pub status: PlanStatus,
+}
+
+/// The model replaced its checklist. Each update is the whole list, not a change to it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanUpdated {
+    pub turn_id: TurnId,
+    pub explanation: Option<String>,
+    pub plan: Vec<PlanStep>,
+}
+
+// ---- questions to the user (request_user_input)
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Question {
+    /// What the answer is filed under.
+    pub id: String,
+    /// A short heading, 12 characters or fewer.
+    pub header: String,
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+    /// Offer a free-form "Other" answer besides the options.
+    pub is_other: bool,
+}
+
+/// `item/question/request`: the agent is stopped until the user answers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputRequest {
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
+    /// The tool call the questions belong to.
+    pub call_id: String,
+    pub questions: Vec<Question>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UserInputAnswer {
+    pub answers: Vec<String>,
+}
+
+/// The client's answer to an `item/question/request`: each question's id to what was chosen or
+/// typed. A client that will not answer replies with an error instead.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UserInputResponse {
+    pub answers: BTreeMap<String, UserInputAnswer>,
+}
+
+/// A request to the client has been answered or withdrawn (by whichever client got there
+/// first, or because the turn was stopped); every other client takes its prompt down.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestResolved {
+    pub request_id: RequestId,
 }

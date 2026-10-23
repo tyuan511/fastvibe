@@ -8,10 +8,7 @@ use tokio_util::sync::CancellationToken;
 async fn apply(cwd: Option<&Path>, patch: &str) -> ToolOutput {
     ApplyPatchTool
         .call(
-            ToolCtx {
-                cancel: CancellationToken::new(),
-                cwd: cwd.map(Path::to_path_buf),
-            },
+            ToolCtx::new(CancellationToken::new(), cwd.map(Path::to_path_buf)),
             json!({ "input": patch }),
         )
         .await
@@ -195,10 +192,7 @@ async fn a_heredoc_wrapper_and_a_bare_string_argument_are_tolerated() {
     .await;
     assert!(!out.is_error, "{}", out.content);
 
-    let ctx = ToolCtx {
-        cancel: CancellationToken::new(),
-        cwd: Some(dir.path().to_path_buf()),
-    };
+    let ctx = ToolCtx::new(CancellationToken::new(), Some(dir.path().to_path_buf()));
     let out = ApplyPatchTool
         .call(
             ctx,

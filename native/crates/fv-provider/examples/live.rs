@@ -98,6 +98,7 @@ async fn main() {
         tools: Arc::new(tools),
         system: "You are a careful assistant. Use the add tool for arithmetic.".into(),
         cwd: None,
+        ui: None,
     };
 
     let (tx, mut rx) = mpsc::unbounded_channel();

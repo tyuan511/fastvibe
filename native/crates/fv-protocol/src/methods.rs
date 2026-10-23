@@ -87,10 +87,33 @@ notifications!(ServerNotification {
     AgentMessageDelta => "item/agentMessage/delta": ThreadEvent<Delta>,
     ReasoningDelta => "item/reasoning/delta": ThreadEvent<Delta>,
     ToolCallArgumentsDelta => "item/toolCall/argumentsDelta": ThreadEvent<Delta>,
+    TurnPlanUpdated => "turn/plan/updated": ThreadEvent<PlanUpdated>,
+    ServerRequestResolved => "serverRequest/resolved": ThreadEvent<RequestResolved>,
 });
 
-/// Server → client requests that wait for an answer (questions, client-side tools).
-/// None are defined yet; the enum exists so the transport can already route them.
+/// Server → client requests that wait for an answer. The client replies with a JSON-RPC
+/// response carrying the result type named on each variant, or with an error to decline.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "method")]
-pub enum ServerRequest {}
+pub enum ServerRequest {
+    /// Questions for the user; answered with a [`UserInputResponse`].
+    #[serde(rename = "item/question/request")]
+    UserInput {
+        id: RequestId,
+        params: UserInputRequest,
+    },
+}
+
+impl ServerRequest {
+    pub fn id(&self) -> &RequestId {
+        match self {
+            ServerRequest::UserInput { id, .. } => id,
+        }
+    }
+
+    pub fn method(&self) -> &'static str {
+        match self {
+            ServerRequest::UserInput { .. } => "item/question/request",
+        }
+    }
+}

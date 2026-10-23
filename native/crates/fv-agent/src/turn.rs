@@ -20,6 +20,8 @@ pub struct AgentContext {
     pub tools: Arc<ToolRegistry>,
     pub system: String,
     pub cwd: Option<PathBuf>,
+    /// Where a tool's questions go; absent when no client can answer.
+    pub ui: Option<Arc<dyn crate::UserInput>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -313,12 +315,13 @@ async fn execute_calls(
         let lock = lock.clone();
         let cancel = cancel.clone();
         let cwd = ctx.cwd.clone();
+        let ui = ctx.ui.clone();
         let events = events.clone();
         async move {
             let (content, is_error) = match tool {
                 None => (format!("Unknown tool: {name}"), true),
                 Some(tool) => {
-                    let tool_ctx = ToolCtx { cancel: cancel.clone(), cwd };
+                    let tool_ctx = ToolCtx { cancel: cancel.clone(), cwd, call_id: call_id.clone(), ui };
                     let args = arguments.clone();
                     let run = async {
                         // Held across the call; dropped when it finishes or is stopped.

@@ -53,6 +53,7 @@ fn agent(model: ScriptedModel, tools: Vec<Slow>) -> (AgentContext, Arc<ScriptedM
             tools: Arc::new(registry),
             system: "sys".into(),
             cwd: None,
+            ui: None,
         },
         model,
     )
@@ -379,6 +380,7 @@ async fn results_stay_in_call_order_even_when_they_finish_out_of_order() {
         tools: Arc::new(registry),
         system: String::new(),
         cwd: None,
+        ui: None,
     };
     let r = run(&ctx, &CancellationToken::new()).await;
     assert_eq!(

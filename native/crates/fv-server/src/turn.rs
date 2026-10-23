@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use fv_agent::{AgentContext, AgentEvent, TurnOutcome, base_instructions, run_turn};
+
+use crate::prompt::{ThreadUserInput, announce_resolved};
 use fv_protocol::types::{Item, TurnStatus};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -79,6 +81,7 @@ async fn drive(
         .flatten()
         .and_then(|t| t.cwd)
         .map(std::path::PathBuf::from);
+    let (withdrawn_tx, mut withdrawn_rx) = mpsc::unbounded_channel();
     let ctx = AgentContext {
         // The base instructions, then whatever the server was configured to add.
         system: format!(
@@ -87,6 +90,14 @@ async fn drive(
             state.agent.system
         ),
         cwd,
+        // Questions the agent asks go to whoever is watching this thread.
+        ui: Some(std::sync::Arc::new(ThreadUserInput {
+            state: state.clone(),
+            rt: rt.clone(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            withdrawn: withdrawn_tx,
+        })),
         ..state.agent.clone()
     };
     let first_prompt = text.clone();
@@ -105,6 +116,9 @@ async fn drive(
                         rt.publish(&state, e).await;
                     }
                 }
+                Some(id) = withdrawn_rx.recv() => {
+                    announce_resolved(&state, &thread_id, id).await;
+                }
                 outcome = &mut run => break outcome,
             }
         }
@@ -115,6 +129,9 @@ async fn drive(
         for e in mapper.map(event) {
             rt.publish(&state, e).await;
         }
+    }
+    while let Ok(id) = withdrawn_rx.try_recv() {
+        announce_resolved(&state, &thread_id, id).await;
     }
     rt.set_history(history);
 

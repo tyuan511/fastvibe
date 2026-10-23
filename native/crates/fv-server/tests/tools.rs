@@ -130,7 +130,15 @@ async fn a_turn_can_write_read_and_run_in_the_threads_directory() {
     // The model was told what it can use and where it is working.
     let first = &model.requests()[0];
     let names: Vec<&str> = first.tools.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, ["apply_patch", "exec_command"]);
+    assert_eq!(
+        names,
+        [
+            "apply_patch",
+            "exec_command",
+            "request_user_input",
+            "update_plan"
+        ]
+    );
     assert!(
         first.system.contains(&work.path().display().to_string()),
         "{}",

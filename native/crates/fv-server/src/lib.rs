@@ -7,6 +7,7 @@ mod listener;
 mod log;
 mod mapping;
 mod policy;
+mod prompt;
 mod runtime;
 mod state;
 mod turn;
@@ -31,5 +32,6 @@ pub fn agent_with_builtin_tools(
         tools: std::sync::Arc::new(tools),
         system: String::new(),
         cwd: None,
+        ui: None,
     }
 }

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
+use fv_core::{Answers, Question};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -36,10 +37,34 @@ impl ToolOutput {
     }
 }
 
+/// The way a tool asks the user something and waits for the answer.
+pub trait UserInput: Send + Sync {
+    /// Ask the questions; `None` when nobody answered (the turn was stopped, or the client
+    /// declined). `call_id` names the tool call the questions belong to.
+    fn ask(&self, call_id: String, questions: Vec<Question>)
+    -> BoxFuture<'static, Option<Answers>>;
+}
+
 pub struct ToolCtx {
     /// Fires when the user stops the turn; a tool that spawns something long should kill it.
     pub cancel: CancellationToken,
     pub cwd: Option<PathBuf>,
+    /// The id the model gave this call.
+    pub call_id: String,
+    /// Present when a client is there to answer questions.
+    pub ui: Option<Arc<dyn UserInput>>,
+}
+
+impl ToolCtx {
+    /// A context with no way to ask the user; what most tools (and tests) need.
+    pub fn new(cancel: CancellationToken, cwd: Option<PathBuf>) -> Self {
+        Self {
+            cancel,
+            cwd,
+            call_id: String::new(),
+            ui: None,
+        }
+    }
 }
 
 pub trait Tool: Send + Sync {

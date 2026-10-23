@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use fv_protocol::jsonrpc::code;
-use fv_protocol::{ErrorObject, RequestId, Rpc, ServerNotification};
+use fv_protocol::{ErrorObject, RequestId, Rpc, ServerNotification, ServerRequest};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::UnixStream;
@@ -49,6 +49,7 @@ pub struct Client {
     outgoing: mpsc::Sender<Value>,
     pending: Pending,
     next_id: AtomicI64,
+    requests: Mutex<Option<mpsc::UnboundedReceiver<ServerRequest>>>,
 }
 
 impl Client {
@@ -72,6 +73,7 @@ impl Client {
     {
         let (out_tx, mut out_rx) = mpsc::channel::<Value>(256);
         let (note_tx, note_rx) = mpsc::unbounded_channel();
+        let (request_tx, request_rx) = mpsc::unbounded_channel();
         let pending: Pending = Arc::default();
 
         tokio::spawn(async move {
@@ -92,7 +94,7 @@ impl Client {
                 let Ok(frame) = serde_json::from_str::<Value>(&line) else {
                     continue;
                 };
-                route(&reader_pending, &note_tx, frame);
+                route(&reader_pending, &note_tx, &request_tx, frame);
             }
             // The connection is gone: wake everyone still waiting.
             let waiting: Vec<_> = reader_pending.lock().unwrap().drain().collect();
@@ -109,6 +111,7 @@ impl Client {
                 outgoing: out_tx,
                 pending,
                 next_id: AtomicI64::new(1),
+                requests: Mutex::new(Some(request_rx)),
             },
             note_rx,
         )
@@ -134,6 +137,29 @@ impl Client {
         }
     }
 
+    /// The server's requests to this client (questions for the user). Take it once; a client
+    /// that never takes it leaves them unanswered, and the agent waits.
+    pub fn take_requests(&self) -> Option<mpsc::UnboundedReceiver<ServerRequest>> {
+        self.requests.lock().unwrap().take()
+    }
+
+    /// Answer a request of the server's with its result.
+    pub async fn respond(&self, id: RequestId, result: Value) -> Result<(), ClientError> {
+        self.outgoing
+            .send(json!({ "id": id, "result": result }))
+            .await
+            .map_err(|_| ClientError::Closed)
+    }
+
+    /// Decline a request of the server's.
+    pub async fn decline(&self, id: RequestId, message: &str) -> Result<(), ClientError> {
+        let error = ErrorObject::new(code::INTERNAL_ERROR, message);
+        self.outgoing
+            .send(json!({ "id": id, "error": error }))
+            .await
+            .map_err(|_| ClientError::Closed)
+    }
+
     /// Send a notification (no answer expected).
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), ClientError> {
         self.outgoing
@@ -143,7 +169,12 @@ impl Client {
     }
 }
 
-fn route(pending: &Pending, notes: &mpsc::UnboundedSender<ServerNotification>, frame: Value) {
+fn route(
+    pending: &Pending,
+    notes: &mpsc::UnboundedSender<ServerNotification>,
+    requests: &mpsc::UnboundedSender<ServerRequest>,
+    frame: Value,
+) {
     let id = frame
         .get("id")
         .and_then(|v| serde_json::from_value::<RequestId>(v.clone()).ok());
@@ -164,7 +195,12 @@ fn route(pending: &Pending, notes: &mpsc::UnboundedSender<ServerNotification>, f
                 let _ = notes.send(note);
             }
         }
-        // A server → client request: none are defined yet.
+        // A request from the server; one this build does not know is ignored.
+        (Some(_), true) => {
+            if let Ok(request) = serde_json::from_value::<ServerRequest>(frame) {
+                let _ = requests.send(request);
+            }
+        }
         _ => {}
     }
 }

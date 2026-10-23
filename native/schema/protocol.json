@@ -520,6 +520,40 @@
           }
         ]
       },
+      "PlanStatus": {
+        "enum": [
+          "pending",
+          "in_progress",
+          "completed"
+        ],
+        "type": "string"
+      },
+      "PlanStep": {
+        "properties": {
+          "status": {
+            "$ref": "#/$defs/PlanStatus"
+          },
+          "step": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RequestId": {
+        "anyOf": [
+          {
+            "format": "int64",
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
       "Thread": {
         "properties": {
           "archived": {
@@ -695,6 +729,65 @@
           "turnId",
           "itemId",
           "delta"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent6": {
+        "description": "The model replaced its checklist. Each update is the whole list, not a change to it.",
+        "properties": {
+          "explanation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan": {
+            "items": {
+              "$ref": "#/$defs/PlanStep"
+            },
+            "type": "array"
+          },
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "turnId",
+          "plan"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent7": {
+        "description": "A request to the client has been answered or withdrawn (by whichever client got there\nfirst, or because the turn was stopped); every other client takes its prompt down.",
+        "properties": {
+          "requestId": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "requestId"
         ],
         "type": "object"
       },
@@ -876,8 +969,190 @@
           "params"
         ],
         "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "turn/plan/updated",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent6"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "serverRequest/resolved",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent7"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
       }
     ],
     "title": "ServerNotification"
+  },
+  "serverRequest": {
+    "$defs": {
+      "Question": {
+        "properties": {
+          "header": {
+            "description": "A short heading, 12 characters or fewer.",
+            "type": "string"
+          },
+          "id": {
+            "description": "What the answer is filed under.",
+            "type": "string"
+          },
+          "isOther": {
+            "description": "Offer a free-form \"Other\" answer besides the options.",
+            "type": "boolean"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/$defs/QuestionOption"
+            },
+            "type": "array"
+          },
+          "question": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "header",
+          "question",
+          "options",
+          "isOther"
+        ],
+        "type": "object"
+      },
+      "QuestionOption": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "description"
+        ],
+        "type": "object"
+      },
+      "RequestId": {
+        "anyOf": [
+          {
+            "format": "int64",
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "UserInputRequest": {
+        "description": "`item/question/request`: the agent is stopped until the user answers.",
+        "properties": {
+          "callId": {
+            "description": "The tool call the questions belong to.",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/$defs/Question"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "turnId",
+          "callId",
+          "questions"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Server → client requests that wait for an answer. The client replies with a JSON-RPC\nresponse carrying the result type named on each variant, or with an error to decline.",
+    "oneOf": [
+      {
+        "description": "Questions for the user; answered with a [`UserInputResponse`].",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "item/question/request",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/UserInputRequest"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "ServerRequest"
+  },
+  "userInputResponse": {
+    "$defs": {
+      "UserInputAnswer": {
+        "properties": {
+          "answers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "answers"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The client's answer to an `item/question/request`: each question's id to what was chosen or\ntyped. A client that will not answer replies with an error instead.",
+    "properties": {
+      "answers": {
+        "additionalProperties": {
+          "$ref": "#/$defs/UserInputAnswer"
+        },
+        "type": "object"
+      }
+    },
+    "required": [
+      "answers"
+    ],
+    "title": "UserInputResponse",
+    "type": "object"
   }
 }

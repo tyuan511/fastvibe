@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use fv_agent::{AgentEvent, BlockKind};
 use fv_core::ContentBlock;
-use fv_protocol::types::Item;
+use fv_protocol::types::{Item, PlanStep};
 use serde_json::Value;
 
 use crate::log::LogEvent;
@@ -114,8 +114,12 @@ impl EventMapper {
                 is_error,
             } => {
                 let (name, arguments) = self.calls.remove(&call_id).unwrap_or((name, arguments));
-                vec![LogEvent::ItemCompleted {
-                    turn_id,
+                // `update_plan` carries its checklist in its arguments; clients get it as an event.
+                let plan = (name == "update_plan" && !is_error)
+                    .then(|| plan_from(&arguments))
+                    .flatten();
+                let mut out = vec![LogEvent::ItemCompleted {
+                    turn_id: turn_id.clone(),
                     item: Item::ToolCall {
                         id: call_id,
                         name,
@@ -123,8 +127,26 @@ impl EventMapper {
                         output: Some(output),
                         is_error,
                     },
-                }]
+                }];
+                if let Some((explanation, plan)) = plan {
+                    out.push(LogEvent::PlanUpdated {
+                        turn_id,
+                        explanation,
+                        plan,
+                    });
+                }
+                out
             }
         }
     }
+}
+
+fn plan_from(arguments: &Value) -> Option<(Option<String>, Vec<PlanStep>)> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        explanation: Option<String>,
+        plan: Vec<PlanStep>,
+    }
+    let args: Args = serde_json::from_value(arguments.clone()).ok()?;
+    Some((args.explanation, args.plan))
 }

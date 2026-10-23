@@ -10,6 +10,8 @@ Parts of this crate are adapted from **OpenAI Codex** (<https://github.com/opena
 | `src/apply_patch/instructions.md` | `apply-patch/apply_patch_tool_instructions.md` | used as the base of the tool description |
 | `src/apply_patch/plan.rs` | `apply-patch/src/lib.rs` (`derive_new_contents_from_chunks`, `compute_replacements`, `apply_replacements`) | patches are planned against an in-memory view of every file first and written only if all of them apply |
 | `src/truncate.rs` | `core/src/truncate.rs` (`truncate_middle`) | none |
+| `src/update_plan.rs` | `core/src/tools/handlers/plan.rs`, `plan_spec.rs` | name, arguments and description kept; the plan reaches clients from the call's arguments |
+| `src/request_user_input.rs` | `core/src/tools/handlers/request_user_input.rs`, `request_user_input_spec.rs` | name, arguments, description and result format kept; no collaboration modes; the client always adds an "Other" answer |
 | `src/exec_command.rs` | `core/src/tools/handlers/shell_spec.rs` (`exec_command`) and `core/src/exec.rs` | argument names kept; commands run to completion (no resumable sessions yet) |
 
 The Apache License 2.0 applies to those portions. The upstream copyright notices are retained in the files.

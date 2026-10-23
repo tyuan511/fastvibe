@@ -2230,6 +2230,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "fv-agent",
+ "fv-core",
  "libc",
  "serde",
  "serde_json",

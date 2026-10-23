@@ -46,11 +46,26 @@ pub async fn serve_connection<R, W>(
         if line.trim().is_empty() {
             continue;
         }
-        let Some(reply) = handle_frame(&state, origin, conn, &mut initialized, &line).await else {
-            continue;
-        };
+        // Messages that must follow the reply (a resumed thread's unanswered questions).
+        let mut followups = Vec::new();
+        let reply = handle_frame(
+            &state,
+            origin,
+            conn,
+            &mut initialized,
+            &line,
+            &mut followups,
+        )
+        .await;
         // Answers wait for room rather than being dropped: the client is owed one per request.
-        if tx.send(reply).await.is_err() {
+        let mut closed = false;
+        for frame in reply.into_iter().chain(followups) {
+            if tx.send(frame).await.is_err() {
+                closed = true;
+                break;
+            }
+        }
+        if closed {
             break;
         }
     }
@@ -74,6 +89,7 @@ async fn handle_frame(
     conn: ConnId,
     initialized: &mut bool,
     line: &str,
+    followups: &mut Vec<Message>,
 ) -> Option<Message> {
     let frame: Value = match serde_json::from_str(line) {
         Ok(v) => v,
@@ -93,6 +109,15 @@ async fn handle_frame(
         .get("method")
         .and_then(Value::as_str)
         .map(str::to_owned);
+
+    // An answer to a request of ours (a question put to the user).
+    if method.is_none()
+        && let Some(id) = &id
+        && (frame.get("result").is_some() || frame.get("error").is_some())
+    {
+        crate::prompt::resolve(state, id.clone(), &frame).await;
+        return None;
+    }
 
     let (Some(id), Some(method)) = (id, method.clone()) else {
         // A notification (or a stray response, which nothing waits for yet).
@@ -133,7 +158,7 @@ async fn handle_frame(
         ));
     }
 
-    match dispatch(state, conn, request).await {
+    match dispatch(state, conn, request, followups).await {
         Ok(result) => {
             if is_initialize {
                 *initialized = true;
@@ -152,6 +177,7 @@ async fn dispatch(
     state: &Arc<ServerState>,
     conn: ConnId,
     request: ClientRequest,
+    followups: &mut Vec<Message>,
 ) -> Result<Value, ErrorObject> {
     match request {
         ClientRequest::Initialize { params, .. } => {
@@ -173,9 +199,12 @@ async fn dispatch(
         ClientRequest::ThreadList { params, .. } => to_value(ThreadListResponse {
             threads: state.threads(params.include_archived)?,
         }),
-        ClientRequest::ThreadStart { params, .. } => to_value(ThreadStartResponse {
-            thread: state.create_thread(params.cwd, params.project)?,
-        }),
+        ClientRequest::ThreadStart { params, .. } => {
+            let thread = state.create_thread(params.cwd, params.project)?;
+            // Whoever starts a thread is watching it.
+            state.runtime(&thread.id).subscribe(conn);
+            to_value(ThreadStartResponse { thread })
+        }
         ClientRequest::ThreadResume { params, .. } => {
             let thread = state
                 .thread(&params.thread_id)?
@@ -183,6 +212,10 @@ async fn dispatch(
             // Subscribing and reading the snapshot are one step: nothing can happen to the
             // thread in between that the client would then see twice or not at all.
             let (turns, seq, running) = state.runtime(&params.thread_id).resume(conn);
+            // Questions still waiting for an answer are put to this client too, after the reply.
+            for request in state.pending_prompts(&params.thread_id) {
+                followups.push(crate::prompt::request_frame(&request));
+            }
             to_value(ThreadResumeResponse {
                 thread,
                 turns,

@@ -222,8 +222,8 @@ codex 的现行版若绑定了它自己的内部 crate，就取最近一个自�
 | --- | --- | --- |
 | `exec_command`、`write_stdin` | `shell_spec` / `unified_exec`：命令可转后台，返回 session id，再用 `write_stdin` 写入或轮询；可选 pty | `exec_command` 已做（跑到结束或超时）；会话式进程与 `write_stdin` 随 pty / 终端面板一起做。去掉沙箱与审批那一层（`with_escalated_permissions` 等） |
 | `apply_patch` | `apply-patch` crate | 已做。唯一的编辑工具（新建 = Add File，整文件替换 = Delete + Add）；与 codex 的差异：全部能应用才写盘 |
-| `update_plan` | `plan` | 待做。清单状态存在工具结果里，随分支重建 |
-| `request_user_input` | `request_user_input` | 待做。对应协议的 `item/question/request`，多问题分页沿用它的参数形状 |
+| `update_plan` | `plan` | 已做。工具只校验形状并回 `Plan updated`；清单在调用参数里，server 额外发 `turn/plan/updated`（整张清单，不是差量）给在看的客户端 |
+| `request_user_input` | `request_user_input` | 已做。工具把回合停住，server 向客户端发 `item/question/request`（服务端请求），回答作为工具结果（codex 的 JSON 形状）；客户端总是加一个自由输入的 Other |
 | `view_image` | `view_image` | 待做。图片落盘、转写只存引用，请求前按预算回填 |
 | MCP 工具与资源 | `mcp`、`mcp_resource`（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`），`rmcp` | 待做。每引擎连一次、所有会话共享 |
 | `tool_search` | `tool_search` | 待做。延迟声明的工具先搜后用 |
@@ -435,6 +435,20 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 - 这一轮顺手抓到并修了两处：`Item` 与 `Message` / `ContentBlock` 的枚举变体字段是 snake_case（`is_error`），
   与其它协议类型的 camelCase 不一致，会让手机端的类型对不上，现用 `rename_all_fields` 统一；
   `main` 里工具没注册上，是因为替换没匹配却没有断言——现在 server 的 agent 由 `agent_with_builtin_tools` 一处构造，主程序与测试共用。
+
+**计划与提问（`update_plan`、`request_user_input`）**：
+
+- **服务端请求机制**（`ServerRequest` 不再是空枚举）：server 以 JSON-RPC 请求发给客户端，客户端用同 id 的**响应**回答，或用**错误**拒绝；
+  `fv-client` 新增 `take_requests()` / `respond()` / `decline()`。工具通过 `ToolCtx.ui`（`fv_agent::UserInput`）提问，与传输无关，没有 UI 时返回「没有可答复的客户端」。
+- **提问不绑定某个客户端**：请求发给当时订阅该线程的所有连接；先答的生效，随后发 `serverRequest/resolved`（带 `seq` 的线程事件）让其余客户端收起面板，
+  迟到或重复的回答被忽略。客户端断开不取消提问——请求留在服务端，**之后任何客户端 `thread/resume` 都会在回复之后被重放同一个请求**（同一 id，谁都能答）。
+- **停止回合会撤回提问**：工具 future 被丢弃时，`Withdraw` 在析构里同步摘掉待答项并通过通道交给回合驱动器，驱动器**先**发 `serverRequest/resolved`、
+  **再**发 `turn/completed`，不会留下一个没人在等的问题；析构里不做 await，所以不会晚于「空闲」。
+- 拒绝（错误响应）也让回合继续：模型收到「was cancelled before receiving a response」。
+- 一路抓到的：`thread/start` 按文档应订阅调用者，但上一轮的替换因格式化没匹配而静默失败了，这次补上并修正了对应测试；
+  `register_builtin` 同样漏过一次，现在有 `tests/registry.rs` 钉住注册清单（按名字排序），不会再静默。
+- **真实验证**（`deepseek-v4.1-flash`，`responses`）：模型先 `update_plan` 列 2 步，再 `request_user_input` 问文件名（选项 `a.txt (Recommended)` / `b.txt`），
+  收到回答 `b.txt` 后用 `apply_patch` 建了 `b.txt`，并把计划更新为全部完成。
 
 **存储（`fv-store`）**：`fastvibe.db`（目录，`PRAGMA user_version` 迁移、0600、`auto_vacuum` 先于 WAL、高版本拒绝打开）+
 `sessions/<id>.jsonl`（只追加，首行 header，之后每行一条消息并用 `parentId` 串成链）。写入跟着 agent 的 `Committed` 事件走：

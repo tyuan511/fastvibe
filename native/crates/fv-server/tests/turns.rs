@@ -55,6 +55,7 @@ async fn start(model: Option<ScriptedModel>) -> Harness {
         tools: Arc::new(tools),
         system: "sys".into(),
         cwd: None,
+        ui: None,
     };
     let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
     let sock = dir.path().join("s.sock");

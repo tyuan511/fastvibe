@@ -9,10 +9,7 @@ use tokio_util::sync::CancellationToken;
 async fn exec(cwd: Option<&Path>, args: Value) -> ToolOutput {
     ExecCommandTool
         .call(
-            ToolCtx {
-                cancel: CancellationToken::new(),
-                cwd: cwd.map(Path::to_path_buf),
-            },
+            ToolCtx::new(CancellationToken::new(), cwd.map(Path::to_path_buf)),
             args,
         )
         .await

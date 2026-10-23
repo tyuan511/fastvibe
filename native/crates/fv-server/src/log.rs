@@ -42,6 +42,15 @@ pub enum LogEvent {
         error: Option<String>,
     },
     Running(bool),
+    PlanUpdated {
+        turn_id: TurnId,
+        explanation: Option<String>,
+        plan: Vec<PlanStep>,
+    },
+    /// A request to the client was answered or withdrawn.
+    RequestResolved {
+        request_id: fv_protocol::RequestId,
+    },
 }
 
 pub struct ThreadLog {
@@ -166,6 +175,18 @@ impl ThreadLog {
                 status,
                 error
             })),
+            LogEvent::PlanUpdated {
+                turn_id,
+                explanation,
+                plan,
+            } => ServerNotification::TurnPlanUpdated(ev!(PlanUpdated {
+                turn_id,
+                explanation,
+                plan
+            })),
+            LogEvent::RequestResolved { request_id } => {
+                ServerNotification::ServerRequestResolved(ev!(RequestResolved { request_id }))
+            }
             LogEvent::Running(running) => {
                 self.running = running;
                 ServerNotification::ThreadStatusChanged(ev!(ThreadStatus { running }))

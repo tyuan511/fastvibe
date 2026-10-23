@@ -18,6 +18,14 @@ use crate::runtime::ThreadRuntime;
 
 pub type ConnId = u64;
 
+/// A question put to the user whose answer the agent is waiting for.
+pub(crate) struct PendingPrompt {
+    pub thread_id: ThreadId,
+    /// Kept so a client that connects later can be shown it.
+    pub request: fv_protocol::ServerRequest,
+    pub answer: tokio::sync::oneshot::Sender<Option<fv_core::Answers>>,
+}
+
 /// Frames queued for one connection before a slow reader starts to cost the server memory.
 pub const OUTBOUND_CAPACITY: usize = 256;
 
@@ -32,6 +40,7 @@ pub struct ServerState {
     pub store: Store,
     connections: Mutex<HashMap<ConnId, mpsc::Sender<Message>>>,
     runtimes: Mutex<HashMap<ThreadId, Arc<ThreadRuntime>>>,
+    prompts: Mutex<HashMap<fv_protocol::RequestId, PendingPrompt>>,
     next_conn: AtomicU64,
 }
 
@@ -51,6 +60,7 @@ impl ServerState {
             store,
             connections: Mutex::default(),
             runtimes: Mutex::default(),
+            prompts: Mutex::default(),
             next_conn: AtomicU64::new(1),
         })
     }
@@ -170,6 +180,41 @@ impl ServerState {
             fv_protocol::types::CatalogChanged {},
         ));
         Ok(thread)
+    }
+
+    pub(crate) fn park_prompt(
+        &self,
+        id: fv_protocol::RequestId,
+        thread_id: &str,
+        request: fv_protocol::ServerRequest,
+    ) -> tokio::sync::oneshot::Receiver<Option<fv_core::Answers>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.prompts.lock().unwrap().insert(
+            id,
+            PendingPrompt {
+                thread_id: thread_id.to_string(),
+                request,
+                answer: tx,
+            },
+        );
+        rx
+    }
+
+    /// Remove a prompt. Whoever gets it owns delivering its answer (or withdrawing it), so an
+    /// answer and a cancellation arriving together cannot both act.
+    pub(crate) fn take_prompt(&self, id: &fv_protocol::RequestId) -> Option<PendingPrompt> {
+        self.prompts.lock().unwrap().remove(id)
+    }
+
+    /// The prompts still waiting in a thread.
+    pub fn pending_prompts(&self, thread_id: &str) -> Vec<fv_protocol::ServerRequest> {
+        self.prompts
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|p| p.thread_id == thread_id)
+            .map(|p| p.request.clone())
+            .collect()
     }
 
     pub fn subscriber_count(&self, thread: &str) -> usize {

@@ -22,6 +22,7 @@ fn agent_with(model: Arc<dyn Model>) -> AgentContext {
         tools: Arc::new(ToolRegistry::new()),
         system: String::new(),
         cwd: None,
+        ui: None,
     }
 }
 
@@ -182,6 +183,13 @@ async fn resume_subscribes_and_disconnect_unsubscribes() {
         .await
         .unwrap()
         .thread;
+    // Whoever starts a thread is watching it.
+    assert_eq!(h.state.subscriber_count(&t.id), 1);
+    a.call::<ThreadUnsubscribe>(ThreadIdParams {
+        thread_id: t.id.clone(),
+    })
+    .await
+    .unwrap();
     assert_eq!(h.state.subscriber_count(&t.id), 0);
 
     let snapshot = a

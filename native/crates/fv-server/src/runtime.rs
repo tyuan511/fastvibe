@@ -125,6 +125,18 @@ impl ThreadRuntime {
         deliver(self, staged).await;
     }
 
+    /// Send a message that is not a thread event (no sequence number) to everyone watching.
+    pub async fn send_frame(&self, state: &ServerState, frame: fv_protocol::Message) {
+        let targets = {
+            let g = self.inner.lock().unwrap();
+            g.subscribers
+                .iter()
+                .filter_map(|c| state.sender(*c).map(|tx| (*c, tx)))
+                .collect()
+        };
+        deliver(self, Staged { frame, targets }).await;
+    }
+
     /// Number the event and work out who gets it, all under the lock; sending happens after.
     fn stage(&self, g: &mut Inner, state: &ServerState, event: LogEvent) -> Staged {
         let note = g.log.append(event);

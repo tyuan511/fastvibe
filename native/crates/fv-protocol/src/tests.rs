@@ -85,6 +85,8 @@ fn schema_matches_committed_snapshot() {
         "clientRequest": schemars::schema_for!(ClientRequest),
         "clientNotification": schemars::schema_for!(ClientNotification),
         "serverNotification": schemars::schema_for!(ServerNotification),
+        "serverRequest": schemars::schema_for!(ServerRequest),
+        "userInputResponse": schemars::schema_for!(types::UserInputResponse),
         "message": schemars::schema_for!(Message),
     });
     let text = serde_json::to_string_pretty(&schema).unwrap() + "\n";
@@ -101,4 +103,54 @@ fn schema_matches_committed_snapshot() {
         committed, schema,
         "protocol changed: rerun with UPDATE_SCHEMA=1 and commit native/schema/"
     );
+}
+
+#[test]
+fn a_question_request_has_its_wire_shape() {
+    let req = ServerRequest::UserInput {
+        id: RequestId::String("r1".into()),
+        params: types::UserInputRequest {
+            thread_id: "t".into(),
+            turn_id: "u".into(),
+            call_id: "c".into(),
+            questions: vec![types::Question {
+                id: "scope".into(),
+                header: "Scope".into(),
+                question: "How far?".into(),
+                options: vec![types::QuestionOption {
+                    label: "Small".into(),
+                    description: "Just this".into(),
+                }],
+                is_other: true,
+            }],
+        },
+    };
+    let v = serde_json::to_value(&req).unwrap();
+    assert_eq!(v["method"], "item/question/request");
+    assert_eq!(v["id"], "r1");
+    assert_eq!(v["params"]["questions"][0]["isOther"], true);
+    assert_eq!(serde_json::from_value::<ServerRequest>(v).unwrap(), req);
+
+    let answer: types::UserInputResponse =
+        serde_json::from_value(json!({"answers": {"scope": {"answers": ["Small"]}}})).unwrap();
+    assert_eq!(answer.answers["scope"].answers, ["Small"]);
+}
+
+#[test]
+fn plan_updates_use_snake_case_statuses() {
+    let n = ServerNotification::TurnPlanUpdated(types::ThreadEvent {
+        thread_id: "t".into(),
+        seq: 3,
+        body: types::PlanUpdated {
+            turn_id: "u".into(),
+            explanation: None,
+            plan: vec![types::PlanStep {
+                step: "do it".into(),
+                status: types::PlanStatus::InProgress,
+            }],
+        },
+    });
+    let v = serde_json::to_value(&n).unwrap();
+    assert_eq!(v["method"], "turn/plan/updated");
+    assert_eq!(v["params"]["plan"][0]["status"], "in_progress");
 }
