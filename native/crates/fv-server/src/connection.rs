@@ -1,0 +1,227 @@
+use std::sync::Arc;
+
+use futures_util::{SinkExt, StreamExt};
+use fv_protocol::jsonrpc::code;
+use fv_protocol::methods::CLIENT_METHODS;
+use fv_protocol::types::*;
+use fv_protocol::{ClientRequest, ErrorObject, Message, PROTOCOL_VERSION, RequestId};
+use serde_json::Value;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::mpsc;
+use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
+
+use crate::policy::allows;
+use crate::state::{ConnId, OUTBOUND_CAPACITY, ServerState};
+
+const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+
+/// Serve one client until it hangs up. The byte stream can be a unix socket, an `ssh` child's
+/// stdio or (in tests) an in-memory pipe; only `origin` says how far to trust it.
+pub async fn serve_connection<R, W>(
+    state: Arc<ServerState>,
+    origin: ClientOrigin,
+    reader: R,
+    writer: W,
+) where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    let (tx, mut rx) = mpsc::channel::<Message>(OUTBOUND_CAPACITY);
+    let conn = state.register(tx.clone());
+
+    let writer_task = tokio::spawn(async move {
+        let mut sink = FramedWrite::new(writer, LinesCodec::new_with_max_length(MAX_FRAME_BYTES));
+        while let Some(frame) = rx.recv().await {
+            let line = serde_json::to_string(&frame).expect("frames serialize");
+            if sink.send(line).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut lines = FramedRead::new(reader, LinesCodec::new_with_max_length(MAX_FRAME_BYTES));
+    let mut initialized = false;
+    while let Some(line) = lines.next().await {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Some(reply) = handle_frame(&state, origin, conn, &mut initialized, &line).await else {
+            continue;
+        };
+        // Answers wait for room rather than being dropped: the client is owed one per request.
+        if tx.send(reply).await.is_err() {
+            break;
+        }
+    }
+
+    state.unregister(conn);
+    drop(tx);
+    let _ = writer_task.await;
+}
+
+fn error(id: RequestId, code: i64, message: impl Into<String>) -> Message {
+    Message::Error {
+        id,
+        error: ErrorObject::new(code, message),
+    }
+}
+
+/// One incoming line → the answer to send back, if it calls for one.
+async fn handle_frame(
+    state: &Arc<ServerState>,
+    origin: ClientOrigin,
+    conn: ConnId,
+    initialized: &mut bool,
+    line: &str,
+) -> Option<Message> {
+    let frame: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        // No id to answer to; JSON-RPC answers a parse error with a null id.
+        Err(_) => {
+            return Some(error(
+                RequestId::String(String::new()),
+                code::PARSE_ERROR,
+                "invalid JSON",
+            ));
+        }
+    };
+    let id = frame
+        .get("id")
+        .and_then(|v| serde_json::from_value::<RequestId>(v.clone()).ok());
+    let method = frame
+        .get("method")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+
+    let (Some(id), Some(method)) = (id, method.clone()) else {
+        // A notification (or a stray response, which nothing waits for yet).
+        if method.as_deref() == Some("initialized") {
+            *initialized = true;
+        }
+        return None;
+    };
+
+    if !CLIENT_METHODS.contains(&method.as_str()) {
+        return Some(error(
+            id,
+            code::METHOD_NOT_FOUND,
+            format!("unknown method {method}"),
+        ));
+    }
+    let request: ClientRequest = match serde_json::from_value(frame) {
+        Ok(r) => r,
+        Err(e) => return Some(error(id, code::INVALID_PARAMS, e.to_string())),
+    };
+
+    let is_initialize = matches!(request, ClientRequest::Initialize { .. });
+    if is_initialize && *initialized {
+        return Some(error(
+            id,
+            code::ALREADY_INITIALIZED,
+            "initialize was already called",
+        ));
+    }
+    if !is_initialize && !*initialized {
+        return Some(error(id, code::NOT_INITIALIZED, "call initialize first"));
+    }
+    if !allows(origin, &request) {
+        return Some(error(
+            id,
+            code::FORBIDDEN,
+            format!("{method} is not available to this connection"),
+        ));
+    }
+
+    match dispatch(state, conn, request).await {
+        Ok(result) => {
+            if is_initialize {
+                *initialized = true;
+            }
+            Some(Message::Response { id, result })
+        }
+        Err(e) => Some(Message::Error { id, error: e }),
+    }
+}
+
+fn to_value<T: serde::Serialize>(v: T) -> Result<Value, ErrorObject> {
+    serde_json::to_value(v).map_err(|e| ErrorObject::new(code::INTERNAL_ERROR, e.to_string()))
+}
+
+async fn dispatch(
+    state: &Arc<ServerState>,
+    conn: ConnId,
+    request: ClientRequest,
+) -> Result<Value, ErrorObject> {
+    match request {
+        ClientRequest::Initialize { params, .. } => {
+            if params.protocol_version != PROTOCOL_VERSION {
+                return Err(ErrorObject::new(
+                    code::INVALID_PARAMS,
+                    format!(
+                        "protocol version {} is not supported (server speaks {PROTOCOL_VERSION})",
+                        params.protocol_version
+                    ),
+                ));
+            }
+            to_value(InitializeResponse {
+                server_version: crate::SERVER_VERSION.to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                data_dir: state.data_dir.display().to_string(),
+            })
+        }
+        ClientRequest::ThreadList { params, .. } => to_value(ThreadListResponse {
+            threads: state.threads(params.include_archived),
+        }),
+        ClientRequest::ThreadStart { params, .. } => to_value(ThreadStartResponse {
+            thread: state.create_thread(params.cwd, params.project),
+        }),
+        ClientRequest::ThreadResume { params, .. } => {
+            let thread = state
+                .thread(&params.thread_id)
+                .ok_or_else(|| ErrorObject::new(code::INVALID_PARAMS, "thread not found"))?;
+            // Subscribing and reading the snapshot are one step: nothing can happen to the
+            // thread in between that the client would then see twice or not at all.
+            let (turns, seq, running) = state.runtime(&params.thread_id).resume(conn);
+            to_value(ThreadResumeResponse {
+                thread,
+                turns,
+                seq,
+                running,
+            })
+        }
+        ClientRequest::ThreadUnsubscribe { params, .. } => {
+            state.runtime(&params.thread_id).unsubscribe(conn);
+            to_value(Empty {})
+        }
+        ClientRequest::TurnStart { params, .. } => {
+            state
+                .thread(&params.thread_id)
+                .ok_or_else(|| ErrorObject::new(code::INVALID_PARAMS, "thread not found"))?;
+            let rt = state.runtime(&params.thread_id);
+            // The caller sees its own turn without having to resume first.
+            rt.subscribe(conn);
+            let turn_id = uuid::Uuid::new_v4().to_string();
+            let cancel = rt.begin(state, &turn_id).await.ok_or_else(|| {
+                ErrorObject::new(
+                    code::THREAD_BUSY,
+                    "a turn is already running in this thread",
+                )
+            })?;
+            crate::turn::spawn_turn(
+                state.clone(),
+                rt,
+                params.thread_id,
+                turn_id.clone(),
+                params.text,
+                cancel,
+            );
+            to_value(TurnStartResponse { turn_id })
+        }
+        ClientRequest::TurnInterrupt { params, .. } => {
+            // Stopping a thread that is not running is not an error: the user's intent is met.
+            state.runtime(&params.thread_id).interrupt();
+            to_value(Empty {})
+        }
+    }
+}

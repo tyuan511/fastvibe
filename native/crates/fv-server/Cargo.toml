@@ -1,0 +1,31 @@
+[package]
+name = "fv-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "fv_server"
+
+[[bin]]
+name = "fastvibe-server"
+path = "src/main.rs"
+
+[dependencies]
+fv-protocol = { path = "../fv-protocol" }
+fv-core = { path = "../fv-core" }
+fv-agent = { path = "../fv-agent" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+fv-client = { path = "../fv-client" }
+tempfile = "3"
+
+[lints]
+workspace = true

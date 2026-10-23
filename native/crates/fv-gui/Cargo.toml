@@ -1,0 +1,25 @@
+[package]
+name = "fv-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# `Window::render_to_image` is behind GPUI's test-support feature; the visual-regression
+# harness (and only it) needs the captured frame.
+capture = ["dep:image", "dep:gpui-capture", "dep:gpui-macos-capture"]
+
+[dependencies]
+gpui-kit = "0.8.0"
+fv-theme = { path = "../fv-theme" }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+# Same crates gpui-kit already uses (it pins them exactly), named again only to switch on
+# their test-support features. Going through `gpui-kit/test-support` instead drags in the
+# optional gpui-fast backend, which cannot share a lockfile with the gpui-pre one.
+gpui-capture = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"], optional = true }
+gpui-macos-capture = { package = "gpui-pre-macos", version = "=0.3.9", features = ["test-support"], optional = true }
+
+[lints]
+workspace = true
