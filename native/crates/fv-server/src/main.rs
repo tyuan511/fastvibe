@@ -129,9 +129,22 @@ async fn main() {
             tokio::select! {
                 r = server.run() => { if let Err(e) = r { fail(format!("listener stopped: {e}")); } }
                 _ = tokio::signal::ctrl_c() => {}
+                _ = terminated() => {}
             }
         }
     }
     // A clean exit folds the write-ahead log back into the database file.
     let _ = state.store.db.checkpoint();
+}
+
+/// Resolves on SIGTERM, which is how the app (or a service manager) asks the server to stop:
+/// leaving through the normal path lets the database be folded back into its file.
+async fn terminated() {
+    use tokio::signal::unix::{SignalKind, signal};
+    match signal(SignalKind::terminate()) {
+        Ok(mut s) => {
+            s.recv().await;
+        }
+        Err(_) => std::future::pending::<()>().await,
+    }
 }

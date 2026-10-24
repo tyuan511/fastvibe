@@ -1,0 +1,19 @@
+[package]
+name = "fv-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fv-client = { path = "../fv-client" }
+fv-protocol = { path = "../fv-protocol" }
+tokio.workspace = true
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+
+[lints]
+workspace = true

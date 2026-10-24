@@ -2150,14 +2150,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "fv-daemon"
+version = "0.1.0"
+dependencies = [
+ "fv-client",
+ "fv-protocol",
+ "libc",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "fv-gui"
 version = "0.1.0"
 dependencies = [
+ "futures-channel",
+ "futures-util",
+ "fv-client",
+ "fv-daemon",
+ "fv-protocol",
  "fv-theme",
  "gpui-kit",
  "gpui-pre",
  "gpui-pre-macos",
  "image",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

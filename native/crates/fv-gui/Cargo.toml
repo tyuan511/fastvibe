@@ -5,6 +5,14 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "fv_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fastvibe"
+path = "src/main.rs"
+
 [features]
 # `Window::render_to_image` is behind GPUI's test-support feature; the visual-regression
 # harness (and only it) needs the captured frame.
@@ -13,8 +21,14 @@ capture = ["dep:image", "dep:gpui-capture", "dep:gpui-macos-capture"]
 [dependencies]
 gpui-kit = "0.8.0"
 fv-theme = { path = "../fv-theme" }
+fv-protocol = { path = "../fv-protocol" }
+fv-client = { path = "../fv-client" }
+fv-daemon = { path = "../fv-daemon" }
+tokio.workspace = true
+futures-util.workspace = true
+futures-channel = "0.3"
+serde_json.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
-
 # Same crates gpui-kit already uses (it pins them exactly), named again only to switch on
 # their test-support features. Going through `gpui-kit/test-support` instead drags in the
 # optional gpui-fast backend, which cannot share a lockfile with the gpui-pre one.
