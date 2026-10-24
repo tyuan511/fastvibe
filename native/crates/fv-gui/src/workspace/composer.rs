@@ -53,6 +53,30 @@ impl Workspace {
             .or(self.defaults.thinking)
             .map(thinking_label);
 
+        // How full the model's window is: a ring that warms up as it nears the limit.
+        let usage = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.views.get(id))
+            .and_then(|v| v.token_usage)
+            .filter(|u| u.window > 0);
+        let context_ring = usage.map(|u| {
+            let fraction = u.used as f32 / u.window as f32;
+            let color = if fraction >= 0.9 {
+                p.c(Token::Destructive)
+            } else if fraction >= 0.7 {
+                p.c(Token::Warning)
+            } else {
+                p.c(Token::MutedForeground)
+            };
+            div()
+                .id("context-ring")
+                .size(px(28.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(crate::ui::ring(fraction, 14.0, p.c(Token::Border), color))
+        });
         let send_enabled = running || !empty;
         let send = div()
             .id("send")
@@ -103,6 +127,7 @@ impl Workspace {
         let menu = self.model_menu.then(|| self.model_menu(cx));
         // Only a conversation that does not exist yet can still choose where it runs.
         let project_row = self.selected.is_none().then(|| self.project_chip(cx));
+        let send_error = self.send_error.clone();
 
         div()
             .w_full()
@@ -112,6 +137,19 @@ impl Workspace {
             .pb(px(20.0))
             .flex_none()
             .children(project_row)
+            .children(send_error.map(|e| {
+                div()
+                    .mb(px(8.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded(px(12.0))
+                    .border_1()
+                    .border_color(p.c(Token::Destructive).opacity(0.25))
+                    .bg(p.c(Token::Destructive).opacity(0.05))
+                    .text_size(px(TEXT_SM))
+                    .text_color(p.c(Token::Destructive))
+                    .child(SharedString::from(e))
+            }))
             .child(
                 div()
                     .relative()
@@ -154,6 +192,7 @@ impl Workspace {
                             .gap(px(4.0))
                             .child(crate::ui::icon_button("attach", "attachment", p).rounded_full())
                             .child(div().flex_1())
+                            .children(context_ring)
                             .child(chip)
                             .child(send),
                     )

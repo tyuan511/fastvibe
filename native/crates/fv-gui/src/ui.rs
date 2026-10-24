@@ -81,6 +81,43 @@ pub fn float(menu: Div) -> Deferred {
     deferred(menu.occlude()).with_priority(10)
 }
 
+/// A thin ring, `fraction` of it (from the top, clockwise) in `color` over a `track`.
+pub fn ring(fraction: f32, size: f32, track: Hsla, color: Hsla) -> impl IntoElement {
+    let fraction = fraction.clamp(0.0, 1.0);
+    div().size(px(size)).flex_none().child(
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                let stroke = 2.0_f32;
+                let r = size / 2.0 - stroke / 2.0;
+                let c = bounds.center();
+                let arc = |from: f32, to: f32, color: Hsla, window: &mut Window| {
+                    let steps = (((to - from).abs() * 48.0).ceil() as usize).max(2);
+                    let mut path = PathBuilder::stroke(px(stroke));
+                    for i in 0..=steps {
+                        let t = from + (to - from) * (i as f32 / steps as f32);
+                        let a = t * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                        let p = point(c.x + px(r * a.cos()), c.y + px(r * a.sin()));
+                        if i == 0 {
+                            path.move_to(p);
+                        } else {
+                            path.line_to(p);
+                        }
+                    }
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, color);
+                    }
+                };
+                arc(0.0, 0.999, track, window);
+                if fraction > 0.0 {
+                    arc(0.0, fraction, color, window);
+                }
+            },
+        )
+        .size_full(),
+    )
+}
+
 pub trait Muted {
     fn muted(self, p: &Palette) -> Self;
 }

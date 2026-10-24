@@ -2041,6 +2041,14 @@ impl Workspace {
         !pk.chosen.is_empty()
     }
 
+    /// Type `text` into the composer and send it, as Enter would.
+    pub fn script_send(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let input = self.input.clone();
+        input.update(cx, |st, cx| st.set_value(text.to_string(), window, cx));
+        self.skip_model_check = true;
+        self.send(window, cx);
+    }
+
     pub fn script_finish_add(&mut self, cx: &mut Context<Self>) {
         self.finish_add_provider(cx);
     }

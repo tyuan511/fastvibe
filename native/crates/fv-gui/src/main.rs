@@ -23,6 +23,10 @@ struct Args {
     model_menu: bool,
     /// Dev only: open every fold and tool call.
     expand: bool,
+    /// Dev only: start with the ⌘K search open.
+    palette: bool,
+    /// Dev only: type this into the composer and send it, then capture.
+    script_send: Option<String>,
     /// Open 设置 at this section: `providers`, `add-provider`.
     settings: Option<String>,
     screenshot: Option<String>,
@@ -44,6 +48,8 @@ fn parse_args() -> Args {
         script_add: None,
         model_menu: false,
         expand: false,
+        palette: false,
+        script_send: None,
         screenshot: None,
     };
     let mut it = std::env::args().skip(1);
@@ -67,6 +73,8 @@ fn parse_args() -> Args {
             "--settings" => a.settings = it.next(),
             "--model-menu" => a.model_menu = true,
             "--expand" => a.expand = true,
+            "--palette" => a.palette = true,
+            "--script-send" => a.script_send = it.next(),
             "--script-add" => a.script_add = it.next(),
             "--screenshot" => a.screenshot = it.next(),
             other => panic!("unknown argument {other}"),
@@ -82,6 +90,7 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             fv_gui::assets::load_fonts(cx);
+            fv_gui::workspace::bind_keys(cx);
             let palette = Palette::new(
                 args.prefs
                     .resolve(args.prefers_dark, cfg!(target_os = "macos")),
@@ -113,6 +122,7 @@ fn main() {
             let settings = args.settings.clone();
             let model_menu = args.model_menu;
             let expand = args.expand;
+            let palette_open = args.palette;
             let (handle, workspace) = gpui_kit::open_window(options, cx, move |window, cx| {
                 let ws = cx.new(|cx| {
                     match fixture.as_deref() {
@@ -141,6 +151,9 @@ fn main() {
                     }
                     ws
                 });
+                if palette_open {
+                    ws.update(cx, |ws, cx| ws.show_palette(window, cx));
+                }
                 if expand {
                     ws.update(cx, |ws, cx| ws.expand_all(cx));
                 }
@@ -154,6 +167,21 @@ fn main() {
             })
             .expect("failed to open window");
 
+            #[cfg(feature = "capture")]
+            if let Some(text) = args.script_send.clone() {
+                let path = args.screenshot.clone().unwrap_or_else(|| "send.png".into());
+                cx.spawn(async move |cx| {
+                    wait(cx, 1500).await;
+                    let _ = cx.update_window(handle, |_, window, cx| {
+                        workspace.update(cx, |ws, cx| ws.script_send(&text, window, cx))
+                    });
+                    wait(cx, 2500).await;
+                    capture(handle, &path, cx).await;
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+                return;
+            }
             #[cfg(feature = "capture")]
             if let Some(spec) = args.script_add.clone() {
                 let path = args.screenshot.clone().unwrap_or_else(|| "script".into());

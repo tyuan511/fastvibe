@@ -95,7 +95,9 @@ impl Workspace {
                                     .child("FastVibe"),
                             ),
                     )
-                    .child(icon_button("search", "search01", p)),
+                    .child(icon_button("search", "search01", p).on_click(
+                        cx.listener(|this, _, window, cx| this.open_palette(window, cx)),
+                    )),
             )
             .child(
                 div()

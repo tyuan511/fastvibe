@@ -192,7 +192,10 @@ pub fn theme_conversation() -> Fixture {
     ];
     let snapshot = ThreadResumeResponse {
         thread: threads[0].clone(),
-        token_usage: None,
+        token_usage: Some(TokenUsage {
+            used: 24_400,
+            window: 128_000,
+        }),
         turns,
         seq: 0,
         running: false,

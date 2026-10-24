@@ -13,6 +13,7 @@ use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::*;
 
 mod composer;
+mod palette;
 pub mod settings;
 mod sidebar;
 mod transcript;
@@ -81,6 +82,12 @@ pub struct Workspace {
     stick_to_bottom: bool,
     /// 设置, while it is open (it covers the workspace, which keeps its state behind it).
     settings: Option<settings::SettingsState>,
+    /// ⌘K: the search box, while it is open.
+    search_box: Option<Entity<InputState>>,
+    /// Dev only: send even with no model listed (the echo server has none).
+    pub(super) skip_model_check: bool,
+    /// Why the last send did not go through, shown above the composer.
+    send_error: Option<String>,
     /// The folders the user works in, as the server lists them.
     projects: Vec<ProjectInfo>,
     /// The ⋯ menu of a project row: which, and where the pointer was.
@@ -211,6 +218,9 @@ impl Workspace {
             closed_projects: HashSet::new(),
             stick_to_bottom: true,
             settings: None,
+            search_box: None,
+            skip_model_check: false,
+            send_error: None,
             projects: Vec::new(),
             project_row_menu: None,
             thread_menu: None,
@@ -374,6 +384,11 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Dev only: open the search.
+    pub fn show_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_palette(window, cx);
     }
 
     /// Dev only: open the composer's model list, to look at a popup.
@@ -797,7 +812,7 @@ impl Workspace {
         }
     }
 
-    fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.input.read(cx).value().trim().to_string();
         if text.is_empty() || self.palette_blocked() {
             return;
@@ -805,35 +820,58 @@ impl Workspace {
         let Some(b) = self.backend.clone() else {
             return;
         };
+        // Nothing can be answered without a model: say so, and keep what was typed.
+        if self.models.is_empty() && !self.skip_model_check {
+            self.send_error = Some("还没有可用的模型：先到 设置 → 模型与默认 添加供应商。".into());
+            cx.notify();
+            return;
+        }
         self.input
             .update(cx, |state, cx| state.set_value("", window, cx));
+        self.send_error = None;
         let selected = self.selected.clone();
         let pending_model = self.pending_model.clone();
         let project = self.draft_project.clone();
+        let no_model = self.defaults.model.is_none() && pending_model.is_none();
+        let handle_input = self.input.clone();
+        let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
+            // A send that did not go through puts the words back and says why.
+            let fail = |why: String, text: String, this: &WeakEntity<Self>, cx: &mut AsyncApp| {
+                let _ = cx.update_window(window_handle, |_, window, cx| {
+                    handle_input.update(cx, |st, cx| st.set_value(text, window, cx));
+                });
+                this.update(cx, |this, cx| {
+                    this.send_error = Some(why);
+                    cx.notify();
+                })
+                .ok();
+            };
             let id = match selected {
                 Some(id) => id,
                 None => {
                     // Without a project the server gives the conversation a scratch folder.
-                    let Ok(started) = b
+                    let started = b
                         .call::<ThreadStart>(ThreadStartParams {
                             cwd: project.clone(),
                             project,
                             model: pending_model,
                             thinking: None,
                         })
-                        .await
-                    else {
-                        return;
+                        .await;
+                    let started = match started {
+                        Ok(s) => s,
+                        Err(e) => return fail(format!("无法新建对话：{e}"), text, &this, cx),
                     };
                     let id = started.thread.id.clone();
-                    let Ok(snapshot) = b
+                    let snapshot = b
                         .call::<ThreadResume>(ThreadIdParams {
                             thread_id: id.clone(),
                         })
-                        .await
-                    else {
-                        return;
+                        .await;
+                    let snapshot = match snapshot {
+                        Ok(s) => s,
+                        Err(e) => return fail(format!("无法打开对话：{e}"), text, &this, cx),
                     };
                     this.update(cx, |this, cx| {
                         this.selected = Some(id.clone());
@@ -846,12 +884,20 @@ impl Workspace {
                     id
                 }
             };
-            let _ = b
+            let started = b
                 .call::<TurnStart>(TurnStartParams {
                     thread_id: id,
-                    text,
+                    text: text.clone(),
                 })
                 .await;
+            if let Err(e) = started {
+                let why = if no_model {
+                    "还没有可用的模型：先到 设置 → 模型与默认 添加供应商。".to_string()
+                } else {
+                    format!("发送失败：{e}")
+                };
+                fail(why, text, &this, cx);
+            }
         })
         .detach();
     }
@@ -971,6 +1017,11 @@ impl Render for Workspace {
         let root = div()
             .relative()
             .size_full()
+            .key_context("Workspace")
+            .on_action(cx.listener(Self::on_new_chat))
+            .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_open_search))
+            .on_action(cx.listener(Self::on_dismiss))
             .font_family(crate::assets::UI_FONT)
             .bg(p.c(Token::Background))
             .text_color(p.c(Token::Foreground))
@@ -1007,8 +1058,77 @@ impl Render for Workspace {
             .with_priority(5)
         });
         root.children(self.thread_menu_view(cx))
+            .children(self.palette_view(cx))
             .children(self.project_row_menu_view(cx))
             .children(self.settings_dialogs(cx))
             .children(catcher)
+    }
+}
+
+// ---- keyboard
+
+actions!(fastvibe, [Quit, NewChat, OpenSettings, OpenSearch, Dismiss]);
+
+/// Bind the app's shortcuts. The Electron app's: ⌘N new chat, ⌘, settings, ⌘K search.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-n", NewChat, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("cmd-k", OpenSearch, None),
+        KeyBinding::new("escape", Dismiss, None),
+    ]);
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.set_menus(vec![Menu {
+        name: "FastVibe".into(),
+        items: vec![
+            MenuItem::action("新对话", NewChat),
+            MenuItem::action("搜索…", OpenSearch),
+            MenuItem::action("设置…", OpenSettings),
+            MenuItem::separator(),
+            MenuItem::action("退出 FastVibe", Quit),
+        ],
+        disabled: false,
+    }]);
+}
+
+impl Workspace {
+    fn on_new_chat(&mut self, _: &NewChat, _: &mut Window, cx: &mut Context<Self>) {
+        self.settings = None;
+        self.selected = None;
+        self.close_menus(cx);
+    }
+
+    fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        let section = if self.models.is_empty() {
+            settings::Section::Providers
+        } else {
+            settings::Section::General
+        };
+        self.open_settings(section, window, cx);
+    }
+
+    fn on_open_search(&mut self, _: &OpenSearch, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_palette(window, cx);
+    }
+
+    /// Esc closes the topmost thing: a menu, then a dialog or the search, then 设置.
+    fn on_dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.any_menu_open() {
+            self.close_menus(cx);
+        } else if self.search_box.is_some() {
+            self.close_palette(window, cx);
+        } else if let Some(s) = &mut self.settings {
+            if s.add.is_some() {
+                s.add = None;
+            } else if s.add_models.is_some() {
+                s.add_models = None;
+            } else if s.confirm_delete.is_some() {
+                s.confirm_delete = None;
+            } else {
+                self.settings = None;
+            }
+            cx.notify();
+        }
     }
 }
