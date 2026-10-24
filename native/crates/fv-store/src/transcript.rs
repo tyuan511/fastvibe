@@ -39,6 +39,8 @@ enum Line {
 
 pub struct Loaded {
     pub messages: Vec<Message>,
+    /// When each message was written, milliseconds since the epoch (parallel to `messages`).
+    pub timestamps: Vec<i64>,
     /// Lines that could not be read and were skipped (at most the last one, after a crash,
     /// unless the file was edited by hand).
     pub skipped: usize,
@@ -127,23 +129,33 @@ impl TranscriptStore {
         if !path.exists() {
             return Ok(Loaded {
                 messages: Vec::new(),
+                timestamps: Vec::new(),
                 skipped: 0,
             });
         }
         let reader = BufReader::new(std::fs::File::open(&path)?);
-        let (mut messages, mut skipped) = (Vec::new(), 0);
+        let (mut messages, mut timestamps, mut skipped) = (Vec::new(), Vec::new(), 0);
         for line in reader.lines() {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
             }
             match serde_json::from_str::<Line>(&line) {
-                Ok(Line::Message { message, .. }) => messages.push(message),
+                Ok(Line::Message {
+                    message, timestamp, ..
+                }) => {
+                    messages.push(message);
+                    timestamps.push(timestamp);
+                }
                 Ok(Line::Session { .. }) => {}
                 Err(_) => skipped += 1,
             }
         }
-        Ok(Loaded { messages, skipped })
+        Ok(Loaded {
+            messages,
+            timestamps,
+            skipped,
+        })
     }
 
     pub fn delete(&self, conversation_id: &str) -> Result<(), StoreError> {

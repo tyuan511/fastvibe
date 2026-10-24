@@ -27,6 +27,8 @@ fv-daemon = { path = "../fv-daemon" }
 tokio.workspace = true
 futures-util.workspace = true
 futures-channel = "0.3"
+libc = "0.2"
+serde.workspace = true
 serde_json.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Same crates gpui-kit already uses (it pins them exactly), named again only to switch on

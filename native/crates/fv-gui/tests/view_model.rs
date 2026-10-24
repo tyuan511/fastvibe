@@ -40,6 +40,7 @@ fn started(seq: u64, turn: &str) -> N {
         seq,
         TurnRef {
             turn_id: turn.into(),
+            at: None,
         },
     ))
 }
@@ -50,6 +51,7 @@ fn item_started(seq: u64, turn: &str, item: Item) -> N {
         ItemRef {
             turn_id: turn.into(),
             item,
+            at: None,
         },
     ))
 }
@@ -105,6 +107,7 @@ fn a_reply_streams_into_place() {
                 id: "m".into(),
                 text: "Hello!".into(),
             },
+            at: None,
         },
     )));
     assert!(matches!(&v.turns[0].items[0], Item::AgentMessage { text, .. } if text == "Hello!"));
@@ -115,13 +118,13 @@ fn a_reply_streams_into_place() {
 fn events_the_snapshot_already_holds_are_skipped_and_the_next_one_continues_it() {
     let snapshot = view(
         5,
-        vec![Turn {
-            id: "u1".into(),
-            items: vec![Item::AgentMessage {
+        vec![Turn::new(
+            "u1".into(),
+            vec![Item::AgentMessage {
                 id: "m".into(),
                 text: "so far".into(),
             }],
-        }],
+        )],
     );
     let mut v = snapshot;
     // Event 5 is in the snapshot already: applying it again would double the text.
@@ -148,6 +151,7 @@ fn other_threads_and_catalog_notices_are_not_this_ones() {
         seq: 1,
         body: TurnRef {
             turn_id: "x".into(),
+            at: None,
         },
     });
     assert_eq!(v.apply(&other), Applied::Ignored);
@@ -262,6 +266,7 @@ fn a_tool_call_item_is_replaced_by_its_finished_form() {
                 output: Some("a\nb".into()),
                 is_error: false,
             },
+            at: None,
         },
     )));
     assert_eq!(v.turns[0].items.len(), 1);

@@ -190,12 +190,15 @@ async fn a_turn_streams_its_items_in_order_with_contiguous_sequence_numbers() {
         ServerNotification::TurnCompleted(e) => Some(e.body.clone()),
         _ => None,
     });
+    let at = completed.as_ref().and_then(|c| c.at);
+    assert!(at.is_some(), "a finished turn says when it finished");
     assert_eq!(
         completed,
         Some(TurnCompleted {
             turn_id: turn,
             status: TurnStatus::Completed,
-            error: None
+            error: None,
+            at,
         })
     );
 

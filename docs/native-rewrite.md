@@ -337,7 +337,25 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
 | 离屏截图 | `Window::render_to_image()` 可用（Metal 渲染，2× 屏幕给 1920×1280）。**注意两点**：① 它在 `test-support` 特性后面，而经 `gpui-kit/test-support` 开启会把可选的 gpui-fast 后端拉进依赖解析并冲突，所以 `fv-gui` 的 `capture` 特性直接给 `gpui-pre` / `gpui-pre-macos` 开 `test-support`；② 截的是 GPUI 场景，**不含 NSVisualEffectView 的模糊**，玻璃主题的回归截图只能比对场景本身（半透明叠在固定底色上），模糊效果靠实机目检 |
 | 主题 token → 画面 | `fv-theme` 的 token 直接转成 `Rgba` 使用，24 套主题的实色 / 玻璃都能画出；`GlassPane` 等玻璃专用 token 在实色下不存在，视图要有回退 |
 | gpui-kit 默认外观 | `Button::primary()` 是黑底，不跟随主题——印证了需要 `fv-ui` 重新上皮肤 |
-| 未验证 | 字体回退（目前用系统字体，未打包 Instrument Sans）、Liquid Glass 的高光描边自绘、`rem_size` 缩放 |
+| 未验证 | Liquid Glass 的高光描边自绘、`rem_size` 缩放 |
+
+### 4.4 主界面第一版复刻（2026-10-24）
+
+侧栏、会话标题栏、转写、composer、新对话页已按 Electron 版的类名逐项复刻，用夹具与 `mock.html` 同数据截图对照
+（`native/scripts/compare-ui.sh OUT [light|dark]`：同为 1100×720@2x；Electron 用 headless Chrome 截 `mock.html`，
+原生用 `fastvibe --fixture theme|new`，夹具内容抄自 `mock/preview-data.ts`）。亮色 `github-light`、暗色 `tokyo-night`
+（预览的暗色场景）下，侧栏逐行位置一致，转写与 composer 的宽度、圆角、间距、字号一致。
+
+- **字体**：Instrument Sans 由 Google Fonts 的可变字体实例化为 400/500/600/700 四个静态 TTF 随包（GPUI 不吃 woff2、
+  也不按可变轴选字重）。等宽 SF Mono 在 macOS 上藏在 Terminal.app 里、未注册为系统字体，启动时从那里加载。
+- **图标**：`native/scripts/export-icons.mjs` 把渲染层 import 的 Hugeicons（`strokeWidth` 2）导出为 SVG；文件图标直接嵌入
+  仓库里的 `resources/file-icons`（两版共用一份），解析规则移植自 `shared/file-icons.ts`，彩色图形走 `img()` 而非单色 `svg()`。
+- **协议补充**：`Turn` 增加 `startedAt / processEndedAt / completedAt`，`TurnRef / ItemRef / TurnCompleted` 带 `at`
+  （服务端时钟）；重开会话时由转写每行已有的时间戳还原。转写据此画「用时」（到答案开始）、悬停时的时间与「耗时」。
+- **GPUI 坑**：`Textarea` 的字号是其 size 的 0.875、且自带内边距，按 `Size::Size(16)` 设置并在外层扣掉；离屏截图只截上一帧
+  场景，截图前要主动 `window.draw` 几次；`ScrollHandle::scroll_to_bottom` 要等有过布局的那一帧。
+- **还缺（需要新的协议数据或组件）**：标题栏与新对话页的 git 分支 / 改动 chip、composer 的上下文环、压缩分隔线的
+  「接近上限 · 128.0K → 24.4K」、工具卡展开后的详细样式、各种弹出菜单的 Nova 皮肤、右侧面板与设置页。
 
 ## 5. 数据迁移
 

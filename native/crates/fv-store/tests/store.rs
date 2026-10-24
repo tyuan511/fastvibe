@@ -492,3 +492,26 @@ fn a_compaction_survives_the_transcript_and_picks_the_models_view() {
     assert_eq!(all.len(), 4, "the transcript keeps everything");
     assert_eq!(effective_history(&all), vec![compaction, user("c")]);
 }
+
+#[test]
+fn restored_turns_carry_when_they_started_worked_and_ended() {
+    use fv_core::Message;
+    let messages = vec![
+        Message::User { text: "hi".into() },
+        Message::ToolResult {
+            call_id: "c".into(),
+            name: "exec_command".into(),
+            content: "ok".into(),
+            is_error: false,
+        },
+        Message::User {
+            text: "again".into(),
+        },
+    ];
+    let turns = fv_store::turns_from_timed_history(&messages, &[1_000, 4_000, 9_000]);
+    assert_eq!(turns[0].started_at, Some(1_000));
+    assert_eq!(turns[0].process_ended_at, Some(4_000));
+    assert_eq!(turns[0].completed_at, Some(4_000));
+    assert_eq!(turns[1].started_at, Some(9_000));
+    assert_eq!(turns[1].completed_at, None);
+}

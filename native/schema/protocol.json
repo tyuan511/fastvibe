@@ -1114,6 +1114,15 @@
       },
       "ThreadEvent": {
         "properties": {
+          "at": {
+            "default": null,
+            "description": "When it happened, by the server's clock.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "seq": {
             "description": "Monotonic per thread.",
             "format": "uint64",
@@ -1136,6 +1145,14 @@
       },
       "ThreadEvent2": {
         "properties": {
+          "at": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "error": {
             "type": [
               "string",
@@ -1191,6 +1208,14 @@
       },
       "ThreadEvent4": {
         "properties": {
+          "at": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "item": {
             "$ref": "#/$defs/Item"
           },

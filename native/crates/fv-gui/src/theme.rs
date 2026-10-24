@@ -66,6 +66,10 @@ pub fn apply(palette: &Palette, cx: &mut App) {
     };
     let theme = Theme::global_mut(cx);
     theme.mode = mode;
+    theme.font_family = crate::assets::UI_FONT.into();
+    theme.font_size = gpui_kit::px(14.0);
+    theme.mono_font_family = crate::assets::MONO_FONT.into();
+    theme.radius = gpui_kit::px(8.0);
     let c = |t| palette.c(t);
     let k = &mut theme.colors;
     k.background = c(Token::Background);

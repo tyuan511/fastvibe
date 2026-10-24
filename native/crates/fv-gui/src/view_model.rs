@@ -77,11 +77,16 @@ impl ThreadView {
         }
         self.seq = seq;
         match note {
-            N::TurnStarted(e) => self.turns.push(Turn {
-                id: e.body.turn_id.clone(),
-                items: Vec::new(),
-            }),
-            N::TurnCompleted(_) => {}
+            N::TurnStarted(e) => {
+                let mut turn = Turn::new(e.body.turn_id.clone(), Vec::new());
+                turn.started_at = e.body.at;
+                self.turns.push(turn);
+            }
+            N::TurnCompleted(e) => {
+                if let Some(t) = self.turn_mut(&e.body.turn_id) {
+                    t.completed_at = e.body.at;
+                }
+            }
             N::ThreadStatusChanged(e) => self.running = e.body.running,
             N::ItemStarted(e) => {
                 if let Some(t) = self.turn_mut(&e.body.turn_id) {
@@ -90,6 +95,9 @@ impl ThreadView {
             }
             N::ItemCompleted(e) => {
                 if let Some(t) = self.turn_mut(&e.body.turn_id) {
+                    if matches!(e.body.item, Item::ToolCall { .. }) && e.body.at.is_some() {
+                        t.process_ended_at = e.body.at;
+                    }
                     match t
                         .items
                         .iter_mut()

@@ -13,7 +13,7 @@ mod transcript;
 
 pub use credentials::CredentialStore;
 pub use db::{Db, StoreError, StoredProvider};
-pub use history::turns_from_history;
+pub use history::{turns_from_history, turns_from_timed_history};
 pub use images::ImageStore;
 pub use transcript::{Loaded, TranscriptStore};
 

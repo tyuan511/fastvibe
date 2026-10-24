@@ -133,6 +133,27 @@ pub struct ThreadResumeResponse {
 pub struct Turn {
     pub id: TurnId,
     pub items: Vec<Item>,
+    /// When the user's message was accepted (milliseconds since the epoch).
+    #[serde(default)]
+    pub started_at: Option<i64>,
+    /// When the last tool call finished: the end of the work a settled turn folds away
+    /// (用时), as opposed to the whole turn (耗时).
+    #[serde(default)]
+    pub process_ended_at: Option<i64>,
+    #[serde(default)]
+    pub completed_at: Option<i64>,
+}
+
+impl Turn {
+    pub fn new(id: TurnId, items: Vec<Item>) -> Self {
+        Self {
+            id,
+            items,
+            started_at: None,
+            process_ended_at: None,
+            completed_at: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -200,6 +221,8 @@ pub struct ThreadEvent<T> {
 pub struct ItemRef {
     pub turn_id: TurnId,
     pub item: Item,
+    #[serde(default)]
+    pub at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -214,6 +237,9 @@ pub struct Delta {
 #[serde(rename_all = "camelCase")]
 pub struct TurnRef {
     pub turn_id: TurnId,
+    /// When it happened, by the server's clock.
+    #[serde(default)]
+    pub at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -235,6 +261,8 @@ pub struct TurnCompleted {
     pub turn_id: TurnId,
     pub status: TurnStatus,
     pub error: Option<String>,
+    #[serde(default)]
+    pub at: Option<i64>,
 }
 
 /// `running` is true from the moment a turn is accepted until it has fully settled.

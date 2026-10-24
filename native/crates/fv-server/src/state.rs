@@ -11,7 +11,7 @@ use fv_protocol::ErrorObject;
 use fv_protocol::jsonrpc::code;
 use fv_protocol::types::{Thread, ThreadId};
 use fv_protocol::{Message, ServerNotification};
-use fv_store::{Store, StoreError, turns_from_history};
+use fv_store::{Store, StoreError, turns_from_timed_history};
 use tokio::sync::mpsc;
 
 use crate::runtime::ThreadRuntime;
@@ -91,7 +91,7 @@ impl ServerState {
         if let Some(rt) = runtimes.get(thread_id) {
             return rt.clone();
         }
-        let history = match self.store.transcripts.read(thread_id) {
+        let (history, times) = match self.store.transcripts.read(thread_id) {
             Ok(loaded) => {
                 if loaded.skipped > 0 {
                     eprintln!(
@@ -99,15 +99,15 @@ impl ServerState {
                         loaded.skipped
                     );
                 }
-                loaded.messages
+                (loaded.messages, loaded.timestamps)
             }
             Err(e) => {
                 eprintln!("cannot read the transcript of {thread_id}: {e}");
-                Vec::new()
+                (Vec::new(), Vec::new())
             }
         };
         // The thread is drawn in full; the model is sent only what follows the last summary.
-        let turns = turns_from_history(&history);
+        let turns = turns_from_timed_history(&history, &times);
         let history = fv_core::effective_history(&history);
         let rt = Arc::new(ThreadRuntime::restored(
             thread_id.to_string(),

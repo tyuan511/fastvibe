@@ -5,6 +5,13 @@
 use fv_protocol::ServerNotification;
 use fv_protocol::types::*;
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// One thing that happened in a thread, before it is stamped with a sequence number.
 #[derive(Clone, Debug)]
 pub enum LogEvent {
@@ -116,26 +123,34 @@ impl ThreadLog {
         }
         match event {
             LogEvent::TurnStarted { turn_id } => {
-                self.turns.push(Turn {
-                    id: turn_id.clone(),
-                    items: Vec::new(),
-                });
-                ServerNotification::TurnStarted(ev!(TurnRef { turn_id }))
+                let at = Some(now_ms());
+                let mut turn = Turn::new(turn_id.clone(), Vec::new());
+                turn.started_at = at;
+                self.turns.push(turn);
+                ServerNotification::TurnStarted(ev!(TurnRef { turn_id, at }))
             }
             LogEvent::ItemStarted { turn_id, item } => {
                 if let Some(t) = self.turn_mut(&turn_id) {
                     t.items.push(item.clone());
                 }
-                ServerNotification::ItemStarted(ev!(ItemRef { turn_id, item }))
+                ServerNotification::ItemStarted(ev!(ItemRef {
+                    turn_id,
+                    item,
+                    at: Some(now_ms()),
+                }))
             }
             LogEvent::ItemCompleted { turn_id, item } => {
+                let at = Some(now_ms());
                 if let Some(t) = self.turn_mut(&turn_id) {
+                    if matches!(item, Item::ToolCall { .. }) {
+                        t.process_ended_at = at;
+                    }
                     match t.items.iter_mut().find(|i| item_id(i) == item_id(&item)) {
                         Some(slot) => *slot = item.clone(),
                         None => t.items.push(item.clone()),
                     }
                 }
-                ServerNotification::ItemCompleted(ev!(ItemRef { turn_id, item }))
+                ServerNotification::ItemCompleted(ev!(ItemRef { turn_id, item, at }))
             }
             LogEvent::TextDelta {
                 turn_id,
@@ -176,11 +191,18 @@ impl ThreadLog {
                 turn_id,
                 status,
                 error,
-            } => ServerNotification::TurnCompleted(ev!(TurnCompleted {
-                turn_id,
-                status,
-                error
-            })),
+            } => {
+                let at = Some(now_ms());
+                if let Some(t) = self.turn_mut(&turn_id) {
+                    t.completed_at = at;
+                }
+                ServerNotification::TurnCompleted(ev!(TurnCompleted {
+                    turn_id,
+                    status,
+                    error,
+                    at,
+                }))
+            }
             LogEvent::TokenUsage { used, window } => {
                 ServerNotification::ThreadTokenUsageUpdated(ev!(TokenUsage { used, window }))
             }

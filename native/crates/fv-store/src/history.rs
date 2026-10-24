@@ -8,18 +8,33 @@ use fv_protocol::types::{Item, Turn};
 /// ids. A turn that failed or was stopped leaves no trace beyond its messages: an error item
 /// has no message of its own.
 pub fn turns_from_history(messages: &[Message]) -> Vec<Turn> {
+    turns_from_timed_history(messages, &[])
+}
+
+/// [`turns_from_history`], with each message's write time (parallel to `messages`; may be
+/// empty) giving the turns their start, end of work and end.
+pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn> {
     let mut turns: Vec<Turn> = Vec::new();
-    for message in messages {
+    for (i, message) in messages.iter().enumerate() {
+        let at = times.get(i).copied();
+        if !matches!(message, Message::User { .. } | Message::Compaction { .. })
+            && let Some(turn) = turns.last_mut()
+            && at.is_some()
+        {
+            turn.completed_at = at;
+        }
         match message {
             Message::User { text } => {
                 let turn = format!("t{}", turns.len());
-                turns.push(Turn {
-                    id: turn.clone(),
-                    items: vec![Item::UserMessage {
+                let mut t = Turn::new(
+                    turn.clone(),
+                    vec![Item::UserMessage {
                         id: format!("{turn}i0"),
                         text: text.clone(),
                     }],
-                });
+                );
+                t.started_at = at;
+                turns.push(t);
             }
             Message::Assistant(a) => {
                 let Some(turn) = turns.last_mut() else {
@@ -63,12 +78,15 @@ pub fn turns_from_history(messages: &[Message]) -> Vec<Turn> {
             // still in the transcript, and still drawn: only the model stops seeing them.
             Message::Compaction { .. } => {
                 let turn = format!("t{}", turns.len());
-                turns.push(Turn {
-                    id: turn.clone(),
-                    items: vec![Item::ContextCompaction {
+                let mut t = Turn::new(
+                    turn.clone(),
+                    vec![Item::ContextCompaction {
                         id: format!("{turn}i0"),
                     }],
-                });
+                );
+                t.started_at = at;
+                t.completed_at = at;
+                turns.push(t);
             }
             Message::ToolResult {
                 call_id,
@@ -79,6 +97,9 @@ pub fn turns_from_history(messages: &[Message]) -> Vec<Turn> {
                 let Some(turn) = turns.last_mut() else {
                     continue;
                 };
+                if at.is_some() {
+                    turn.process_ended_at = at;
+                }
                 for item in &mut turn.items {
                     if let Item::ToolCall {
                         id,
