@@ -30,7 +30,8 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::ModelDefaultsGet { .. }
             | ClientRequest::ModelDefaultsSet { .. }
             | ClientRequest::ProjectList { .. }
-            | ClientRequest::ProjectAdd { .. }
+            | ClientRequest::ProjectCreate { .. }
+            | ClientRequest::ProjectUpdate { .. }
             | ClientRequest::ProjectRemove { .. }
             | ClientRequest::SettingsGet { .. }
             | ClientRequest::SettingsSet { .. } => true,

@@ -264,6 +264,28 @@
         ],
         "type": "object"
       },
+      "ProjectCreateParams": {
+        "description": "`project/create`: a name (the first folder's name when absent) and its folders, the first\nbeing the primary one.",
+        "properties": {
+          "folders": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "folders"
+        ],
+        "type": "object"
+      },
       "ProjectPathParams": {
         "properties": {
           "path": {
@@ -272,6 +294,32 @@
         },
         "required": [
           "path"
+        ],
+        "type": "object"
+      },
+      "ProjectUpdateParams": {
+        "description": "`project/update`: replace a project's name and folders. `path` names the project as it is\nnow; `folders` is the whole list as it should be, the first being the primary one. When the\nprimary changes, the project's conversations move to the new one (each keeps its own cwd).",
+        "properties": {
+          "folders": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "folders"
         ],
         "type": "object"
       },
@@ -925,11 +973,31 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
-            "const": "project/add",
+            "const": "project/create",
             "type": "string"
           },
           "params": {
-            "$ref": "#/$defs/ProjectPathParams"
+            "$ref": "#/$defs/ProjectCreateParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "project/update",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ProjectUpdateParams"
           }
         },
         "required": [

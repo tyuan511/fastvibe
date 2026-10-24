@@ -27,6 +27,8 @@ struct Args {
     palette: bool,
     /// Dev only: type this into the composer and send it, then capture.
     script_send: Option<String>,
+    /// Dev only: `name|folder|folder…`, created through the dialog.
+    script_project: Option<String>,
     /// Open 设置 at this section: `providers`, `add-provider`.
     settings: Option<String>,
     screenshot: Option<String>,
@@ -50,6 +52,7 @@ fn parse_args() -> Args {
         expand: false,
         palette: false,
         script_send: None,
+        script_project: None,
         screenshot: None,
     };
     let mut it = std::env::args().skip(1);
@@ -75,6 +78,7 @@ fn parse_args() -> Args {
             "--expand" => a.expand = true,
             "--palette" => a.palette = true,
             "--script-send" => a.script_send = it.next(),
+            "--script-project" => a.script_project = it.next(),
             "--script-add" => a.script_add = it.next(),
             "--screenshot" => a.screenshot = it.next(),
             other => panic!("unknown argument {other}"),
@@ -167,6 +171,28 @@ fn main() {
             })
             .expect("failed to open window");
 
+            #[cfg(feature = "capture")]
+            if let Some(spec) = args.script_project.clone() {
+                let path = args
+                    .screenshot
+                    .clone()
+                    .unwrap_or_else(|| "project.png".into());
+                cx.spawn(async move |cx| {
+                    wait(cx, 1500).await;
+                    let _ = cx.update_window(handle, |_, window, cx| {
+                        workspace.update(cx, |ws, cx| ws.script_project(&spec, window, cx))
+                    });
+                    wait(cx, 400).await;
+                    let stem = path.trim_end_matches(".png").to_string();
+                    capture(handle, &format!("{stem}-1.png"), cx).await;
+                    workspace.update(cx, |ws, cx| ws.script_save_project(cx));
+                    wait(cx, 1500).await;
+                    capture(handle, &format!("{stem}-2.png"), cx).await;
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+                return;
+            }
             #[cfg(feature = "capture")]
             if let Some(text) = args.script_send.clone() {
                 let path = args.screenshot.clone().unwrap_or_else(|| "send.png".into());

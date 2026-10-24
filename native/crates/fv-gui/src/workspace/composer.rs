@@ -275,7 +275,7 @@ impl Workspace {
         let p = &self.palette;
         let hover = p.c(Token::Muted);
         let label = match &self.draft_project {
-            Some(path) => super::transcript::project_name(path).to_string(),
+            Some(path) => self.project_label(path),
             None => "选择项目".to_string(),
         };
         let projects: Vec<String> = self.projects.iter().map(|p| p.path.clone()).collect();
@@ -320,9 +320,7 @@ impl Workspace {
                         .when(active, |d| d.bg(p.c(Token::Accent)))
                         .hover(move |d| d.bg(hover))
                         .child(icon("folder01", 14.0, p.c(Token::MutedForeground)))
-                        .child(crate::ui::truncate(
-                            super::transcript::project_name(project).to_string(),
-                        ))
+                        .child(crate::ui::truncate(self.project_label(project)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.draft_project = chosen.clone();
                             this.project_menu = false;

@@ -177,12 +177,26 @@ fn build_context(
         Some(thread) => crate::providers::model_for(state, thread),
         None => state.agent.model.clone(),
     };
+    // A project with several folders says which they are; the model may use absolute paths in
+    // all of them (there is no sandbox to extend, as there is none to begin with).
+    let folders = thread
+        .as_ref()
+        .and_then(|t| t.project.as_deref())
+        .and_then(|project| crate::projects::of_thread(state, project))
+        .and_then(|project| {
+            let cwd = cwd.as_ref()?.display().to_string();
+            crate::projects::folders_prompt(&project, &cwd)
+        })
+        .map(|text| format!("\n\n{text}"))
+        .unwrap_or_default();
     AgentContext {
         model,
-        // The base instructions, then whatever the server was configured to add.
+        // The base instructions, the project's folders, then whatever the server was
+        // configured to add.
         system: format!(
-            "{}{}",
+            "{}{}{}",
             base_instructions(cwd.as_deref()),
+            folders,
             state.agent.system
         ),
         cwd,

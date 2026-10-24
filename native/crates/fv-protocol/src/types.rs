@@ -607,9 +607,13 @@ impl AppSettings {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectInfo {
-    /// Absolute path: what a conversation's `project` and `cwd` hold.
+    /// The primary folder, absolute: the project's identity, and what a conversation's
+    /// `project` and `cwd` hold.
     pub path: String,
     pub name: String,
+    /// The other folders, in order. A project with none is one folder.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -622,4 +626,26 @@ pub struct ProjectListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectPathParams {
     pub path: String,
+}
+
+/// `project/create`: a name (the first folder's name when absent) and its folders, the first
+/// being the primary one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCreateParams {
+    #[serde(default)]
+    pub name: Option<String>,
+    pub folders: Vec<String>,
+}
+
+/// `project/update`: replace a project's name and folders. `path` names the project as it is
+/// now; `folders` is the whole list as it should be, the first being the primary one. When the
+/// primary changes, the project's conversations move to the new one (each keeps its own cwd).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectUpdateParams {
+    pub path: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub folders: Vec<String>,
 }

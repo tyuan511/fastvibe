@@ -175,8 +175,9 @@ impl Workspace {
         body = body.child(section_label(
             text::PROJECTS,
             pinned.is_empty(),
-            icon_button_xs("new-project", "add01", p)
-                .on_click(cx.listener(|this, _, _, cx| this.add_project(cx))),
+            icon_button_xs("new-project", "add01", p).on_click(
+                cx.listener(|this, _, window, cx| this.open_project_dialog(None, window, cx)),
+            ),
             p,
         ));
         if projects.is_empty() {
@@ -240,12 +241,7 @@ impl Workspace {
 
     fn project_row(&self, project: &str, open: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
-        let name = project
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or(project)
-            .to_string();
+        let name = self.project_label(project);
         let key = project.to_string();
         let (more_key, new_key) = (key.clone(), key.clone());
         let group = SharedString::from(format!("project-{project}"));

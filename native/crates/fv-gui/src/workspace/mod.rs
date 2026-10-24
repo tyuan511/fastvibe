@@ -14,6 +14,7 @@ use gpui_kit::*;
 
 mod composer;
 mod palette;
+mod projects;
 pub mod settings;
 mod sidebar;
 mod transcript;
@@ -88,6 +89,8 @@ pub struct Workspace {
     pub(super) skip_model_check: bool,
     /// Why the last send did not go through, shown above the composer.
     send_error: Option<String>,
+    /// 创建项目 / 编辑项目, while its dialog is open.
+    project_dialog: Option<projects::ProjectDialog>,
     /// The folders the user works in, as the server lists them.
     projects: Vec<ProjectInfo>,
     /// The ⋯ menu of a project row: which, and where the pointer was.
@@ -167,6 +170,7 @@ impl Workspace {
             .map(|path| ProjectInfo {
                 name: transcript::project_name(&path).to_string(),
                 path,
+                folders: Vec::new(),
             })
             .collect();
         this.models = fixture.models;
@@ -221,6 +225,7 @@ impl Workspace {
             search_box: None,
             skip_model_check: false,
             send_error: None,
+            project_dialog: None,
             projects: Vec::new(),
             project_row_menu: None,
             thread_menu: None,
@@ -311,11 +316,24 @@ impl Workspace {
         let (path, at) = self.project_row_menu.clone()?;
         let p = &self.palette;
         let hover = p.c(Token::Accent);
+        let edit_path = path.clone();
         let menu = settings::popover(p)
             .absolute()
             .left(at.x)
             .top(at.y)
             .w(px(160.0))
+            .child(
+                settings::menu_item(SharedString::from("pm-edit"), false, hover)
+                    .child(crate::ui::icon(
+                        "pencil-edit02",
+                        14.0,
+                        p.c(Token::MutedForeground),
+                    ))
+                    .child("编辑项目")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_project_dialog(Some(edit_path.clone()), window, cx)
+                    })),
+            )
             .child(
                 settings::menu_item(SharedString::from("pm-remove"), false, hover)
                     .child(crate::ui::icon(
@@ -420,6 +438,15 @@ impl Workspace {
 
     // ---- talking to the server
 
+    /// A project's name as the user knows it: the one they gave it, else its folder's.
+    pub(super) fn project_label(&self, path: &str) -> String {
+        self.projects
+            .iter()
+            .find(|p| p.path == path)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| transcript::project_name(path).to_string())
+    }
+
     fn refresh_app_settings(&mut self, cx: &mut Context<Self>) {
         let Some(b) = self.backend.clone() else {
             return;
@@ -485,41 +512,6 @@ impl Workspace {
             if let Ok(r) = call.await {
                 this.update(cx, |this, cx| {
                     this.projects = r.projects;
-                    cx.notify();
-                })
-                .ok();
-            }
-        })
-        .detach();
-    }
-
-    /// 添加项目: pick a folder with the system's own dialog and list it.
-    pub(super) fn add_project(&mut self, cx: &mut Context<Self>) {
-        let Some(b) = self.backend.clone() else {
-            return;
-        };
-        let picked = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("添加项目".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = picked.await else {
-                return;
-            };
-            let Some(path) = paths.into_iter().next() else {
-                return;
-            };
-            let call = b.call::<ProjectAdd>(ProjectPathParams {
-                path: path.display().to_string(),
-            });
-            if let Ok(project) = call.await {
-                this.update(cx, |this, cx| {
-                    // The new chat page starts in it, so the next message lands there.
-                    this.selected = None;
-                    this.draft_project = Some(project.path);
-                    this.refresh_projects(cx);
                     cx.notify();
                 })
                 .ok();
@@ -1058,6 +1050,7 @@ impl Render for Workspace {
             .with_priority(5)
         });
         root.children(self.thread_menu_view(cx))
+            .children(self.project_dialog_view(cx))
             .children(self.palette_view(cx))
             .children(self.project_row_menu_view(cx))
             .children(self.settings_dialogs(cx))

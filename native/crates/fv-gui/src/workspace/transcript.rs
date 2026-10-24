@@ -55,18 +55,9 @@ impl Workspace {
             .line_height(px(20.0));
         if let Some(t) = thread {
             if let Some(project) = &t.project {
-                let name = project
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(project);
+                let name = self.project_label(project);
                 left = left
-                    .child(
-                        ui::truncate(name.to_string())
-                            .max_w(px(128.0))
-                            .flex_none()
-                            .muted(p),
-                    )
+                    .child(ui::truncate(name).max_w(px(128.0)).flex_none().muted(p))
                     .child(div().flex_none().muted(p).child("/"));
             }
             let title = if t.title.trim().is_empty() {
@@ -164,7 +155,7 @@ impl Workspace {
         recent.truncate(4);
         let now = now_ms();
         let heading = match &project {
-            Some(path) => format!("{} 中的最近对话", project_name(path)),
+            Some(path) => format!("{} 中的最近对话", self.project_label(path)),
             None => "最近对话".to_string(),
         };
         let hover = p.c(Token::Muted);

@@ -317,8 +317,11 @@ async fn dispatch(
             to_value(Empty {})
         }
         ClientRequest::ProjectList { .. } => to_value(crate::projects::list(state)?),
-        ClientRequest::ProjectAdd { params, .. } => {
-            to_value(crate::projects::add(state, &params.path)?)
+        ClientRequest::ProjectCreate { params, .. } => {
+            to_value(crate::projects::create(state, params)?)
+        }
+        ClientRequest::ProjectUpdate { params, .. } => {
+            to_value(crate::projects::update(state, params)?)
         }
         ClientRequest::ProjectRemove { params, .. } => {
             to_value(crate::projects::remove(state, &params.path)?)

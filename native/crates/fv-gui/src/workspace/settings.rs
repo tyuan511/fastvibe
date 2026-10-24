@@ -1209,7 +1209,7 @@ impl Workspace {
                     let project = t
                         .project
                         .as_deref()
-                        .map(|path| super::transcript::project_name(path).to_string())
+                        .map(|path| self.project_label(path))
                         .unwrap_or_else(|| "无项目".to_string());
                     card = card.child(
                         div()
@@ -2275,12 +2275,14 @@ pub(super) fn dialog_head(title: &str, description: &str, p: &crate::theme::Pale
                 .font_weight(FontWeight::MEDIUM)
                 .child(SharedString::from(title.to_string())),
         )
-        .child(
-            div()
-                .text_size(px(TEXT_SM))
-                .muted(p)
-                .child(SharedString::from(description.to_string())),
-        )
+        .when(!description.is_empty(), |d| {
+            d.child(
+                div()
+                    .text_size(px(TEXT_SM))
+                    .muted(p)
+                    .child(SharedString::from(description.to_string())),
+            )
+        })
 }
 
 pub(super) fn dialog_foot(
