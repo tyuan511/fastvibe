@@ -157,6 +157,45 @@ impl ServerState {
         ));
     }
 
+    /// Rename, archive or pin a thread. None of these is activity, so `updated_at` stays.
+    pub fn update_thread(
+        &self,
+        patch: fv_protocol::types::ThreadUpdateParams,
+    ) -> Result<Thread, ErrorObject> {
+        let mut thread = self
+            .thread(&patch.thread_id)?
+            .ok_or_else(|| ErrorObject::new(code::INVALID_PARAMS, "no such thread"))?;
+        if let Some(title) = patch.title {
+            thread.title = title.trim().to_string();
+        }
+        if let Some(archived) = patch.archived {
+            thread.archived = archived;
+        }
+        if let Some(pinned) = patch.pinned {
+            thread.pinned = pinned;
+        }
+        self.store.db.put_thread(&thread).map_err(internal)?;
+        self.broadcast(ServerNotification::CatalogChanged(
+            fv_protocol::types::CatalogChanged {},
+        ));
+        Ok(thread)
+    }
+
+    /// Remove a thread for good: a run in progress is stopped, then its record, transcript and
+    /// pictures go. A thread that is already gone is not an error.
+    pub fn delete_thread(&self, id: &str) -> Result<(), ErrorObject> {
+        if let Some(rt) = self.runtimes.lock().unwrap().remove(id) {
+            rt.interrupt();
+        }
+        self.store.transcripts.delete(id).map_err(internal)?;
+        self.store.images.delete(id).map_err(internal)?;
+        self.store.db.delete_thread(id).map_err(internal)?;
+        self.broadcast(ServerNotification::CatalogChanged(
+            fv_protocol::types::CatalogChanged {},
+        ));
+        Ok(())
+    }
+
     pub fn threads(&self, include_archived: bool) -> Result<Vec<Thread>, ErrorObject> {
         self.store
             .db
@@ -187,8 +226,12 @@ impl ServerState {
             unread: false,
             model,
             thinking,
+            pinned: false,
         };
         self.store.db.put_thread(&thread).map_err(internal)?;
+        if let Some(project) = &thread.project {
+            crate::projects::note_used(self, project);
+        }
         self.broadcast(ServerNotification::ThreadStarted(thread.clone()));
         self.broadcast(ServerNotification::CatalogChanged(
             fv_protocol::types::CatalogChanged {},

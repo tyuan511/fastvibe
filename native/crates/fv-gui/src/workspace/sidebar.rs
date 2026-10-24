@@ -2,7 +2,9 @@
 //! row, the brand row, three navigation rows, then 项目 and 聊天, and 设置 at the foot.
 
 use fv_protocol::types::Thread;
+use fv_protocol::types::ThreadUpdateParams;
 use fv_theme::Token;
+use gpui_kit::component::input::Input;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -116,36 +118,65 @@ impl Workspace {
 
     fn lists(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
-        let visible: Vec<&Thread> = self.threads.iter().filter(|t| !t.archived).collect();
+        let all_visible: Vec<&Thread> = self.threads.iter().filter(|t| !t.archived).collect();
+        let pinned: Vec<&Thread> = all_visible.iter().copied().filter(|t| t.pinned).collect();
+        let visible: Vec<&Thread> = all_visible.iter().copied().filter(|t| !t.pinned).collect();
 
         // Projects in the order their most recent chat was touched; each lists its chats.
-        let mut projects: Vec<(String, Vec<&Thread>)> = Vec::new();
-        for t in &visible {
-            if let Some(project) = &t.project {
-                match projects.iter_mut().find(|(p, _)| p == project) {
-                    Some((_, list)) => list.push(t),
-                    None => projects.push((project.clone(), vec![t])),
-                }
-            }
-        }
-        let chats: Vec<&Thread> = visible
+        // A project is a listed folder, empty or not; a chat from one that was removed from the
+        // list is shown with the plain chats.
+        let in_list = |t: &Thread| {
+            t.project
+                .as_ref()
+                .is_some_and(|p| self.projects.iter().any(|x| &x.path == p))
+        };
+        let projects: Vec<(String, Vec<&Thread>)> = self
+            .projects
             .iter()
-            .copied()
-            .filter(|t| t.project.is_none())
+            .map(|proj| {
+                (
+                    proj.path.clone(),
+                    visible
+                        .iter()
+                        .copied()
+                        .filter(|t| t.project.as_ref() == Some(&proj.path))
+                        .collect(),
+                )
+            })
             .collect();
+        let chats: Vec<&Thread> = visible.iter().copied().filter(|t| !in_list(t)).collect();
 
         let mut body = div()
             .px(px(8.0))
             .pt(px(12.0))
             .pb(px(12.0))
             .flex()
-            .flex_col()
-            .child(section_label(
-                text::PROJECTS,
-                true,
-                icon_button_xs("new-project", "add01", p),
-                p,
-            ));
+            .flex_col();
+        if !pinned.is_empty() {
+            let mut list = div().flex().flex_col().gap(px(2.0));
+            for t in &pinned {
+                list = list.child(self.session_row(t, false, cx));
+            }
+            body = body
+                .child(
+                    div()
+                        .pl(px(8.0))
+                        .py(px(4.0))
+                        .mb(px(0.0))
+                        .text_size(px(TEXT_XS))
+                        .font_weight(FontWeight::MEDIUM)
+                        .muted(p)
+                        .child("置顶"),
+                )
+                .child(list);
+        }
+        body = body.child(section_label(
+            text::PROJECTS,
+            pinned.is_empty(),
+            icon_button_xs("new-project", "add01", p)
+                .on_click(cx.listener(|this, _, _, cx| this.add_project(cx))),
+            p,
+        ));
         if projects.is_empty() {
             body = body.child(
                 div()
@@ -214,6 +245,7 @@ impl Workspace {
             .unwrap_or(project)
             .to_string();
         let key = project.to_string();
+        let (more_key, new_key) = (key.clone(), key.clone());
         let group = SharedString::from(format!("project-{project}"));
         let hover = ui::half(p.c(Token::SidebarAccent));
         div()
@@ -257,16 +289,33 @@ impl Workspace {
                     .gap(px(2.0))
                     .invisible()
                     .group_hover(group, |s| s.visible())
-                    .child(icon_button_xs(
-                        SharedString::from(format!("project-more-{project}")),
-                        "more-horizontal",
-                        p,
-                    ))
-                    .child(icon_button_xs(
-                        SharedString::from(format!("project-new-{project}")),
-                        "pencil-edit02",
-                        p,
-                    )),
+                    .child(
+                        icon_button_xs(
+                            SharedString::from(format!("project-more-{project}")),
+                            "more-horizontal",
+                            p,
+                        )
+                        .on_click(cx.listener(
+                            move |this, e: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.project_row_menu = Some((more_key.clone(), e.position()));
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        icon_button_xs(
+                            SharedString::from(format!("project-new-{project}")),
+                            "pencil-edit02",
+                            p,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.selected = None;
+                            this.draft_project = Some(new_key.clone());
+                            cx.notify();
+                        })),
+                    ),
             )
     }
 
@@ -281,8 +330,77 @@ impl Workspace {
         };
         let running = self.views.get(&t.id).is_some_and(|v| v.running);
         let hover = ui::half(p.c(Token::SidebarAccent));
+        let group = SharedString::from(format!("session-{}", t.id));
+        let renaming = self
+            .rename
+            .as_ref()
+            .filter(|(rid, _)| rid == &t.id)
+            .map(|(_, input)| input.clone());
+        let (menu_id, pin_id, archive_id) = (t.id.clone(), t.id.clone(), t.id.clone());
+        let pinned = t.pinned;
+
+        // The busy mark stands where the actions are; hovering swaps one for the other.
+        let marker = if running {
+            Some(icon("loading03", 14.0, p.c(Token::MutedForeground)).into_any_element())
+        } else if t.unread && !active {
+            Some(
+                div()
+                    .size(px(8.0))
+                    .rounded_full()
+                    .bg(p.c(Token::Primary))
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+        let actions = div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(px(2.0))
+            .invisible()
+            .group_hover(group.clone(), |s| s.visible())
+            .child(
+                icon_button_xs(SharedString::from(format!("pin-{}", t.id)), "pin", p).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.update_thread(
+                            ThreadUpdateParams {
+                                thread_id: pin_id.clone(),
+                                title: None,
+                                archived: None,
+                                pinned: Some(!pinned),
+                            },
+                            cx,
+                        )
+                    }),
+                ),
+            )
+            .child(
+                icon_button_xs(
+                    SharedString::from(format!("archive-{}", t.id)),
+                    "archive04",
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.update_thread(
+                        ThreadUpdateParams {
+                            thread_id: archive_id.clone(),
+                            title: None,
+                            archived: Some(true),
+                            pinned: None,
+                        },
+                        cx,
+                    )
+                })),
+            );
+
         div()
             .id(SharedString::from(format!("thread-{}", t.id)))
+            .group(group.clone())
             .h(px(32.0))
             .pl(px(8.0))
             .pr(px(4.0))
@@ -301,27 +419,30 @@ impl Workspace {
                 }
             })
             .when(lead_slot, |d| d.child(div().size(px(14.0)).flex_none()))
-            .child(ui::truncate(title).flex_1())
-            .when(running, |d| {
-                d.child(
-                    div()
-                        .size(px(24.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(icon("loading03", 14.0, p.c(Token::MutedForeground))),
-                )
+            .map(|d| match renaming {
+                Some(input) => d.child(div().flex_1().min_w_0().child(Input::new(&input))),
+                None => d.child(ui::truncate(title).flex_1()),
             })
-            .when(t.unread && !active && !running, |d| {
-                d.child(
-                    div()
-                        .size(px(24.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(div().size(px(8.0)).rounded_full().bg(p.c(Token::Primary))),
-                )
-            })
+            .child(
+                div()
+                    .relative()
+                    .w(px(50.0))
+                    .h(px(24.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .pr(px(8.0))
+                    .child(div().group_hover(group, |s| s.invisible()).children(marker))
+                    .child(actions),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    this.thread_menu = Some((menu_id.clone(), e.position));
+                    cx.notify();
+                }),
+            )
             .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
     }
 

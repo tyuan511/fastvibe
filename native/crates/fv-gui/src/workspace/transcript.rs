@@ -453,7 +453,7 @@ impl Workspace {
                 for item in &layout.process {
                     inner = inner.child(match item {
                         Item::AgentMessage { id, text } => self.markdown(id, text),
-                        other => self.process_item(other),
+                        other => self.process_item(other, cx),
                     });
                 }
                 fold = fold.child(inner);
@@ -466,7 +466,7 @@ impl Workspace {
             col = col.child(match item {
                 Item::AgentMessage { id, text } => self.markdown(id, text),
                 Item::Error { message, .. } => self.error_notice(message),
-                other => self.process_item_live(other, live_tail),
+                other => self.process_item_live(other, live_tail, cx),
             });
         }
         let ends_live = layout
@@ -515,51 +515,190 @@ impl Workspace {
             ))
     }
 
-    fn process_item(&self, item: &Item) -> Div {
-        self.process_item_live(item, false)
+    fn process_item(&self, item: &Item, cx: &mut Context<Self>) -> Div {
+        self.process_item_live(item, false, cx)
     }
 
-    /// A thought or a tool call, as one quiet line.
-    fn process_item_live(&self, item: &Item, live: bool) -> Div {
+    /// A thought or a tool call: one quiet line, opened by a click to what it said or did.
+    fn process_item_live(&self, item: &Item, live: bool, cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
-        let row = div()
-            .w_full()
-            .max_w(px(REPLY_MAX))
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .text_size(px(TEXT_SM))
-            .line_height(px(20.0));
-        match item {
-            Item::Reasoning { text: body, .. } => {
+        let (id, header, body): (String, Div, Option<Div>) = match item {
+            Item::Reasoning { id, text: body } => {
                 let first = body.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-                row.child(div().flex_none().muted(p).child(if live {
+                let header = div().flex_none().muted(p).child(if live {
                     "正在思考"
                 } else {
                     text::THINKING
-                }))
-                .child(
-                    ui::truncate(first.to_string())
-                        .flex_1()
-                        .text_color(p.c(Token::MutedForeground).opacity(0.7)),
-                )
+                });
+                let preview = ui::truncate(first.to_string())
+                    .flex_1()
+                    .text_color(p.c(Token::MutedForeground).opacity(0.7));
+                let row = div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(header)
+                    .child(preview);
+                let open = self.open_items.contains(id);
+                let detail = open.then(|| {
+                    div()
+                        .pl(px(10.0))
+                        .border_l_2()
+                        .border_color(p.c(Token::Border))
+                        .text_size(px(TEXT_SM))
+                        .line_height(px(22.0))
+                        .muted(p)
+                        .child(SharedString::from(body.clone()))
+                });
+                (id.clone(), row, detail)
             }
             Item::ToolCall {
+                id,
                 name,
                 arguments,
                 output,
                 is_error,
-                ..
             } => {
                 let (verb, detail) = presentation::tool_title(name, arguments, output.is_none());
-                row.child(div().flex_none().muted(p).child(verb))
+                let row = div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(div().flex_none().muted(p).child(verb))
                     .child(ui::truncate(detail).text_color(p.c(Token::Foreground)))
                     .when(*is_error, |d| {
                         d.child(icon("alert-circle", 14.0, p.c(Token::Destructive)))
-                    })
+                    });
+                let open = self.open_items.contains(id);
+                let detail =
+                    open.then(|| self.tool_detail(name, arguments, output.as_deref(), *is_error));
+                (id.clone(), row, detail)
             }
-            _ => row,
+            _ => return div(),
+        };
+        let open = self.open_items.contains(&id);
+        let key = id.clone();
+        div()
+            .w_full()
+            .max_w(px(REPLY_MAX))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .text_size(px(TEXT_SM))
+            .line_height(px(20.0))
+            .child(
+                div()
+                    .id(SharedString::from(format!("item-{id}")))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(div().flex_1().min_w_0().child(header))
+                    .child(ui::chevron(
+                        open,
+                        14.0,
+                        p.c(Token::MutedForeground).opacity(0.6),
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.open_items.remove(&key) {
+                            this.open_items.insert(key.clone());
+                        }
+                        cx.notify();
+                    })),
+            )
+            .children(body)
+    }
+
+    /// What a tool call was asked and what it said back.
+    fn tool_detail(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+        output: Option<&str>,
+        is_error: bool,
+    ) -> Div {
+        let p = &self.palette;
+        let asked = match name {
+            "exec_command" => arguments
+                .get("cmd")
+                .and_then(|v| v.as_str())
+                .map(|c| self.code_block(&format!("$ {c}"), false)),
+            "apply_patch" => arguments
+                .get("input")
+                .and_then(|v| v.as_str())
+                .map(|patch| self.code_block(patch, true)),
+            _ => Some(self.code_block(
+                &serde_json::to_string_pretty(arguments).unwrap_or_default(),
+                false,
+            )),
+        };
+        let mut col = div().flex().flex_col().gap(px(6.0)).children(asked);
+        if let Some(out) = output.filter(|o| !o.trim().is_empty()) {
+            let mut block = self.code_block(out, false);
+            if is_error {
+                block = block.text_color(p.c(Token::Destructive));
+            }
+            col = col.child(block);
         }
+        col
+    }
+
+    /// Monospace text in a scrolling box; a patch gets its added and removed lines tinted.
+    fn code_block(&self, text: &str, diff: bool) -> Stateful<Div> {
+        const MAX_LINES: usize = 400;
+        let p = &self.palette;
+        let mut lines = div().flex().flex_col();
+        for line in text.lines().take(MAX_LINES) {
+            let (bg, fg) = if diff && line.starts_with('+') && !line.starts_with("+++") {
+                (Some(p.c(Token::Success).opacity(0.12)), None)
+            } else if diff && line.starts_with('-') && !line.starts_with("---") {
+                (Some(p.c(Token::Destructive).opacity(0.12)), None)
+            } else if diff && line.starts_with("***") {
+                (None, Some(p.c(Token::MutedForeground)))
+            } else {
+                (None, None)
+            };
+            lines = lines.child(
+                div()
+                    .min_h(px(20.0))
+                    .px(px(12.0))
+                    .when_some(bg, |d, c| d.bg(c))
+                    .when_some(fg, |d, c| d.text_color(c))
+                    .child(SharedString::from(
+                        if line.is_empty() { " " } else { line }.to_string(),
+                    )),
+            );
+        }
+        if text.lines().count() > MAX_LINES {
+            lines = lines.child(
+                div()
+                    .px(px(12.0))
+                    .muted(p)
+                    .child(SharedString::from(format!(
+                        "… 还有 {} 行",
+                        text.lines().count() - MAX_LINES
+                    ))),
+            );
+        }
+        div()
+            .id(SharedString::from(format!("code-{:x}", {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                text.hash(&mut h);
+                h.finish()
+            })))
+            .w_full()
+            .max_h(px(240.0))
+            .overflow_y_scroll()
+            .py(px(8.0))
+            .rounded(px(10.0))
+            .bg(p.c(Token::CodeBg))
+            .font_family(crate::assets::MONO_FONT)
+            .text_size(px(12.0))
+            .line_height(px(20.0))
+            .child(lines)
     }
 
     fn error_notice(&self, message: &str) -> Div {

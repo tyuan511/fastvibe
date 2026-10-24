@@ -76,6 +76,22 @@ pub struct Thread {
     pub model: Option<String>,
     #[serde(default)]
     pub thinking: Option<ThinkingLevel>,
+    /// Kept at the top of the sidebar.
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+/// `thread/update`: the fields to change; the rest stay.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUpdateParams {
+    pub thread_id: ThreadId,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub archived: Option<bool>,
+    #[serde(default)]
+    pub pinned: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -518,4 +534,92 @@ pub struct ThreadModelParams {
 pub struct TokenUsage {
     pub used: u64,
     pub window: u64,
+}
+
+// ---- app settings
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeMode {
+    Light,
+    Dark,
+    /// Follow the operating system.
+    System,
+}
+
+/// What every client of this server shares about how the app looks. Ids name themes from the
+/// clients' own catalog; one a client does not know falls back to its default.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    pub theme_mode: ThemeMode,
+    pub light_theme: String,
+    pub dark_theme: String,
+    /// 玻璃效果: the translucent window, where the platform has a blur to show.
+    pub glass: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            theme_mode: ThemeMode::System,
+            light_theme: "github-light".into(),
+            dark_theme: "github-dark".into(),
+            glass: false,
+        }
+    }
+}
+
+/// `settings/set`: the fields to change; the rest stay.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettingsPatch {
+    #[serde(default)]
+    pub theme_mode: Option<ThemeMode>,
+    #[serde(default)]
+    pub light_theme: Option<String>,
+    #[serde(default)]
+    pub dark_theme: Option<String>,
+    #[serde(default)]
+    pub glass: Option<bool>,
+}
+
+impl AppSettings {
+    pub fn apply(&mut self, patch: AppSettingsPatch) {
+        if let Some(v) = patch.theme_mode {
+            self.theme_mode = v;
+        }
+        if let Some(v) = patch.light_theme {
+            self.light_theme = v;
+        }
+        if let Some(v) = patch.dark_theme {
+            self.dark_theme = v;
+        }
+        if let Some(v) = patch.glass {
+            self.glass = v;
+        }
+    }
+}
+
+// ---- projects
+
+/// A folder the user works in; its conversations are listed under it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectInfo {
+    /// Absolute path: what a conversation's `project` and `cwd` hold.
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectListResponse {
+    pub projects: Vec<ProjectInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPathParams {
+    pub path: String,
 }

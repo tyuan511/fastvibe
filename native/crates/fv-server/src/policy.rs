@@ -18,6 +18,8 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::ThreadUnsubscribe { .. }
             | ClientRequest::TurnStart { .. }
             | ClientRequest::TurnInterrupt { .. }
+            | ClientRequest::ThreadUpdate { .. }
+            | ClientRequest::ThreadDelete { .. }
             | ClientRequest::ThreadCompactStart { .. }
             | ClientRequest::ThreadModelSet { .. }
             | ClientRequest::ProviderList { .. }
@@ -26,7 +28,12 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::ProviderReorder { .. }
             | ClientRequest::ModelList { .. }
             | ClientRequest::ModelDefaultsGet { .. }
-            | ClientRequest::ModelDefaultsSet { .. } => true,
+            | ClientRequest::ModelDefaultsSet { .. }
+            | ClientRequest::ProjectList { .. }
+            | ClientRequest::ProjectAdd { .. }
+            | ClientRequest::ProjectRemove { .. }
+            | ClientRequest::SettingsGet { .. }
+            | ClientRequest::SettingsSet { .. } => true,
             // Fetching a provider's model list makes this machine request an address the
             // caller chose: a lever a remote client does not need.
             ClientRequest::ProviderFetchModels { .. } => false,

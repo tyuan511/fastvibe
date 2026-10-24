@@ -1,7 +1,7 @@
 //! FastVibe, the desktop app.
 //!
 //!   cargo run -p fv-gui -- [--data-dir DIR] [--server-bin PATH] [--theme ID] [--dark]
-//!       [--no-glass] [--open THREAD_ID] [--fixture theme|new] [--screenshot out.png]
+//!       [--glass] [--open THREAD_ID] [--fixture theme|new] [--screenshot out.png]
 
 use std::path::PathBuf;
 
@@ -19,6 +19,10 @@ struct Args {
     fixture: Option<String>,
     /// Dev only: `NAME,URL,KEY` of a provider to add through 设置 (see `script_add`).
     script_add: Option<String>,
+    /// Dev only: start with the composer's model list open.
+    model_menu: bool,
+    /// Dev only: open every fold and tool call.
+    expand: bool,
     /// Open 设置 at this section: `providers`, `add-provider`.
     settings: Option<String>,
     screenshot: Option<String>,
@@ -26,7 +30,11 @@ struct Args {
 
 fn parse_args() -> Args {
     let mut a = Args {
-        prefs: Preferences::default(),
+        // Solid by default: the translucent look is opt-in until it is tuned.
+        prefs: Preferences {
+            glass: false,
+            ..Preferences::default()
+        },
         prefers_dark: false,
         data_dir: fv_daemon::default_data_dir(),
         server_bin: None,
@@ -34,12 +42,15 @@ fn parse_args() -> Args {
         fixture: None,
         settings: None,
         script_add: None,
+        model_menu: false,
+        expand: false,
         screenshot: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--dark" => a.prefers_dark = true,
+            "--glass" => a.prefs.glass = true,
             "--no-glass" => a.prefs.glass = false,
             "--theme" => {
                 let id = it.next().expect("--theme needs an id");
@@ -54,6 +65,8 @@ fn parse_args() -> Args {
             "--open" => a.open = it.next(),
             "--fixture" => a.fixture = it.next(),
             "--settings" => a.settings = it.next(),
+            "--model-menu" => a.model_menu = true,
+            "--expand" => a.expand = true,
             "--script-add" => a.script_add = it.next(),
             "--screenshot" => a.screenshot = it.next(),
             other => panic!("unknown argument {other}"),
@@ -98,6 +111,8 @@ fn main() {
             let open = args.open.clone();
             let fixture = args.fixture.clone();
             let settings = args.settings.clone();
+            let model_menu = args.model_menu;
+            let expand = args.expand;
             let (handle, workspace) = gpui_kit::open_window(options, cx, move |window, cx| {
                 let ws = cx.new(|cx| {
                     match fixture.as_deref() {
@@ -126,6 +141,12 @@ fn main() {
                     }
                     ws
                 });
+                if expand {
+                    ws.update(cx, |ws, cx| ws.expand_all(cx));
+                }
+                if model_menu {
+                    ws.update(cx, |ws, cx| ws.show_model_menu(cx));
+                }
                 if let Some(section) = settings.as_deref() {
                     ws.update(cx, |ws, cx| ws.show_settings_named(section, window, cx));
                 }

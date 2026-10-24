@@ -74,6 +74,13 @@ pub fn half(c: Hsla) -> Hsla {
     c.opacity(c.a * 0.5)
 }
 
+/// Paint `menu` above everything else in the window and stop clicks going through it. An
+/// absolutely positioned child is otherwise drawn in tree order, so the card it hangs from
+/// (its border, its focus ring) can show through.
+pub fn float(menu: Div) -> Deferred {
+    deferred(menu.occlude()).with_priority(10)
+}
+
 pub trait Muted {
     fn muted(self, p: &Palette) -> Self;
 }

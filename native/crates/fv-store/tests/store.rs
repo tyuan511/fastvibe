@@ -15,6 +15,7 @@ fn thread(id: &str, updated_at: i64) -> Thread {
         updated_at,
         archived: false,
         unread: false,
+        pinned: false,
         model: None,
         thinking: None,
     }

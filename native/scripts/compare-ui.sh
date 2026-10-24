@@ -31,6 +31,6 @@ for scene in theme new; do
     --window-size=1100,720 --virtual-time-budget=6000 --user-data-dir="$out/.chrome" \
     --screenshot="$out/electron-$scene.png" "http://localhost:$port/mock.html?$query" 2>/dev/null
   # shellcheck disable=SC2086
-  "$here/target/debug/fastvibe" --fixture "$scene" --no-glass $dark_flag $native_theme \
+  "$here/target/debug/fastvibe" --fixture "$scene" $dark_flag $native_theme \
     --screenshot "$out/native-$scene.png"
 done

@@ -309,6 +309,22 @@ async fn dispatch(
         ClientRequest::ModelDefaultsSet { params, .. } => {
             to_value(crate::providers::set_defaults(state, params)?)
         }
+        ClientRequest::ThreadUpdate { params, .. } => to_value(ThreadStartResponse {
+            thread: state.update_thread(params)?,
+        }),
+        ClientRequest::ThreadDelete { params, .. } => {
+            state.delete_thread(&params.thread_id)?;
+            to_value(Empty {})
+        }
+        ClientRequest::ProjectList { .. } => to_value(crate::projects::list(state)?),
+        ClientRequest::ProjectAdd { params, .. } => {
+            to_value(crate::projects::add(state, &params.path)?)
+        }
+        ClientRequest::ProjectRemove { params, .. } => {
+            to_value(crate::projects::remove(state, &params.path)?)
+        }
+        ClientRequest::SettingsGet { .. } => to_value(crate::settings::read(state)?),
+        ClientRequest::SettingsSet { params, .. } => to_value(crate::settings::set(state, params)?),
         ClientRequest::TurnInterrupt { params, .. } => {
             // Stopping a thread that is not running is not an error: the user's intent is met.
             state.runtime(&params.thread_id).interrupt();

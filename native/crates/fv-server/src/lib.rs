@@ -7,9 +7,11 @@ mod listener;
 mod log;
 mod mapping;
 mod policy;
+mod projects;
 mod prompt;
 mod providers;
 mod runtime;
+mod settings;
 mod state;
 mod turn;
 

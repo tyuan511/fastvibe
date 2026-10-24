@@ -65,7 +65,10 @@ impl ThreadView {
             N::ThreadTokenUsageUpdated(e) => (&e.thread_id, e.seq),
             N::ServerRequestResolved(e) => (&e.thread_id, e.seq),
             // Catalog-level notices belong to the list of threads, not to one of them.
-            N::ThreadStarted(_) | N::CatalogChanged(_) | N::ProvidersChanged(_) => {
+            N::ThreadStarted(_)
+            | N::CatalogChanged(_)
+            | N::ProvidersChanged(_)
+            | N::SettingsChanged(_) => {
                 return Applied::Ignored;
             }
         };
@@ -116,7 +119,10 @@ impl ThreadView {
             N::ServerRequestResolved(e) => {
                 self.questions.retain(|(id, _)| *id != e.body.request_id)
             }
-            N::ThreadStarted(_) | N::CatalogChanged(_) | N::ProvidersChanged(_) => {}
+            N::ThreadStarted(_)
+            | N::CatalogChanged(_)
+            | N::ProvidersChanged(_)
+            | N::SettingsChanged(_) => {}
         }
         Applied::Changed
     }

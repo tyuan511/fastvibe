@@ -12,6 +12,7 @@ fn thread() -> Thread {
         updated_at: 0,
         archived: false,
         unread: false,
+        pinned: false,
         model: None,
         thinking: None,
     }

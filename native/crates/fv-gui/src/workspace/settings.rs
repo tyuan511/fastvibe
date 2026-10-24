@@ -92,51 +92,6 @@ fn section_label(section: Section) -> &'static str {
         .unwrap_or("")
 }
 
-/// The providers a user is most likely to have a key for, so adding one is a key and nothing
-/// else. The address is the one the provider documents; `engine_base_url` in the server adapts
-/// it to each protocol.
-pub const BUILTIN: &[(&str, ApiProtocol, &str)] = &[
-    ("DeepSeek", ApiProtocol::Chat, "https://api.deepseek.com/v1"),
-    (
-        "OpenAI",
-        ApiProtocol::Responses,
-        "https://api.openai.com/v1",
-    ),
-    (
-        "Anthropic",
-        ApiProtocol::Anthropic,
-        "https://api.anthropic.com/v1",
-    ),
-    (
-        "Google Gemini",
-        ApiProtocol::Google,
-        "https://generativelanguage.googleapis.com/v1beta",
-    ),
-    (
-        "OpenRouter",
-        ApiProtocol::Chat,
-        "https://openrouter.ai/api/v1",
-    ),
-    (
-        "Moonshot (Kimi)",
-        ApiProtocol::Chat,
-        "https://api.moonshot.cn/v1",
-    ),
-    (
-        "智谱 GLM",
-        ApiProtocol::Chat,
-        "https://open.bigmodel.cn/api/paas/v4",
-    ),
-    (
-        "通义千问",
-        ApiProtocol::Chat,
-        "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    ),
-    ("xAI", ApiProtocol::Chat, "https://api.x.ai/v1"),
-    ("Groq", ApiProtocol::Chat, "https://api.groq.com/openai/v1"),
-    ("Mistral", ApiProtocol::Chat, "https://api.mistral.ai/v1"),
-];
-
 pub fn protocol_label(p: ApiProtocol) -> &'static str {
     match p {
         ApiProtocol::Chat => "OpenAI Chat Completions (/chat/completions)",
@@ -181,9 +136,6 @@ pub struct Picker {
 
 /// 添加供应商: the form, then the models it offers.
 pub struct AddProvider {
-    pub custom: bool,
-    pub builtin: Option<usize>,
-    pub builtin_menu: bool,
     pub name: Entity<InputState>,
     pub base_url: Entity<InputState>,
     pub key: Entity<InputState>,
@@ -200,7 +152,20 @@ pub struct AddModels {
     pub picker: Picker,
 }
 
+/// Which 外观 list is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeMenu {
+    Mode,
+    Light,
+    Dark,
+}
+
 pub struct SettingsState {
+    pub theme_menu: Option<ThemeMenu>,
+    /// 归档对话: what the sidebar leaves out.
+    pub archived: Option<Vec<Thread>>,
+    /// The archived thread asked to be deleted, until the user confirms.
+    pub confirm_delete: Option<ThreadId>,
     pub section: Section,
     pub providers: Option<Vec<ProviderInfo>>,
     pub edit: Option<ProviderEdit>,
@@ -239,6 +204,9 @@ impl Workspace {
                 providers: None,
                 edit: None,
                 default_menu: false,
+                theme_menu: None,
+                archived: None,
+                confirm_delete: None,
                 search: input(window, cx, "搜索供应商或模型", false),
                 add: None,
                 add_models: None,
@@ -252,7 +220,32 @@ impl Workspace {
         self.project_menu = false;
         self.refresh_providers(cx);
         self.refresh_models(cx);
+        self.refresh_archived(cx);
         cx.notify();
+    }
+
+    pub(super) fn refresh_archived(&mut self, cx: &mut Context<Self>) {
+        if self.settings.is_none() {
+            return;
+        }
+        let Some(b) = self.backend.clone() else {
+            return;
+        };
+        let call = b.call::<ThreadList>(ThreadListParams {
+            include_archived: true,
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(r) = call.await {
+                this.update(cx, |this, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.archived = Some(r.threads.into_iter().filter(|t| t.archived).collect());
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     pub(super) fn refresh_providers(&mut self, cx: &mut Context<Self>) {
@@ -487,9 +480,6 @@ impl Workspace {
 
     pub(super) fn open_add_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let add = AddProvider {
-            custom: false,
-            builtin: None,
-            builtin_menu: false,
             name: input(window, cx, "例如 OpenRouter", false),
             base_url: input(window, cx, "https://api.example.com/v1", false),
             key: input(window, cx, "粘贴该供应商的 API 密钥", true),
@@ -511,23 +501,9 @@ impl Workspace {
             return;
         };
         let key = value(&a.key, cx);
-        let (protocol, base_url) = if a.custom {
-            (a.protocol, value(&a.base_url, cx))
-        } else {
-            match a.builtin {
-                Some(i) => (BUILTIN[i].1, BUILTIN[i].2.to_string()),
-                None => {
-                    self.add_error("请选择一个内置供应商", cx);
-                    return;
-                }
-            }
-        };
-        if a.custom && (value(&a.name, cx).is_empty() || base_url.is_empty() || key.is_empty()) {
+        let (protocol, base_url) = (a.protocol, value(&a.base_url, cx));
+        if value(&a.name, cx).is_empty() || base_url.is_empty() || key.is_empty() {
             self.add_error("请填写名称、Base URL 与 API 密钥", cx);
-            return;
-        }
-        if key.is_empty() {
-            self.add_error("请填写 API 密钥", cx);
             return;
         }
         let search = input(window, cx, "搜索模型", false);
@@ -582,12 +558,7 @@ impl Workspace {
             self.add_error("至少选择一个模型", cx);
             return;
         }
-        let (name, protocol, base_url) = if a.custom {
-            (value(&a.name, cx), a.protocol, value(&a.base_url, cx))
-        } else {
-            let (n, p, u) = BUILTIN[a.builtin.unwrap_or(0)];
-            (n.to_string(), p, u.to_string())
-        };
+        let (name, protocol, base_url) = (value(&a.name, cx), a.protocol, value(&a.base_url, cx));
         let first = models[0].id.clone();
         let call = b.call::<ProviderUpsert>(ProviderUpsertParams {
             id: None,
@@ -702,6 +673,8 @@ impl Workspace {
                                 Section::Providers => {
                                     self.providers_pane(s, window, cx).into_any_element()
                                 }
+                                Section::General => self.general_pane(s, cx).into_any_element(),
+                                Section::Archived => self.archived_pane(s, cx).into_any_element(),
                                 _ => self.not_yet().into_any_element(),
                             }),
                     ),
@@ -884,7 +857,9 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .when(s.default_menu, |d| d.child(self.default_menu(cx)));
+            .when(s.default_menu, |d| {
+                d.child(ui::float(self.default_menu(cx)))
+            });
 
         let count = providers.map(|l| l.len()).unwrap_or(0);
         let header = div()
@@ -984,7 +959,317 @@ impl Workspace {
         )
     }
 
-    fn default_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// 偏好设置 → 外观: mode, the two themes, and the translucent window.
+    fn general_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = &self.palette;
+        let a = &self.app_settings;
+        let hover = p.c(Token::Accent);
+        let mode_label = |m: ThemeMode| match m {
+            ThemeMode::System => "跟随系统",
+            ThemeMode::Light => "亮色",
+            ThemeMode::Dark => "暗色",
+        };
+        let select =
+            |id: &'static str, which: ThemeMenu, content: AnyElement, cx: &mut Context<Self>| {
+                outline_button(id, p)
+                    .w(px(172.0))
+                    .h(px(36.0))
+                    .justify_between()
+                    .rounded(px(10.0))
+                    .font_weight(FontWeight::NORMAL)
+                    .text_size(px(TEXT_SM))
+                    .child(content)
+                    .child(icon("unfold-more", 14.0, p.c(Token::MutedForeground)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(s) = &mut this.settings {
+                            s.theme_menu = if s.theme_menu == Some(which) {
+                                None
+                            } else {
+                                Some(which)
+                            };
+                        }
+                        cx.notify();
+                    }))
+            };
+
+        let mut mode_menu = popover(p)
+            .absolute()
+            .top(px(40.0))
+            .right(px(0.0))
+            .w(px(172.0));
+        for m in [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark] {
+            mode_menu = mode_menu.child(
+                menu_item(
+                    SharedString::from(format!("mode-{m:?}")),
+                    a.theme_mode == m,
+                    hover,
+                )
+                .child(mode_label(m))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.theme_menu = None;
+                    }
+                    this.patch_settings(
+                        AppSettingsPatch {
+                            theme_mode: Some(m),
+                            ..Default::default()
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+
+        let theme_list = |kind: fv_theme::ThemeKind, current: &str, cx: &mut Context<Self>| {
+            let menu = popover(p)
+                .absolute()
+                .top(px(40.0))
+                .right(px(0.0))
+                .w(px(220.0))
+                .max_h(px(320.0));
+            let mut rows = div().id("theme-list").overflow_y_scroll().flex().flex_col();
+            for id in fv_theme::ids_for(kind) {
+                let theme_id = id.clone();
+                let Some(seed) = fv_theme::seed(id) else {
+                    continue;
+                };
+                rows = rows.child(
+                    menu_item(
+                        SharedString::from(format!("theme-{id}")),
+                        current == id,
+                        hover,
+                    )
+                    .child(swatch(seed))
+                    .child(ui::truncate(seed.label.clone()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(s) = &mut this.settings {
+                            s.theme_menu = None;
+                        }
+                        let id = theme_id.clone();
+                        this.patch_settings(
+                            match kind {
+                                fv_theme::ThemeKind::Light => AppSettingsPatch {
+                                    light_theme: Some(id),
+                                    ..Default::default()
+                                },
+                                fv_theme::ThemeKind::Dark => AppSettingsPatch {
+                                    dark_theme: Some(id),
+                                    ..Default::default()
+                                },
+                            },
+                            cx,
+                        )
+                    })),
+                );
+            }
+            menu.child(rows)
+        };
+        let theme_button =
+            |id: &'static str, which: ThemeMenu, theme: &str, cx: &mut Context<Self>| {
+                let content = match fv_theme::seed(theme) {
+                    Some(seed) => div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(swatch(seed))
+                        .child(ui::truncate(seed.label.clone()))
+                        .into_any_element(),
+                    None => div()
+                        .child(SharedString::from(theme.to_string()))
+                        .into_any_element(),
+                };
+                select(id, which, content, cx)
+            };
+
+        let light_btn = theme_button("light-theme", ThemeMenu::Light, &a.light_theme, cx);
+        let dark_btn = theme_button("dark-theme", ThemeMenu::Dark, &a.dark_theme, cx);
+        let mode_btn = select(
+            "theme-mode",
+            ThemeMenu::Mode,
+            div().child(mode_label(a.theme_mode)).into_any_element(),
+            cx,
+        );
+        let light_menu = theme_list(fv_theme::ThemeKind::Light, &a.light_theme, cx);
+        let dark_menu = theme_list(fv_theme::ThemeKind::Dark, &a.dark_theme, cx);
+        let glass = a.glass;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .pl(px(4.0))
+                    .text_size(px(TEXT_SM))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("外观"),
+            )
+            .child(
+                card(p)
+                    .child(setting_row(
+                        "主题模式",
+                        "跟随系统时随 macOS 外观自动切换",
+                        false,
+                        p,
+                        div()
+                            .relative()
+                            .child(mode_btn)
+                            .when(s.theme_menu == Some(ThemeMenu::Mode), |d| {
+                                d.child(ui::float(mode_menu))
+                            }),
+                    ))
+                    .child(setting_row(
+                        "亮色主题",
+                        "亮色模式下使用的主题",
+                        true,
+                        p,
+                        div()
+                            .relative()
+                            .child(light_btn)
+                            .when(s.theme_menu == Some(ThemeMenu::Light), |d| {
+                                d.child(ui::float(light_menu))
+                            }),
+                    ))
+                    .child(setting_row(
+                        "暗色主题",
+                        "暗色模式下使用的主题",
+                        true,
+                        p,
+                        div()
+                            .relative()
+                            .child(dark_btn)
+                            .when(s.theme_menu == Some(ThemeMenu::Dark), |d| {
+                                d.child(ui::float(dark_menu))
+                            }),
+                    ))
+                    .child(setting_row(
+                        "玻璃效果",
+                        "窗口背景半透明，透出桌面",
+                        true,
+                        p,
+                        switch(SharedString::from("glass"), glass, p).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.patch_settings(
+                                    AppSettingsPatch {
+                                        glass: Some(!glass),
+                                        ..Default::default()
+                                    },
+                                    cx,
+                                )
+                            },
+                        )),
+                    )),
+            )
+    }
+
+    /// 归档对话: restore one to the sidebar, or delete it for good (after asking).
+    fn archived_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = &self.palette;
+        let mut col = div().flex().flex_col().gap(px(16.0)).child(
+            div()
+                .pl(px(4.0))
+                .text_size(px(TEXT_XS))
+                .muted(p)
+                .child("归档只是从侧边栏收起，内容仍在；删除会一并移除会话记录，无法恢复。"),
+        );
+        let list = match &s.archived {
+            None => card(p).child(
+                div()
+                    .px(px(16.0))
+                    .py(px(20.0))
+                    .text_size(px(TEXT_SM))
+                    .muted(p)
+                    .child("正在加载…"),
+            ),
+            Some(items) if items.is_empty() => card(p).child(
+                div()
+                    .px(px(16.0))
+                    .py(px(32.0))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("没有已归档的对话"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child("在侧边栏悬停对话点归档图标，或右键选择「归档」。"),
+                    ),
+            ),
+            Some(items) => {
+                let mut card = card(p);
+                for (i, t) in items.iter().enumerate() {
+                    let (restore_id, delete_id) = (t.id.clone(), t.id.clone());
+                    let project = t
+                        .project
+                        .as_deref()
+                        .map(|path| super::transcript::project_name(path).to_string())
+                        .unwrap_or_else(|| "无项目".to_string());
+                    card = card.child(
+                        div()
+                            .px(px(16.0))
+                            .py(px(10.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(12.0))
+                            .when(i > 0, |d| d.border_t_1().border_color(p.c(Token::Border)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        ui::truncate(if t.title.is_empty() {
+                                            text::UNTITLED.to_string()
+                                        } else {
+                                            t.title.clone()
+                                        })
+                                        .text_size(px(TEXT_SM))
+                                        .font_weight(FontWeight::MEDIUM),
+                                    )
+                                    .child(ui::truncate(project).text_size(px(TEXT_XS)).muted(p)),
+                            )
+                            .child(
+                                outline_button(SharedString::from(format!("restore-{}", t.id)), p)
+                                    .child("恢复")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.update_thread(
+                                            ThreadUpdateParams {
+                                                thread_id: restore_id.clone(),
+                                                title: None,
+                                                archived: Some(false),
+                                                pinned: None,
+                                            },
+                                            cx,
+                                        )
+                                    })),
+                            )
+                            .child(
+                                outline_button(SharedString::from(format!("delete-{}", t.id)), p)
+                                    .text_color(p.c(Token::Destructive))
+                                    .child("删除")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(s) = &mut this.settings {
+                                            s.confirm_delete = Some(delete_id.clone());
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                    );
+                }
+                card
+            }
+        };
+        col = col.child(list);
+        col
+    }
+
+    fn default_menu(&self, cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
         let hover = p.c(Token::Accent);
         let mut menu = popover(p)
@@ -1265,7 +1550,7 @@ impl Workspace {
                                     cx.notify();
                                 })),
                         )
-                        .when(edit.protocol_menu, |d| d.child(protocol_menu)),
+                        .when(edit.protocol_menu, |d| d.child(ui::float(protocol_menu))),
                 ),
             )
             .child(
@@ -1353,6 +1638,44 @@ impl Workspace {
                     }
                 },
             ));
+        }
+        if let Some(id) = &s.confirm_delete {
+            let title = s
+                .archived
+                .as_ref()
+                .and_then(|l| l.iter().find(|t| &t.id == id))
+                .map(|t| t.title.clone())
+                .unwrap_or_default();
+            let target = id.clone();
+            let body = dialog_card(&self.palette, 448.0)
+                .child(dialog_head(
+                    "删除这个对话？",
+                    &format!("「{title}」及其全部消息会被删除，无法恢复。"),
+                    &self.palette,
+                ))
+                .child(dialog_foot(
+                    &self.palette,
+                    cx,
+                    |this, cx| {
+                        if let Some(s) = &mut this.settings {
+                            s.confirm_delete = None;
+                        }
+                        cx.notify();
+                    },
+                    "删除",
+                    move |this, _, cx| {
+                        if let Some(s) = &mut this.settings {
+                            s.confirm_delete = None;
+                        }
+                        this.delete_thread(target.clone(), cx);
+                    },
+                    false,
+                ));
+            return Some(modal(body, &self.palette, cx, |this| {
+                if let Some(s) = &mut this.settings {
+                    s.confirm_delete = None;
+                }
+            }));
         }
         if let Some(am) = &s.add_models {
             let name = s
@@ -1445,29 +1768,6 @@ impl Workspace {
                 ));
         }
 
-        let tab = |id: &'static str, label: &'static str, on: bool, custom: bool| {
-            div()
-                .id(id)
-                .flex_1()
-                .h(px(28.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.0))
-                .cursor_pointer()
-                .text_size(px(TEXT_XS))
-                .font_weight(FontWeight::MEDIUM)
-                .when(on, |d| d.bg(p.c(Token::Background)).shadow_sm())
-                .when(!on, |d| d.muted(p))
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(a) = this.settings.as_mut().and_then(|s| s.add.as_mut()) {
-                        a.custom = custom;
-                        a.error = None;
-                    }
-                    cx.notify();
-                }))
-        };
         let label = |t: &'static str| {
             div()
                 .text_size(px(12.8))
@@ -1480,18 +1780,8 @@ impl Workspace {
             .pb(px(16.0))
             .flex()
             .flex_col()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .p(px(4.0))
-                    .flex()
-                    .gap(px(4.0))
-                    .rounded(px(8.0))
-                    .bg(p.c(Token::Muted).opacity(0.6))
-                    .child(tab("tab-builtin", "内置供应商", !a.custom, false))
-                    .child(tab("tab-custom", "自定义供应商", a.custom, true)),
-            );
-        if a.custom {
+            .gap(px(12.0));
+        {
             let mut menu = popover(p).absolute().top(px(36.0)).left(px(0.0)).w_full();
             for proto in PROTOCOLS {
                 menu = menu.child(
@@ -1538,75 +1828,9 @@ impl Workspace {
                                         cx.notify();
                                     })),
                             )
-                            .when(a.protocol_menu, |d| d.child(menu)),
+                            .when(a.protocol_menu, |d| d.child(ui::float(menu))),
                     ),
                 );
-        } else {
-            let mut menu = popover(p)
-                .absolute()
-                .top(px(36.0))
-                .left(px(0.0))
-                .w_full()
-                .max_h(px(240.0));
-            let mut items = div()
-                .id("builtin-list")
-                .overflow_y_scroll()
-                .flex()
-                .flex_col();
-            for (i, (name, _, url)) in BUILTIN.iter().enumerate() {
-                items = items.child(
-                    menu_item(
-                        SharedString::from(format!("builtin-{i}")),
-                        a.builtin == Some(i),
-                        hover,
-                    )
-                    .h(px(44.0))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .child(div().text_size(px(TEXT_SM)).child(*name))
-                            .child(ui::truncate(*url).text_size(px(TEXT_XS)).muted(p)),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(a) = this.settings.as_mut().and_then(|s| s.add.as_mut()) {
-                            a.builtin = Some(i);
-                            a.builtin_menu = false;
-                            a.error = None;
-                        }
-                        cx.notify();
-                    })),
-                );
-            }
-            menu = menu.child(items);
-            form = form.child(
-                div().child(label("供应商")).child(
-                    div()
-                        .relative()
-                        .child(
-                            outline_button("builtin", p)
-                                .font_weight(FontWeight::NORMAL)
-                                .text_size(px(TEXT_SM))
-                                .w_full()
-                                .justify_between()
-                                .child(match a.builtin {
-                                    Some(i) => BUILTIN[i].0,
-                                    None => "选择内置供应商",
-                                })
-                                .child(icon("arrow-down01", 14.0, p.c(Token::MutedForeground)))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(a) =
-                                        this.settings.as_mut().and_then(|s| s.add.as_mut())
-                                    {
-                                        a.builtin_menu = !a.builtin_menu;
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .when(a.builtin_menu, |d| d.child(menu)),
-                ),
-            );
         }
         form = form
             .child(
@@ -1623,15 +1847,7 @@ impl Workspace {
                 )
             });
         dialog_card(p, 448.0)
-            .child(dialog_head(
-                "添加供应商",
-                if a.custom {
-                    "填写名称、地址和密钥。"
-                } else {
-                    "选择一个内置供应商，填入 API 密钥。"
-                },
-                p,
-            ))
+            .child(dialog_head("添加供应商", "填写名称、地址和密钥。", p))
             .child(form)
             .child(dialog_foot(
                 p,
@@ -1799,7 +2015,6 @@ impl Workspace {
         self.open_settings(Section::Providers, window, cx);
         self.open_add_provider(window, cx);
         if let Some(a) = self.settings.as_mut().and_then(|s| s.add.as_mut()) {
-            a.custom = true;
             let (n, u, k) = (a.name.clone(), a.base_url.clone(), a.key.clone());
             n.update(cx, |st, cx| st.set_value(name.to_string(), window, cx));
             u.update(cx, |st, cx| st.set_value(base_url.to_string(), window, cx));
@@ -1845,8 +2060,71 @@ impl Workspace {
 
 // ---- pieces shared by the panes
 
+/// `SettingsRow`: a title, a one-line description, and the control on the right.
+pub(super) fn setting_row(
+    title: &str,
+    description: &str,
+    divider: bool,
+    p: &crate::theme::Palette,
+    control: impl IntoElement,
+) -> Div {
+    div()
+        .px(px(16.0))
+        .py(px(12.0))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(24.0))
+        .when(divider, |d| d.border_t_1().border_color(p.c(Token::Border)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .text_size(px(TEXT_SM))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(SharedString::from(title.to_string())),
+                )
+                .child(
+                    div()
+                        .mt(px(2.0))
+                        .text_size(px(TEXT_XS))
+                        .line_height(px(16.0))
+                        .muted(p)
+                        .child(SharedString::from(description.to_string())),
+                ),
+        )
+        .child(div().flex_none().child(control))
+}
+
+/// A theme's preview: its page colour with three bars in its accents.
+fn swatch(seed: &fv_theme::Seed) -> Div {
+    let bar = |c: fv_theme::Color| {
+        div()
+            .w(px(2.0))
+            .h(px(10.0))
+            .rounded_full()
+            .bg(crate::theme::hsla(c))
+    };
+    div()
+        .size(px(20.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(2.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(crate::theme::hsla(seed.border))
+        .bg(crate::theme::hsla(seed.bg))
+        .child(bar(seed.accent))
+        .child(bar(seed.success))
+        .child(bar(seed.warning))
+}
+
 /// `SettingsGroup`'s card: rounded, bordered, rows divided by hairlines.
-fn card(p: &crate::theme::Palette) -> Div {
+pub(super) fn card(p: &crate::theme::Palette) -> Div {
     div()
         .rounded(px(14.0))
         .border_1()
@@ -1858,7 +2136,7 @@ fn card(p: &crate::theme::Palette) -> Div {
 }
 
 /// `Button variant="outline" size="sm"`.
-fn outline_button(id: impl Into<ElementId>, p: &crate::theme::Palette) -> Stateful<Div> {
+pub(super) fn outline_button(id: impl Into<ElementId>, p: &crate::theme::Palette) -> Stateful<Div> {
     let hover = p.c(Token::Muted);
     div()
         .id(id)
@@ -1878,7 +2156,7 @@ fn outline_button(id: impl Into<ElementId>, p: &crate::theme::Palette) -> Statef
         .hover(move |d| d.bg(hover))
 }
 
-fn popover(p: &crate::theme::Palette) -> Div {
+pub(super) fn popover(p: &crate::theme::Palette) -> Div {
     div()
         .p(px(4.0))
         .rounded(px(10.0))
@@ -1892,7 +2170,7 @@ fn popover(p: &crate::theme::Palette) -> Div {
         .text_size(px(TEXT_SM))
 }
 
-fn menu_label(t: &'static str, p: &crate::theme::Palette) -> Div {
+pub(super) fn menu_label(t: &'static str, p: &crate::theme::Palette) -> Div {
     div()
         .px(px(8.0))
         .py(px(4.0))
@@ -1902,7 +2180,7 @@ fn menu_label(t: &'static str, p: &crate::theme::Palette) -> Div {
         .child(t)
 }
 
-fn menu_item(id: SharedString, active: bool, hover: Hsla) -> Stateful<Div> {
+pub(super) fn menu_item(id: SharedString, active: bool, hover: Hsla) -> Stateful<Div> {
     div()
         .id(id)
         .min_h(px(32.0))
@@ -1917,7 +2195,7 @@ fn menu_item(id: SharedString, active: bool, hover: Hsla) -> Stateful<Div> {
 }
 
 /// `Switch size="sm"`: a 24×14 pill.
-fn switch(id: SharedString, on: bool, p: &crate::theme::Palette) -> Stateful<Div> {
+pub(super) fn switch(id: SharedString, on: bool, p: &crate::theme::Palette) -> Stateful<Div> {
     div()
         .id(id)
         .w(px(28.0))
@@ -1941,7 +2219,7 @@ fn switch(id: SharedString, on: bool, p: &crate::theme::Palette) -> Stateful<Div
         )
 }
 
-fn checkbox(on: bool, p: &crate::theme::Palette) -> Div {
+pub(super) fn checkbox(on: bool, p: &crate::theme::Palette) -> Div {
     div()
         .size(px(16.0))
         .flex_none()
@@ -1961,7 +2239,7 @@ fn checkbox(on: bool, p: &crate::theme::Palette) -> Div {
         })
 }
 
-fn dialog_card(p: &crate::theme::Palette, width: f32) -> Div {
+pub(super) fn dialog_card(p: &crate::theme::Palette, width: f32) -> Div {
     div()
         .w(px(width))
         .max_w(relative(0.92))
@@ -1975,7 +2253,7 @@ fn dialog_card(p: &crate::theme::Palette, width: f32) -> Div {
         .flex_col()
 }
 
-fn dialog_head(title: &str, description: &str, p: &crate::theme::Palette) -> Div {
+pub(super) fn dialog_head(title: &str, description: &str, p: &crate::theme::Palette) -> Div {
     div()
         .px(px(20.0))
         .pt(px(18.0))
@@ -1997,7 +2275,7 @@ fn dialog_head(title: &str, description: &str, p: &crate::theme::Palette) -> Div
         )
 }
 
-fn dialog_foot(
+pub(super) fn dialog_foot(
     p: &crate::theme::Palette,
     cx: &mut Context<Workspace>,
     cancel: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
@@ -2044,7 +2322,7 @@ fn dialog_foot(
 }
 
 /// A dialog over the whole window, on a dimmed backdrop that closes it when clicked.
-fn modal(
+pub(super) fn modal(
     body: Div,
     p: &crate::theme::Palette,
     cx: &mut Context<Workspace>,

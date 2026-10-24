@@ -70,6 +70,8 @@ client_requests! {
     ThreadUnsubscribe => "thread/unsubscribe": ThreadIdParams => Empty,
     TurnStart => "turn/start": TurnStartParams => TurnStartResponse,
     TurnInterrupt => "turn/interrupt": ThreadIdParams => Empty,
+    ThreadUpdate => "thread/update": ThreadUpdateParams => ThreadStartResponse,
+    ThreadDelete => "thread/delete": ThreadIdParams => Empty,
     ThreadCompactStart => "thread/compact/start": ThreadIdParams => Empty,
     ThreadModelSet => "thread/model/set": ThreadModelParams => ThreadStartResponse,
     ProviderList => "provider/list": Empty => ProviderListResponse,
@@ -80,6 +82,11 @@ client_requests! {
     ModelList => "model/list": Empty => ModelListResponse,
     ModelDefaultsGet => "model/defaults/get": Empty => ModelDefaults,
     ModelDefaultsSet => "model/defaults/set": ModelDefaults => ModelDefaults,
+    ProjectList => "project/list": Empty => ProjectListResponse,
+    ProjectAdd => "project/add": ProjectPathParams => ProjectInfo,
+    ProjectRemove => "project/remove": ProjectPathParams => ProjectListResponse,
+    SettingsGet => "settings/get": Empty => AppSettings,
+    SettingsSet => "settings/set": AppSettingsPatch => AppSettings,
 }
 
 notifications!(ClientNotification {
@@ -91,6 +98,8 @@ notifications!(ServerNotification {
     CatalogChanged => "catalog/changed": CatalogChanged,
     // A provider or the default model changed; model pickers read `model/list` again.
     ProvidersChanged => "providers/changed": Empty,
+    // Appearance settings changed (by any client, this one included).
+    SettingsChanged => "settings/changed": AppSettings,
     TurnStarted => "turn/started": ThreadEvent<TurnRef>,
     TurnCompleted => "turn/completed": ThreadEvent<TurnCompleted>,
     ThreadStatusChanged => "thread/status/changed": ThreadEvent<ThreadStatus>,

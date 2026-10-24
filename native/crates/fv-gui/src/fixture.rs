@@ -27,6 +27,7 @@ fn thread(id: &str, title: &str, project: Option<&str>, updated: i64) -> Thread 
         updated_at: updated,
         archived: false,
         unread: false,
+        pinned: false,
         model: None,
         thinking: None,
     }
