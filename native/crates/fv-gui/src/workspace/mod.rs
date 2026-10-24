@@ -13,6 +13,7 @@ use gpui_kit::component::input::{InputEvent, TextareaState};
 use gpui_kit::*;
 
 mod composer;
+pub mod settings;
 mod sidebar;
 mod transcript;
 
@@ -76,6 +77,8 @@ pub struct Workspace {
     closed_projects: HashSet<String>,
     /// Scroll to the end once the transcript has been laid out (opening a conversation).
     stick_to_bottom: bool,
+    /// 设置, while it is open (it covers the workspace, which keeps its state behind it).
+    settings: Option<settings::SettingsState>,
 }
 
 impl Workspace {
@@ -174,12 +177,35 @@ impl Workspace {
             open_folds: HashSet::new(),
             closed_projects: HashSet::new(),
             stick_to_bottom: true,
+            settings: None,
         }
     }
 
     pub fn set_palette(&mut self, palette: Palette, cx: &mut Context<Self>) {
         self.palette = palette;
         cx.notify();
+    }
+
+    /// Open 设置 at a section (the capture flow and the composer's 管理模型 use it).
+    pub fn show_settings(
+        &mut self,
+        section: settings::Section,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_settings(section, window, cx);
+    }
+
+    /// `--settings providers` / `--settings add-provider`, for the capture flow.
+    pub fn show_settings_named(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match name {
+            "providers" => self.open_settings(settings::Section::Providers, window, cx),
+            "add-provider" => {
+                self.open_settings(settings::Section::Providers, window, cx);
+                self.open_add_provider(window, cx);
+            }
+            _ => self.open_settings(settings::Section::General, window, cx),
+        }
     }
 
     /// Open a conversation by id once the list has loaded (used by the capture flow).
@@ -304,7 +330,12 @@ impl Workspace {
                 match &note {
                     ServerNotification::ThreadStarted(_)
                     | ServerNotification::CatalogChanged(_) => self.refresh_threads(cx),
-                    ServerNotification::ProvidersChanged(_) => self.refresh_models(cx),
+                    ServerNotification::ProvidersChanged(_) => {
+                        self.refresh_models(cx);
+                        if self.settings.is_some() {
+                            self.refresh_providers(cx);
+                        }
+                    }
                     _ => {}
                 }
                 let mut gap = Vec::new();
@@ -494,14 +525,24 @@ impl Render for Workspace {
             cx.notify();
         }
         let p = self.palette.clone();
-        div()
+        let root = div()
+            .relative()
             .size_full()
             .font_family(crate::assets::UI_FONT)
             .bg(p.c(Token::Background))
             .text_color(p.c(Token::Foreground))
-            .text_size(px(crate::ui::TEXT_SM))
-            .flex()
-            .child(self.sidebar(cx))
-            .child(self.main(window, cx))
+            .text_size(px(crate::ui::TEXT_SM));
+        let root = if self.settings.is_some() {
+            root.child(self.settings_view(window, cx))
+        } else {
+            root.child(
+                div()
+                    .size_full()
+                    .flex()
+                    .child(self.sidebar(cx))
+                    .child(self.main(window, cx)),
+            )
+        };
+        root.children(self.settings_dialogs(cx))
     }
 }

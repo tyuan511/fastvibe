@@ -1,0 +1,2087 @@
+//! 设置, after `components/settings/settings-dialog.tsx`: the section list in the sidebar's pane,
+//! the open section on the right. 模型与默认 (`providers-settings.tsx`, `provider-detail.tsx`,
+//! `add-provider-dialog.tsx`) is the one that works so far: it is what a fresh install needs
+//! before it can talk to any model.
+
+use std::collections::HashSet;
+
+use fv_protocol::methods::*;
+use fv_protocol::types::Empty;
+use fv_protocol::types::*;
+use fv_theme::Token;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+
+use super::composer::thinking_label;
+use super::sidebar::{INSET, SIDEBAR_WIDTH};
+use super::{Workspace, text};
+use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon, icon_button_xs};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Section {
+    General,
+    Personalization,
+    Shortcuts,
+    Archived,
+    Usage,
+    Import,
+    Providers,
+    Subagents,
+    Memory,
+    Mcp,
+    Skills,
+    Computer,
+    Browser,
+    Proxy,
+    Remote,
+    Ssh,
+    About,
+}
+
+/// One pane in the list: which, its label, its icon.
+type SectionItem = (Section, &'static str, &'static str);
+
+/// `SETTINGS_SECTIONS`: groups, then each pane's label and icon.
+const SECTIONS: &[(&str, &[SectionItem])] = &[
+    (
+        "偏好设置",
+        &[
+            (Section::General, "偏好设置", "settings02"),
+            (Section::Personalization, "个性化", "sparkles"),
+            (Section::Shortcuts, "快捷键", "keyboard"),
+        ],
+    ),
+    (
+        "工作区与数据",
+        &[
+            (Section::Archived, "归档对话", "archive04"),
+            (Section::Usage, "使用统计", "analytics01"),
+            (Section::Import, "导入", "import"),
+        ],
+    ),
+    (
+        "模型与扩展",
+        &[
+            (Section::Providers, "模型与默认", "boxes"),
+            (Section::Subagents, "子 Agent", "bot"),
+            (Section::Memory, "长期记忆", "sticky-note01"),
+            (Section::Mcp, "MCP 工具", "plug01"),
+            (Section::Skills, "技能", "sparkles"),
+        ],
+    ),
+    (
+        "系统",
+        &[
+            (Section::Computer, "电脑操控", "computer"),
+            (Section::Browser, "浏览器控制", "globe02"),
+            (Section::Proxy, "网络代理", "router01"),
+            (Section::Remote, "远程访问", "wifi01"),
+            (Section::Ssh, "SSH 远程主机", "server-stack01"),
+        ],
+    ),
+    ("关于", &[(Section::About, "关于", "information-circle")]),
+];
+
+fn section_label(section: Section) -> &'static str {
+    SECTIONS
+        .iter()
+        .flat_map(|(_, items)| items.iter())
+        .find(|(s, _, _)| *s == section)
+        .map(|(_, l, _)| *l)
+        .unwrap_or("")
+}
+
+/// The providers a user is most likely to have a key for, so adding one is a key and nothing
+/// else. The address is the one the provider documents; `engine_base_url` in the server adapts
+/// it to each protocol.
+pub const BUILTIN: &[(&str, ApiProtocol, &str)] = &[
+    ("DeepSeek", ApiProtocol::Chat, "https://api.deepseek.com/v1"),
+    (
+        "OpenAI",
+        ApiProtocol::Responses,
+        "https://api.openai.com/v1",
+    ),
+    (
+        "Anthropic",
+        ApiProtocol::Anthropic,
+        "https://api.anthropic.com/v1",
+    ),
+    (
+        "Google Gemini",
+        ApiProtocol::Google,
+        "https://generativelanguage.googleapis.com/v1beta",
+    ),
+    (
+        "OpenRouter",
+        ApiProtocol::Chat,
+        "https://openrouter.ai/api/v1",
+    ),
+    (
+        "Moonshot (Kimi)",
+        ApiProtocol::Chat,
+        "https://api.moonshot.cn/v1",
+    ),
+    (
+        "智谱 GLM",
+        ApiProtocol::Chat,
+        "https://open.bigmodel.cn/api/paas/v4",
+    ),
+    (
+        "通义千问",
+        ApiProtocol::Chat,
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ),
+    ("xAI", ApiProtocol::Chat, "https://api.x.ai/v1"),
+    ("Groq", ApiProtocol::Chat, "https://api.groq.com/openai/v1"),
+    ("Mistral", ApiProtocol::Chat, "https://api.mistral.ai/v1"),
+];
+
+pub fn protocol_label(p: ApiProtocol) -> &'static str {
+    match p {
+        ApiProtocol::Chat => "OpenAI Chat Completions (/chat/completions)",
+        ApiProtocol::Responses => "OpenAI Responses (/responses)",
+        ApiProtocol::Anthropic => "Anthropic Messages (/v1/messages)",
+        ApiProtocol::Google => "Google Generative AI",
+    }
+}
+
+const PROTOCOLS: [ApiProtocol; 4] = [
+    ApiProtocol::Chat,
+    ApiProtocol::Responses,
+    ApiProtocol::Anthropic,
+    ApiProtocol::Google,
+];
+
+const LEVELS: [ThinkingLevel; 6] = [
+    ThinkingLevel::Minimal,
+    ThinkingLevel::Low,
+    ThinkingLevel::Medium,
+    ThinkingLevel::High,
+    ThinkingLevel::Xhigh,
+    ThinkingLevel::Max,
+];
+
+/// The open provider's editable fields.
+pub struct ProviderEdit {
+    pub id: String,
+    pub base_url: Entity<InputState>,
+    pub key: Entity<InputState>,
+    pub protocol_menu: bool,
+}
+
+/// Models offered by a provider, to tick before they are added.
+pub struct Picker {
+    /// `None` while the list is being fetched.
+    pub models: Option<Vec<ModelInfo>>,
+    pub chosen: HashSet<String>,
+    pub error: Option<String>,
+    pub search: Entity<InputState>,
+}
+
+/// 添加供应商: the form, then the models it offers.
+pub struct AddProvider {
+    pub custom: bool,
+    pub builtin: Option<usize>,
+    pub builtin_menu: bool,
+    pub name: Entity<InputState>,
+    pub base_url: Entity<InputState>,
+    pub key: Entity<InputState>,
+    pub protocol: ApiProtocol,
+    pub protocol_menu: bool,
+    pub busy: bool,
+    pub error: Option<String>,
+    pub picker: Option<Picker>,
+}
+
+/// 管理模型: the models a saved provider offers, to add more of them.
+pub struct AddModels {
+    pub provider_id: String,
+    pub picker: Picker,
+}
+
+pub struct SettingsState {
+    pub section: Section,
+    pub providers: Option<Vec<ProviderInfo>>,
+    pub edit: Option<ProviderEdit>,
+    pub default_menu: bool,
+    pub search: Entity<InputState>,
+    pub add: Option<AddProvider>,
+    pub add_models: Option<AddModels>,
+    pub notice: Option<String>,
+}
+
+fn input(window: &mut Window, cx: &mut App, placeholder: &str, masked: bool) -> Entity<InputState> {
+    let placeholder = SharedString::from(placeholder.to_string());
+    cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(placeholder)
+            .masked(masked)
+    })
+}
+
+fn value(state: &Entity<InputState>, cx: &App) -> String {
+    state.read(cx).value().trim().to_string()
+}
+
+impl Workspace {
+    // ---- opening and closing
+
+    pub(super) fn open_settings(
+        &mut self,
+        section: Section,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.is_none() {
+            self.settings = Some(SettingsState {
+                section,
+                providers: None,
+                edit: None,
+                default_menu: false,
+                search: input(window, cx, "搜索供应商或模型", false),
+                add: None,
+                add_models: None,
+                notice: None,
+            });
+        }
+        if let Some(s) = &mut self.settings {
+            s.section = section;
+        }
+        self.model_menu = false;
+        self.project_menu = false;
+        self.refresh_providers(cx);
+        self.refresh_models(cx);
+        cx.notify();
+    }
+
+    pub(super) fn refresh_providers(&mut self, cx: &mut Context<Self>) {
+        let Some(b) = self.backend.clone() else {
+            if let Some(s) = &mut self.settings
+                && s.providers.is_none()
+            {
+                s.providers = Some(Vec::new());
+            }
+            return;
+        };
+        let call = b.call::<ProviderList>(Empty {});
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                if let Some(s) = &mut this.settings {
+                    match result {
+                        Ok(r) => s.providers = Some(r.providers),
+                        Err(e) => s.notice = Some(format!("读取供应商失败：{e}")),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Save a provider as it is now, with `change` applied; the key is kept unless given.
+    fn save_provider(
+        &mut self,
+        id: &str,
+        api_key: Option<String>,
+        change: impl FnOnce(&mut ProviderUpsertParams),
+        cx: &mut Context<Self>,
+    ) {
+        let Some(b) = self.backend.clone() else {
+            return;
+        };
+        let Some(p) = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.providers.as_ref())
+            .and_then(|list| list.iter().find(|p| p.id == id))
+        else {
+            return;
+        };
+        let mut params = ProviderUpsertParams {
+            id: Some(p.id.clone()),
+            name: p.name.clone(),
+            protocol: p.protocol,
+            base_url: p.base_url.clone(),
+            api_key,
+            enabled: p.enabled,
+            models: p.models.clone(),
+        };
+        change(&mut params);
+        let call = b.call::<ProviderUpsert>(params);
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                if let Err(e) = result
+                    && let Some(s) = &mut this.settings
+                {
+                    s.notice = Some(format!("保存失败：{e}"));
+                }
+                this.refresh_providers(cx);
+                this.refresh_models(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn delete_provider(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(b) = self.backend.clone() else {
+            return;
+        };
+        let call = b.call::<ProviderDelete>(ProviderIdParams { provider_id: id });
+        cx.spawn(async move |this, cx| {
+            let _ = call.await;
+            this.update(cx, |this, cx| {
+                if let Some(s) = &mut this.settings {
+                    s.edit = None;
+                }
+                this.refresh_providers(cx);
+                this.refresh_models(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn set_default(&mut self, defaults: ModelDefaults, cx: &mut Context<Self>) {
+        self.defaults = defaults.clone();
+        if let Some(s) = &mut self.settings {
+            s.default_menu = false;
+        }
+        cx.notify();
+        let Some(b) = self.backend.clone() else {
+            return;
+        };
+        let call = b.call::<ModelDefaultsSet>(defaults);
+        cx.spawn(async move |this, cx| {
+            if let Ok(d) = call.await {
+                this.update(cx, |this, cx| {
+                    this.defaults = d;
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn toggle_provider(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(s) = &mut self.settings else { return };
+        if s.edit.as_ref().is_some_and(|e| e.id == id) {
+            s.edit = None;
+            cx.notify();
+            return;
+        }
+        let Some(p) = s
+            .providers
+            .as_ref()
+            .and_then(|l| l.iter().find(|p| p.id == id))
+            .cloned()
+        else {
+            return;
+        };
+        let base_url = input(window, cx, "https://api.example.com/v1", false);
+        base_url.update(cx, |st, cx| st.set_value(p.base_url.clone(), window, cx));
+        let key = input(
+            window,
+            cx,
+            if p.has_key {
+                "已保存，输入新密钥可更新"
+            } else {
+                "粘贴 API 密钥"
+            },
+            true,
+        );
+        if let Some(s) = &mut self.settings {
+            s.edit = Some(ProviderEdit {
+                id,
+                base_url,
+                key,
+                protocol_menu: false,
+            });
+        }
+        cx.notify();
+    }
+
+    fn fetch_into(
+        &mut self,
+        params: FetchModelsParams,
+        target: impl Fn(&mut SettingsState) -> Option<&mut Picker> + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(b) = self.backend.clone() else {
+            if let Some(picker) = self.settings.as_mut().and_then(&target) {
+                picker.models = Some(Vec::new());
+                picker.error = Some("还没有连上服务，稍后再试。".to_string());
+            }
+            if let Some(a) = self.settings.as_mut().and_then(|s| s.add.as_mut()) {
+                a.busy = false;
+            }
+            cx.notify();
+            return;
+        };
+        let call = b.call::<ProviderFetchModels>(params);
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                if let Some(s) = &mut this.settings {
+                    let is_add = s.add.as_ref().is_some_and(|a| a.picker.is_some());
+                    if let Some(picker) = target(s) {
+                        match result {
+                            Ok(r) => picker.models = Some(r.models),
+                            Err(e) => {
+                                picker.models = Some(Vec::new());
+                                picker.error = Some(format!("无法拉取模型列表：{e}"));
+                            }
+                        }
+                    }
+                    if is_add && let Some(a) = &mut s.add {
+                        a.busy = false;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn open_add_models(
+        &mut self,
+        provider_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let search = input(window, cx, "搜索模型", false);
+        let Some(s) = &mut self.settings else { return };
+        let chosen = s
+            .providers
+            .as_ref()
+            .and_then(|l| l.iter().find(|p| p.id == provider_id))
+            .map(|p| p.models.iter().map(|m| m.id.clone()).collect())
+            .unwrap_or_default();
+        s.add_models = Some(AddModels {
+            provider_id: provider_id.clone(),
+            picker: Picker {
+                models: None,
+                chosen,
+                error: None,
+                search,
+            },
+        });
+        cx.notify();
+        self.fetch_into(
+            FetchModelsParams {
+                provider_id: Some(provider_id),
+                protocol: None,
+                base_url: None,
+                api_key: None,
+            },
+            |s| s.add_models.as_mut().map(|a| &mut a.picker),
+            cx,
+        );
+    }
+
+    pub(super) fn open_add_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let add = AddProvider {
+            custom: false,
+            builtin: None,
+            builtin_menu: false,
+            name: input(window, cx, "例如 OpenRouter", false),
+            base_url: input(window, cx, "https://api.example.com/v1", false),
+            key: input(window, cx, "粘贴该供应商的 API 密钥", true),
+            protocol: ApiProtocol::Chat,
+            protocol_menu: false,
+            busy: false,
+            error: None,
+            picker: None,
+        };
+        if let Some(s) = &mut self.settings {
+            s.add = Some(add);
+        }
+        cx.notify();
+    }
+
+    /// 确认 on the form: check it, then ask the provider for its models.
+    fn confirm_add_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(a) = self.settings.as_ref().and_then(|s| s.add.as_ref()) else {
+            return;
+        };
+        let key = value(&a.key, cx);
+        let (protocol, base_url) = if a.custom {
+            (a.protocol, value(&a.base_url, cx))
+        } else {
+            match a.builtin {
+                Some(i) => (BUILTIN[i].1, BUILTIN[i].2.to_string()),
+                None => {
+                    self.add_error("请选择一个内置供应商", cx);
+                    return;
+                }
+            }
+        };
+        if a.custom && (value(&a.name, cx).is_empty() || base_url.is_empty() || key.is_empty()) {
+            self.add_error("请填写名称、Base URL 与 API 密钥", cx);
+            return;
+        }
+        if key.is_empty() {
+            self.add_error("请填写 API 密钥", cx);
+            return;
+        }
+        let search = input(window, cx, "搜索模型", false);
+        if let Some(a) = self.settings.as_mut().and_then(|s| s.add.as_mut()) {
+            a.busy = true;
+            a.error = None;
+            a.picker = Some(Picker {
+                models: None,
+                chosen: HashSet::new(),
+                error: None,
+                search,
+            });
+        }
+        cx.notify();
+        self.fetch_into(
+            FetchModelsParams {
+                provider_id: None,
+                protocol: Some(protocol),
+                base_url: Some(base_url),
+                api_key: Some(key),
+            },
+            |s| s.add.as_mut().and_then(|a| a.picker.as_mut()),
+            cx,
+        );
+    }
+
+    fn add_error(&mut self, message: &str, cx: &mut Context<Self>) {
+        if let Some(a) = self.settings.as_mut().and_then(|s| s.add.as_mut()) {
+            a.error = Some(message.to_string());
+        }
+        cx.notify();
+    }
+
+    /// 添加 N 个模型: save the new provider with the ticked models.
+    fn finish_add_provider(&mut self, cx: &mut Context<Self>) {
+        let Some(b) = self.backend.clone() else {
+            self.add_error("还没有连上服务，稍后再试。", cx);
+            return;
+        };
+        let Some(a) = self.settings.as_ref().and_then(|s| s.add.as_ref()) else {
+            return;
+        };
+        let Some(picker) = &a.picker else { return };
+        let models: Vec<ModelInfo> = picker
+            .models
+            .iter()
+            .flatten()
+            .filter(|m| picker.chosen.contains(&m.id))
+            .cloned()
+            .collect();
+        if models.is_empty() {
+            self.add_error("至少选择一个模型", cx);
+            return;
+        }
+        let (name, protocol, base_url) = if a.custom {
+            (value(&a.name, cx), a.protocol, value(&a.base_url, cx))
+        } else {
+            let (n, p, u) = BUILTIN[a.builtin.unwrap_or(0)];
+            (n.to_string(), p, u.to_string())
+        };
+        let first = models[0].id.clone();
+        let call = b.call::<ProviderUpsert>(ProviderUpsertParams {
+            id: None,
+            name,
+            protocol,
+            base_url,
+            api_key: Some(value(&a.key, cx)),
+            enabled: true,
+            models,
+        });
+        let had_default = self.defaults.model.is_some();
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(r) => {
+                        if let Some(s) = &mut this.settings {
+                            s.add = None;
+                        }
+                        // The first provider's first model becomes the default, so the very
+                        // next message has somewhere to go.
+                        if !had_default {
+                            let label = format!("{}/{}", r.provider.id, first);
+                            let thinking = this.defaults.thinking;
+                            this.set_default(
+                                ModelDefaults {
+                                    model: Some(label),
+                                    thinking,
+                                },
+                                cx,
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(a) = this.settings.as_mut().and_then(|s| s.add.as_mut()) {
+                            a.error = Some(format!("保存失败：{e}"));
+                        }
+                    }
+                }
+                this.refresh_providers(cx);
+                this.refresh_models(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_add_models(&mut self, cx: &mut Context<Self>) {
+        let Some(am) = self.settings.as_mut().and_then(|s| s.add_models.take()) else {
+            return;
+        };
+        let chosen = am.picker.chosen.clone();
+        let fetched: Vec<ModelInfo> = am.picker.models.clone().unwrap_or_default();
+        self.save_provider(
+            &am.provider_id,
+            None,
+            move |p| {
+                // Keep what is still ticked, in its order, then the newly ticked.
+                p.models.retain(|m| chosen.contains(&m.id));
+                for m in fetched {
+                    if chosen.contains(&m.id) && !p.models.iter().any(|x| x.id == m.id) {
+                        p.models.push(m);
+                    }
+                }
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
+    // ---- drawing
+
+    pub(super) fn settings_view(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let Some(s) = &self.settings else {
+            return div().into_any_element();
+        };
+        div()
+            .size_full()
+            .flex()
+            .child(self.settings_nav(s, cx))
+            .child(
+                div()
+                    .id("settings-body")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(768.0))
+                            .mx_auto()
+                            .px(px(16.0))
+                            .pt(px(32.0))
+                            .pb(px(48.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(20.0))
+                            .child(
+                                div()
+                                    .text_size(px(20.0))
+                                    .line_height(px(28.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(section_label(s.section)),
+                            )
+                            .child(match s.section {
+                                Section::Providers => {
+                                    self.providers_pane(s, window, cx).into_any_element()
+                                }
+                                _ => self.not_yet().into_any_element(),
+                            }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn settings_nav(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = &self.palette;
+        let hover = ui::half(p.c(Token::SidebarAccent));
+        let mut list = div().px(px(8.0)).pb(px(12.0)).flex().flex_col();
+        for (gi, (group, items)) in SECTIONS.iter().enumerate() {
+            list = list.child(
+                div()
+                    .when(gi > 0, |d| d.mt(px(12.0)))
+                    .pl(px(8.0))
+                    .py(px(4.0))
+                    .text_size(px(TEXT_XS))
+                    .font_weight(FontWeight::MEDIUM)
+                    .muted(p)
+                    .child(*group),
+            );
+            for (section, label, glyph) in items.iter() {
+                let section = *section;
+                let active = s.section == section;
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!("settings-{label}")))
+                        .h(px(32.0))
+                        .px(px(8.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .rounded(px(8.0))
+                        .cursor_pointer()
+                        .text_size(px(TEXT_SM))
+                        .map(|d| {
+                            if active {
+                                d.bg(p.c(Token::SidebarAccent))
+                                    .font_weight(FontWeight::MEDIUM)
+                            } else {
+                                d.hover(move |d| d.bg(hover))
+                            }
+                        })
+                        .child(icon(glyph, 14.0, p.c(Token::MutedForeground)))
+                        .child(*label)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_settings(section, window, cx)
+                        })),
+                );
+            }
+        }
+        div()
+            .w(px(SIDEBAR_WIDTH))
+            .h_full()
+            .flex_none()
+            .p(px(INSET))
+            .child(
+                div()
+                    .relative()
+                    .size_full()
+                    .rounded(px(16.0))
+                    .bg(p.pane())
+                    .text_color(p.c(Token::SidebarForeground))
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .child(div().h(px(44.0)).flex_none())
+                    .child(
+                        div().px(px(8.0)).flex_none().child(
+                            div()
+                                .id("back-to-app")
+                                .h(px(32.0))
+                                .px(px(8.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(10.0))
+                                .rounded(px(8.0))
+                                .cursor_pointer()
+                                .text_size(px(TEXT_SM))
+                                .hover(move |d| d.bg(hover))
+                                .child(icon("arrow-left01", 14.0, p.c(Token::MutedForeground)))
+                                .child("返回应用")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.settings = None;
+                                    cx.notify();
+                                })),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .id("settings-nav")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .pt(px(4.0))
+                            .child(list),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded(px(16.0))
+                            .border_1()
+                            .border_color(p.c(Token::SidebarBorder)),
+                    ),
+            )
+    }
+
+    fn not_yet(&self) -> impl IntoElement {
+        let p = &self.palette;
+        card(p).child(
+            div()
+                .px(px(16.0))
+                .py(px(24.0))
+                .text_size(px(TEXT_SM))
+                .muted(p)
+                .child("这一页还在移植中。"),
+        )
+    }
+
+    fn providers_pane(
+        &self,
+        s: &SettingsState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = &self.palette;
+        let providers = s.providers.as_deref();
+        let query = s.search.read(cx).value().trim().to_lowercase();
+
+        // 会话模型: the model and thinking a new conversation starts with.
+        let current = match &self.defaults.model {
+            Some(label) => self
+                .models
+                .iter()
+                .find(|m| &m.label == label)
+                .map(|m| format!("{}/{}", m.provider_name, m.model.id))
+                .unwrap_or_else(|| label.clone()),
+            None => "未设置".to_string(),
+        };
+        let thinking = self.defaults.thinking.map(thinking_label).unwrap_or("默认");
+        let default_row = div()
+            .relative()
+            .px(px(16.0))
+            .py(px(12.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(24.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("会话模型"),
+                    )
+                    .child(
+                        div()
+                            .mt(px(2.0))
+                            .text_size(px(TEXT_XS))
+                            .line_height(px(16.0))
+                            .muted(p)
+                            .child("新建对话使用这个模型和推理强度，单个对话仍可临时切换。"),
+                    ),
+            )
+            .child(
+                outline_button("default-model", p)
+                    .h(px(36.0))
+                    .rounded(px(10.0))
+                    .child(SharedString::from(format!("{current} · {thinking}")))
+                    .child(icon("arrow-down01", 12.0, p.c(Token::MutedForeground)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(s) = &mut this.settings {
+                            s.default_menu = !s.default_menu;
+                        }
+                        cx.notify();
+                    })),
+            )
+            .when(s.default_menu, |d| d.child(self.default_menu(cx)));
+
+        let count = providers.map(|l| l.len()).unwrap_or(0);
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .pl(px(4.0))
+                    .flex()
+                    .gap(px(6.0))
+                    .text_size(px(TEXT_SM))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("供应商")
+                    .child(div().muted(p).child(SharedString::from(count.to_string()))),
+            )
+            .child(
+                outline_button("add-provider", p)
+                    .child(icon("add01", 14.0, p.c(Token::Foreground)))
+                    .child("添加供应商")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_add_provider(window, cx)),
+                    ),
+            );
+
+        let mut list = card(p);
+        match providers {
+            None => {
+                list = list.child(
+                    div()
+                        .px(px(16.0))
+                        .py(px(20.0))
+                        .text_size(px(TEXT_SM))
+                        .muted(p)
+                        .child("正在加载供应商…"),
+                )
+            }
+            Some([]) => {
+                list = list.child(
+                    div()
+                        .px(px(16.0))
+                        .py(px(28.0))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .text_size(px(TEXT_SM))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("添加第一个供应商"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(TEXT_XS))
+                                .muted(p)
+                                .child("连接 API 密钥，选择要使用的模型。"),
+                        ),
+                )
+            }
+            Some(all) => {
+                for (i, provider) in all.iter().enumerate() {
+                    let matches = query.is_empty()
+                        || provider.name.to_lowercase().contains(&query)
+                        || provider
+                            .models
+                            .iter()
+                            .any(|m| m.id.to_lowercase().contains(&query));
+                    if matches {
+                        list = list.child(self.provider_row(provider, i > 0, s, window, cx));
+                    }
+                }
+            }
+        }
+
+        let mut col = div().flex().flex_col().gap(px(20.0));
+        if let Some(n) = &s.notice {
+            col = col.child(
+                div()
+                    .text_size(px(TEXT_SM))
+                    .text_color(p.c(Token::Destructive))
+                    .child(SharedString::from(n.clone())),
+            );
+        }
+        col.child(card(p).child(default_row)).child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(header)
+                .child(Input::new(&s.search).prefix(icon(
+                    "search01",
+                    14.0,
+                    p.c(Token::MutedForeground),
+                )))
+                .child(list),
+        )
+    }
+
+    fn default_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = &self.palette;
+        let hover = p.c(Token::Accent);
+        let mut menu = popover(p)
+            .absolute()
+            .top(px(52.0))
+            .right(px(16.0))
+            .w(px(300.0));
+        menu = menu.child(menu_label("模型", p));
+        if self.models.is_empty() {
+            menu = menu.child(
+                div()
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .muted(p)
+                    .child(text::NO_MODEL_HINT),
+            );
+        }
+        for m in &self.models {
+            let label = m.label.clone();
+            let active = self.defaults.model.as_deref() == Some(m.label.as_str());
+            menu = menu.child(
+                menu_item(SharedString::from(format!("dm-{}", m.label)), active, hover)
+                    .child(ui::truncate(format!("{}/{}", m.provider_name, m.model.id)).flex_1())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let thinking = this.defaults.thinking;
+                        this.set_default(
+                            ModelDefaults {
+                                model: Some(label.clone()),
+                                thinking,
+                            },
+                            cx,
+                        )
+                    })),
+            );
+        }
+        menu = menu.child(div().my(px(4.0)).h(px(1.0)).bg(p.c(Token::Border)));
+        menu = menu.child(menu_label("推理强度", p));
+        for level in LEVELS {
+            let active = self.defaults.thinking == Some(level);
+            menu = menu.child(
+                menu_item(SharedString::from(format!("dl-{level:?}")), active, hover)
+                    .child(thinking_label(level))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let model = this.defaults.model.clone();
+                        this.set_default(
+                            ModelDefaults {
+                                model,
+                                thinking: Some(level),
+                            },
+                            cx,
+                        )
+                    })),
+            );
+        }
+        menu
+    }
+
+    fn provider_row(
+        &self,
+        provider: &ProviderInfo,
+        divider: bool,
+        s: &SettingsState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = &self.palette;
+        let id = provider.id.clone();
+        let open = s.edit.as_ref().filter(|e| e.id == provider.id);
+        let (toggle_id, delete_id, enable_id) = (id.clone(), id.clone(), id.clone());
+        let enabled = provider.enabled;
+        let head = div()
+            .id(SharedString::from(format!("provider-{id}")))
+            .h(px(48.0))
+            .px(px(16.0))
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .cursor_pointer()
+            .child(icon("boxes", 16.0, p.c(Token::MutedForeground)))
+            .child(
+                ui::truncate(provider.name.clone())
+                    .flex_1()
+                    .text_size(px(15.0))
+                    .font_weight(FontWeight::MEDIUM),
+            )
+            .when(!provider.has_key, |d| {
+                d.child(
+                    div()
+                        .px(px(6.0))
+                        .rounded_full()
+                        .bg(p.c(Token::Warning).opacity(0.12))
+                        .text_size(px(TEXT_XS))
+                        .text_color(p.c(Token::Warning))
+                        .child("未连接"),
+                )
+            })
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(SharedString::from(format!(
+                        "{} 个模型",
+                        provider.models.len()
+                    ))),
+            )
+            .child(
+                icon_button_xs(SharedString::from(format!("delete-{id}")), "delete02", p).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.delete_provider(delete_id.clone(), cx)
+                    }),
+                ),
+            )
+            .child(
+                switch(SharedString::from(format!("enable-{id}")), enabled, p).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.save_provider(&enable_id, None, |u| u.enabled = !enabled, cx)
+                    }),
+                ),
+            )
+            .child(icon(
+                if open.is_some() {
+                    "arrow-up01"
+                } else {
+                    "arrow-down01"
+                },
+                14.0,
+                p.c(Token::MutedForeground),
+            ))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.toggle_provider(toggle_id.clone(), window, cx)
+            }));
+
+        let mut row = div()
+            .flex()
+            .flex_col()
+            .when(divider, |d| d.border_t_1().border_color(p.c(Token::Border)))
+            .child(head);
+        if let Some(edit) = open {
+            row = row.child(self.provider_detail(provider, edit, window, cx));
+        }
+        row
+    }
+
+    fn provider_detail(
+        &self,
+        provider: &ProviderInfo,
+        edit: &ProviderEdit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = &self.palette;
+        let id = provider.id.clone();
+        let hover = p.c(Token::Accent);
+        let field = |label: &'static str| {
+            div()
+                .text_size(px(TEXT_XS))
+                .muted(p)
+                .mb(px(6.0))
+                .child(label)
+        };
+        let (save_url_id, save_key_id, add_id, sync_id) =
+            (id.clone(), id.clone(), id.clone(), id.clone());
+        let base_state = edit.base_url.clone();
+        let key_state = edit.key.clone();
+
+        let mut protocol_menu = popover(p).absolute().top(px(36.0)).left(px(0.0)).w_full();
+        for proto in PROTOCOLS {
+            let pid = id.clone();
+            protocol_menu = protocol_menu.child(
+                menu_item(
+                    SharedString::from(format!("proto-{id}-{proto:?}")),
+                    proto == provider.protocol,
+                    hover,
+                )
+                .child(protocol_label(proto))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(e) = this.settings.as_mut().and_then(|s| s.edit.as_mut()) {
+                        e.protocol_menu = false;
+                    }
+                    this.save_provider(&pid, None, |u| u.protocol = proto, cx)
+                })),
+            );
+        }
+
+        let mut models = div().flex().flex_col();
+        for m in &provider.models {
+            let (pid, mid) = (id.clone(), m.id.clone());
+            let window_size = m.context_window.map(compact_tokens).unwrap_or_default();
+            models = models.child(
+                div()
+                    .h(px(32.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .text_size(px(TEXT_SM))
+                    .child(ui::truncate(m.name.clone().unwrap_or_else(|| m.id.clone())).flex_1())
+                    .child(
+                        div()
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child(SharedString::from(window_size)),
+                    )
+                    .child(
+                        icon_button_xs(
+                            SharedString::from(format!("rm-{id}-{}", m.id)),
+                            "delete02",
+                            p,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let mid = mid.clone();
+                            this.save_provider(
+                                &pid,
+                                None,
+                                move |u| u.models.retain(|x| x.id != mid),
+                                cx,
+                            )
+                        })),
+                    ),
+            );
+        }
+        if provider.models.is_empty() {
+            models = models.child(div().py(px(8.0)).text_size(px(TEXT_XS)).muted(p).child(
+                if provider.has_key {
+                    "还没有模型，点击右上角添加"
+                } else {
+                    "连接后即可选择模型"
+                },
+            ));
+        }
+
+        div()
+            .px(px(16.0))
+            .pb(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(14.0))
+            .child(
+                div().child(field("Base URL")).child(
+                    div()
+                        .flex()
+                        .gap(px(6.0))
+                        .child(div().flex_1().child(Input::new(&edit.base_url)))
+                        .child(
+                            outline_button(SharedString::from(format!("save-url-{id}")), p)
+                                .child("保存")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let url = value(&base_state, cx);
+                                    this.save_provider(
+                                        &save_url_id,
+                                        None,
+                                        move |u| u.base_url = url,
+                                        cx,
+                                    )
+                                })),
+                        ),
+                ),
+            )
+            .child(
+                div().child(field("API 格式")).child(
+                    div()
+                        .relative()
+                        .child(
+                            outline_button(SharedString::from(format!("proto-{id}")), p)
+                                .font_weight(FontWeight::NORMAL)
+                                .text_size(px(TEXT_SM))
+                                .w_full()
+                                .justify_between()
+                                .child(protocol_label(provider.protocol))
+                                .child(icon("unfold-more", 14.0, p.c(Token::MutedForeground)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(e) =
+                                        this.settings.as_mut().and_then(|s| s.edit.as_mut())
+                                    {
+                                        e.protocol_menu = !e.protocol_menu;
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .when(edit.protocol_menu, |d| d.child(protocol_menu)),
+                ),
+            )
+            .child(
+                div().child(field("API 密钥")).child(
+                    div()
+                        .flex()
+                        .gap(px(6.0))
+                        .child(div().flex_1().child(Input::new(&edit.key).mask_toggle()))
+                        .child(
+                            outline_button(SharedString::from(format!("save-key-{id}")), p)
+                                .child("保存")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    let key = value(&key_state, cx);
+                                    if key.is_empty() {
+                                        return;
+                                    }
+                                    key_state.update(cx, |st, cx| st.set_value("", window, cx));
+                                    this.save_provider(&save_key_id, Some(key), |_| {}, cx)
+                                })),
+                        ),
+                ),
+            )
+            .child(
+                div()
+                    .pt(px(12.0))
+                    .border_t_1()
+                    .border_color(p.c(Token::Border))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .h(px(28.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .text_size(px(TEXT_SM))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("模型列表")
+                            .child(
+                                div()
+                                    .muted(p)
+                                    .child(SharedString::from(provider.models.len().to_string())),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                icon_button_xs(
+                                    SharedString::from(format!("add-models-{id}")),
+                                    "add01",
+                                    p,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.open_add_models(add_id.clone(), window, cx)
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button_xs(
+                                    SharedString::from(format!("sync-{id}")),
+                                    "refresh",
+                                    p,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.open_add_models(sync_id.clone(), window, cx)
+                                    },
+                                )),
+                            ),
+                    )
+                    .child(models),
+            )
+    }
+
+    /// The dialogs Settings can raise, drawn over the whole window.
+    pub(super) fn settings_dialogs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let s = self.settings.as_ref()?;
+        if let Some(a) = &s.add {
+            return Some(modal(
+                self.add_provider_dialog(a, cx),
+                &self.palette,
+                cx,
+                |this| {
+                    if let Some(s) = &mut this.settings {
+                        s.add = None;
+                    }
+                },
+            ));
+        }
+        if let Some(am) = &s.add_models {
+            let name = s
+                .providers
+                .as_ref()
+                .and_then(|l| l.iter().find(|p| p.id == am.provider_id))
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            let body = dialog_card(&self.palette, 672.0)
+                .child(dialog_head(
+                    &format!("管理模型 · {name}"),
+                    "勾选要使用的模型。",
+                    &self.palette,
+                ))
+                .child(div().px(px(20.0)).pb(px(16.0)).child(self.picker(
+                    &am.picker,
+                    |s| s.add_models.as_mut().map(|a| &mut a.picker),
+                    cx,
+                )))
+                .child(dialog_foot(
+                    &self.palette,
+                    cx,
+                    |this, cx| {
+                        if let Some(s) = &mut this.settings {
+                            s.add_models = None;
+                        }
+                        cx.notify();
+                    },
+                    "确认",
+                    |this, _, cx| this.finish_add_models(cx),
+                    false,
+                ));
+            return Some(modal(body, &self.palette, cx, |this| {
+                if let Some(s) = &mut this.settings {
+                    s.add_models = None;
+                }
+            }));
+        }
+        None
+    }
+
+    fn add_provider_dialog(&self, a: &AddProvider, cx: &mut Context<Self>) -> Div {
+        let p = &self.palette;
+        let hover = p.c(Token::Accent);
+        if let Some(picker) = &a.picker {
+            let n = picker.chosen.len();
+            return dialog_card(p, 672.0)
+                .child(dialog_head(
+                    "选择模型",
+                    &match &picker.models {
+                        Some(list) => format!("已获取 {} 个模型，勾选后加入。", list.len()),
+                        None => "正在拉取模型列表…".to_string(),
+                    },
+                    p,
+                ))
+                .child(
+                    div()
+                        .px(px(20.0))
+                        .pb(px(16.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .child(self.picker(
+                            picker,
+                            |s| s.add.as_mut().and_then(|a| a.picker.as_mut()),
+                            cx,
+                        ))
+                        .when_some(a.error.clone(), |d, e| {
+                            d.child(
+                                div()
+                                    .text_size(px(TEXT_XS))
+                                    .text_color(p.c(Token::Destructive))
+                                    .child(SharedString::from(e)),
+                            )
+                        }),
+                )
+                .child(dialog_foot(
+                    p,
+                    cx,
+                    |this, cx| {
+                        if let Some(a) = this.settings.as_mut().and_then(|s| s.add.as_mut()) {
+                            a.picker = None;
+                            a.busy = false;
+                        }
+                        cx.notify();
+                    },
+                    &format!("添加 {n} 个模型"),
+                    |this, _, cx| this.finish_add_provider(cx),
+                    n == 0,
+                ));
+        }
+
+        let tab = |id: &'static str, label: &'static str, on: bool, custom: bool| {
+            div()
+                .id(id)
+                .flex_1()
+                .h(px(28.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .text_size(px(TEXT_XS))
+                .font_weight(FontWeight::MEDIUM)
+                .when(on, |d| d.bg(p.c(Token::Background)).shadow_sm())
+                .when(!on, |d| d.muted(p))
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(a) = this.settings.as_mut().and_then(|s| s.add.as_mut()) {
+                        a.custom = custom;
+                        a.error = None;
+                    }
+                    cx.notify();
+                }))
+        };
+        let label = |t: &'static str| {
+            div()
+                .text_size(px(12.8))
+                .font_weight(FontWeight::MEDIUM)
+                .mb(px(6.0))
+                .child(t)
+        };
+        let mut form = div()
+            .px(px(20.0))
+            .pb(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .p(px(4.0))
+                    .flex()
+                    .gap(px(4.0))
+                    .rounded(px(8.0))
+                    .bg(p.c(Token::Muted).opacity(0.6))
+                    .child(tab("tab-builtin", "内置供应商", !a.custom, false))
+                    .child(tab("tab-custom", "自定义供应商", a.custom, true)),
+            );
+        if a.custom {
+            let mut menu = popover(p).absolute().top(px(36.0)).left(px(0.0)).w_full();
+            for proto in PROTOCOLS {
+                menu = menu.child(
+                    menu_item(
+                        SharedString::from(format!("new-proto-{proto:?}")),
+                        proto == a.protocol,
+                        hover,
+                    )
+                    .child(protocol_label(proto))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(a) = this.settings.as_mut().and_then(|s| s.add.as_mut()) {
+                            a.protocol = proto;
+                            a.protocol_menu = false;
+                        }
+                        cx.notify();
+                    })),
+                );
+            }
+            form = form
+                .child(div().child(label("名称")).child(Input::new(&a.name)))
+                .child(
+                    div()
+                        .child(label("Base URL"))
+                        .child(Input::new(&a.base_url)),
+                )
+                .child(
+                    div().child(label("API 格式")).child(
+                        div()
+                            .relative()
+                            .child(
+                                outline_button("new-proto", p)
+                                    .font_weight(FontWeight::NORMAL)
+                                    .text_size(px(TEXT_SM))
+                                    .w_full()
+                                    .justify_between()
+                                    .child(protocol_label(a.protocol))
+                                    .child(icon("unfold-more", 14.0, p.c(Token::MutedForeground)))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Some(a) =
+                                            this.settings.as_mut().and_then(|s| s.add.as_mut())
+                                        {
+                                            a.protocol_menu = !a.protocol_menu;
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .when(a.protocol_menu, |d| d.child(menu)),
+                    ),
+                );
+        } else {
+            let mut menu = popover(p)
+                .absolute()
+                .top(px(36.0))
+                .left(px(0.0))
+                .w_full()
+                .max_h(px(240.0));
+            let mut items = div()
+                .id("builtin-list")
+                .overflow_y_scroll()
+                .flex()
+                .flex_col();
+            for (i, (name, _, url)) in BUILTIN.iter().enumerate() {
+                items = items.child(
+                    menu_item(
+                        SharedString::from(format!("builtin-{i}")),
+                        a.builtin == Some(i),
+                        hover,
+                    )
+                    .h(px(44.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .child(div().text_size(px(TEXT_SM)).child(*name))
+                            .child(ui::truncate(*url).text_size(px(TEXT_XS)).muted(p)),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(a) = this.settings.as_mut().and_then(|s| s.add.as_mut()) {
+                            a.builtin = Some(i);
+                            a.builtin_menu = false;
+                            a.error = None;
+                        }
+                        cx.notify();
+                    })),
+                );
+            }
+            menu = menu.child(items);
+            form = form.child(
+                div().child(label("供应商")).child(
+                    div()
+                        .relative()
+                        .child(
+                            outline_button("builtin", p)
+                                .font_weight(FontWeight::NORMAL)
+                                .text_size(px(TEXT_SM))
+                                .w_full()
+                                .justify_between()
+                                .child(match a.builtin {
+                                    Some(i) => BUILTIN[i].0,
+                                    None => "选择内置供应商",
+                                })
+                                .child(icon("arrow-down01", 14.0, p.c(Token::MutedForeground)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(a) =
+                                        this.settings.as_mut().and_then(|s| s.add.as_mut())
+                                    {
+                                        a.builtin_menu = !a.builtin_menu;
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .when(a.builtin_menu, |d| d.child(menu)),
+                ),
+            );
+        }
+        form = form
+            .child(
+                div()
+                    .child(label("API 密钥"))
+                    .child(Input::new(&a.key).mask_toggle()),
+            )
+            .when_some(a.error.clone(), |d, e| {
+                d.child(
+                    div()
+                        .text_size(px(TEXT_XS))
+                        .text_color(p.c(Token::Destructive))
+                        .child(SharedString::from(e)),
+                )
+            });
+        dialog_card(p, 448.0)
+            .child(dialog_head(
+                "添加供应商",
+                if a.custom {
+                    "填写名称、地址和密钥。"
+                } else {
+                    "选择一个内置供应商，填入 API 密钥。"
+                },
+                p,
+            ))
+            .child(form)
+            .child(dialog_foot(
+                p,
+                cx,
+                |this, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.add = None;
+                    }
+                    cx.notify();
+                },
+                if a.busy { "正在拉取…" } else { "确认" },
+                |this, window, cx| this.confirm_add_provider(window, cx),
+                a.busy,
+            ))
+    }
+
+    /// `ModelPicker`: search, then one row per model with a check box.
+    fn picker(
+        &self,
+        picker: &Picker,
+        target: fn(&mut SettingsState) -> Option<&mut Picker>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = &self.palette;
+        let query = picker.search.read(cx).value().trim().to_lowercase();
+        let hover = p.c(Token::Muted).opacity(0.5);
+        let mut rows = div().flex().flex_col();
+        match &picker.models {
+            None => {
+                rows = rows.child(
+                    div()
+                        .py(px(40.0))
+                        .flex()
+                        .justify_center()
+                        .text_size(px(TEXT_XS))
+                        .muted(p)
+                        .child("正在拉取模型列表…"),
+                )
+            }
+            Some(list) if list.is_empty() => {
+                rows = rows.child(
+                    div()
+                        .py(px(40.0))
+                        .flex()
+                        .justify_center()
+                        .text_size(px(TEXT_XS))
+                        .text_color(if picker.error.is_some() {
+                            p.c(Token::Destructive)
+                        } else {
+                            p.c(Token::MutedForeground)
+                        })
+                        .child(SharedString::from(
+                            picker
+                                .error
+                                .clone()
+                                .unwrap_or_else(|| "没有模型".to_string()),
+                        )),
+                )
+            }
+            Some(list) => {
+                for (i, m) in list.iter().enumerate() {
+                    if !query.is_empty()
+                        && !m.id.to_lowercase().contains(&query)
+                        && !m
+                            .name
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(&query)
+                    {
+                        continue;
+                    }
+                    let checked = picker.chosen.contains(&m.id);
+                    let mid = m.id.clone();
+                    rows = rows.child(
+                        div()
+                            .id(SharedString::from(format!("pick-{}", m.id)))
+                            .px(px(12.0))
+                            .py(px(8.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(10.0))
+                            .cursor_pointer()
+                            .when(i > 0, |d| d.border_t_1().border_color(p.c(Token::Border)))
+                            .hover(move |d| d.bg(hover))
+                            .child(checkbox(checked, p))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        ui::truncate(
+                                            m.name.clone().unwrap_or_else(|| m.id.clone()),
+                                        )
+                                        .text_size(px(TEXT_XS))
+                                        .font_weight(FontWeight::MEDIUM),
+                                    )
+                                    .child(
+                                        ui::truncate(m.id.clone()).text_size(px(TEXT_XS)).muted(p),
+                                    ),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(pk) = this.settings.as_mut().and_then(target)
+                                    && !pk.chosen.remove(&mid)
+                                {
+                                    pk.chosen.insert(mid.clone());
+                                }
+                                cx.notify();
+                            })),
+                    );
+                }
+            }
+        }
+        let total = picker.models.as_ref().map(|l| l.len()).unwrap_or(0);
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(div().flex_1().child(Input::new(&picker.search).prefix(icon(
+                        "search01",
+                        14.0,
+                        p.c(Token::MutedForeground),
+                    ))))
+                    .child(
+                        div()
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child(SharedString::from(format!(
+                                "{} / {}",
+                                picker.chosen.len(),
+                                total
+                            ))),
+                    ),
+            )
+            .child(
+                div()
+                    .id("picker-rows")
+                    .h(px(288.0))
+                    .overflow_y_scroll()
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(p.c(Token::Border))
+                    .child(rows),
+            )
+    }
+}
+
+/// Dev-only (capture builds): drive 添加供应商 → 选择模型 → 添加 the way a person would, so the
+/// flow can be checked against a real server without clicking.
+#[cfg(feature = "capture")]
+impl Workspace {
+    pub fn script_add_custom_provider(
+        &mut self,
+        name: &str,
+        base_url: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_settings(Section::Providers, window, cx);
+        self.open_add_provider(window, cx);
+        if let Some(a) = self.settings.as_mut().and_then(|s| s.add.as_mut()) {
+            a.custom = true;
+            let (n, u, k) = (a.name.clone(), a.base_url.clone(), a.key.clone());
+            n.update(cx, |st, cx| st.set_value(name.to_string(), window, cx));
+            u.update(cx, |st, cx| st.set_value(base_url.to_string(), window, cx));
+            k.update(cx, |st, cx| st.set_value(key.to_string(), window, cx));
+        }
+        self.confirm_add_provider(window, cx);
+    }
+
+    /// Tick every fetched model; true once there were some to tick.
+    pub fn script_pick_all(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(pk) = self
+            .settings
+            .as_mut()
+            .and_then(|s| s.add.as_mut())
+            .and_then(|a| a.picker.as_mut())
+        else {
+            return false;
+        };
+        let Some(models) = &pk.models else {
+            return false;
+        };
+        pk.chosen = models.iter().map(|m| m.id.clone()).collect();
+        cx.notify();
+        !pk.chosen.is_empty()
+    }
+
+    pub fn script_finish_add(&mut self, cx: &mut Context<Self>) {
+        self.finish_add_provider(cx);
+    }
+
+    pub fn script_expand_first_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.providers.as_ref())
+            .and_then(|l| l.first())
+            .map(|p| p.id.clone());
+        if let Some(id) = id {
+            self.toggle_provider(id, window, cx);
+        }
+    }
+}
+
+// ---- pieces shared by the panes
+
+/// `SettingsGroup`'s card: rounded, bordered, rows divided by hairlines.
+fn card(p: &crate::theme::Palette) -> Div {
+    div()
+        .rounded(px(14.0))
+        .border_1()
+        .border_color(p.c(Token::Border))
+        .bg(p.c(Token::Card))
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+}
+
+/// `Button variant="outline" size="sm"`.
+fn outline_button(id: impl Into<ElementId>, p: &crate::theme::Palette) -> Stateful<Div> {
+    let hover = p.c(Token::Muted);
+    div()
+        .id(id)
+        .h(px(32.0))
+        .px(px(10.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(p.c(Token::Border))
+        .bg(p.c(Token::Background))
+        .cursor_pointer()
+        .text_size(px(12.8))
+        .font_weight(FontWeight::MEDIUM)
+        .hover(move |d| d.bg(hover))
+}
+
+fn popover(p: &crate::theme::Palette) -> Div {
+    div()
+        .p(px(4.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(p.c(Token::Border))
+        .bg(p.get(Token::GlassOverlay).unwrap_or(p.c(Token::Popover)))
+        .text_color(p.c(Token::PopoverForeground))
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .text_size(px(TEXT_SM))
+}
+
+fn menu_label(t: &'static str, p: &crate::theme::Palette) -> Div {
+    div()
+        .px(px(8.0))
+        .py(px(4.0))
+        .text_size(px(TEXT_XS))
+        .font_weight(FontWeight::MEDIUM)
+        .muted(p)
+        .child(t)
+}
+
+fn menu_item(id: SharedString, active: bool, hover: Hsla) -> Stateful<Div> {
+    div()
+        .id(id)
+        .min_h(px(32.0))
+        .px(px(8.0))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .when(active, move |d| d.bg(hover))
+        .hover(move |d| d.bg(hover))
+}
+
+/// `Switch size="sm"`: a 24×14 pill.
+fn switch(id: SharedString, on: bool, p: &crate::theme::Palette) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(px(28.0))
+        .h(px(16.0))
+        .flex_none()
+        .p(px(2.0))
+        .rounded_full()
+        .cursor_pointer()
+        .bg(if on {
+            p.c(Token::Primary)
+        } else {
+            p.c(Token::Input)
+        })
+        .flex()
+        .when(on, |d| d.justify_end())
+        .child(
+            div()
+                .size(px(12.0))
+                .rounded_full()
+                .bg(p.c(Token::Background)),
+        )
+}
+
+fn checkbox(on: bool, p: &crate::theme::Palette) -> Div {
+    div()
+        .size(px(16.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.0))
+        .border_1()
+        .border_color(if on {
+            p.c(Token::Primary)
+        } else {
+            p.c(Token::Input)
+        })
+        .when(on, |d| d.bg(p.c(Token::Primary)))
+        .when(on, |d| {
+            d.child(icon("tick02", 12.0, p.c(Token::PrimaryForeground)))
+        })
+}
+
+fn dialog_card(p: &crate::theme::Palette, width: f32) -> Div {
+    div()
+        .w(px(width))
+        .max_w(relative(0.92))
+        .rounded(px(16.0))
+        .border_1()
+        .border_color(p.c(Token::Border))
+        .bg(p.get(Token::GlassOverlay).unwrap_or(p.c(Token::Popover)))
+        .text_color(p.c(Token::PopoverForeground))
+        .shadow_lg()
+        .flex()
+        .flex_col()
+}
+
+fn dialog_head(title: &str, description: &str, p: &crate::theme::Palette) -> Div {
+    div()
+        .px(px(20.0))
+        .pt(px(18.0))
+        .pb(px(14.0))
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .text_size(px(16.0))
+                .font_weight(FontWeight::MEDIUM)
+                .child(SharedString::from(title.to_string())),
+        )
+        .child(
+            div()
+                .text_size(px(TEXT_SM))
+                .muted(p)
+                .child(SharedString::from(description.to_string())),
+        )
+}
+
+fn dialog_foot(
+    p: &crate::theme::Palette,
+    cx: &mut Context<Workspace>,
+    cancel: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
+    confirm_label: &str,
+    confirm: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+    disabled: bool,
+) -> Div {
+    div()
+        .px(px(16.0))
+        .py(px(12.0))
+        .flex()
+        .justify_end()
+        .gap(px(8.0))
+        .border_t_1()
+        .border_color(p.c(Token::Border))
+        .bg(p.c(Token::Muted).opacity(0.5))
+        .rounded_b(px(16.0))
+        .child(
+            outline_button("dialog-cancel", p)
+                .child("取消")
+                .on_click(cx.listener(move |this, _, _, cx| cancel(this, cx))),
+        )
+        .child(
+            div()
+                .id("dialog-confirm")
+                .h(px(32.0))
+                .px(px(12.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .bg(p.c(Token::Primary))
+                .text_color(p.c(Token::PrimaryForeground))
+                .text_size(px(12.8))
+                .font_weight(FontWeight::MEDIUM)
+                .when(disabled, |d| d.opacity(0.5))
+                .when(!disabled, |d| d.cursor_pointer())
+                .child(SharedString::from(confirm_label.to_string()))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if !disabled {
+                        confirm(this, window, cx)
+                    }
+                })),
+        )
+}
+
+/// A dialog over the whole window, on a dimmed backdrop that closes it when clicked.
+fn modal(
+    body: Div,
+    p: &crate::theme::Palette,
+    cx: &mut Context<Workspace>,
+    close: impl Fn(&mut Workspace) + 'static,
+) -> AnyElement {
+    let _ = p;
+    div()
+        .id("modal-backdrop")
+        .absolute()
+        .inset_0()
+        .bg(hsla(0.0, 0.0, 0.0, 0.18))
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_click(cx.listener(move |this, _, _, cx| {
+            close(this);
+            cx.notify();
+        }))
+        .child(
+            div()
+                .id("modal-body")
+                // Clicks inside the dialog are its own.
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .child(body),
+        )
+        .into_any_element()
+}
+
+/// `128000` → `128K`, `1000000` → `1M`.
+fn compact_tokens(n: u32) -> String {
+    if n >= 1_000_000 && n.is_multiple_of(1_000_000) {
+        format!("{}M", n / 1_000_000)
+    } else if n >= 1_000_000 {
+        format!("{:.1}M", f64::from(n) / 1_000_000.0)
+    } else if n >= 1000 {
+        format!("{}K", n / 1000)
+    } else {
+        n.to_string()
+    }
+}

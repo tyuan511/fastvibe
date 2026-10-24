@@ -188,6 +188,25 @@ impl Workspace {
                     .child(text::NO_MODEL_HINT),
             );
         }
+        // 管理模型 → 设置 → 模型与默认, at the foot of the list.
+        list = list.child(
+            div()
+                .id("manage-models")
+                .h(px(32.0))
+                .px(px(8.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .rounded(px(8.0))
+                .cursor_pointer()
+                .hover(move |d| d.bg(hover))
+                .child(icon("settings02", 14.0, p.c(Token::MutedForeground)))
+                .child("管理模型")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.model_menu = false;
+                    this.open_settings(super::settings::Section::Providers, window, cx)
+                })),
+        );
         for m in &self.models {
             let label = m.label.clone();
             list = list.child(

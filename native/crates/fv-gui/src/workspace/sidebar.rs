@@ -35,7 +35,7 @@ impl Workspace {
                     .child(self.traffic_light_row())
                     .child(self.brand_and_nav(cx))
                     .child(self.lists(cx))
-                    .child(self.footer())
+                    .child(self.footer(cx))
                     // The hairline is drawn over the pane, not around its content, so it
                     // takes no room: the rows sit where the Electron pane puts them.
                     .child(
@@ -325,7 +325,7 @@ impl Workspace {
             .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
     }
 
-    fn footer(&self) -> impl IntoElement {
+    fn footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
         div()
             .flex_none()
@@ -336,7 +336,17 @@ impl Workspace {
             .child(
                 nav_row("settings", "settings01", text::SETTINGS, p)
                     .flex_1()
-                    .min_w_0(),
+                    .min_w_0()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        // Nothing works before a model is connected, so that is where an
+                        // install with none is taken.
+                        let section = if this.models.is_empty() {
+                            super::settings::Section::Providers
+                        } else {
+                            super::settings::Section::General
+                        };
+                        this.open_settings(section, window, cx)
+                    })),
             )
             .child(
                 div()
