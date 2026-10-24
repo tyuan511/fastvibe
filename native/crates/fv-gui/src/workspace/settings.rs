@@ -2368,15 +2368,39 @@ pub(super) fn outline_button(id: impl Into<ElementId>, p: &crate::theme::Palette
         .hover(move |d| d.bg(hover))
 }
 
+/// `.overlay-surface` under glass: rounder, no border, a hairline edge, the long soft shadow
+/// and the specular rim. Solid themes keep the card.
+fn overlay_surface(d: Div, radius: f32, p: &crate::theme::Palette) -> Div {
+    match (p.get(Token::GlassEdge), p.get(Token::GlassShade)) {
+        (Some(edge), Some(shade)) => {
+            let shadow = |color: Hsla, y: f32, blur: f32, spread: f32| BoxShadow {
+                color,
+                offset: point(px(0.0), px(y)),
+                blur_radius: px(blur),
+                spread_radius: px(spread),
+                inset: false,
+            };
+            d.rounded(px(14.0))
+                .relative()
+                .shadow(vec![
+                    shadow(edge, 0.0, 0.0, 0.5),
+                    shadow(shade, 18.0, 40.0, -14.0),
+                    shadow(shade, 2.0, 8.0, -2.0),
+                ])
+                .child(crate::ui::glass_rim(14.0, p).unwrap_or_else(div))
+        }
+        _ => d
+            .rounded(px(radius))
+            .border_1()
+            .border_color(p.c(Token::Border))
+            .shadow_lg(),
+    }
+}
+
 pub(super) fn popover(p: &crate::theme::Palette) -> Div {
-    div()
-        .p(px(4.0))
-        .rounded(px(10.0))
-        .border_1()
-        .border_color(p.c(Token::Border))
+    overlay_surface(div().p(px(4.0)), 10.0, p)
         .bg(p.get(Token::GlassOverlay).unwrap_or(p.c(Token::Popover)))
         .text_color(p.c(Token::PopoverForeground))
-        .shadow_lg()
         .flex()
         .flex_col()
         .text_size(px(TEXT_SM))
@@ -2452,15 +2476,9 @@ pub(super) fn checkbox(on: bool, p: &crate::theme::Palette) -> Div {
 }
 
 pub(super) fn dialog_card(p: &crate::theme::Palette, width: f32) -> Div {
-    div()
-        .w(px(width))
-        .max_w(relative(0.92))
-        .rounded(px(16.0))
-        .border_1()
-        .border_color(p.c(Token::Border))
+    overlay_surface(div().w(px(width)).max_w(relative(0.92)), 16.0, p)
         .bg(p.get(Token::GlassOverlay).unwrap_or(p.c(Token::Popover)))
         .text_color(p.c(Token::PopoverForeground))
-        .shadow_lg()
         .flex()
         .flex_col()
 }

@@ -2157,6 +2157,7 @@ dependencies = [
  "fv-client",
  "fv-protocol",
  "libc",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
 ]
@@ -2176,6 +2177,8 @@ dependencies = [
  "gpui-pre-macos",
  "image",
  "libc",
+ "objc",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "tokio",
@@ -2230,6 +2233,7 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -8971,6 +8975,8 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "fv-daemon",
+ "sha2 0.10.9",
+ "tokio",
 ]
 
 [[package]]

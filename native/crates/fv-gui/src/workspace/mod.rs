@@ -523,11 +523,8 @@ impl Workspace {
         };
         let palette = Palette::new(prefs.resolve(self.system_dark, cfg!(target_os = "macos")));
         crate::theme::apply(&palette, cx);
-        window.set_background_appearance(if palette.glass() {
-            WindowBackgroundAppearance::Blurred
-        } else {
-            WindowBackgroundAppearance::Opaque
-        });
+        window.set_background_appearance(crate::vibrancy::background(palette.glass()));
+        crate::vibrancy::set(window, palette.glass());
         self.palette = palette;
         cx.notify();
     }

@@ -118,6 +118,119 @@ pub fn ring(fraction: f32, size: f32, track: Hsla, color: Hsla) -> impl IntoElem
     )
 }
 
+/// Liquid Glass's specular rim (`index.css`, `--glass-rim`): a 1px ring that is bright where the
+/// light would catch the edge (top left) and fades round to the far corner. CSS cuts it out of
+/// a gradient box with a mask; here the ring is two gradient strokes, one for each half of the
+/// gradient line (GPUI's gradients have two stops).
+pub fn glass_rim(radius: f32, p: &Palette) -> Option<Div> {
+    let strong = p.get(Token::GlassRimStrong)?;
+    let weak = p.get(Token::GlassRimWeak)?;
+    let clear = Hsla { a: 0.0, ..weak };
+    Some(
+        div().absolute().inset_0().child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let inset = 0.5_f32;
+                    let (w, h) = (
+                        f32::from(bounds.size.width) - 2.0 * inset,
+                        f32::from(bounds.size.height) - 2.0 * inset,
+                    );
+                    let r = (radius - inset).min(w / 2.0).min(h / 2.0).max(0.0);
+                    let (ox, oy) = (
+                        f32::from(bounds.origin.x) + inset,
+                        f32::from(bounds.origin.y) + inset,
+                    );
+                    let mut ring = Vec::new();
+                    let corner = |cx: f32, cy: f32, from: f32, ring: &mut Vec<(f32, f32)>| {
+                        for i in 0..=10 {
+                            let a = from + (i as f32 / 10.0) * std::f32::consts::FRAC_PI_2;
+                            ring.push((cx + r * a.cos(), cy + r * a.sin()));
+                        }
+                    };
+                    use std::f32::consts::{FRAC_PI_2, PI};
+                    corner(ox + w - r, oy + r, -FRAC_PI_2, &mut ring);
+                    corner(ox + w - r, oy + h - r, 0.0, &mut ring);
+                    corner(ox + r, oy + h - r, FRAC_PI_2, &mut ring);
+                    corner(ox + r, oy + r, PI, &mut ring);
+                    let paint = |bg: Background, window: &mut Window| {
+                        let mut path = PathBuilder::stroke(px(1.0));
+                        for (i, (x, y)) in ring.iter().enumerate() {
+                            let pt = point(px(*x), px(*y));
+                            if i == 0 {
+                                path.move_to(pt);
+                            } else {
+                                path.line_to(pt);
+                            }
+                        }
+                        path.line_to(point(px(ring[0].0), px(ring[0].1)));
+                        if let Ok(path) = path.build() {
+                            window.paint_path(path, bg);
+                        }
+                    };
+                    paint(
+                        linear_gradient(
+                            155.0,
+                            linear_color_stop(strong, 0.0),
+                            linear_color_stop(clear, 0.48),
+                        ),
+                        window,
+                    );
+                    paint(
+                        linear_gradient(
+                            155.0,
+                            linear_color_stop(clear, 0.62),
+                            linear_color_stop(weak, 1.0),
+                        ),
+                        window,
+                    );
+                },
+            )
+            .size_full(),
+        ),
+    )
+}
+
+/// The rest of a glass pane's edge: the 0.5px dark hairline and the light the top edge catches
+/// (`inset 0 0 0 0.5px edge, inset 0 18px 32px -28px sheen`), over a pane `radius` round.
+pub fn glass_edge(radius: f32, p: &Palette) -> Option<Div> {
+    let edge = p.get(Token::GlassEdge)?;
+    let sheen = p.get(Token::GlassSheen)?;
+    let clear = Hsla { a: 0.0, ..sheen };
+    Some(
+        div()
+            .absolute()
+            .inset_0()
+            .rounded(px(radius))
+            .border_1()
+            .border_color(Hsla {
+                a: edge.a * 0.5,
+                ..edge
+            })
+            .overflow_hidden()
+            .child(div().w_full().h(px(26.0)).bg(linear_gradient(
+                180.0,
+                linear_color_stop(
+                    Hsla {
+                        a: sheen.a * 0.6,
+                        ..sheen
+                    },
+                    0.0,
+                ),
+                linear_color_stop(clear, 1.0),
+            ))),
+    )
+}
+
+/// Both of the above, for a pane or card `radius` round; nothing without glass.
+pub fn glass_surface(radius: f32, p: &Palette) -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .children(glass_edge(radius, p))
+        .children(glass_rim(radius, p))
+}
+
 pub trait Muted {
     fn muted(self, p: &Palette) -> Self;
 }

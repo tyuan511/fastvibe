@@ -54,6 +54,13 @@ pub struct InitializeResponse {
     pub protocol_version: u32,
     /// Where the server keeps its data; informational for clients on the same machine.
     pub data_dir: String,
+    /// A digest of the running server executable. Development builds compare it with the one
+    /// just built instead of treating every GUI launch as a server upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_fingerprint: Option<String>,
+    /// Whether any conversation currently has a turn in flight. A restart must not interrupt it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_running_turns: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

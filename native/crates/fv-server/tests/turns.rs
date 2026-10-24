@@ -72,17 +72,22 @@ async fn start(model: Option<ScriptedModel>) -> Harness {
 impl Harness {
     async fn client(&self) -> (Client, Notes) {
         let (c, n) = Client::connect_unix(&self.sock).await.unwrap();
-        c.call::<Initialize>(InitializeParams {
-            client_info: ClientInfo {
-                name: "t".into(),
-                version: "0".into(),
-            },
-            protocol_version: PROTOCOL_VERSION,
-            capabilities: Default::default(),
-        })
-        .await
-        .unwrap();
+        self.initialize(&c).await;
         (c, n)
+    }
+
+    async fn initialize(&self, client: &Client) -> InitializeResponse {
+        client
+            .call::<Initialize>(InitializeParams {
+                client_info: ClientInfo {
+                    name: "t".into(),
+                    version: "0".into(),
+                },
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: Default::default(),
+            })
+            .await
+            .unwrap()
     }
 }
 
@@ -262,6 +267,29 @@ async fn tool_calls_appear_as_items_that_finish_with_their_output() {
             false
         ))
     );
+}
+
+#[tokio::test]
+async fn the_handshake_reports_running_turns_without_stopping_them() {
+    let h = start(Some(ScriptedModel::new([Reply::new()
+        .text("working ")
+        .then_hang()])))
+    .await;
+    let (c, mut notes) = h.client().await;
+    let thread = new_thread(&c).await;
+    say(&c, &thread, "start").await.unwrap();
+    until(&mut notes, |n| n.method() == "item/agentMessage/delta").await;
+
+    let (other, _notes) = Client::connect_unix(&h.sock).await.unwrap();
+    let hello = h.initialize(&other).await;
+    assert_eq!(hello.has_running_turns, Some(true));
+
+    c.call::<TurnInterrupt>(ThreadIdParams { thread_id: thread })
+        .await
+        .unwrap();
+    until(&mut notes, idle).await;
+    let (third, _notes) = Client::connect_unix(&h.sock).await.unwrap();
+    assert_eq!(h.initialize(&third).await.has_running_turns, Some(false));
 }
 
 #[tokio::test]

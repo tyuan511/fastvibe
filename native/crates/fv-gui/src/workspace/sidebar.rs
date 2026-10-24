@@ -38,6 +38,7 @@ impl Workspace {
                     .child(self.brand_and_nav(cx))
                     .child(self.lists(cx))
                     .child(self.footer(cx))
+                    .child(crate::ui::glass_surface(16.0, p))
                     // The hairline is drawn over the pane, not around its content, so it
                     // takes no room: the rows sit where the Electron pane puts them.
                     .child(

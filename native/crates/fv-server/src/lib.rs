@@ -23,6 +23,14 @@ pub use state::ServerState;
 /// What `initialize` reports as the server's version.
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Identify this exact server executable, including uncommitted code and build-configuration
+/// changes. `None` only when the executable cannot be read (for example after it was replaced).
+pub fn build_fingerprint() -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
+    Some(format!("{:x}", Sha256::digest(bytes)))
+}
+
 /// The agent every server runs: the given model, and all of the built-in tools. `main` and the
 /// tests both build it here, so what the tests exercise is what ships.
 pub fn agent_with_builtin_tools(

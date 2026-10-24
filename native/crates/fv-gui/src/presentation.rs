@@ -152,6 +152,318 @@ pub fn split_path(path: &str) -> (&str, &str) {
     }
 }
 
+/// Which kind of tool a call is, from its name alone (`familyOf` in `tool-family.ts`, over
+/// the tool names the native engine has).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Family {
+    Read,
+    Edit,
+    Terminal,
+    Search,
+    Web,
+    Skill,
+    Agent,
+    Todo,
+    Question,
+    Mcp,
+    Present,
+    Other,
+}
+
+pub fn family_of(name: &str) -> Family {
+    let key = name.trim().to_lowercase();
+    match key.as_str() {
+        "present" => Family::Present,
+        "view_image" | "read" | "read_file" => Family::Read,
+        "apply_patch" | "edit" | "write" => Family::Edit,
+        "exec_command" | "write_stdin" | "bash" | "shell" => Family::Terminal,
+        "web_search" => Family::Web,
+        "tool_search" | "conversation_search" | "grep" | "search" => Family::Search,
+        "update_plan" => Family::Todo,
+        "request_user_input" => Family::Question,
+        _ if key.starts_with("mcp") || key.contains("__") => Family::Mcp,
+        _ if key.contains("skill") => Family::Skill,
+        _ if key.starts_with("spawn_agent")
+            || key.starts_with("send_input")
+            || key.starts_with("wait_agent")
+            || key.starts_with("close_agent")
+            || key.starts_with("resume_agent")
+            || key.starts_with("subagent") =>
+        {
+            Family::Agent
+        }
+        _ => Family::Other,
+    }
+}
+
+/// The Hugeicons glyph a family's row opens with.
+pub fn family_icon(f: Family, edits_file: bool) -> &'static str {
+    match f {
+        Family::Read => "file-text",
+        Family::Edit if edits_file => "file-edit",
+        Family::Edit => "file-edit",
+        Family::Terminal => "square-terminal",
+        Family::Search | Family::Web => "search01",
+        Family::Skill => "sparkles",
+        Family::Agent => "bot",
+        Family::Todo => "list-checks",
+        Family::Question => "message-question",
+        Family::Mcp => "plug01",
+        Family::Present => "image01",
+        Family::Other => "wrench01",
+    }
+}
+
+/// A call's row, as `describeTool` makes it: a category label, what it acted on, and a muted
+/// context after that.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolView {
+    pub family: Family,
+    pub label: String,
+    pub subject: String,
+    pub context: String,
+}
+
+pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView {
+    let family = family_of(name);
+    let field = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").trim();
+    let label = |done: &str, live: &str| if running { live } else { done }.to_string();
+    let (label, subject, context) = match family {
+        Family::Terminal => (
+            label("终端", "正在执行"),
+            field("cmd").lines().next().unwrap_or(name).to_string(),
+            String::new(),
+        ),
+        Family::Edit => {
+            let files = patch_changes(field("input"));
+            let (subject, context) = match files.as_slice() {
+                [one] => {
+                    let (n, d) = split_path(&one.path);
+                    (n.to_string(), d.to_string())
+                }
+                [] => (name.to_string(), String::new()),
+                many => (format!("{} 个文件", many.len()), String::new()),
+            };
+            (label("编辑", "正在编辑"), subject, context)
+        }
+        Family::Read => {
+            let (n, d) = split_path(field("path"));
+            (
+                label("读取", "正在读取"),
+                if n.is_empty() {
+                    name.to_string()
+                } else {
+                    n.to_string()
+                },
+                d.to_string(),
+            )
+        }
+        Family::Search => (
+            label("搜索", "正在搜索"),
+            ["query", "pattern", "path"]
+                .iter()
+                .map(|k| field(k))
+                .find(|v| !v.is_empty())
+                .unwrap_or(name)
+                .to_string(),
+            String::new(),
+        ),
+        Family::Web => (
+            label("网络搜索", "正在搜索网页"),
+            if field("query").is_empty() {
+                name.to_string()
+            } else {
+                field("query").to_string()
+            },
+            String::new(),
+        ),
+        Family::Todo => (label("待办", "正在更新待办"), String::new(), String::new()),
+        Family::Question => (label("询问", "正在询问"), String::new(), String::new()),
+        Family::Agent => (
+            label("子智能体", "子智能体运行中"),
+            name.to_string(),
+            String::new(),
+        ),
+        Family::Skill => (
+            label("技能", "正在运行技能"),
+            name.to_string(),
+            String::new(),
+        ),
+        Family::Present => (label("展示", "正在展示"), name.to_string(), String::new()),
+        Family::Mcp => (
+            label("工具调用", "正在调用"),
+            name.to_string(),
+            String::new(),
+        ),
+        Family::Other => (
+            label("工具调用", "正在运行"),
+            name.to_string(),
+            String::new(),
+        ),
+    };
+    ToolView {
+        family,
+        label,
+        subject,
+        context,
+    }
+}
+
+/// What stays on its own line and breaks a run of tool calls.
+fn folds_into_run(name: &str) -> bool {
+    !matches!(
+        family_of(name),
+        Family::Question | Family::Todo | Family::Agent | Family::Present
+    ) && !name.starts_with("dag_")
+}
+
+/// One stretch of a turn's process: a lone item, or several settled calls folded into a row.
+#[derive(Debug, PartialEq)]
+pub enum Part<'a> {
+    Item(&'a Item),
+    Run(Vec<&'a Item>),
+}
+
+/// `collapseToolRuns`: consecutive settled calls between two stretches of prose fold into one
+/// row. A call still running stands on its own below the fold (and breaks the batch), so the
+/// row only ever counts what has landed; a single call stays a row. A thought splits the batch
+/// as prose does (folding thoughts in is a setting this app does not have). A part nobody
+/// would see (a blank thought or reply) does not split anything.
+pub fn fold_runs<'a>(items: &[&'a Item], streaming_tail: bool) -> Vec<Part<'a>> {
+    let mut out = Vec::new();
+    let mut pending: Vec<&'a Item> = Vec::new();
+    fn flush<'a>(pending: &mut Vec<&'a Item>, out: &mut Vec<Part<'a>>) {
+        match pending.len() {
+            0 => {}
+            1 => out.push(Part::Item(pending[0])),
+            _ => out.push(Part::Run(std::mem::take(pending))),
+        }
+        pending.clear();
+    }
+    let last = items.len().saturating_sub(1);
+    for (i, item) in items.iter().enumerate() {
+        let live = streaming_tail && i == last;
+        match item {
+            Item::Reasoning { text, .. } if text.trim().is_empty() && !live => continue,
+            Item::AgentMessage { text, .. } if text.trim().is_empty() && !live => continue,
+            Item::ToolCall { name, output, .. } if output.is_some() && folds_into_run(name) => {
+                pending.push(item);
+            }
+            other => {
+                flush(&mut pending, &mut out);
+                out.push(Part::Item(other));
+            }
+        }
+    }
+    flush(&mut pending, &mut out);
+    out
+}
+
+/// A piece of a folded row's settled line: plain words, or the name of a file / query.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Piece {
+    Text(String),
+    Name(String),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Category {
+    Command,
+    Read,
+    Write,
+    Search,
+    Tool,
+}
+
+/// `runSummary`: each category once, in the order it first appeared; one call names the file or
+/// query, several say how many; a failed call is not counted (its row says so when opened).
+pub fn run_summary(items: &[&Item]) -> Vec<Piece> {
+    let mut order: Vec<(Category, Vec<&Item>)> = Vec::new();
+    for item in items {
+        let Item::ToolCall { name, is_error, .. } = item else {
+            continue;
+        };
+        if *is_error {
+            continue;
+        }
+        let category = match family_of(name) {
+            Family::Terminal => Category::Command,
+            Family::Read => Category::Read,
+            Family::Edit => Category::Write,
+            Family::Search | Family::Web => Category::Search,
+            _ => Category::Tool,
+        };
+        match order.iter_mut().find(|(c, _)| *c == category) {
+            Some((_, v)) => v.push(item),
+            None => order.push((category, vec![item])),
+        }
+    }
+    let mut pieces = Vec::new();
+    for (n, (category, batch)) in order.iter().enumerate() {
+        let count = batch.len();
+        // 「已」covers the whole line: later clauses leave it off.
+        let lead = |s: &str| {
+            if n == 0 {
+                s.to_string()
+            } else {
+                s.trim_start_matches('已').to_string()
+            }
+        };
+        if n > 0 {
+            pieces.push(Piece::Text("，".into()));
+        }
+        let named = match (category, batch.as_slice()) {
+            (Category::Command, _) => None,
+            (
+                _,
+                [
+                    Item::ToolCall {
+                        name, arguments, ..
+                    },
+                ],
+            ) => {
+                let v = describe(name, arguments, false);
+                Some(v.subject)
+            }
+            _ => None,
+        };
+        match (category, named) {
+            (Category::Command, _) => {
+                pieces.push(Piece::Text(lead(&format!("已运行 {count} 个命令"))))
+            }
+            (Category::Read, Some(s)) => {
+                pieces.push(Piece::Text(lead("已读取 ")));
+                pieces.push(Piece::Name(s));
+            }
+            (Category::Read, None) => {
+                pieces.push(Piece::Text(lead(&format!("已读取 {count} 个文件"))))
+            }
+            (Category::Write, Some(s)) => {
+                pieces.push(Piece::Text(lead("已写入 ")));
+                pieces.push(Piece::Name(s));
+            }
+            (Category::Write, None) => {
+                pieces.push(Piece::Text(lead(&format!("已写入 {count} 个文件"))))
+            }
+            (Category::Search, Some(s)) => {
+                pieces.push(Piece::Text(lead("已搜索 ")));
+                pieces.push(Piece::Name(s));
+            }
+            (Category::Search, None) => {
+                pieces.push(Piece::Text(lead(&format!("已搜索 {count} 次"))))
+            }
+            (Category::Tool, Some(s)) => {
+                pieces.push(Piece::Text(lead("已调用 ")));
+                pieces.push(Piece::Name(s));
+            }
+            (Category::Tool, None) => {
+                pieces.push(Piece::Text(lead(&format!("已调用 {count} 个工具"))))
+            }
+        }
+    }
+    pieces
+}
+
 /// The one-line description of a tool call, as the transcript's collapsed row says it.
 pub fn tool_title(name: &str, args: &serde_json::Value, running: bool) -> (String, String) {
     let field = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("");

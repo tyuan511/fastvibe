@@ -1,3 +1,3 @@
 [alias]
-# Build both, replace the old development server, then start the app.
+# Build both, replace a changed idle development server, then start the app.
 dev = "run -q -p xtask -- dev"

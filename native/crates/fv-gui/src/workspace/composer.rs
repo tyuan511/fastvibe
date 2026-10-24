@@ -215,6 +215,8 @@ impl Workspace {
                             .child(chip)
                             .child(send),
                     )
+                    // The rim sits on the border and yields to the focus ring.
+                    .children((!focused).then(|| crate::ui::glass_rim(22.0, p)).flatten())
                     .children(menu.map(crate::ui::float))
                     .children(access_menu.map(crate::ui::float))
             }))

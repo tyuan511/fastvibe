@@ -83,6 +83,10 @@ pub struct Connection {
     pub server_version: String,
     /// The server is from a different build than this app; it should be restarted when idle.
     pub version_mismatch: bool,
+    /// Digest of the running executable, absent on servers built before this handshake field.
+    pub build_fingerprint: Option<String>,
+    /// `None` means the running server is too old to report activity; restart conservatively.
+    pub has_running_turns: Option<bool>,
 }
 
 /// Where the app keeps its data unless told otherwise.
@@ -307,5 +311,7 @@ pub async fn connect_to(
         requests,
         server_version: hello.server_version,
         version_mismatch,
+        build_fingerprint: hello.build_fingerprint,
+        has_running_turns: hello.has_running_turns,
     })
 }

@@ -238,6 +238,39 @@ pub fn approval() -> Fixture {
     f
 }
 
+/// A reply that uses every kind of markdown block, for checking how they are drawn.
+pub fn markdown() -> Fixture {
+    let mut f = theme_conversation();
+    let rich = "## 改动概览\n\n已完成，改动集中在 **设置页**，详见 [文档](https://example.com/docs) 和 `settings.json`：\n\n- 「主题模式」下拉支持 跟随系统 / 亮色 / 暗色\n- `useThemeSync` 监听 `prefers-color-scheme`\n  - 嵌套的一层\n- 亮色与暗色各自记忆\n\n1. 先改 `themes.ts`\n2. 再改设置页\n3. 最后跑 `pnpm typecheck`\n\n### 示例\n\n```ts\nexport function resolveTheme(mode: ThemeMode, dark: boolean) {\n  return mode === \"system\" ? (dark ? \"dark\" : \"light\") : mode;\n}\n```\n\n> 注意：跟随系统时会先固定为此刻生效的主题。\n\n| 模式 | 含义 | 默认 |\n| --- | --- | --- |\n| light | 亮色 | 否 |\n| system | 跟随系统 | 是 |\n\n---\n\n需要的话，我可以再把它接进命令面板。";
+    if let Some(view) = &mut f.view {
+        view.turns.truncate(1);
+        for turn in &mut view.turns {
+            // Only the answer: the process above it would fold away anyway.
+            turn.items.retain(|i| {
+                matches!(i, Item::UserMessage { .. })
+                    || matches!(i, Item::AgentMessage { id, .. } if id == "a3")
+            });
+            for item in &mut turn.items {
+                if let Item::AgentMessage { id, text } = item
+                    && id == "a3"
+                {
+                    *text = rich.to_string();
+                }
+            }
+        }
+    }
+    f
+}
+
+/// The first turn alone, so its process is what is on screen.
+pub fn process() -> Fixture {
+    let mut f = theme_conversation();
+    if let Some(view) = &mut f.view {
+        view.turns.truncate(1);
+    }
+    f
+}
+
 /// The conversation with a question put to the user.
 pub fn question() -> Fixture {
     let mut f = theme_conversation();

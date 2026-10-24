@@ -50,8 +50,8 @@
   Main 里」「保持唤醒」「定时任务需要应用开着」的问题：它们都属于 server，不属于窗口。
 - GUI 启动时由 `fv-daemon` 连接已有的 server；没有就拉起一个。server 的数据目录内有 `server.pid`、`server.lock`、
   `server.sock`（0600，父目录 0700）。GUI 升级后发现 server 版本不同，等它空闲再重启。
-  `cargo dev` 是例外：构建完成后先停止本次数据目录下的旧 server 并等它退出，再启动 GUI，确保开发时的新协议不会落到旧进程上；
-  因此它会中断正在运行的开发会话。直接运行 GUI 仍复用常驻 server。
+  `cargo dev` 构建后比较本次服务端二进制的 SHA-256 与握手中运行进程的报告：相同直接复用；不同且没有回合运行时，停止本次数据目录下的旧 server、
+  等它退出再启动 GUI。有回合运行或旧服务端无法报告状态时保留旧进程并提示，绝不因开发启动而中断会话。直接运行 GUI 仍复用常驻 server。
 - 「退出 FastVibe」= 停 server（有运行中的任务先确认）；只关窗口不停 server。是否在没有窗口时继续常驻是一个设置项
   （默认：有定时任务或远程访问开着时常驻）。
 - **同一个二进制也是 SSH 主机上的 Agent**：远端跑 `fastvibe-server --listen stdio`，经 `ssh` 的 stdio 直接连，
@@ -390,6 +390,17 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   **界面照 codex**：审批和提问不再画在转写里，而是在 composer 区——提问面板（「问题」、编号选项、「或自行撰写回复」、跳过 / 发送）在 composer 上方；
   审批面板（终端 / 文件、问题、等宽命令、「拒绝 Esc」「允许一次 ↵」+ 下拉「本次会话都允许」）直接盖住 composer，Esc 拒绝、Enter 允许一次。
   composer 左下角新增权限按钮与菜单：请求批准 / 沙箱里直接做 / 完全访问权限（橙色胶囊）。实现在 `workspace/ask.rs`；预览 `--fixture approval|question`。
+- **玻璃、markdown、工具折叠对齐（2026-10-24）**：①玻璃：Electron 的 `vibrancy: "under-window"` 保留系统材质的着色与饱和度，而 GPUI 自带的 `Blurred` 会把这两样剥掉
+  （只剩模糊），所以窗口对 GPUI 是 `Transparent`，由 `vibrancy.rs` 自己在 contentView 下面垫一个 `NSVisualEffectView`（UnderWindowBackground、BehindWindow、Active，
+  和 Electron 同参数）。再把 `index.css` 的 Liquid Glass 移过来：`ui::glass_rim`（1px 渐变高光环，155° 强→透明→弱，两段渐变描边）、`glass_edge`（0.5px 暗边 + 顶部 sheen），
+  用在侧栏、composer 卡片（聚焦时让位给焦点环）、弹层与对话框（圆角 14、无边框、`glass-shade` 双层阴影）。**没法在离屏截图里验证模糊本身**（模糊是系统在窗口外合成的），
+  所以这一项只对过参数与结构，没有逐像素对过。②markdown：仍用 gpui-component 的 `TextView`（保留选区与流式淡入），`markdown.rs` 把它的 `TextViewStyle` 调成 `.chat-markdown`：
+  段间距 0.4em、标题 1.15 / 1.05 / 1rem、代码块圆角边框 + muted/40、行内代码 `code-inline-bg`、表格圆角边框 + 表头 muted/60、高亮主题取 `--code-*`。
+  还差：代码块头部「语言 + 复制」一行、列表圆点（库画的是小方点）、表格只留横线（库画全框）、代码高亮要库开 tree-sitter 语言才有色。
+  ③工具：`presentation::fold_runs` / `run_summary` 照 `collapseToolRuns` / `runSummary`——连续已完成的调用折成一行「已运行 2 个命令，读取 App.tsx」（图标 layers01、chevron 常显），
+  进行中的调用、提问、计划、子智能体各占一行并截断批次；单个调用行是「图标 + 类别 + 等宽主体 + 更淡的目录」，chevron 悬停才显示，展开体左侧一条细线。
+  工具族按 codex 的工具名（`exec_command`、`apply_patch`、`view_image`…）。预览：`--fixture markdown|process`。
+
 - **还缺（需要新的协议数据或组件）**：标题栏与新对话页的 git 分支 / 改动 chip、composer 的上下文环、压缩分隔线的
   「接近上限 · 128.0K → 24.4K」、工具卡展开后的详细样式、各种弹出菜单的 Nova 皮肤、右侧面板与设置页。
 

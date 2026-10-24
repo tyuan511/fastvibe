@@ -27,6 +27,8 @@ tokio-util.workspace = true
 futures-util.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
+sha2 = "0.10"
+
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 fv-client = { path = "../fv-client" }

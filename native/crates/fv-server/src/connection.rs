@@ -194,6 +194,8 @@ async fn dispatch(
                 server_version: crate::SERVER_VERSION.to_string(),
                 protocol_version: PROTOCOL_VERSION,
                 data_dir: state.data_dir.display().to_string(),
+                build_fingerprint: crate::build_fingerprint(),
+                has_running_turns: Some(state.has_running_turns()),
             })
         }
         ClientRequest::ThreadList { params, .. } => to_value(ThreadListResponse {

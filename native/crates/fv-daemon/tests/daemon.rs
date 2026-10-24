@@ -62,6 +62,8 @@ async fn it_starts_a_server_and_connects_to_it() {
         .unwrap();
     assert!(threads.threads.is_empty());
     assert!(conn.version_mismatch, "test version 0 is not the server's");
+    assert!(conn.build_fingerprint.is_some());
+    assert_eq!(conn.has_running_turns, Some(false));
     let pid = pid_of(dir.path());
     daemon.stop().unwrap();
     wait_gone(pid).await;

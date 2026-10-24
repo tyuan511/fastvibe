@@ -112,11 +112,7 @@ fn main() {
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(24.0), px(24.0))),
                 }),
-                window_background: if glass {
-                    WindowBackgroundAppearance::Blurred
-                } else {
-                    WindowBackgroundAppearance::Opaque
-                },
+                window_background: fv_gui::vibrancy::background(glass),
                 ..Default::default()
             };
             let data_dir = args.data_dir.clone();
@@ -128,6 +124,7 @@ fn main() {
             let expand = args.expand;
             let palette_open = args.palette;
             let (handle, workspace) = gpui_kit::open_window(options, cx, move |window, cx| {
+                fv_gui::vibrancy::set(window, glass);
                 let ws = cx.new(|cx| {
                     match fixture.as_deref() {
                         Some("theme") => {
@@ -142,6 +139,22 @@ fn main() {
                             return Workspace::fixture(
                                 palette,
                                 fv_gui::fixture::approval(),
+                                window,
+                                cx,
+                            );
+                        }
+                        Some("markdown") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::markdown(),
+                                window,
+                                cx,
+                            );
+                        }
+                        Some("process") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::process(),
                                 window,
                                 cx,
                             );

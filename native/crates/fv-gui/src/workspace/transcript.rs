@@ -437,25 +437,12 @@ impl Workspace {
             );
             if open {
                 let mut inner = div().pt(px(12.0)).flex().flex_col().gap(px(10.0));
-                for item in &layout.process {
-                    inner = inner.child(match item {
-                        Item::AgentMessage { id, text } => self.markdown(id, text),
-                        other => self.process_item(other, cx),
-                    });
-                }
+                inner = inner.children(self.parts(&layout.process, false, cx));
                 fold = fold.child(inner);
             }
             col = col.child(fold);
         }
-        let last = layout.answer.len().saturating_sub(1);
-        for (i, item) in layout.answer.iter().enumerate() {
-            let live_tail = running && i == last;
-            col = col.child(match item {
-                Item::AgentMessage { id, text } => self.markdown(id, text),
-                Item::Error { message, .. } => self.error_notice(message),
-                other => self.process_item_live(other, live_tail, cx),
-            });
-        }
+        col = col.children(self.parts(&layout.answer, running, cx));
         let ends_live = layout
             .answer
             .last()
@@ -496,10 +483,13 @@ impl Workspace {
             .w_full()
             .text_size(px(TEXT_SM))
             .line_height(px(24.0))
-            .child(TextView::markdown(
-                SharedString::from(format!("a-{id}")),
-                SharedString::from(text.to_string()),
-            ))
+            .child(
+                TextView::markdown(
+                    SharedString::from(format!("a-{id}")),
+                    SharedString::from(text.to_string()),
+                )
+                .style(crate::markdown::style(&self.palette)),
+            )
     }
 
     fn process_item(&self, item: &Item, cx: &mut Context<Self>) -> Div {
@@ -547,17 +537,8 @@ impl Workspace {
                 output,
                 is_error,
             } => {
-                let (verb, detail) = presentation::tool_title(name, arguments, output.is_none());
-                let row = div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(div().flex_none().muted(p).child(verb))
-                    .child(ui::truncate(detail).text_color(p.c(Token::Foreground)))
-                    .when(*is_error, |d| {
-                        d.child(icon("alert-circle", 14.0, p.c(Token::Destructive)))
-                    });
+                let view = presentation::describe(name, arguments, output.is_none());
+                let row = self.tool_head(&view, *is_error, output.is_none());
                 let open = self.open_items.contains(id);
                 let detail =
                     open.then(|| self.tool_detail(name, arguments, output.as_deref(), *is_error));
@@ -565,29 +546,46 @@ impl Workspace {
             }
             _ => return div(),
         };
+        self.fold_row(id, header, body, false, cx)
+    }
+
+    /// `ToolRow`: a header that opens to a body set off by a rule on its left (`ml-2 border-l
+    /// pl-3.5`). The chevron shows on hover, or always when `chevron_always`.
+    fn fold_row(
+        &self,
+        id: String,
+        header: Div,
+        body: Option<Div>,
+        chevron_always: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let p = &self.palette;
         let open = self.open_items.contains(&id);
         let key = id.clone();
+        let group = SharedString::from(format!("tool-{id}"));
         div()
             .w_full()
             .max_w(px(REPLY_MAX))
             .flex()
             .flex_col()
-            .gap(px(8.0))
             .text_size(px(TEXT_SM))
             .line_height(px(20.0))
             .child(
                 div()
                     .id(SharedString::from(format!("item-{id}")))
+                    .group(group.clone())
                     .cursor_pointer()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(8.0))
                     .child(div().flex_1().min_w_0().child(header))
-                    .child(ui::chevron(
-                        open,
-                        14.0,
-                        p.c(Token::MutedForeground).opacity(0.6),
-                    ))
+                    .child(
+                        div()
+                            .when(!chevron_always && !open, |d| {
+                                d.invisible().group_hover(group, |s| s.visible())
+                            })
+                            .child(ui::chevron(open, 14.0, p.c(Token::MutedForeground))),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.open_items.remove(&key) {
                             this.open_items.insert(key.clone());
@@ -595,7 +593,145 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .children(body)
+            .children(body.map(|body| {
+                div().pt(px(8.0)).child(
+                    div()
+                        .ml(px(8.0))
+                        .pl(px(14.0))
+                        .border_l_1()
+                        .border_color(p.c(Token::Border))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .child(body),
+                )
+            }))
+    }
+
+    /// The row a call opens with: its family's icon, the category in muted words, what it acted
+    /// on in mono, and the directory or glob after that in fainter mono.
+    fn tool_head(&self, v: &presentation::ToolView, failed: bool, running: bool) -> Div {
+        let p = &self.palette;
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(ui::icon(
+                presentation::family_icon(v.family, true),
+                14.0,
+                p.c(Token::MutedForeground),
+            ))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(if running {
+                        p.c(Token::Foreground)
+                    } else {
+                        p.c(Token::MutedForeground)
+                    })
+                    .child(SharedString::from(v.label.clone())),
+            )
+            .when(!v.subject.is_empty(), |d| {
+                d.child(
+                    ui::truncate(v.subject.clone())
+                        .font_family(crate::assets::MONO_FONT)
+                        .text_color(p.c(Token::Foreground)),
+                )
+            })
+            .when(!v.context.is_empty(), |d| {
+                d.child(
+                    ui::truncate(v.context.clone())
+                        .flex_1()
+                        .font_family(crate::assets::MONO_FONT)
+                        .text_color(p.c(Token::MutedForeground).opacity(0.6)),
+                )
+            })
+            .when(failed, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .text_color(p.c(Token::Destructive))
+                        .child("执行失败"),
+                )
+            })
+    }
+
+    /// Several settled calls folded into one line, 「已运行 2 个命令，读取 App.tsx」.
+    fn run_row(&self, items: &[&Item], cx: &mut Context<Self>) -> Div {
+        let p = &self.palette;
+        let Some(Item::ToolCall { id, .. }) = items.first() else {
+            return div();
+        };
+        let id = format!("run:{id}");
+        let mut line = div()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .flex()
+            .items_center();
+        for piece in presentation::run_summary(items) {
+            line = match piece {
+                presentation::Piece::Text(t) => line.child(SharedString::from(t)),
+                presentation::Piece::Name(n) => line.child(
+                    div()
+                        .mx(px(2.0))
+                        .text_size(px(13.0))
+                        .px(px(6.0))
+                        .rounded(px(6.0))
+                        .bg(p.c(Token::Muted))
+                        .font_family(crate::assets::MONO_FONT)
+                        .text_color(p.c(Token::Foreground))
+                        .child(SharedString::from(n)),
+                ),
+            };
+        }
+        let head = div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(ui::icon("layers01", 14.0, p.c(Token::MutedForeground)))
+            .child(line.muted(p));
+        let body = self.open_items.contains(&id).then(|| {
+            let mut col = div().w_full().flex().flex_col().gap(px(8.0));
+            for item in items {
+                col = col.child(self.process_item(item, cx));
+            }
+            col
+        });
+        self.fold_row(id, head, body, true, cx)
+    }
+
+    /// A stretch of the process or answer, drawn the way the transcript draws it: prose as
+    /// markdown, settled calls in a row each or folded into one, and the tail marked live.
+    pub(super) fn parts(
+        &self,
+        items: &[&Item],
+        running: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let last = items.last().copied();
+        presentation::fold_runs(items, running)
+            .into_iter()
+            .map(|part| match part {
+                presentation::Part::Run(batch) => self.run_row(&batch, cx).into_any_element(),
+                presentation::Part::Item(item) => {
+                    let live = running && last.is_some_and(|l| std::ptr::eq(l, item));
+                    match item {
+                        Item::AgentMessage { id, text } => {
+                            self.markdown(id, text).into_any_element()
+                        }
+                        Item::Error { message, .. } => {
+                            self.error_notice(message).into_any_element()
+                        }
+                        other => self.process_item_live(other, live, cx).into_any_element(),
+                    }
+                }
+            })
+            .collect()
     }
 
     /// What a tool call was asked and what it said back.

@@ -202,6 +202,15 @@ impl ServerState {
         Ok(())
     }
 
+    /// A restart may replace the server only when no conversation has work in flight.
+    pub fn has_running_turns(&self) -> bool {
+        self.runtimes
+            .lock()
+            .unwrap()
+            .values()
+            .any(|runtime| runtime.is_running())
+    }
+
     pub fn threads(&self, include_archived: bool) -> Result<Vec<Thread>, ErrorObject> {
         self.store
             .db

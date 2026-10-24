@@ -109,3 +109,83 @@ fn file_icons_follow_the_manifest_rules() {
     // `d.ts` is a longer extension than `ts`, and wins.
     assert_ne!(resolve("x.d.ts", false), resolve("x.ts", false));
 }
+
+fn named(id: &str, name: &str, args: serde_json::Value) -> Item {
+    Item::ToolCall {
+        id: id.into(),
+        name: name.into(),
+        arguments: args,
+        output: Some("ok".into()),
+        is_error: false,
+    }
+}
+
+#[test]
+fn settled_calls_between_prose_fold_into_one_run() {
+    use fv_gui::presentation::{Part, fold_runs};
+    let items = [
+        say("a"),
+        tool("1", true),
+        tool("2", true),
+        say("b"),
+        tool("3", true),
+    ];
+    let refs: Vec<&Item> = items.iter().collect();
+    let parts = fold_runs(&refs, false);
+    assert_eq!(parts.len(), 4);
+    assert!(matches!(&parts[1], Part::Run(r) if r.len() == 2));
+    assert!(
+        matches!(&parts[3], Part::Item(_)),
+        "a lone call stays a row"
+    );
+}
+
+#[test]
+fn a_running_call_stands_alone_and_splits_the_batch() {
+    use fv_gui::presentation::{Part, fold_runs};
+    let items = [
+        tool("1", true),
+        tool("2", true),
+        tool("3", false),
+        tool("4", true),
+    ];
+    let refs: Vec<&Item> = items.iter().collect();
+    let parts = fold_runs(&refs, true);
+    assert!(matches!(&parts[0], Part::Run(r) if r.len() == 2));
+    assert!(matches!(&parts[1], Part::Item(_)));
+    assert!(matches!(&parts[2], Part::Item(_)));
+}
+
+#[test]
+fn questions_and_plans_break_a_run() {
+    use fv_gui::presentation::{Part, fold_runs};
+    let items = [
+        tool("1", true),
+        named("q", "request_user_input", json!({})),
+        tool("2", true),
+    ];
+    let refs: Vec<&Item> = items.iter().collect();
+    assert!(
+        fold_runs(&refs, false)
+            .iter()
+            .all(|p| matches!(p, Part::Item(_)))
+    );
+}
+
+#[test]
+fn the_summary_names_one_file_and_counts_many() {
+    use fv_gui::presentation::{Piece, run_summary};
+    let items = [
+        tool("1", true),
+        tool("2", true),
+        named("3", "view_image", json!({"path": "/a/b/pic.png"})),
+    ];
+    let refs: Vec<&Item> = items.iter().collect();
+    let line: String = run_summary(&refs)
+        .into_iter()
+        .map(|p| match p {
+            Piece::Text(t) | Piece::Name(t) => t,
+        })
+        .collect();
+    assert_eq!(line, "已运行 2 个命令，读取 pic.png");
+}

@@ -1,8 +1,12 @@
 //! Project tasks, run as `cargo <alias>`.
 //!
-//!   cargo dev [-- app args]   build both, restart the development server, start the app
+//!   cargo dev [-- app args]   build both, update an idle changed server, start the app
 
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+
+use fv_daemon::Daemon;
+use sha2::{Digest, Sha256};
 
 fn cargo() -> Command {
     Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
@@ -19,6 +23,82 @@ fn main() -> ExitCode {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Restart {
+    Unchanged,
+    Now,
+    Busy,
+}
+
+/// Decide from the running executable's own report, never from timestamps or package versions.
+/// An old server that cannot report a fingerprint/activity is deliberately left alone: killing
+/// a conversation just because two builds speak different protocol versions is worse than a
+/// one-line warning explaining how to replace it once idle.
+fn restart_needed(current: Option<&str>, running: Option<bool>, built: &str) -> Restart {
+    match current {
+        Some(current) if current == built => Restart::Unchanged,
+        _ if running == Some(false) => Restart::Now,
+        _ => Restart::Busy,
+    }
+}
+
+fn fingerprint(path: &Path) -> std::io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn requested_data_dir(app_args: &[String]) -> Result<Option<PathBuf>, &'static str> {
+    let mut data_dir = std::env::var_os("FASTVIBE_DATA_DIR").map(Into::into);
+    let mut args = app_args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--data-dir" {
+            let Some(path) = args.next() else {
+                return Err("--data-dir needs a path");
+            };
+            data_dir = Some(path.into());
+        }
+    }
+    Ok(data_dir)
+}
+
+/// A blocking handshake is fine here: no server runtime or GUI exists on this thread yet.
+fn prepare_server(daemon: &Daemon, built: &str) -> Result<(), String> {
+    if !daemon.socket().exists() {
+        return Ok(());
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let connection =
+        match runtime.block_on(daemon.connect("fastvibe-dev", env!("CARGO_PKG_VERSION"))) {
+            Ok(connection) => connection,
+            // A crashed server's stale socket needs no shutdown. If it is merely starting, the
+            // GUI's normal connection path will retry/report it without us killing anything.
+            Err(_) => return Ok(()),
+        };
+    match restart_needed(
+        connection.build_fingerprint.as_deref(),
+        connection.has_running_turns,
+        built,
+    ) {
+        Restart::Unchanged => Ok(()),
+        Restart::Busy => {
+            eprintln!(
+                "FastVibe server update available; keeping the running server to avoid interrupting a conversation. Stop the old server or rerun cargo dev when idle to update."
+            );
+            Ok(())
+        }
+        Restart::Now => {
+            drop(connection);
+            daemon
+                .stop_and_wait()
+                .map(|_| ())
+                .map_err(|error| format!("could not restart the development server: {error}"))
+        }
+    }
+}
+
 fn dev(app_args: Vec<String>) -> ExitCode {
     // The app looks for the server next to itself, so both must be built first.
     let built = cargo()
@@ -28,22 +108,13 @@ fn dev(app_args: Vec<String>) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // A resident server deliberately survives closing the GUI. Development is different: an
-    // old process would answer newly added protocol methods with -32601. Only stop the server
-    // belonging to the data directory this launch will use; FASTVIBE_DATA_DIR has the same
-    // precedence in Daemon::default_data_dir.
-    let mut data_dir = std::env::var_os("FASTVIBE_DATA_DIR").map(Into::into);
-    let mut app_args = app_args.into_iter();
-    while let Some(arg) = app_args.next() {
-        if arg == "--data-dir" {
-            let Some(path) = app_args.next() else {
-                eprintln!("--data-dir needs a path");
-                return ExitCode::FAILURE;
-            };
-            data_dir = Some(path.into());
+    let data_dir = match requested_data_dir(&app_args) {
+        Ok(dir) => dir.unwrap_or_else(fv_daemon::default_data_dir),
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
         }
-    }
-    let data_dir = data_dir.unwrap_or_else(fv_daemon::default_data_dir);
+    };
     let server_bin = match fv_daemon::find_server_binary() {
         Ok(path) => path,
         Err(error) => {
@@ -51,9 +122,16 @@ fn dev(app_args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let built_fingerprint = match fingerprint(&server_bin) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("could not fingerprint {}: {error}", server_bin.display());
+            return ExitCode::FAILURE;
+        }
+    };
     let daemon = fv_daemon::Daemon::new(data_dir, server_bin);
-    if let Err(error) = daemon.stop_and_wait() {
-        eprintln!("could not restart the development server: {error}");
+    if let Err(error) = prepare_server(&daemon, &built_fingerprint) {
+        eprintln!("{error}");
         return ExitCode::FAILURE;
     }
 
@@ -64,5 +142,58 @@ fn dev(app_args: Vec<String>) -> ExitCode {
     match status {
         Ok(s) if s.success() => ExitCode::SUCCESS,
         _ => ExitCode::FAILURE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unchanged_build_never_restarts() {
+        assert_eq!(
+            restart_needed(Some("same"), Some(false), "same"),
+            Restart::Unchanged
+        );
+        assert_eq!(
+            restart_needed(Some("same"), Some(true), "same"),
+            Restart::Unchanged
+        );
+        assert_eq!(
+            restart_needed(Some("same"), None, "same"),
+            Restart::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_changed_build_restarts_only_when_idle() {
+        assert_eq!(
+            restart_needed(Some("old"), Some(false), "new"),
+            Restart::Now
+        );
+        assert_eq!(
+            restart_needed(Some("old"), Some(true), "new"),
+            Restart::Busy
+        );
+        assert_eq!(restart_needed(Some("old"), None, "new"), Restart::Busy);
+        assert_eq!(restart_needed(None, Some(false), "new"), Restart::Now);
+        assert_eq!(restart_needed(None, Some(true), "new"), Restart::Busy);
+        assert_eq!(restart_needed(None, None, "new"), Restart::Busy);
+    }
+
+    #[test]
+    fn data_dir_arguments_and_environment_use_the_same_precedence() {
+        let base = std::env::var_os("FASTVIBE_DATA_DIR").map(PathBuf::from);
+        let args = vec![
+            "--theme".into(),
+            "--data-dir".into(),
+            "/tmp/dev-data".into(),
+        ];
+        assert_eq!(requested_data_dir(&args), Ok(Some("/tmp/dev-data".into())));
+        assert_eq!(requested_data_dir(&["--theme".into()]), Ok(base));
+        assert_eq!(
+            requested_data_dir(&["--data-dir".into()]),
+            Err("--data-dir needs a path")
+        );
     }
 }
