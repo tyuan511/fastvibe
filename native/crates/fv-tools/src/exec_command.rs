@@ -8,10 +8,15 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
-use fv_agent::{Tool, ToolCtx, ToolOutput, ToolSpec};
+use fv_agent::{
+    ApprovalKind, ApprovalPolicy, ApprovalRequest, Decision, Permissions, Policy, Tool, ToolCtx,
+    ToolOutput, ToolSpec,
+};
+use fv_sandbox::{is_known_safe, looks_denied};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
@@ -46,6 +51,12 @@ struct Args {
     login: bool,
     #[serde(default)]
     max_output_tokens: Option<usize>,
+    /// `require_escalated` asks to run outside the sandbox; the user is asked first.
+    #[serde(default)]
+    sandbox_permissions: Option<String>,
+    /// Why it has to run outside the sandbox: what the user is shown when asked.
+    #[serde(default)]
+    justification: Option<String>,
 }
 
 fn default_login() -> bool {
@@ -67,7 +78,9 @@ impl Tool for ExecCommandTool {
                     "timeout_ms": {"type": "number", "description": "Kill the command after this many milliseconds. Defaults to 120000; at most 600000."},
                     "shell": {"type": "string", "description": "Shell binary to launch. Defaults to the user's default shell."},
                     "login": {"type": "boolean", "description": "True runs the shell as a login shell (-l); false does not. Defaults to true."},
-                    "max_output_tokens": {"type": "number", "description": "Output token budget. Defaults to 10000 tokens."}
+                    "max_output_tokens": {"type": "number", "description": "Output token budget. Defaults to 10000 tokens."},
+                    "sandbox_permissions": {"type": "string", "enum": ["use_default", "require_escalated"], "description": "Commands run in a sandbox that stops them writing outside the working folders and using the network. Use `require_escalated` to run this one without it; the user is asked first. Only use it for a command that failed because of the sandbox, or that surely needs to leave it."},
+                    "justification": {"type": "string", "description": "With `require_escalated`: a short question for the user explaining why the command has to run outside the sandbox."}
                 },
                 "required": ["cmd"],
                 "additionalProperties": false
@@ -110,9 +123,112 @@ impl Tool for ExecCommandTool {
                 .shell
                 .or_else(|| std::env::var("SHELL").ok())
                 .unwrap_or_else(|| "/bin/sh".into());
-            run(&shell, args.login, &args.cmd, workdir, timeout, budget).await
+            let request = Request {
+                call_id: ctx.call_id.clone(),
+                shell,
+                login: args.login,
+                cmd: args.cmd,
+                workdir,
+                timeout,
+                budget,
+                escalate: args.sandbox_permissions.as_deref() == Some("require_escalated"),
+                justification: args.justification,
+            };
+            execute(ctx.permissions.clone(), request).await
         })
     }
+}
+
+struct Request {
+    call_id: String,
+    shell: String,
+    login: bool,
+    cmd: String,
+    workdir: Option<PathBuf>,
+    timeout: Duration,
+    budget: usize,
+    escalate: bool,
+    justification: Option<String>,
+}
+
+/// What a finished command left behind, for deciding whether the sandbox was in its way.
+struct Ran {
+    output: ToolOutput,
+    code: Option<i32>,
+    text: String,
+}
+
+/// Run a command under the turn's permissions: in the sandbox, asking the user when the policy
+/// says to, and again outside the sandbox when it was in the way and the policy allows asking.
+async fn execute(permissions: Option<Arc<Permissions>>, request: Request) -> ToolOutput {
+    let Some(perms) = permissions else {
+        return run(&request, None).await.output;
+    };
+    let sandboxed = perms.policy.sandboxed();
+    let mut outside = !sandboxed;
+    let ask = |reason: String| {
+        perms.ask(ApprovalRequest {
+            call_id: request.call_id.clone(),
+            kind: ApprovalKind::Command {
+                command: request.cmd.clone(),
+                cwd: request.workdir.as_ref().map(|d| d.display().to_string()),
+            },
+            reason: Some(reason),
+        })
+    };
+
+    if request.escalate && sandboxed {
+        if perms.approval == ApprovalPolicy::Never {
+            return ToolOutput::err(
+                "This command cannot leave the sandbox: approvals are switched off (approval policy `never`).",
+            );
+        }
+        let reason = request
+            .justification
+            .clone()
+            .unwrap_or_else(|| "The command asks to run outside the sandbox.".into());
+        if ask(reason).await == Decision::Denied {
+            return ToolOutput::err(
+                "The user did not allow this command to run outside the sandbox.",
+            );
+        }
+        outside = true;
+    } else if perms.approval == ApprovalPolicy::Untrusted
+        && !is_known_safe(&request.cmd)
+        && ask("This command is not known to be read-only.".into()).await == Decision::Denied
+    {
+        return ToolOutput::err("The user did not allow this command to run.");
+    }
+
+    let first = run(&request, (!outside).then_some(&perms.policy)).await;
+    if outside || !looks_denied(first.code, &first.text) {
+        return first.output;
+    }
+    // The sandbox was in the way.
+    match perms.approval {
+        ApprovalPolicy::OnFailure => {
+            let reason =
+                "The command failed in the sandbox. Run it again without the sandbox?".to_string();
+            if ask(reason).await == Decision::Denied {
+                return first.output;
+            }
+            run(&request, None).await.output
+        }
+        ApprovalPolicy::OnRequest => note(
+            first.output,
+            "The sandbox may have blocked this command. If it has to run outside it, call exec_command again with sandbox_permissions=\"require_escalated\" and a justification; the user will be asked.",
+        ),
+        ApprovalPolicy::Untrusted | ApprovalPolicy::Never => note(
+            first.output,
+            "The sandbox may have blocked this command, and asking is not available under the current approval policy.",
+        ),
+    }
+}
+
+fn note(mut out: ToolOutput, text: &str) -> ToolOutput {
+    out.content.push_str("\n\n");
+    out.content.push_str(text);
+    out
 }
 
 enum Ended {
@@ -145,18 +261,29 @@ fn kill_group(pid: i32) {
     }
 }
 
-async fn run(
-    shell: &str,
-    login: bool,
-    cmd: &str,
-    workdir: Option<PathBuf>,
-    timeout: Duration,
-    budget: usize,
-) -> ToolOutput {
-    let mut command = Command::new(shell);
+async fn run(request: &Request, policy: Option<&Policy>) -> Ran {
+    let Request {
+        shell,
+        login,
+        cmd,
+        workdir,
+        timeout,
+        budget,
+        ..
+    } = request;
+    let (timeout, budget) = (*timeout, *budget);
+    let shell_args = vec![if *login { "-lc" } else { "-c" }.to_string(), cmd.clone()];
+    let (program, args) = match policy {
+        Some(policy) => match fv_sandbox::wrap(policy, shell, &shell_args) {
+            Ok(Some(w)) => (w.program, w.args),
+            Ok(None) => (shell.clone(), shell_args),
+            Err(e) => return Ran::failed(e),
+        },
+        None => (shell.clone(), shell_args),
+    };
+    let mut command = Command::new(&program);
     command
-        .arg(if login { "-lc" } else { "-c" })
-        .arg(cmd)
+        .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -172,7 +299,7 @@ async fn run(
     let started = Instant::now();
     let mut child = match command.spawn() {
         Ok(c) => c,
-        Err(e) => return ToolOutput::err(format!("failed to start `{shell}`: {e}")),
+        Err(e) => return Ran::failed(format!("failed to start `{shell}`: {e}")),
     };
     let mut guard = GroupGuard(child.id().map(|p| p as i32));
 
@@ -255,10 +382,28 @@ async fn run(
         },
     };
     let content = format!("Wall time: {wall:.1} seconds\n{status}\nOutput:\n{body}");
-    if failed {
-        ToolOutput::err(content)
-    } else {
-        ToolOutput::ok(content)
+    let code = match ended {
+        Ended::Exited(s) => s.code(),
+        Ended::TimedOut => None,
+    };
+    Ran {
+        output: if failed {
+            ToolOutput::err(content)
+        } else {
+            ToolOutput::ok(content)
+        },
+        code,
+        text,
+    }
+}
+
+impl Ran {
+    fn failed(message: String) -> Self {
+        Self {
+            output: ToolOutput::err(message),
+            code: None,
+            text: String::new(),
+        }
     }
 }
 

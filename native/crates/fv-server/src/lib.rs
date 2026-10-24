@@ -37,5 +37,6 @@ pub fn agent_with_builtin_tools(
         cwd: None,
         ui: None,
         loaded: Default::default(),
+        permissions: None,
     }
 }

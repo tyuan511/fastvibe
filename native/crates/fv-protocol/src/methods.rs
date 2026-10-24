@@ -125,18 +125,25 @@ pub enum ServerRequest {
         id: RequestId,
         params: UserInputRequest,
     },
+    /// A command or patch that needs the user's say-so; answered with an [`ApprovalResponse`].
+    #[serde(rename = "item/approval/request")]
+    Approval {
+        id: RequestId,
+        params: ApprovalRequestParams,
+    },
 }
 
 impl ServerRequest {
     pub fn id(&self) -> &RequestId {
         match self {
-            ServerRequest::UserInput { id, .. } => id,
+            ServerRequest::UserInput { id, .. } | ServerRequest::Approval { id, .. } => id,
         }
     }
 
     pub fn method(&self) -> &'static str {
         match self {
             ServerRequest::UserInput { .. } => "item/question/request",
+            ServerRequest::Approval { .. } => "item/approval/request",
         }
     }
 }

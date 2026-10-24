@@ -14,6 +14,6 @@ Parts of this crate are adapted from **OpenAI Codex** (<https://github.com/opena
 | `src/request_user_input.rs` | `core/src/tools/handlers/request_user_input.rs`, `request_user_input_spec.rs` | name, arguments, description and result format kept; no collaboration modes; the client always adds an "Other" answer |
 | `src/view_image.rs` | `core/src/tools/handlers/view_image.rs`, `view_image_spec.rs` | name, argument, description and refusal messages kept; a large picture is scaled down before it is sent (it is carried again by every later request) |
 | `src/tool_search.rs`, `src/bm25.rs` | `core/src/tools/handlers/tool_search.rs`, `tool_search_spec.rs` | name, arguments and the BM25 idea kept; codex relies on the Responses API's own deferred loading, here deferred tools are left out of requests until found, so it works with any provider |
-| `src/exec_command.rs` | `core/src/tools/handlers/shell_spec.rs` (`exec_command`) and `core/src/exec.rs` | argument names kept; commands run to completion (no resumable sessions yet) |
+| `src/exec_command.rs` | `core/src/tools/handlers/shell_spec.rs` (`exec_command`) and `core/src/exec.rs` | argument names kept, plus codex's `sandbox_permissions` / `justification`; commands run to completion (no resumable sessions yet) and behind the sandbox in `fv-sandbox` |
 
 The Apache License 2.0 applies to those portions. The upstream copyright notices are retained in the files.

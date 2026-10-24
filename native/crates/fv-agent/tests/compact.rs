@@ -45,6 +45,7 @@ fn agent(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
             cwd: None,
             ui: None,
             loaded: Default::default(),
+            permissions: None,
         },
         model,
     )

@@ -23,7 +23,13 @@ pub(crate) struct PendingPrompt {
     pub thread_id: ThreadId,
     /// Kept so a client that connects later can be shown it.
     pub request: fv_protocol::ServerRequest,
-    pub answer: tokio::sync::oneshot::Sender<Option<fv_core::Answers>>,
+    pub answer: tokio::sync::oneshot::Sender<Reply>,
+}
+
+/// What a client sent back for a request of ours: `None` when it declined or never answered.
+pub(crate) enum Reply {
+    Answers(Option<fv_core::Answers>),
+    Decision(Option<fv_protocol::types::ApprovalDecision>),
 }
 
 /// Frames queued for one connection before a slow reader starts to cost the server memory.
@@ -244,7 +250,7 @@ impl ServerState {
         id: fv_protocol::RequestId,
         thread_id: &str,
         request: fv_protocol::ServerRequest,
-    ) -> tokio::sync::oneshot::Receiver<Option<fv_core::Answers>> {
+    ) -> tokio::sync::oneshot::Receiver<Reply> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.prompts.lock().unwrap().insert(
             id,

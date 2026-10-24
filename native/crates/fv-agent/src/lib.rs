@@ -9,6 +9,7 @@ mod compact;
 mod event;
 mod history;
 mod model;
+mod permissions;
 mod prompt;
 mod tool;
 mod turn;
@@ -22,6 +23,10 @@ pub use compact::{
 pub use event::{AgentEvent, BlockKind};
 pub use history::normalize;
 pub use model::{Model, ModelError, ModelEvent, ModelRequest};
+pub use permissions::{
+    ApprovalKind, ApprovalPolicy, ApprovalRequest, Approver, Decision, Permissions, Policy,
+    SandboxMode,
+};
 pub use prompt::base_instructions;
 pub use tool::{LoadedTools, Tool, ToolCtx, ToolOutput, ToolRegistry, ToolSpec, UserInput};
 pub use turn::{AgentContext, TurnOutcome, run_turn};

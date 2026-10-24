@@ -68,6 +68,23 @@ async fn it_starts_a_server_and_connects_to_it() {
 }
 
 #[tokio::test]
+async fn a_development_restart_waits_for_the_old_server_to_leave() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::new(dir.path().to_path_buf(), server_bin());
+    daemon.ensure_running().await.unwrap();
+    let old_pid = pid_of(dir.path());
+
+    assert!(daemon.stop_and_wait().unwrap());
+    wait_gone(old_pid).await;
+    assert!(!daemon.ensure_running().await.is_err());
+    let new_pid = pid_of(dir.path());
+    assert_ne!(new_pid, old_pid);
+    assert!(alive(new_pid));
+    daemon.stop().unwrap();
+    wait_gone(new_pid).await;
+}
+
+#[tokio::test]
 async fn a_second_app_finds_the_server_the_first_started() {
     let dir = tempfile::tempdir().unwrap();
     let first = Daemon::new(dir.path().to_path_buf(), server_bin());

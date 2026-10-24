@@ -5,5 +5,8 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[dependencies]
+fv-daemon = { path = "../fv-daemon" }
+
 [lints]
 workspace = true

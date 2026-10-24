@@ -100,6 +100,7 @@ async fn main() {
         cwd: None,
         ui: None,
         loaded: Default::default(),
+        permissions: None,
     };
 
     let (tx, mut rx) = mpsc::unbounded_channel();

@@ -57,6 +57,7 @@ async fn start(model: Option<ScriptedModel>) -> Harness {
         cwd: None,
         ui: None,
         loaded: Default::default(),
+        permissions: None,
     };
     let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
     let sock = dir.path().join("s.sock");

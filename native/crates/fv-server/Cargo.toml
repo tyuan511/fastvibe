@@ -16,6 +16,7 @@ path = "src/main.rs"
 fv-protocol = { path = "../fv-protocol" }
 fv-core = { path = "../fv-core" }
 fv-agent = { path = "../fv-agent" }
+fv-sandbox = { path = "../fv-sandbox" }
 fv-store = { path = "../fv-store" }
 fv-provider = { path = "../fv-provider" }
 fv-tools = { path = "../fv-tools" }

@@ -122,6 +122,16 @@ pub(super) fn plan(hunks: &[Hunk], cwd: Option<&Path>) -> Result<Plan, String> {
 }
 
 impl Plan {
+    /// Every file the patch would write or remove, as absolute paths.
+    pub(super) fn paths(&self) -> Vec<PathBuf> {
+        self.ops
+            .iter()
+            .map(|op| match op {
+                Op::Write(path, _) | Op::Remove(path) => path.clone(),
+            })
+            .collect()
+    }
+
     /// Write everything. The only failures left are the disk's own (full, read-only).
     pub(super) fn apply(self) -> Result<String, String> {
         for op in &self.ops {

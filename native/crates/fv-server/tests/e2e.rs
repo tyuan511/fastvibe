@@ -24,6 +24,7 @@ fn agent_with(model: Arc<dyn Model>) -> AgentContext {
         cwd: None,
         ui: None,
         loaded: Default::default(),
+        permissions: None,
     }
 }
 

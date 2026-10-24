@@ -50,6 +50,8 @@
   Main 里」「保持唤醒」「定时任务需要应用开着」的问题：它们都属于 server，不属于窗口。
 - GUI 启动时由 `fv-daemon` 连接已有的 server；没有就拉起一个。server 的数据目录内有 `server.pid`、`server.lock`、
   `server.sock`（0600，父目录 0700）。GUI 升级后发现 server 版本不同，等它空闲再重启。
+  `cargo dev` 是例外：构建完成后先停止本次数据目录下的旧 server 并等它退出，再启动 GUI，确保开发时的新协议不会落到旧进程上；
+  因此它会中断正在运行的开发会话。直接运行 GUI 仍复用常驻 server。
 - 「退出 FastVibe」= 停 server（有运行中的任务先确认）；只关窗口不停 server。是否在没有窗口时继续常驻是一个设置项
   （默认：有定时任务或远程访问开着时常驻）。
 - **同一个二进制也是 SSH 主机上的 Agent**：远端跑 `fastvibe-server --listen stdio`，经 `ssh` 的 stdio 直接连，
@@ -380,6 +382,14 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   这里没有沙箱，所以只需要告诉模型。GUI：侧栏项目旁「+」打开「创建项目」（名称、文件夹列表、主标记、悬停「设为主文件夹」与移除、
   添加文件夹可一次多选），项目行 ⋯ →「编辑项目」同一个对话框。还没做：`@` 跨文件夹搜索、其余文件夹的 AGENTS.md / 技能提示、
   每个仓库单独的 git 面板。
+- **沙箱与审批（2026-10-24，老版没有，照 codex 新加）**：新 crate `fv-sandbox`（codex 的 macOS Seatbelt：`/usr/bin/sandbox-exec` + SBPL 策略，`.git` 只读保护，
+  网络默认关）。模式 `read-only / workspace-write / danger-full-access`，审批策略 `untrusted / on-failure / on-request / never`，存在应用设置里（全局）。
+  `exec_command` 在沙箱里跑，模型可带 `sandbox_permissions: require_escalated` + `justification` 申请沙箱外运行；`apply_patch` 由服务端按可写根检查。
+  需要用户点头时服务端发 `item/approval/request`（客户端用 JSON-RPC 响应作答，`serverRequest/resolved` 撤回），决定为允许一次 / 本会话允许 / 拒绝。
+  系统提示会告诉模型当前沙箱。只有 macOS 有沙箱（其它平台除非完全访问否则报错）；还没有按会话覆盖。
+  **界面照 codex**：审批和提问不再画在转写里，而是在 composer 区——提问面板（「问题」、编号选项、「或自行撰写回复」、跳过 / 发送）在 composer 上方；
+  审批面板（终端 / 文件、问题、等宽命令、「拒绝 Esc」「允许一次 ↵」+ 下拉「本次会话都允许」）直接盖住 composer，Esc 拒绝、Enter 允许一次。
+  composer 左下角新增权限按钮与菜单：请求批准 / 沙箱里直接做 / 完全访问权限（橙色胶囊）。实现在 `workspace/ask.rs`；预览 `--fixture approval|question`。
 - **还缺（需要新的协议数据或组件）**：标题栏与新对话页的 git 分支 / 改动 chip、composer 的上下文环、压缩分隔线的
   「接近上限 · 128.0K → 24.4K」、工具卡展开后的详细样式、各种弹出菜单的 Nova 皮肤、右侧面板与设置页。
 

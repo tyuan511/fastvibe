@@ -557,6 +557,88 @@ pub struct AppSettings {
     pub dark_theme: String,
     /// 玻璃效果: the translucent window, where the platform has a blur to show.
     pub glass: bool,
+    /// How much of the machine a command may touch (codex's `sandbox_mode`).
+    #[serde(default)]
+    pub sandbox_mode: SandboxMode,
+    /// When the user is asked before something runs (codex's `approval_policy`).
+    #[serde(default)]
+    pub approval_policy: ApprovalPolicy,
+    /// Whether sandboxed commands may use the network.
+    #[serde(default)]
+    pub sandbox_network: bool,
+}
+
+/// How much of the machine a command may touch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxMode {
+    /// Read anything, write nothing.
+    ReadOnly,
+    /// Read anything; write in the project's folders and the temporary directories.
+    #[default]
+    WorkspaceWrite,
+    /// No sandbox.
+    DangerFullAccess,
+}
+
+/// When the user is asked before something runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ApprovalPolicy {
+    /// Ask before anything that is not known to be read-only.
+    Untrusted,
+    /// Run in the sandbox; ask only to run again outside it after it was in the way.
+    OnFailure,
+    /// Run in the sandbox; the model asks when it needs to leave it.
+    #[default]
+    OnRequest,
+    /// Never ask.
+    Never,
+}
+
+/// What the agent wants to do that needs the user's say-so.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ApprovalKind {
+    Command {
+        command: String,
+        cwd: Option<String>,
+    },
+    Patch {
+        files: Vec<String>,
+    },
+}
+
+/// `item/approval/request`: the agent is stopped until the user answers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalRequestParams {
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
+    /// The tool call it is for.
+    pub call_id: String,
+    pub kind: ApprovalKind,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ApprovalDecision {
+    /// This once.
+    Approved,
+    /// This, and the same again for the rest of the conversation.
+    ApprovedForSession,
+    Denied,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalResponse {
+    pub decision: ApprovalDecision,
 }
 
 impl Default for AppSettings {
@@ -566,6 +648,9 @@ impl Default for AppSettings {
             light_theme: "github-light".into(),
             dark_theme: "github-dark".into(),
             glass: false,
+            sandbox_mode: SandboxMode::default(),
+            approval_policy: ApprovalPolicy::default(),
+            sandbox_network: false,
         }
     }
 }
@@ -582,6 +667,12 @@ pub struct AppSettingsPatch {
     pub dark_theme: Option<String>,
     #[serde(default)]
     pub glass: Option<bool>,
+    #[serde(default)]
+    pub sandbox_mode: Option<SandboxMode>,
+    #[serde(default)]
+    pub approval_policy: Option<ApprovalPolicy>,
+    #[serde(default)]
+    pub sandbox_network: Option<bool>,
 }
 
 impl AppSettings {
@@ -597,6 +688,15 @@ impl AppSettings {
         }
         if let Some(v) = patch.glass {
             self.glass = v;
+        }
+        if let Some(v) = patch.sandbox_mode {
+            self.sandbox_mode = v;
+        }
+        if let Some(v) = patch.approval_policy {
+            self.approval_policy = v;
+        }
+        if let Some(v) = patch.sandbox_network {
+            self.sandbox_network = v;
         }
     }
 }

@@ -33,6 +33,8 @@ pub enum DaemonError {
     DidNotStart {
         log: String,
     },
+    /// The previous process was signalled but did not release its socket in time.
+    DidNotStop,
     Rpc(String),
 }
 
@@ -51,6 +53,9 @@ impl std::fmt::Display for DaemonError {
                         format!(": {log}")
                     }
                 )
+            }
+            DaemonError::DidNotStop => {
+                write!(f, "the previous FastVibe server did not stop in time")
             }
             DaemonError::Rpc(e) => write!(f, "{e}"),
         }
@@ -237,6 +242,27 @@ impl Daemon {
     ) -> Result<Connection, DaemonError> {
         let socket = self.ensure_running().await?;
         connect_to(&socket, client_name, client_version).await
+    }
+
+    /// Stop the current server and wait for its socket to close before returning. Development
+    /// builds use this before starting the GUI, so newly built protocol methods cannot be
+    /// answered by an older resident process.
+    pub fn stop_and_wait(&self) -> Result<bool, DaemonError> {
+        if !self.stop()? {
+            return Ok(false);
+        }
+        let started = Instant::now();
+        while self.reachable_blocking() {
+            if started.elapsed() > START_TIMEOUT {
+                return Err(DaemonError::DidNotStop);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(true)
+    }
+
+    fn reachable_blocking(&self) -> bool {
+        std::os::unix::net::UnixStream::connect(self.socket()).is_ok()
     }
 
     /// Ask the server to stop, if it is running.

@@ -19,7 +19,8 @@ function* files(dir) {
   }
 }
 
-const used = new Set();
+// Glyphs the native app draws that the renderer does not import.
+const used = new Set(["HandIcon", "Shield01Icon", "ShieldAlertIcon", "SecurityCheckIcon", "CommandLineIcon", "HelpCircleIcon", "ArrowRight02Icon", "Edit02Icon"]);
 const importRe = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*["']@hugeicons\/core-free-icons["']/g;
 for (const f of files(root)) {
   for (const m of readFileSync(f, "utf8").matchAll(importRe)) {

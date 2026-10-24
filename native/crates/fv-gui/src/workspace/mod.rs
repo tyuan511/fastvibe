@@ -1,7 +1,7 @@
 //! The main window: sidebar of conversations, the transcript of the open one, and the
 //! composer. Everything it knows comes from the server through [`Backend`].
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use futures_util::StreamExt as _;
 use fv_protocol::methods::*;
@@ -12,6 +12,7 @@ use fv_theme::Token;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::*;
 
+mod ask;
 mod composer;
 mod palette;
 mod projects;
@@ -62,6 +63,7 @@ pub struct Workspace {
     views: HashMap<ThreadId, ThreadView>,
     /// Questions that arrived for a thread whose view is not loaded yet.
     pending_questions: Vec<(RequestId, UserInputRequest)>,
+    pending_approvals: Vec<(RequestId, ApprovalRequestParams)>,
     models: Vec<ModelEntry>,
     defaults: ModelDefaults,
     /// The model picked on the empty page, before a conversation exists.
@@ -72,7 +74,13 @@ pub struct Workspace {
     model_menu: bool,
     input: Entity<TextareaState>,
     scroll: ScrollHandle,
-    answers: HashMap<RequestId, BTreeMap<String, UserInputAnswer>>,
+    /// How far through each waiting question set the user is.
+    ask: HashMap<RequestId, ask::AskProgress>,
+    ask_input: Entity<InputState>,
+    panel_focus: FocusHandle,
+    focused_for: Option<RequestId>,
+    approval_menu: bool,
+    access_menu: bool,
     /// Turns whose folded process the user opened.
     open_folds: HashSet<String>,
     /// Thoughts and tool calls the user opened, by item id.
@@ -200,6 +208,17 @@ impl Workspace {
             }
         })
         .detach();
+        let ask_input = cx.new(|cx| InputState::new(window, cx).placeholder("或自行撰写回复"));
+        cx.subscribe_in(
+            &ask_input,
+            window,
+            |this, _, ev: &InputEvent, window, cx| match ev {
+                InputEvent::PressEnter { .. } => this.submit_free(window, cx),
+                InputEvent::Change => cx.notify(),
+                _ => {}
+            },
+        )
+        .detach();
         let this = Self {
             palette,
             backend: None,
@@ -208,6 +227,7 @@ impl Workspace {
             selected: None,
             views: HashMap::new(),
             pending_questions: Vec::new(),
+            pending_approvals: Vec::new(),
             models: Vec::new(),
             defaults: ModelDefaults::default(),
             pending_model: None,
@@ -216,7 +236,12 @@ impl Workspace {
             model_menu: false,
             input,
             scroll: ScrollHandle::new(),
-            answers: HashMap::new(),
+            ask: HashMap::new(),
+            ask_input,
+            panel_focus: cx.focus_handle(),
+            focused_for: None,
+            approval_menu: false,
+            access_menu: false,
             open_folds: HashSet::new(),
             open_items: HashSet::new(),
             closed_projects: HashSet::new(),
@@ -351,6 +376,8 @@ impl Workspace {
 
     fn any_menu_open(&self) -> bool {
         self.model_menu
+            || self.access_menu
+            || self.approval_menu
             || self.project_menu
             || self.thread_menu.is_some()
             || self.project_row_menu.is_some()
@@ -364,6 +391,8 @@ impl Workspace {
 
     fn close_menus(&mut self, cx: &mut Context<Self>) {
         self.model_menu = false;
+        self.access_menu = false;
+        self.approval_menu = false;
         self.project_menu = false;
         self.thread_menu = None;
         self.project_row_menu = None;
@@ -724,6 +753,7 @@ impl Workspace {
                     let mut view = ThreadView::from_snapshot(snapshot);
                     if let Some(old) = this.views.get(&id) {
                         view.questions = old.questions.clone();
+                        view.approvals = old.approvals.clone();
                     }
                     let (mine, rest): (Vec<_>, Vec<_>) =
                         std::mem::take(&mut this.pending_questions)
@@ -732,6 +762,14 @@ impl Workspace {
                     this.pending_questions = rest;
                     for (rid, q) in mine {
                         view.ask(rid, q);
+                    }
+                    let (mine, rest): (Vec<_>, Vec<_>) =
+                        std::mem::take(&mut this.pending_approvals)
+                            .into_iter()
+                            .partition(|(_, a)| a.thread_id == id);
+                    this.pending_approvals = rest;
+                    for (rid, a) in mine {
+                        view.ask_approval(rid, a);
                     }
                     this.views.insert(id, view);
                     this.stick_to_bottom = true;
@@ -758,6 +796,17 @@ impl Workspace {
                         // Not loaded yet: load it, then ask again from the snapshot's side.
                         self.load_view(thread.clone(), cx);
                         self.pending_questions.push((id, params));
+                    }
+                }
+                cx.notify();
+            }
+            BackendEvent::Request(ServerRequest::Approval { id, params }) => {
+                let thread = params.thread_id.clone();
+                match self.views.get_mut(&thread) {
+                    Some(view) => view.ask_approval(id, params),
+                    None => {
+                        self.load_view(thread.clone(), cx);
+                        self.pending_approvals.push((id, params));
                     }
                 }
                 cx.notify();
@@ -948,27 +997,20 @@ impl Workspace {
         cx.notify();
     }
 
-    fn answer(
+    /// Answer an approval card: 允许 / 本次会话允许 / 拒绝.
+    pub(super) fn decide(
         &mut self,
-        request: RequestId,
-        view_questions: usize,
-        question: String,
-        choice: String,
+        id: RequestId,
+        decision: ApprovalDecision,
         cx: &mut Context<Self>,
     ) {
-        let entry = self.answers.entry(request.clone()).or_default();
-        entry.insert(
-            question,
-            UserInputAnswer {
-                answers: vec![choice],
-            },
-        );
-        if entry.len() >= view_questions
-            && let Some(b) = self.backend.clone()
-        {
-            let answers = self.answers.remove(&request).unwrap_or_default();
-            let value = serde_json::to_value(UserInputResponse { answers }).unwrap_or_default();
-            b.respond(request, value);
+        if let Some(b) = self.backend.clone() {
+            let value = serde_json::to_value(ApprovalResponse { decision }).unwrap_or_default();
+            b.respond(id.clone(), value);
+        }
+        // The card goes at once; the server's `resolved` confirms it for everyone else.
+        for view in self.views.values_mut() {
+            view.approvals.retain(|(i, _)| *i != id);
         }
         cx.notify();
     }
@@ -997,6 +1039,7 @@ impl Render for Workspace {
                 self.apply_appearance(window, cx);
             }
         }
+        self.focus_pending(window, cx);
         // The handle only knows the content's height after a layout, so the jump to the end
         // waits for a frame that has one.
         if self.stick_to_bottom && self.scroll.max_offset().y > px(0.0) {
@@ -1070,6 +1113,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-k", OpenSearch, None),
         KeyBinding::new("escape", Dismiss, None),
+        KeyBinding::new("enter", ask::ApproveOnce, Some("ApprovalPanel")),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus(vec![Menu {
@@ -1109,6 +1153,7 @@ impl Workspace {
     fn on_dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
         if self.any_menu_open() {
             self.close_menus(cx);
+        } else if self.settings.is_none() && self.search_box.is_none() && self.dismiss_pending(cx) {
         } else if self.search_box.is_some() {
             self.close_palette(window, cx);
         } else if let Some(s) = &mut self.settings {

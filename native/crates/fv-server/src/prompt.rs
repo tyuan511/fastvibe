@@ -13,7 +13,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::log::LogEvent;
 use crate::runtime::ThreadRuntime;
-use crate::state::ServerState;
+use crate::state::{Reply, ServerState};
 
 /// `UserInput` for one turn of one thread.
 pub struct ThreadUserInput {
@@ -80,7 +80,10 @@ impl UserInput for ThreadUserInput {
                 id,
             };
             rt.send_frame(&state, request_frame(&request)).await;
-            let answers = answer.await.ok().flatten();
+            let answers = match answer.await {
+                Ok(Reply::Answers(a)) => a,
+                _ => None,
+            };
             drop(guard);
             answers
         })
@@ -117,19 +120,90 @@ pub async fn resolve(state: &ServerState, id: RequestId, frame: &serde_json::Val
     let Some(pending) = state.take_prompt(&id) else {
         return;
     };
-    let answers = match frame.get("result") {
-        Some(result) => serde_json::from_value::<types::UserInputResponse>(result.clone())
-            .ok()
-            .map(|r| Answers {
-                answers: r
-                    .answers
-                    .into_iter()
-                    .map(|(q, a)| (q, fv_core::AnswerList { answers: a.answers }))
-                    .collect(),
-            }),
-        // An error reply, or nothing usable: the user did not answer.
-        None => None,
+    let result = frame.get("result");
+    let reply = match &pending.request {
+        ServerRequest::UserInput { .. } => Reply::Answers(result.and_then(|result| {
+            serde_json::from_value::<types::UserInputResponse>(result.clone())
+                .ok()
+                .map(|r| Answers {
+                    answers: r
+                        .answers
+                        .into_iter()
+                        .map(|(q, a)| (q, fv_core::AnswerList { answers: a.answers }))
+                        .collect(),
+                })
+        })),
+        ServerRequest::Approval { .. } => Reply::Decision(result.and_then(|result| {
+            serde_json::from_value::<types::ApprovalResponse>(result.clone())
+                .ok()
+                .map(|r| r.decision)
+        })),
     };
-    let _ = pending.answer.send(answers);
+    // An error reply, or nothing usable, is `None`: the user did not answer.
+    let _ = pending.answer.send(reply);
     announce_resolved(state, &pending.thread_id, id).await;
+}
+
+/// `Approver` for one turn of one thread: asks the clients, remembers a "for the session".
+pub struct ThreadApprover {
+    pub state: Arc<ServerState>,
+    pub rt: Arc<ThreadRuntime>,
+    pub thread_id: ThreadId,
+    pub turn_id: TurnId,
+    pub withdrawn: UnboundedSender<RequestId>,
+}
+
+impl fv_agent::Approver for ThreadApprover {
+    fn approve(
+        &self,
+        request: fv_agent::ApprovalRequest,
+    ) -> BoxFuture<'static, fv_agent::Decision> {
+        let (state, rt) = (self.state.clone(), self.rt.clone());
+        let (thread_id, turn_id) = (self.thread_id.clone(), self.turn_id.clone());
+        let withdrawn = self.withdrawn.clone();
+        Box::pin(async move {
+            let key = request.key();
+            if rt.is_approved(&key) {
+                return fv_agent::Decision::Approved;
+            }
+            let id = RequestId::String(uuid::Uuid::new_v4().to_string());
+            let kind = match request.kind {
+                fv_agent::ApprovalKind::Command { command, cwd } => {
+                    types::ApprovalKind::Command { command, cwd }
+                }
+                fv_agent::ApprovalKind::Patch { files } => types::ApprovalKind::Patch { files },
+            };
+            let wire = ServerRequest::Approval {
+                id: id.clone(),
+                params: types::ApprovalRequestParams {
+                    thread_id: thread_id.clone(),
+                    turn_id,
+                    call_id: request.call_id,
+                    kind,
+                    reason: request.reason,
+                },
+            };
+            let answer = state.park_prompt(id.clone(), &thread_id, wire.clone());
+            let guard = Withdraw {
+                state: state.clone(),
+                withdrawn,
+                id,
+            };
+            rt.send_frame(&state, request_frame(&wire)).await;
+            let decision = match answer.await {
+                Ok(Reply::Decision(d)) => d,
+                _ => None,
+            };
+            drop(guard);
+            match decision {
+                Some(types::ApprovalDecision::Approved) => fv_agent::Decision::Approved,
+                Some(types::ApprovalDecision::ApprovedForSession) => {
+                    rt.approve_for_session(key);
+                    fv_agent::Decision::ApprovedForSession
+                }
+                // Denied, declined, or nobody there.
+                Some(types::ApprovalDecision::Denied) | None => fv_agent::Decision::Denied,
+            }
+        })
+    }
 }

@@ -21,6 +21,8 @@ pub struct ThreadView {
     pub plan: Option<PlanUpdated>,
     /// Questions waiting for the user, by request id.
     pub questions: Vec<(fv_protocol::RequestId, UserInputRequest)>,
+    /// Commands and patches waiting for the user's say-so, by request id.
+    pub approvals: Vec<(fv_protocol::RequestId, ApprovalRequestParams)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -43,6 +45,7 @@ impl ThreadView {
             token_usage: snapshot.token_usage,
             plan: None,
             questions: Vec::new(),
+            approvals: Vec::new(),
         }
     }
 
@@ -117,7 +120,8 @@ impl ThreadView {
             N::TurnPlanUpdated(e) => self.plan = Some(e.body.clone()),
             N::ThreadTokenUsageUpdated(e) => self.token_usage = Some(e.body),
             N::ServerRequestResolved(e) => {
-                self.questions.retain(|(id, _)| *id != e.body.request_id)
+                self.questions.retain(|(id, _)| *id != e.body.request_id);
+                self.approvals.retain(|(id, _)| *id != e.body.request_id);
             }
             N::ThreadStarted(_)
             | N::CatalogChanged(_)
@@ -154,9 +158,16 @@ impl ThreadView {
         }
     }
 
+    /// An approval request from the server for this thread (like a question, not an event).
+    pub fn ask_approval(&mut self, id: fv_protocol::RequestId, request: ApprovalRequestParams) {
+        if request.thread_id == self.thread.id && !self.approvals.iter().any(|(i, _)| *i == id) {
+            self.approvals.push((id, request));
+        }
+    }
+
     /// Whether the last turn is still producing something the user is waiting on.
     pub fn is_waiting_on_user(&self) -> bool {
-        !self.questions.is_empty()
+        !self.questions.is_empty() || !self.approvals.is_empty()
     }
 }
 

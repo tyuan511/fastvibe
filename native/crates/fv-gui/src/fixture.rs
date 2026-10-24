@@ -217,6 +217,58 @@ pub fn theme_conversation() -> Fixture {
     }
 }
 
+/// The conversation with a command waiting for the user's say-so.
+pub fn approval() -> Fixture {
+    let mut f = theme_conversation();
+    if let Some(view) = &mut f.view {
+        view.approvals.push((
+            fv_protocol::RequestId::String("approval-1".into()),
+            ApprovalRequestParams {
+                thread_id: view.thread.id.clone(),
+                turn_id: "turn-2".into(),
+                call_id: "t7".into(),
+                kind: ApprovalKind::Command {
+                    command: "pnpm install --frozen-lockfile".into(),
+                    cwd: Some("/Users/dev/FastVibe/fastvibe".into()),
+                },
+                reason: Some("安装依赖需要访问网络，沙箱里不允许。要在沙箱外运行吗？".into()),
+            },
+        ));
+    }
+    f
+}
+
+/// The conversation with a question put to the user.
+pub fn question() -> Fixture {
+    let mut f = theme_conversation();
+    if let Some(view) = &mut f.view {
+        let opt = |l: &str, d: &str| QuestionOption {
+            label: l.into(),
+            description: d.into(),
+        };
+        view.questions.push((
+            fv_protocol::RequestId::String("question-1".into()),
+            UserInputRequest {
+                thread_id: view.thread.id.clone(),
+                turn_id: "turn-2".into(),
+                call_id: "q1".into(),
+                questions: vec![Question {
+                    id: "scope".into(),
+                    header: "范围".into(),
+                    question: "要改多大范围？".into(),
+                    options: vec![
+                        opt("只改这个文件", "改动最小"),
+                        opt("整个模块", "更大的重构"),
+                        opt("先出方案", "不动代码，先讨论"),
+                    ],
+                    is_other: true,
+                }],
+            },
+        ));
+    }
+    f
+}
+
 /// The empty page of a new conversation, with the same sidebar.
 pub fn new_chat() -> Fixture {
     let mut f = theme_conversation();

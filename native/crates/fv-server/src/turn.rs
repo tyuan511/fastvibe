@@ -158,6 +158,92 @@ fn persist(state: &ServerState, thread_id: &str, event: &AgentEvent) {
 
 /// What a turn of this thread runs with: its own model (or the default), the working directory
 /// it tells the model about, the deferred tools it has found, and a way to ask the user.
+/// What the model is told about its sandbox, so it plans within it and knows how to ask.
+fn permissions_prompt(p: &fv_agent::Permissions) -> String {
+    use fv_agent::{ApprovalPolicy, SandboxMode};
+    let mut out = String::from("Filesystem sandboxing and approvals:\n");
+    match p.policy.mode {
+        SandboxMode::ReadOnly => out.push_str(
+            "Commands run in a read-only sandbox: they can read files anywhere but cannot write any. apply_patch is blocked the same way.\n",
+        ),
+        SandboxMode::WorkspaceWrite => {
+            out.push_str("Commands run in a sandbox that lets them read files anywhere but write only inside these folders (and `.git` and `.fastvibe` inside them stay read-only):\n");
+            for root in &p.policy.writable_roots {
+                out.push_str(&format!("- {}\n", root.display()));
+            }
+            out.push_str(if p.policy.network {
+                "Network access from commands is enabled.\n"
+            } else {
+                "Network access from commands is blocked.\n"
+            });
+        }
+        SandboxMode::DangerFullAccess => out.push_str(
+            "Commands run with full access to the machine: there is no sandbox.\n",
+        ),
+    }
+    if p.policy.mode != SandboxMode::DangerFullAccess {
+        out.push_str(match p.approval {
+            ApprovalPolicy::OnRequest => "Approval policy is on-request. A command that has to leave the sandbox (to write elsewhere or use the network) needs `sandbox_permissions: \"require_escalated\"` with a short `justification`; the user is then asked. Do not ask for it unless the command needs it.\n",
+            ApprovalPolicy::OnFailure => "Approval policy is on-failure. Commands run in the sandbox; if one is blocked by it, the user is asked whether to run it again outside.\n",
+            ApprovalPolicy::Untrusted => "Approval policy is untrusted. Commands that are not plain reads (ls, cat, git status…) ask the user first, and so does every patch.\n",
+            ApprovalPolicy::Never => "Approval policy is never. You cannot ask to leave the sandbox: work within it, and tell the user when something needs more.\n",
+        });
+    }
+    out
+}
+
+/// The sandbox and approval rules for a turn: the user's settings, applied to the folders the
+/// conversation works in (its own, and its project's) and the temporary directories.
+fn permissions_for(
+    state: &Arc<ServerState>,
+    rt: &Arc<ThreadRuntime>,
+    thread: Option<&fv_protocol::types::Thread>,
+    thread_id: &str,
+    turn_id: &str,
+    withdrawn: &mpsc::UnboundedSender<fv_protocol::RequestId>,
+) -> Arc<fv_agent::Permissions> {
+    use fv_protocol::types as wire;
+    let settings = crate::settings::read(state).unwrap_or_default();
+    let mut folders: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(t) = thread {
+        folders.extend(t.cwd.iter().map(std::path::PathBuf::from));
+        if let Some(project) = t
+            .project
+            .as_deref()
+            .and_then(|p| crate::projects::of_thread(state, p))
+        {
+            folders.push(project.path.into());
+            folders.extend(project.folders.into_iter().map(std::path::PathBuf::from));
+        }
+    }
+    let mode = match settings.sandbox_mode {
+        wire::SandboxMode::ReadOnly => fv_agent::SandboxMode::ReadOnly,
+        wire::SandboxMode::WorkspaceWrite => fv_agent::SandboxMode::WorkspaceWrite,
+        wire::SandboxMode::DangerFullAccess => fv_agent::SandboxMode::DangerFullAccess,
+    };
+    let approval = match settings.approval_policy {
+        wire::ApprovalPolicy::Untrusted => fv_agent::ApprovalPolicy::Untrusted,
+        wire::ApprovalPolicy::OnFailure => fv_agent::ApprovalPolicy::OnFailure,
+        wire::ApprovalPolicy::OnRequest => fv_agent::ApprovalPolicy::OnRequest,
+        wire::ApprovalPolicy::Never => fv_agent::ApprovalPolicy::Never,
+    };
+    Arc::new(fv_agent::Permissions {
+        policy: fv_agent::Policy {
+            mode,
+            writable_roots: fv_sandbox::default_writable_roots(&folders),
+            network: settings.sandbox_network,
+        },
+        approval,
+        approver: Some(Arc::new(crate::prompt::ThreadApprover {
+            state: state.clone(),
+            rt: rt.clone(),
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            withdrawn: withdrawn.clone(),
+        })),
+    })
+}
+
 fn build_context(
     state: &Arc<ServerState>,
     rt: &Arc<ThreadRuntime>,
@@ -189,14 +275,16 @@ fn build_context(
         })
         .map(|text| format!("\n\n{text}"))
         .unwrap_or_default();
+    let permissions = permissions_for(state, rt, thread.as_ref(), thread_id, turn_id, &withdrawn);
     AgentContext {
         model,
-        // The base instructions, the project's folders, then whatever the server was
-        // configured to add.
+        // The base instructions, the project's folders, what the sandbox allows, then whatever
+        // the server was configured to add.
         system: format!(
-            "{}{}{}",
+            "{}{}\n\n{}{}",
             base_instructions(cwd.as_deref()),
             folders,
+            permissions_prompt(&permissions),
             state.agent.system
         ),
         cwd,
@@ -208,6 +296,7 @@ fn build_context(
             turn_id: turn_id.to_string(),
             withdrawn,
         })),
+        permissions: Some(permissions),
         ..state.agent.clone()
     }
 }

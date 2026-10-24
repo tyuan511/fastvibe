@@ -21,6 +21,8 @@ struct Inner {
     running: Option<(TurnId, CancellationToken)>,
     /// Deferred tools found with `tool_search`; they stay offered for the rest of the thread.
     loaded: fv_agent::LoadedTools,
+    /// Commands and patches the user approved "for the rest of this conversation".
+    approved: HashSet<String>,
 }
 
 /// Everything about one thread that exists only while the server runs: its subscribers, the
@@ -41,8 +43,18 @@ impl ThreadRuntime {
                 subscribers: HashSet::new(),
                 running: None,
                 loaded: Default::default(),
+                approved: HashSet::new(),
             }),
         }
+    }
+
+    /// Whether the user already said yes to this for the rest of the conversation.
+    pub fn is_approved(&self, key: &str) -> bool {
+        self.inner.lock().unwrap().approved.contains(key)
+    }
+
+    pub fn approve_for_session(&self, key: String) {
+        self.inner.lock().unwrap().approved.insert(key);
     }
 
     /// A runtime for a thread that already has a transcript.
@@ -54,6 +66,7 @@ impl ThreadRuntime {
                 subscribers: HashSet::new(),
                 running: None,
                 loaded: Default::default(),
+                approved: HashSet::new(),
             }),
         }
     }

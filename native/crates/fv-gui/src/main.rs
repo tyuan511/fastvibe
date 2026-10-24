@@ -138,6 +138,22 @@ fn main() {
                                 cx,
                             );
                         }
+                        Some("approval") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::approval(),
+                                window,
+                                cx,
+                            );
+                        }
+                        Some("question") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::question(),
+                                window,
+                                cx,
+                            );
+                        }
                         Some("new") => {
                             return Workspace::fixture(
                                 palette,
@@ -146,7 +162,9 @@ fn main() {
                                 cx,
                             );
                         }
-                        Some(other) => panic!("unknown fixture {other} (theme, new)"),
+                        Some(other) => {
+                            panic!("unknown fixture {other} (theme, approval, question, new)")
+                        }
                         None => {}
                     }
                     let mut ws = Workspace::new(palette, data_dir, server_bin, window, cx);

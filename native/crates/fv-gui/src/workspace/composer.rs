@@ -128,6 +128,18 @@ impl Workspace {
         // Only a conversation that does not exist yet can still choose where it runs.
         let project_row = self.selected.is_none().then(|| self.project_chip(cx));
         let send_error = self.send_error.clone();
+        // A question stands above the composer; a command to allow covers it.
+        let (covered, panel) = match self.pending() {
+            Some(super::ask::Pending::Approval(id, a)) => {
+                (true, Some(self.approval_panel(id, a, cx)))
+            }
+            Some(super::ask::Pending::Question(id, q)) => {
+                (false, Some(self.question_panel(id, q, cx)))
+            }
+            None => (false, None),
+        };
+        let access = self.access_button(cx);
+        let access_menu = self.access_menu.then(|| self.access_menu_view(cx));
 
         div()
             .w_full()
@@ -150,7 +162,13 @@ impl Workspace {
                     .text_color(p.c(Token::Destructive))
                     .child(SharedString::from(e))
             }))
-            .child(
+            .children(panel.map(|panel| {
+                div()
+                    .mb(px(8.0))
+                    .when(covered, |d| d.mb(px(0.0)))
+                    .child(panel)
+            }))
+            .children((!covered).then(|| {
                 div()
                     .relative()
                     .rounded(px(22.0))
@@ -191,13 +209,15 @@ impl Workspace {
                             .items_center()
                             .gap(px(4.0))
                             .child(crate::ui::icon_button("attach", "attachment", p).rounded_full())
+                            .child(access)
                             .child(div().flex_1())
                             .children(context_ring)
                             .child(chip)
                             .child(send),
                     )
-                    .children(menu.map(crate::ui::float)),
-            )
+                    .children(menu.map(crate::ui::float))
+                    .children(access_menu.map(crate::ui::float))
+            }))
     }
 
     fn model_menu(&self, cx: &mut Context<Self>) -> Div {

@@ -235,7 +235,9 @@ async fn a_question_stops_the_turn_until_the_client_answers() {
         .unwrap();
 
     // The question arrives as a request, and the turn is still running while it waits.
-    let ServerRequest::UserInput { id, params } = recv(&mut p.requests).await;
+    let ServerRequest::UserInput { id, params } = recv(&mut p.requests).await else {
+        panic!("expected a question")
+    };
     assert_eq!(params.thread_id, thread);
     assert_eq!(params.call_id, "q1");
     assert_eq!(params.questions[0].id, "scope");

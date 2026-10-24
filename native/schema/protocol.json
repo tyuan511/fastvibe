@@ -56,6 +56,17 @@
       "AppSettingsPatch": {
         "description": "`settings/set`: the fields to change; the rest stay.",
         "properties": {
+          "approvalPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApprovalPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "darkTheme": {
             "default": null,
             "type": [
@@ -77,6 +88,24 @@
               "null"
             ]
           },
+          "sandboxMode": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SandboxMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "sandboxNetwork": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "themeMode": {
             "anyOf": [
               {
@@ -90,6 +119,31 @@
           }
         },
         "type": "object"
+      },
+      "ApprovalPolicy": {
+        "description": "When the user is asked before something runs.",
+        "oneOf": [
+          {
+            "const": "untrusted",
+            "description": "Ask before anything that is not known to be read-only.",
+            "type": "string"
+          },
+          {
+            "const": "onFailure",
+            "description": "Run in the sandbox; ask only to run again outside it after it was in the way.",
+            "type": "string"
+          },
+          {
+            "const": "onRequest",
+            "description": "Run in the sandbox; the model asks when it needs to leave it.",
+            "type": "string"
+          },
+          {
+            "const": "never",
+            "description": "Never ask.",
+            "type": "string"
+          }
+        ]
       },
       "ClientCapabilities": {
         "properties": {
@@ -401,6 +455,26 @@
             "type": "integer"
           },
           {
+            "type": "string"
+          }
+        ]
+      },
+      "SandboxMode": {
+        "description": "How much of the machine a command may touch.",
+        "oneOf": [
+          {
+            "const": "readOnly",
+            "description": "Read anything, write nothing.",
+            "type": "string"
+          },
+          {
+            "const": "workspaceWrite",
+            "description": "Read anything; write in the project's folders and the temporary directories.",
+            "type": "string"
+          },
+          {
+            "const": "dangerFullAccess",
+            "description": "No sandbox.",
             "type": "string"
           }
         ]
@@ -1172,6 +1246,11 @@
       "AppSettings": {
         "description": "What every client of this server shares about how the app looks. Ids name themes from the\nclients' own catalog; one a client does not know falls back to its default.",
         "properties": {
+          "approvalPolicy": {
+            "$ref": "#/$defs/ApprovalPolicy",
+            "default": "onRequest",
+            "description": "When the user is asked before something runs (codex's `approval_policy`)."
+          },
           "darkTheme": {
             "type": "string"
           },
@@ -1181,6 +1260,16 @@
           },
           "lightTheme": {
             "type": "string"
+          },
+          "sandboxMode": {
+            "$ref": "#/$defs/SandboxMode",
+            "default": "workspaceWrite",
+            "description": "How much of the machine a command may touch (codex's `sandbox_mode`)."
+          },
+          "sandboxNetwork": {
+            "default": false,
+            "description": "Whether sandboxed commands may use the network.",
+            "type": "boolean"
           },
           "themeMode": {
             "$ref": "#/$defs/ThemeMode"
@@ -1193,6 +1282,31 @@
           "glass"
         ],
         "type": "object"
+      },
+      "ApprovalPolicy": {
+        "description": "When the user is asked before something runs.",
+        "oneOf": [
+          {
+            "const": "untrusted",
+            "description": "Ask before anything that is not known to be read-only.",
+            "type": "string"
+          },
+          {
+            "const": "onFailure",
+            "description": "Run in the sandbox; ask only to run again outside it after it was in the way.",
+            "type": "string"
+          },
+          {
+            "const": "onRequest",
+            "description": "Run in the sandbox; the model asks when it needs to leave it.",
+            "type": "string"
+          },
+          {
+            "const": "never",
+            "description": "Never ask.",
+            "type": "string"
+          }
+        ]
       },
       "CatalogChanged": {
         "type": "object"
@@ -1363,6 +1477,26 @@
             "type": "integer"
           },
           {
+            "type": "string"
+          }
+        ]
+      },
+      "SandboxMode": {
+        "description": "How much of the machine a command may touch.",
+        "oneOf": [
+          {
+            "const": "readOnly",
+            "description": "Read anything, write nothing.",
+            "type": "string"
+          },
+          {
+            "const": "workspaceWrite",
+            "description": "Read anything; write in the project's folders and the temporary directories.",
+            "type": "string"
+          },
+          {
+            "const": "dangerFullAccess",
+            "description": "No sandbox.",
             "type": "string"
           }
         ]
@@ -1976,6 +2110,83 @@
   },
   "serverRequest": {
     "$defs": {
+      "ApprovalKind": {
+        "description": "What the agent wants to do that needs the user's say-so.",
+        "oneOf": [
+          {
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "command",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "command"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "files": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "const": "patch",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "files"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ApprovalRequestParams": {
+        "description": "`item/approval/request`: the agent is stopped until the user answers.",
+        "properties": {
+          "callId": {
+            "description": "The tool call it is for.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ApprovalKind"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "turnId",
+          "callId",
+          "kind"
+        ],
+        "type": "object"
+      },
       "Question": {
         "properties": {
           "header": {
@@ -2079,6 +2290,27 @@
           },
           "params": {
             "$ref": "#/$defs/UserInputRequest"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "A command or patch that needs the user's say-so; answered with an [`ApprovalResponse`].",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "item/approval/request",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ApprovalRequestParams"
           }
         },
         "required": [

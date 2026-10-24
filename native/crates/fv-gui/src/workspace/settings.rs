@@ -158,6 +158,8 @@ pub enum ThemeMenu {
     Mode,
     Light,
     Dark,
+    Sandbox,
+    Approval,
 }
 
 pub struct SettingsState {
@@ -960,7 +962,209 @@ impl Workspace {
     }
 
     /// 偏好设置 → 外观: mode, the two themes, and the translucent window.
+    /// 偏好设置: how the app looks, then what commands may do.
     fn general_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(24.0))
+            .child(self.appearance_section(s, cx))
+            .child(self.sandbox_section(s, cx))
+    }
+
+    /// 沙箱与审批: codex's sandbox modes and approval policies, and whether the network is open.
+    fn sandbox_section(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = &self.palette;
+        let a = &self.app_settings;
+        let hover = p.c(Token::Accent);
+        let modes: [(SandboxMode, &str); 3] = [
+            (SandboxMode::ReadOnly, "只读"),
+            (SandboxMode::WorkspaceWrite, "工作区可写"),
+            (SandboxMode::DangerFullAccess, "完全访问"),
+        ];
+        let policies: [(ApprovalPolicy, &str); 4] = [
+            (ApprovalPolicy::OnRequest, "按需询问"),
+            (ApprovalPolicy::OnFailure, "失败后询问"),
+            (ApprovalPolicy::Untrusted, "不受信任时询问"),
+            (ApprovalPolicy::Never, "从不询问"),
+        ];
+        let label_of = |m: SandboxMode| {
+            modes
+                .iter()
+                .find(|(x, _)| *x == m)
+                .map(|(_, l)| *l)
+                .unwrap_or("")
+        };
+        let policy_label = |m: ApprovalPolicy| {
+            policies
+                .iter()
+                .find(|(x, _)| *x == m)
+                .map(|(_, l)| *l)
+                .unwrap_or("")
+        };
+        let button = |id: &'static str, which: ThemeMenu, text: &str, cx: &mut Context<Self>| {
+            outline_button(id, p)
+                .w(px(172.0))
+                .h(px(36.0))
+                .justify_between()
+                .rounded(px(10.0))
+                .font_weight(FontWeight::NORMAL)
+                .text_size(px(TEXT_SM))
+                .child(SharedString::from(text.to_string()))
+                .child(icon("unfold-more", 14.0, p.c(Token::MutedForeground)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.theme_menu = if s.theme_menu == Some(which) {
+                            None
+                        } else {
+                            Some(which)
+                        };
+                    }
+                    cx.notify();
+                }))
+        };
+        let mut mode_menu = popover(p)
+            .absolute()
+            .top(px(40.0))
+            .right(px(0.0))
+            .w(px(172.0));
+        for (m, label) in modes {
+            mode_menu = mode_menu.child(
+                menu_item(
+                    SharedString::from(format!("sandbox-{m:?}")),
+                    a.sandbox_mode == m,
+                    hover,
+                )
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.theme_menu = None;
+                    }
+                    this.patch_settings(
+                        AppSettingsPatch {
+                            sandbox_mode: Some(m),
+                            ..Default::default()
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+        let mut policy_menu = popover(p)
+            .absolute()
+            .top(px(40.0))
+            .right(px(0.0))
+            .w(px(172.0));
+        for (m, label) in policies {
+            policy_menu = policy_menu.child(
+                menu_item(
+                    SharedString::from(format!("approval-{m:?}")),
+                    a.approval_policy == m,
+                    hover,
+                )
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.theme_menu = None;
+                    }
+                    this.patch_settings(
+                        AppSettingsPatch {
+                            approval_policy: Some(m),
+                            ..Default::default()
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+        let mode_btn = button(
+            "sandbox-mode",
+            ThemeMenu::Sandbox,
+            label_of(a.sandbox_mode),
+            cx,
+        );
+        let policy_btn = button(
+            "approval-policy",
+            ThemeMenu::Approval,
+            policy_label(a.approval_policy),
+            cx,
+        );
+        let network = a.sandbox_network;
+        let network_usable = a.sandbox_mode == SandboxMode::WorkspaceWrite;
+        let mode_note = match a.sandbox_mode {
+            SandboxMode::ReadOnly => "命令只能读，不能写任何文件",
+            SandboxMode::WorkspaceWrite => "命令可读任何位置，只能写项目文件夹和临时目录",
+            SandboxMode::DangerFullAccess => "命令不受任何限制，请只在信任的环境里使用",
+        };
+        let policy_note = match a.approval_policy {
+            ApprovalPolicy::OnRequest => "命令在沙箱里直接运行；需要离开沙箱时由模型来问你",
+            ApprovalPolicy::OnFailure => "命令在沙箱里直接运行；被沙箱挡住后问你是否不用沙箱重试",
+            ApprovalPolicy::Untrusted => "除了已知只读的命令，其余都先问你",
+            ApprovalPolicy::Never => "从不询问：沙箱挡住的就是挡住了",
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .pl(px(4.0))
+                    .text_size(px(TEXT_SM))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("沙箱与审批"),
+            )
+            .child(
+                card(p)
+                    .child(setting_row(
+                        "沙箱模式",
+                        mode_note,
+                        false,
+                        p,
+                        div()
+                            .relative()
+                            .child(mode_btn)
+                            .when(s.theme_menu == Some(ThemeMenu::Sandbox), |d| {
+                                d.child(ui::float(mode_menu))
+                            }),
+                    ))
+                    .child(setting_row(
+                        "审批策略",
+                        policy_note,
+                        true,
+                        p,
+                        div()
+                            .relative()
+                            .child(policy_btn)
+                            .when(s.theme_menu == Some(ThemeMenu::Approval), |d| {
+                                d.child(ui::float(policy_menu))
+                            }),
+                    ))
+                    .child(setting_row(
+                        "允许联网",
+                        if network_usable {
+                            "沙箱里的命令可以访问网络"
+                        } else {
+                            "只在「工作区可写」下有效；完全访问本来就不限网络，只读不开放"
+                        },
+                        true,
+                        p,
+                        switch(SharedString::from("sandbox-network"), network, p)
+                            .opacity(if network_usable { 1.0 } else { 0.5 })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.patch_settings(
+                                    AppSettingsPatch {
+                                        sandbox_network: Some(!network),
+                                        ..Default::default()
+                                    },
+                                    cx,
+                                )
+                            })),
+                    )),
+            )
+    }
+
+    /// 外观: mode, the two themes, and the translucent window.
+    fn appearance_section(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
         let a = &self.app_settings;
         let hover = p.c(Token::Accent);

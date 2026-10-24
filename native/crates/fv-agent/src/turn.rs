@@ -24,6 +24,8 @@ pub struct AgentContext {
     pub ui: Option<Arc<dyn crate::UserInput>>,
     /// The deferred tools this conversation has loaded (see `tool_search`).
     pub loaded: crate::LoadedTools,
+    /// The sandbox and approval rules of this turn; absent means no limits.
+    pub permissions: Option<Arc<crate::Permissions>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -376,6 +378,7 @@ async fn execute_calls(
         let cancel = cancel.clone();
         let cwd = ctx.cwd.clone();
         let ui = ctx.ui.clone();
+        let permissions = ctx.permissions.clone();
         let vision = ctx.model.supports_images();
         let registry = ctx.tools.clone();
         let loaded = ctx.loaded.clone();
@@ -389,6 +392,7 @@ async fn execute_calls(
                         cwd,
                         call_id: call_id.clone(),
                         ui,
+                        permissions,
                         vision,
                         registry,
                         loaded,

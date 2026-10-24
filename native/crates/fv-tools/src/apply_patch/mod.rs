@@ -8,7 +8,9 @@ mod plan;
 mod seek_sequence;
 
 use futures_util::future::BoxFuture;
-use fv_agent::{Tool, ToolCtx, ToolOutput, ToolSpec};
+use fv_agent::{
+    ApprovalKind, ApprovalPolicy, ApprovalRequest, Decision, Tool, ToolCtx, ToolOutput, ToolSpec,
+};
 use serde_json::{Value, json};
 
 pub(crate) use parser::Hunk;
@@ -75,10 +77,57 @@ impl Tool for ApplyPatchTool {
             };
             // File work is blocking and a patch can touch many files.
             let cwd = ctx.cwd.clone();
-            let applied = tokio::task::spawn_blocking(move || {
-                plan::plan(&args.hunks, cwd.as_deref()).and_then(plan::Plan::apply)
-            })
-            .await;
+            let permissions = ctx.permissions.clone();
+            let call_id = ctx.call_id.clone();
+            let applied =
+                tokio::task::spawn_blocking(move || plan::plan(&args.hunks, cwd.as_deref())).await;
+            let planned = match applied {
+                Ok(Ok(planned)) => planned,
+                Ok(Err(e)) => return ToolOutput::err(e),
+                Err(e) => return ToolOutput::err(format!("apply_patch failed: {e}")),
+            };
+            // A patch writes files itself, outside any sandbox, so the sandbox's rule is
+            // checked here: what a command could not write, a patch may not either, unless the
+            // user says so.
+            if let Some(perms) = permissions {
+                let paths = planned.paths();
+                let blocked: Vec<String> = paths
+                    .iter()
+                    .filter(|p| !perms.policy.can_write(p))
+                    .map(|p| p.display().to_string())
+                    .collect();
+                let ask_for = if perms.approval == ApprovalPolicy::Untrusted {
+                    paths.iter().map(|p| p.display().to_string()).collect()
+                } else {
+                    blocked.clone()
+                };
+                if !ask_for.is_empty() {
+                    if perms.approval == ApprovalPolicy::Never {
+                        return ToolOutput::err(format!(
+                            "The sandbox does not allow writing {}. Nothing was changed.",
+                            blocked.join(", ")
+                        ));
+                    }
+                    let reason = if blocked.is_empty() {
+                        None
+                    } else {
+                        Some("The patch writes outside the folders the sandbox allows.".to_string())
+                    };
+                    let asked = perms
+                        .ask(ApprovalRequest {
+                            call_id,
+                            kind: ApprovalKind::Patch { files: ask_for },
+                            reason,
+                        })
+                        .await;
+                    if asked == Decision::Denied {
+                        return ToolOutput::err(
+                            "The user did not allow this patch. Nothing was changed.",
+                        );
+                    }
+                }
+            }
+            let applied = tokio::task::spawn_blocking(move || planned.apply()).await;
             match applied {
                 Ok(Ok(summary)) => ToolOutput::ok(summary),
                 Ok(Err(e)) => ToolOutput::err(e),

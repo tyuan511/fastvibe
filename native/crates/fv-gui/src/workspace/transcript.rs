@@ -1,6 +1,5 @@
 //! The conversation column, after `App.tsx`'s header, `message-list.tsx` and `message-row.tsx`.
 
-use fv_protocol::RequestId;
 use fv_protocol::types::*;
 use fv_theme::Token;
 use gpui_kit::component::text::TextView;
@@ -286,9 +285,6 @@ impl Workspace {
                 for (i, turn) in view.turns.iter().enumerate() {
                     let running = view.running && i == last;
                     body = body.children(self.turn(turn, running, cx));
-                }
-                for (id, q) in &view.questions {
-                    body = body.child(self.question(id.clone(), q, cx));
                 }
             }
         }
@@ -805,77 +801,6 @@ impl Workspace {
                     ),
             )
             .child(rows)
-    }
-
-    pub(super) fn question(
-        &self,
-        request: RequestId,
-        q: &UserInputRequest,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let p = &self.palette;
-        let total = q.questions.len();
-        let blocks = q.questions.iter().map(|question| {
-            let chosen = self
-                .answers
-                .get(&request)
-                .and_then(|a| a.get(&question.id))
-                .and_then(|a| a.answers.first().cloned());
-            let buttons = question.options.iter().map(|opt| {
-                let request = request.clone();
-                let qid = question.id.clone();
-                let label = opt.label.clone();
-                let on = chosen.as_deref() == Some(opt.label.as_str());
-                div()
-                    .id(SharedString::from(format!("q-{request:?}-{qid}-{label}")))
-                    .h(px(28.0))
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .rounded(px(8.0))
-                    .border_1()
-                    .border_color(p.c(Token::Border))
-                    .cursor_pointer()
-                    .text_size(px(TEXT_SM))
-                    .when(on, |d| {
-                        d.bg(p.c(Token::Primary))
-                            .text_color(p.c(Token::PrimaryForeground))
-                    })
-                    .child(SharedString::from(opt.label.clone()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.answer(request.clone(), total, qid.clone(), label.clone(), cx)
-                    }))
-            });
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_size(px(TEXT_XS))
-                        .muted(p)
-                        .child(SharedString::from(question.header.clone())),
-                )
-                .child(
-                    div()
-                        .text_size(px(TEXT_SM))
-                        .child(SharedString::from(question.question.clone())),
-                )
-                .child(div().flex().gap(px(6.0)).flex_wrap().children(buttons))
-        });
-        div()
-            .w_full()
-            .max_w(px(REPLY_MAX))
-            .p(px(14.0))
-            .rounded(px(14.0))
-            .border_1()
-            .border_color(p.c(Token::Border))
-            .bg(p.c(Token::Card))
-            .flex()
-            .flex_col()
-            .gap(px(14.0))
-            .children(blocks)
-            .into_any_element()
     }
 }
 

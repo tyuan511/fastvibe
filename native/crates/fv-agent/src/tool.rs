@@ -62,6 +62,8 @@ pub struct ToolCtx {
     pub call_id: String,
     /// Present when a client is there to answer questions.
     pub ui: Option<Arc<dyn UserInput>>,
+    /// What the tools may do, and how to ask when they may not; absent means no limits.
+    pub permissions: Option<Arc<crate::Permissions>>,
     /// Whether the model can look at images.
     pub vision: bool,
     /// Every tool, for one (`tool_search`) that has to look at the others.
@@ -78,6 +80,7 @@ impl ToolCtx {
             cwd,
             call_id: String::new(),
             ui: None,
+            permissions: None,
             vision: true,
             registry: Arc::new(ToolRegistry::new()),
             loaded: LoadedTools::default(),

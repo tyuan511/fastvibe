@@ -2123,6 +2123,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "fv-core",
+ "fv-sandbox",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -2206,6 +2207,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fv-sandbox"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "fv-server"
 version = "0.1.0"
 dependencies = [
@@ -2215,6 +2224,7 @@ dependencies = [
  "fv-core",
  "fv-protocol",
  "fv-provider",
+ "fv-sandbox",
  "fv-store",
  "fv-tools",
  "image",
@@ -2256,6 +2266,7 @@ dependencies = [
  "futures-util",
  "fv-agent",
  "fv-core",
+ "fv-sandbox",
  "image",
  "libc",
  "serde",
@@ -8958,6 +8969,9 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "fv-daemon",
+]
 
 [[package]]
 name = "y4m"
