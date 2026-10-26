@@ -132,3 +132,45 @@ no extensions, so they have no memory.
   as skills in the skill list.
 - **Scope**: one store for the whole machine, like Codex's; the handbook records which cwd each
   entry applies to.
+
+## Native implementation (`native/`, Rust + GPUI)
+
+The native server owns the same two phases and opt-in read path. Its configured native data
+folder contains `memories/`; `memory.config.v1` and `memory.ledger.v1` are SQLite settings rows,
+including stage-one results, retry/usage records and the last successful file baseline. Native
+memory does not auto-import the Electron data folder; complete legacy import is tracked in
+`native-completion.md`.
+
+The four templates above are embedded with `include_str!`, retaining their existing NOTICE.
+Consolidation uses a throwaway `fv-agent` session and one private `memory_workspace` tool over a
+bounded in-memory tree. It can list, read with line numbers, search, write, replace or delete
+memory artifacts. It has no shell, external files, network, extensions or live memory context;
+raw notes and rollout summaries are read-only. The ordinary conversation tool registry gains
+no legacy file tools. A ten-minute cap applies to consolidation, five minutes to extraction,
+and twenty minutes to a complete pass.
+
+A valid tree is staged on disk and published with a folder rename. The old folder is kept
+until replacement succeeds; failure never advances the baseline. Transaction markers allow
+startup to restore an original folder after an interrupted swap; clearing also removes owned
+staging leftovers without deleting unmarked folders. A manual file edit during a
+pass aborts publication so the next pass incorporates it. Symbolic links and special files are
+rejected rather than followed. Config/clear generations, cancelled jobs and snapshot versions
+prevent stale output or stale reads from becoming current after disabling or clearing memory.
+The enable-delay trigger is invalidated by a later clear or explicit pass.
+
+`fv-core::Message::MemoryContext` stores hidden map snapshots independently of authored user
+messages. `fv-agent::MemorySource` deduplicates unchanged snapshots, appends changes and
+reinjects after compaction. Disabling memory filters snapshots from requests while preserving
+the original transcript. Compaction never treats a hidden map as user evidence. Citation
+parsing/stripping is shared by storage, server and GUI, so citations contribute usage signals
+without appearing in rendered replies or search results.
+
+Native methods are `memory/read`, `memory/configure` (a full `{ enabled, model }` config),
+`memory/run`, and `memory/clear`, with `memory/changed` carrying a revisioned state.
+`memory/run` starts one background pass and returns promptly. Settings expose the switch,
+model choice, counters/status/errors, run, folder reveal and confirmed clear. Remote calls use
+the same table and are explicitly allowed by policy.
+
+Bulk file preparation, verification and cleanup run on a blocking worker outside the shared
+state lock. Cancellation drains private disk work before clear returns; only the final folder
+swap, cache update and ledger commit share the publication lock.

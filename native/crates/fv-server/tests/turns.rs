@@ -15,6 +15,8 @@ use fv_server::{ServerState, UnixServer};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+mod common;
+
 type Notes = UnboundedReceiver<ServerNotification>;
 
 struct Echo;
@@ -58,8 +60,14 @@ async fn start(model: Option<ScriptedModel>) -> Harness {
         ui: None,
         loaded: Default::default(),
         permissions: None,
+        steer: None,
+        memory: None,
+        budget: Default::default(),
     };
     let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
+    // The script is what these tests pin, so 回复推荐's side request (which runs on the same model)
+    // is off; it is tested on its own.
+    common::disable_reply_suggestions(&state);
     let sock = dir.path().join("s.sock");
     tokio::spawn(UnixServer::bind(state, &sock).await.unwrap().run());
     Harness {
@@ -171,8 +179,9 @@ async fn a_turn_streams_its_items_in_order_with_contiguous_sequence_numbers() {
         [
             "thread/status/changed", // running
             "turn/started",
-            "item/completed", // the user's message
-            "item/started",   // reasoning
+            "item/completed",       // the user's message
+            "thread/stats/updated", // reset the current turn's usage
+            "item/started",         // reasoning
             "item/reasoning/delta",
             "item/completed",
             "item/started", // answer
@@ -181,7 +190,11 @@ async fn a_turn_streams_its_items_in_order_with_contiguous_sequence_numbers() {
             "item/agentMessage/delta",
             "item/completed",
             "thread/tokenUsage/updated", // how full the window is after that request
+            "thread/stats/updated",      // the persisted request's usage and duration
             "turn/completed",
+            // The queue, announced as empty: what was behind this turn (nothing) is answered
+            // before the thread is reported idle.
+            "thread/queue/changed",
             "thread/status/changed", // idle, strictly after the completion
         ]
     );

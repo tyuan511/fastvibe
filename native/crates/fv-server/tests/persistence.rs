@@ -61,6 +61,9 @@ async fn run(dir: &Path, name: &str, model: ScriptedModel) -> Run {
         ui: None,
         loaded: Default::default(),
         permissions: None,
+        steer: None,
+        memory: None,
+        budget: Default::default(),
     };
     let state = Arc::new(ServerState::new(dir.to_path_buf(), agent).unwrap());
     let sock = dir.join(format!("{name}.sock"));
@@ -245,11 +248,13 @@ async fn messages_reach_the_disk_as_they_are_written_not_when_the_turn_ends() {
     // reply is not (it is not a message yet).
     let file = dir.path().join("sessions").join(format!("{thread}.jsonl"));
     let during = std::fs::read_to_string(&file).unwrap();
-    assert_eq!(
-        during.lines().count(),
-        2,
-        "header and the user's message: {during}"
-    );
+    let records: Vec<serde_json::Value> = during
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(records.iter().filter(|r| r["type"] == "message").count(), 1);
+    assert!(records.iter().any(|r| r["type"] == "turnStarted"));
+    assert!(!records.iter().any(|r| r["type"] == "turnCompleted"));
     assert!(during.contains("\"start\"") && !during.contains("half an answer"));
 
     // Stopped, the reply as far as it got is kept.
@@ -260,7 +265,14 @@ async fn messages_reach_the_disk_as_they_are_written_not_when_the_turn_ends() {
     .unwrap();
     until(&mut notes, idle).await;
     let after = std::fs::read_to_string(&file).unwrap();
-    assert_eq!(after.lines().count(), 3);
+    let records: Vec<serde_json::Value> = after
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(records.iter().filter(|r| r["type"] == "message").count(), 2);
+    assert!(records.iter().any(|r| r["type"] == "turnCompleted"
+        && r["status"] == "interrupted"
+        && r["error"].is_null()));
     assert!(after.contains("half an answer"));
 }
 

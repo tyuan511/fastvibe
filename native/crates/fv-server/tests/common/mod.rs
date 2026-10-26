@@ -148,3 +148,22 @@ pub async fn serve(replies: Vec<Reply>) -> Mock {
     });
     Mock { url, captured }
 }
+
+/// Turn 回复推荐 off on a server a test just built.
+///
+/// The side request runs on the conversation's own model — deliberately, since a guess through a
+/// different provider than the one the user just proved works fails on its own — but that means a
+/// scripted model would have one of its replies spent on the placeholder. Tests that pin a script
+/// call this; the placeholder itself is tested against its own model.
+pub fn disable_reply_suggestions(state: &fv_server::ServerState) {
+    let settings = serde_json::to_string(&fv_protocol::types::AppSettings {
+        reply_suggestions: false,
+        ..Default::default()
+    })
+    .unwrap();
+    state
+        .store
+        .db
+        .set_setting("app.settings", Some(&settings))
+        .unwrap();
+}

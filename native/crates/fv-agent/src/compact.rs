@@ -1,17 +1,15 @@
 //! Making room: when a conversation nears the model's context window, the model is asked to
 //! write a note for whoever continues, and the history is replaced by that note and the user's
 //! own words. Modelled on codex's inline compaction (`codex/compact.rs`): the same prompt, the
-//! same bridge, and the same answer to a prompt that is itself too big (drop the oldest
-//! messages and ask again).
+//! same bridge. Oversized input is processed incrementally against the learned capacity,
+//! so older evidence is summarized rather than dropped.
 
-use futures_util::StreamExt;
 use fv_core::{Message, estimate_tokens};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::event::AgentEvent;
-use crate::history::normalize;
-use crate::model::{Model, ModelEvent, ModelRequest};
+use crate::model::Model;
 use crate::turn::AgentContext;
 
 /// Codex's summarization prompt, from `core/templates/compact/prompt.md` (Apache-2.0).
@@ -23,9 +21,6 @@ pub const DEFAULT_CONTEXT_WINDOW: u64 = 128_000;
 
 /// Compact when this much of the window is in use.
 const TRIGGER_PERCENT: u64 = 90;
-/// The text sent to be summarized is trimmed until it fits this much of the window, leaving
-/// room for the note itself.
-const FIT_PERCENT: u64 = 85;
 
 pub fn context_window(model: &dyn Model) -> u64 {
     model
@@ -55,140 +50,113 @@ pub fn context_used(history: &[Message]) -> u64 {
     }
 }
 
+pub fn effective_context_window(ctx: &AgentContext) -> u64 {
+    ctx.budget.window(ctx.model.as_ref())
+}
+
+pub(crate) fn input_limit(ctx: &AgentContext) -> u64 {
+    let window = effective_context_window(ctx);
+    let threshold = window.saturating_mul(TRIGGER_PERCENT) / 100;
+    if ctx.budget.learned(ctx.model.as_ref()) {
+        threshold.min(
+            window
+                .saturating_sub(crate::budget::reply_reserve(ctx.model.as_ref(), window))
+                .saturating_sub(crate::budget::margin(window)),
+        )
+    } else {
+        threshold
+    }
+}
+
 pub fn needs_compaction(ctx: &AgentContext, history: &[Message]) -> bool {
-    context_used(history) * 100 >= context_window(ctx.model.as_ref()) * TRIGGER_PERCENT
+    crate::budget::request_tokens(&crate::turn::model_request(ctx, history)) >= input_limit(ctx)
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CompactError {
-    /// The user stopped it; nothing changed.
     Interrupted,
     Failed(String),
+    /// Distinct from transport/auth failures: only capacity failures can stop automatic
+    /// continuations until the user edits history, changes the route or probes manually.
+    Capacity(String),
 }
 
-/// Summarize the history and replace it. On any failure the history is left as it was.
+/// Explicit compaction probes the declared capacity again. Cancellation and any failure
+/// restore the previous protection; a valid published checkpoint commits the new budget.
 pub async fn compact(
     ctx: &AgentContext,
     history: &mut Vec<Message>,
     events: &mpsc::UnboundedSender<AgentEvent>,
     cancel: &CancellationToken,
 ) -> Result<(), CompactError> {
+    let mut probe = ctx.budget.probe(ctx.model.as_ref());
+    let result = compact_inner(ctx, history, events, cancel, false).await;
+    if result.is_ok() {
+        probe.commit();
+    }
+    drop(probe);
+    if result.is_err() {
+        let _ = events.send(AgentEvent::ContextBudgetChanged {
+            used: crate::budget::request_tokens(&crate::turn::model_request(ctx, history)),
+            window: effective_context_window(ctx),
+        });
+    }
+    result
+}
+
+pub(crate) async fn compact_auto(
+    ctx: &AgentContext,
+    history: &mut Vec<Message>,
+    events: &mpsc::UnboundedSender<AgentEvent>,
+    cancel: &CancellationToken,
+) -> Result<(), CompactError> {
+    compact_inner(ctx, history, events, cancel, true).await
+}
+
+async fn compact_inner(
+    ctx: &AgentContext,
+    history: &mut Vec<Message>,
+    events: &mpsc::UnboundedSender<AgentEvent>,
+    cancel: &CancellationToken,
+    require_smaller: bool,
+) -> Result<(), CompactError> {
     let id = uuid::Uuid::new_v4().to_string();
     let _ = events.send(AgentEvent::CompactionStarted { id: id.clone() });
-    match summarize(ctx, history, cancel).await {
-        Ok(summary) => {
-            let mut user_messages = Vec::new();
-            for m in history.iter() {
-                match m {
-                    Message::Compaction {
-                        user_messages: earlier,
-                        ..
-                    } => user_messages.extend(earlier.iter().cloned()),
-                    Message::User { text } => user_messages.push(text.clone()),
-                    _ => {}
-                }
+    let result = async {
+        let before = crate::budget::request_tokens(&crate::turn::model_request(ctx, history));
+        let (summary, usage) = crate::compact_input::summarize(ctx, history, events, cancel).await?;
+        if cancel.is_cancelled() { return Err(CompactError::Interrupted); }
+        let mut user_messages = Vec::new();
+        for m in history.iter() {
+            match m {
+                Message::Compaction { user_messages: earlier, .. } => user_messages.extend(earlier.iter().cloned()),
+                Message::User { text } => user_messages.push(text.clone()),
+                _ => {}
             }
-            let message = Message::Compaction {
-                user_messages,
-                summary: summary.clone(),
-            };
-            let _ = events.send(AgentEvent::Committed(message.clone()));
-            history.clear();
-            history.push(message);
-            let _ = events.send(AgentEvent::CompactionDone { id, summary });
-            Ok(())
         }
-        Err(e) => {
-            let _ = events.send(AgentEvent::CompactionFailed { id });
-            Err(e)
-        }
-    }
-}
-
-async fn summarize(
-    ctx: &AgentContext,
-    history: &[Message],
-    cancel: &CancellationToken,
-) -> Result<String, CompactError> {
-    let window = context_window(ctx.model.as_ref());
-    let prompt = Message::User {
-        text: SUMMARIZATION_PROMPT.to_string(),
-    };
-    let mut working = normalize(history);
-    loop {
-        // Too big to be sent: the oldest goes first. What is left is cleaned again, since
-        // dropping a call leaves its result with nothing to answer.
-        while working.len() > 1
-            && estimate_tokens(&working) + estimate_tokens(std::slice::from_ref(&prompt))
-                > window * FIT_PERCENT / 100
-        {
-            working.remove(0);
-            working = normalize(&working);
-        }
-        let mut messages = working.clone();
-        messages.push(prompt.clone());
-        let request = ModelRequest {
-            system: ctx.system.clone(),
-            messages,
-            tools: Vec::new(),
+        let message = Message::Compaction {
+            usage, model: ctx.model.label().map(str::to_owned), user_messages, summary: summary.clone(),
         };
-        match collect_text(ctx.model.as_ref(), request, cancel).await {
-            Ok(text) => return Ok(text),
-            Err(Collect::Interrupted) => return Err(CompactError::Interrupted),
-            Err(Collect::Failed { message, overflow }) => {
-                if overflow && working.len() > 1 {
-                    working.remove(0);
-                    working = normalize(&working);
-                    continue;
-                }
-                return Err(CompactError::Failed(if overflow {
-                    "The conversation is too large to summarize.".to_string()
-                } else {
-                    message
-                }));
-            }
+        // Check the ordinary request's projection, including the memory map that will be
+        // re-injected, system instructions and tools. Do not publish an unusable checkpoint.
+        let mut proposed = vec![message.clone()];
+        if let Some(summary) = ctx.memory.as_ref().and_then(|m| m.snapshot()) {
+            proposed.push(Message::MemoryContext { summary });
         }
-    }
-}
-
-enum Collect {
-    Interrupted,
-    Failed { message: String, overflow: bool },
-}
-
-async fn collect_text(
-    model: &dyn Model,
-    request: ModelRequest,
-    cancel: &CancellationToken,
-) -> Result<String, Collect> {
-    let mut stream = model.stream(request);
-    let mut text = String::new();
-    loop {
-        let next = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Err(Collect::Interrupted),
-            next = stream.next() => next,
-        };
-        match next {
-            None => {
-                return Err(Collect::Failed {
-                    message: "The model's response ended before it was complete.".into(),
-                    overflow: false,
-                });
-            }
-            Some(Err(e)) => {
-                return Err(Collect::Failed {
-                    message: e.message,
-                    overflow: e.overflow,
-                });
-            }
-            Some(Ok(ModelEvent::Text(d))) => text.push_str(&d),
-            Some(Ok(ModelEvent::Done(message))) => {
-                // The complete message is the truth; the deltas were only the way it arrived.
-                let full = message.text();
-                return Ok(if full.is_empty() { text } else { full });
-            }
-            Some(Ok(_)) => {}
+        let after = crate::budget::request_tokens(&crate::turn::model_request(ctx, &proposed));
+        if after >= input_limit(ctx) || (require_smaller && after >= before) {
+            return Err(CompactError::Capacity("The summary and required instructions still do not leave enough context space to continue.".into()));
         }
+        if cancel.is_cancelled() { return Err(CompactError::Interrupted); }
+        let _ = events.send(AgentEvent::Committed(message.clone()));
+        history.clear();
+        history.push(message);
+        let _ = events.send(AgentEvent::CompactionDone { id: id.clone(), summary });
+        let _ = events.send(AgentEvent::ContextBudgetChanged { used: after, window: effective_context_window(ctx) });
+        Ok(())
+    }.await;
+    if result.is_err() {
+        let _ = events.send(AgentEvent::CompactionFailed { id });
     }
+    result
 }

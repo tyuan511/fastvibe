@@ -5,8 +5,8 @@ use fv_protocol::types::{Item, Turn};
 /// been closed and is being opened again.
 ///
 /// Ids are derived from position (`t3`, `t3i7`), so the same transcript always yields the same
-/// ids. A turn that failed or was stopped leaves no trace beyond its messages: an error item
-/// has no message of its own.
+/// ids. This is also the fallback for old transcripts without turn boundaries; new stored
+/// transcripts use [`crate::Loaded::turns`] so errors with no assistant message survive.
 pub fn turns_from_history(messages: &[Message]) -> Vec<Turn> {
     turns_from_timed_history(messages, &[])
 }
@@ -16,6 +16,9 @@ pub fn turns_from_history(messages: &[Message]) -> Vec<Turn> {
 pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn> {
     let mut turns: Vec<Turn> = Vec::new();
     for (i, message) in messages.iter().enumerate() {
+        if matches!(message, Message::MemoryContext { .. }) {
+            continue;
+        }
         let at = times.get(i).copied();
         if !matches!(message, Message::User { .. } | Message::Compaction { .. })
             && let Some(turn) = turns.last_mut()
@@ -46,7 +49,7 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
                         ContentBlock::Text { text } if !text.is_empty() => {
                             turn.items.push(Item::AgentMessage {
                                 id,
-                                text: text.clone(),
+                                text: fv_core::strip_memory_citation(text),
                             })
                         }
                         ContentBlock::Thinking { text, .. } if !text.trim().is_empty() => {
@@ -73,7 +76,7 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
                 }
             }
             // Pictures a tool returned; the tool's item already shows what it did.
-            Message::ToolImages { .. } => {}
+            Message::ToolImages { .. } | Message::MemoryContext { .. } => {}
             // A divider where the conversation was summarized. The messages before it are
             // still in the transcript, and still drawn: only the model stops seeing them.
             Message::Compaction { .. } => {

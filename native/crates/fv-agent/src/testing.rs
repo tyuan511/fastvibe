@@ -164,6 +164,7 @@ impl Reply {
             StopReason::Stop
         };
         let message = AssistantMessage {
+            duration_ms: None,
             content: self.content,
             stop,
             usage: Usage {
@@ -200,6 +201,7 @@ impl Model for EchoModel {
             steps.push(Step::Event(ModelEvent::Text(word.into())));
         }
         steps.push(Step::Event(ModelEvent::Done(AssistantMessage {
+            duration_ms: None,
             content: vec![ContentBlock::Text { text: reply }],
             stop: StopReason::Stop,
             usage: Usage::default(),

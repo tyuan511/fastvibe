@@ -84,6 +84,19 @@ impl GenaiModel {
 }
 
 impl Model for GenaiModel {
+    fn context_key(&self) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut key = std::hash::DefaultHasher::new();
+        engine_base_url(self.config.protocol, &self.config.base_url).hash(&mut key);
+        format!("{:?}", self.config.protocol).hash(&mut key);
+        self.config.model_id.hash(&mut key);
+        format!("route:{:x}", key.finish())
+    }
+
+    fn max_output_tokens(&self) -> Option<u32> {
+        self.config.max_output_tokens
+    }
+
     fn supports_images(&self) -> bool {
         self.config.images
     }
@@ -92,9 +105,20 @@ impl Model for GenaiModel {
         self.config.context_window
     }
 
+    fn label(&self) -> Option<&str> {
+        Some(&self.config.label)
+    }
+
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>> {
         let client = self.client.clone();
-        let options = self.options();
+        let mut options = self.options();
+        if let Some(limit) = request.max_output_tokens {
+            options = options.with_max_tokens(
+                self.config
+                    .max_output_tokens
+                    .map_or(limit, |configured| configured.min(limit)),
+            );
+        }
         let label = self.config.label.clone();
         let model_id = self.config.model_id.clone();
         let max_retries = self.config.max_retries;

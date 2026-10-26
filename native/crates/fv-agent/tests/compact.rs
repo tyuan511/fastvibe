@@ -46,6 +46,9 @@ fn agent(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
             ui: None,
             loaded: Default::default(),
             permissions: None,
+            steer: None,
+            memory: None,
+            budget: Default::default(),
         },
         model,
     )
@@ -57,6 +60,7 @@ fn user(t: &str) -> Message {
 
 fn assistant(text: &str, input_tokens: u64) -> Message {
     Message::Assistant(AssistantMessage {
+        duration_ms: None,
         content: vec![ContentBlock::Text { text: text.into() }],
         stop: StopReason::Stop,
         usage: Usage {
@@ -91,8 +95,10 @@ fn is_summary_request(r: &fv_agent::ModelRequest) -> bool {
 fn compaction_of(history: &[Message]) -> Option<(&Vec<String>, &String)> {
     history.iter().find_map(|m| match m {
         Message::Compaction {
+            model: None,
             user_messages,
             summary,
+            ..
         } => Some((user_messages, summary)),
         _ => None,
     })
@@ -141,9 +147,8 @@ async fn a_conversation_near_its_window_is_summarized_and_the_turn_carries_on() 
     );
 
     // What is left in memory: the compaction, then what happened after it.
-    assert!(
-        matches!(&history[0], Message::Compaction { user_messages, summary } if user_messages == &["fix the build"] && summary.starts_with("SUMMARY"))
-    );
+    assert!(matches!(&history[0], Message::Compaction {
+            model: None, user_messages, summary, .. } if user_messages == &["fix the build"] && summary.starts_with("SUMMARY")));
     assert!(matches!(&history[1], Message::Assistant(a) if a.text() == "all done"));
     assert_eq!(history.len(), 2);
 
@@ -154,7 +159,12 @@ async fn a_conversation_near_its_window_is_summarized_and_the_turn_carries_on() 
         .unwrap();
     let committed = events
         .iter()
-        .position(|e| matches!(e, AgentEvent::Committed(Message::Compaction { .. })))
+        .position(|e| {
+            matches!(
+                e,
+                AgentEvent::Committed(Message::Compaction { model: None, .. })
+            )
+        })
         .unwrap();
     let done = events
         .iter()
@@ -196,7 +206,10 @@ async fn a_request_the_provider_refused_as_too_large_is_summarized_and_asked_aga
         ])
         .with_window(1_000_000),
     );
-    let mut history = vec![user("earlier question"), assistant("earlier answer", 10)];
+    let mut history = vec![
+        user("earlier question"),
+        assistant(&"earlier answer ".repeat(500), 10),
+    ];
     let (outcome, _) = run(&ctx, &mut history, "new question").await;
     assert_eq!(outcome, TurnOutcome::Completed);
     assert_eq!(model.requests().len(), 3);
@@ -211,26 +224,26 @@ async fn a_request_the_provider_refused_as_too_large_is_summarized_and_asked_aga
 }
 
 #[tokio::test]
-async fn a_second_refusal_is_not_answered_with_a_second_summary() {
+async fn a_refusal_without_reducible_history_does_not_publish_a_larger_checkpoint() {
     let (ctx, model) = agent(
         ScriptedModel::new([
             Reply::new().then_overflow(),
             Reply::new().text("SUMMARY").done(),
-            Reply::new().then_overflow(),
         ])
         .with_window(1_000_000),
     );
     let mut history = Vec::new();
     let (outcome, _) = run(&ctx, &mut history, "go").await;
     assert!(
-        matches!(&outcome, TurnOutcome::Failed(m) if m.contains("maximum context length")),
+        matches!(&outcome, TurnOutcome::Failed(m) if m.contains("context space")),
         "{outcome:?}"
     );
-    assert_eq!(model.requests().len(), 3, "it kept trying");
+    assert_eq!(model.requests().len(), 2, "it kept trying");
+    assert!(compaction_of(&history).is_none());
 }
 
 #[tokio::test]
-async fn a_summary_request_that_is_itself_too_big_drops_the_oldest_messages() {
+async fn a_summary_refused_as_too_big_repacks_all_older_evidence() {
     let (ctx, model) = agent(
         ScriptedModel::new([
             Reply::new().then_overflow(),
@@ -250,10 +263,24 @@ async fn a_summary_request_that_is_itself_too_big_drops_the_oldest_messages() {
     let lengths: Vec<usize> = model.requests().iter().map(|r| r.messages.len()).collect();
     assert_eq!(
         lengths,
-        [9, 8, 7],
-        "each refusal drops the oldest message: {lengths:?}"
+        [9, 2, 2],
+        "overflow should repack bounded evidence rather than drop messages: {lengths:?}"
     );
     assert!(model.requests().iter().all(is_summary_request));
+    let packed = model.requests()[2]
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::User { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        ["q0", "a0", "q3", "a3"]
+            .iter()
+            .all(|text| packed.contains(text))
+    );
     // Whatever was dropped from the request, the user's own words are all kept.
     let (users, _) = compaction_of(&history).unwrap();
     assert_eq!(users, &["q0", "q1", "q2", "q3"]);
@@ -322,10 +349,14 @@ async fn a_message_too_big_for_any_window_is_reported_not_looped_on() {
     let mut history = Vec::new();
     let (outcome, _) = run(&ctx, &mut history, &"x".repeat(2000)).await;
     assert!(
-        matches!(&outcome, TurnOutcome::Failed(m) if m.contains("too large to continue")),
+        matches!(&outcome, TurnOutcome::Failed(m) if m.contains("actual context capacity")),
         "{outcome:?}"
     );
-    assert_eq!(model.requests().len(), 1, "only the summary was asked for");
+    assert_eq!(
+        model.requests().len(),
+        0,
+        "the fixed summary instructions alone cannot fit"
+    );
 }
 
 #[tokio::test]
@@ -384,6 +415,8 @@ async fn ninety_percent_is_the_line() {
 fn a_compaction_reaches_the_model_as_one_user_message() {
     let out = normalize(&[
         Message::Compaction {
+            model: None,
+            usage: Default::default(),
             user_messages: vec!["ask".into()],
             summary: "did it".into(),
         },

@@ -3,6 +3,8 @@
 //! is 14/20, `text-xs` 12/16, `size-3.5` 14px, `h-8` 32px, `rounded-md` 8px.
 
 use fv_theme::Token;
+use gpui_kit::component::shimmer::ShimmerText;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::assets;
@@ -18,6 +20,23 @@ pub fn icon(name: &str, size: f32, color: Hsla) -> Svg {
         .size(px(size))
         .flex_none()
         .text_color(color)
+}
+
+/// A rotating spinner glyph, `size` pixels square, painted in `color`.
+pub fn spinner(id: impl Into<ElementId>, size: f32, color: Hsla) -> impl IntoElement {
+    icon("loading03", size, color).with_animation(
+        id,
+        Animation::new(std::time::Duration::from_millis(1000)).repeat_synced(),
+        |svg, delta| svg.with_transformation(Transformation::rotate(percentage(delta))),
+    )
+}
+
+/// Text with an animated theme-aware shimmer highlight.
+pub fn shimmer(id: impl Into<ElementId>, text: impl Into<SharedString>) -> ShimmerText {
+    ShimmerText::new(text)
+        .id(id)
+        .duration(std::time::Duration::from_millis(2500))
+        .spread(0.4)
 }
 
 /// The chevron that turns to point down when its section is open.
@@ -50,8 +69,24 @@ fn ghost_square(id: impl Into<ElementId>, size: f32, radius: f32, p: &Palette) -
         .items_center()
         .justify_center()
         .rounded(px(radius))
+        .role(Role::Button)
         .cursor_pointer()
         .hover(move |d| d.bg(hover))
+}
+
+/// The floating panels' 4×32px grip, revealed on hover or while dragging.
+pub fn panel_grip(group: &'static str, dragging: bool, p: &Palette) -> Div {
+    div()
+        .absolute()
+        .top(relative(0.5))
+        .mt(px(-16.0))
+        .left(px(2.0))
+        .w(px(4.0))
+        .h(px(32.0))
+        .rounded_full()
+        .bg(p.c(Token::MutedForeground).opacity(0.65))
+        .when(!dragging, |d| d.invisible())
+        .group_hover(group, |d| d.visible())
 }
 
 /// A single line that ends in an ellipsis instead of wrapping.
@@ -71,7 +106,9 @@ pub fn rule(p: &Palette) -> Div {
 
 /// `bg-sidebar-accent/50`-style hover fills are half the accent.
 pub fn half(c: Hsla) -> Hsla {
-    c.opacity(c.a * 0.5)
+    // GPUI multiplies the existing alpha. Including it in the factor again squares
+    // translucent glass tokens (9% becomes 0.405% instead of Electron's 4.5%).
+    c.opacity(0.5)
 }
 
 /// Paint `menu` above everything else in the window and stop clicks going through it. An
@@ -238,5 +275,55 @@ pub trait Muted {
 impl<E: Styled> Muted for E {
     fn muted(self, p: &Palette) -> Self {
         self.text_color(p.c(Token::MutedForeground))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{half, shimmer, spinner};
+    use crate::theme::Palette;
+    use fv_theme::{Preferences, ThemeKind, ThemeMode, Token, all_ids, seed};
+
+    #[test]
+    fn sidebar_hover_matches_electron_in_every_theme_and_glass_mode() {
+        for id in all_ids() {
+            let dark = seed(id).unwrap().kind == ThemeKind::Dark;
+            for glass in [false, true] {
+                let p = Palette::new(
+                    Preferences {
+                        mode: if dark {
+                            ThemeMode::Dark
+                        } else {
+                            ThemeMode::Light
+                        },
+                        light_theme: id.into(),
+                        dark_theme: id.into(),
+                        glass,
+                    }
+                    .resolve(dark, true),
+                );
+                let accent = p.c(Token::SidebarAccent);
+                let hover = half(accent);
+                // Electron: hover:bg-sidebar-accent/50. Glass uses a 9% foreground
+                // tint in light themes and 12% in dark themes; solid fills are opaque.
+                let expected_alpha = if glass {
+                    if dark { 0.06 } else { 0.045 }
+                } else {
+                    0.5
+                };
+                assert!(
+                    (hover.a - expected_alpha).abs() < 1e-6,
+                    "{id}, glass={glass}: hover alpha {} != {expected_alpha}",
+                    hover.a
+                );
+                assert_eq!((hover.h, hover.s, hover.l), (accent.h, accent.s, accent.l));
+            }
+        }
+    }
+
+    #[test]
+    fn spinner_and_shimmer_construct() {
+        let _ = spinner("test-spin", 14.0, gpui_kit::black());
+        let _ = shimmer("test-shimmer", "正在思考");
     }
 }

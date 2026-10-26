@@ -13,6 +13,7 @@ name = "fastvibe-server"
 path = "src/main.rs"
 
 [dependencies]
+fv-env = { path = "../fv-env" }
 fv-protocol = { path = "../fv-protocol" }
 fv-core = { path = "../fv-core" }
 fv-agent = { path = "../fv-agent" }
@@ -20,19 +21,29 @@ fv-sandbox = { path = "../fv-sandbox" }
 fv-store = { path = "../fv-store" }
 fv-provider = { path = "../fv-provider" }
 fv-tools = { path = "../fv-tools" }
+fv-mcp = { path = "../fv-mcp" }
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml = "0.9"
 tokio.workspace = true
 tokio-util.workspace = true
 futures-util.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
 sha2 = "0.10"
+portable-pty = "0.9"
+alacritty_terminal = "0.26"
+libc = "0.2"
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+similar = "2"
+tempfile = "3"
+trash = { version = "5.2.9", default-features = false, features = ["coinit_multithreaded"] }
 
 [dev-dependencies]
+reqwest = { version = "0.13", features = ["rustls"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 fv-client = { path = "../fv-client" }
-tempfile = "3"
 
 [lints]
 workspace = true

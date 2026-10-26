@@ -138,7 +138,8 @@ async fn a_turn_can_write_read_and_run_in_the_threads_directory() {
             "exec_command",
             "request_user_input",
             "update_plan",
-            "view_image"
+            "view_image",
+            "write_stdin"
         ]
     );
     assert!(

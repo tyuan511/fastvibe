@@ -270,6 +270,19 @@ async fn projects_hold_several_folders_and_the_agent_is_told_about_them() {
     assert!(system.contains("more than one folder"), "{system}");
     assert!(system.contains(&path(&b)), "{system}");
 
+    // Sidebar state follows a changed primary folder, too.
+    client
+        .call::<SettingsSet>(AppSettingsPatch {
+            sidebar: Some(SidebarSettingsPatch {
+                closed_projects: Some(vec![path(&a)]),
+                project_order: Some(vec![path(&a)]),
+                order: Some([(format!("project:{}", path(&a)), vec![thread.id.clone()])].into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     // Making another folder the primary one moves the conversations with it.
     let moved = client
         .call::<ProjectUpdate>(ProjectUpdateParams {
@@ -280,6 +293,14 @@ async fn projects_hold_several_folders_and_the_agent_is_told_about_them() {
         .await
         .unwrap();
     assert_eq!(moved.path, path(&b));
+    let sidebar = client.call::<SettingsGet>(Empty {}).await.unwrap().sidebar;
+    assert_eq!(sidebar.closed_projects, [path(&b)]);
+    assert_eq!(sidebar.project_order, [path(&b)]);
+    assert_eq!(
+        sidebar.order[&format!("project:{}", path(&b))],
+        std::slice::from_ref(&thread.id)
+    );
+    assert!(!sidebar.order.contains_key(&format!("project:{}", path(&a))));
     assert_eq!(moved.folders, vec![path(&a), path(&c)]);
     let listed = client.call::<ProjectList>(Empty {}).await.unwrap().projects;
     assert_eq!(listed.len(), 1, "the project was replaced, not copied");
@@ -314,4 +335,208 @@ async fn projects_hold_several_folders_and_the_agent_is_told_about_them() {
     let after = client.call::<ProjectList>(Empty {}).await.unwrap();
     assert_eq!(after.projects.len(), 1);
     assert_eq!(after.projects[0].path, path(&c));
+}
+
+#[tokio::test]
+async fn sidebar_settings_merge_sections_broadcast_and_survive_restart() {
+    let data = tempfile::tempdir().unwrap();
+    let agent = || fv_server::agent_with_builtin_tools(Arc::new(ScriptedModel::new([])));
+    let state = Arc::new(ServerState::new(data.path().to_path_buf(), agent()).unwrap());
+    let server = UnixServer::bind(state.clone(), &data.path().join("s.sock"))
+        .await
+        .unwrap();
+    tokio::spawn(server.run());
+    let (a, _) = connect(&data.path().join("s.sock")).await;
+    let (b, mut notes) = connect(&data.path().join("s.sock")).await;
+    a.call::<SettingsSet>(AppSettingsPatch {
+        sidebar: Some(SidebarSettingsPatch {
+            width: Some(380.0),
+            collapsed: Some(true),
+            closed_projects: Some(vec!["/work".into()]),
+            project_order: Some(vec!["/b".into(), "/a".into()]),
+            order: Some([("pinned".into(), vec!["p2".into(), "p1".into()])].into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let heard = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(ServerNotification::SettingsChanged(s)) = notes.recv().await {
+                break s;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(heard.sidebar.width, 380.0);
+    let updated = b
+        .call::<SettingsSet>(AppSettingsPatch {
+            sidebar: Some(SidebarSettingsPatch {
+                order: Some([("chats".into(), vec!["c2".into(), "c1".into()])].into()),
+                sort: Some(SidebarSort::Title),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(updated.sidebar.order["pinned"], ["p2", "p1"]);
+    assert!(updated.sidebar.collapsed);
+    assert_eq!(updated.sidebar.width, 380.0);
+    // Reopen storage through a fresh server state, not the client's optimistic state.
+    let reopened = ServerState::new(data.path().to_path_buf(), agent()).unwrap();
+    let stored = reopened
+        .store
+        .db
+        .get_setting("app.settings")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<AppSettings>(&stored).unwrap(),
+        updated
+    );
+    let clamped = a
+        .call::<SettingsSet>(AppSettingsPatch {
+            sidebar: Some(SidebarSettingsPatch {
+                width: Some(9999.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(clamped.sidebar.width, 480.0);
+}
+
+#[tokio::test]
+async fn a_fork_has_independent_history_images_and_subscription() {
+    use fv_core::{ImagePart, ImageSource, Message};
+    use fv_protocol::methods::{ThreadDelete, ThreadFork, ThreadResume};
+    let data = tempfile::tempdir().unwrap();
+    let agent = fv_server::agent_with_builtin_tools(Arc::new(ScriptedModel::new([])));
+    let state = Arc::new(ServerState::new(data.path().to_path_buf(), agent).unwrap());
+    let original = state.create_thread(None, None, None, None).unwrap();
+    let image = state
+        .store
+        .images
+        .externalize(
+            &original.id,
+            &Message::ToolImages {
+                call_id: "image-call".into(),
+                name: "view_image".into(),
+                images: vec![ImagePart {
+                    mime: "image/png".into(),
+                    source: ImageSource::Base64 {
+                        data: "aGVsbG8=".into(),
+                    },
+                }],
+            },
+        )
+        .unwrap();
+    state
+        .store
+        .transcripts
+        .append_timed(
+            &original.id,
+            &[
+                Message::User {
+                    text: "original prompt".into(),
+                },
+                image,
+            ],
+            &[111, 222],
+        )
+        .unwrap();
+    let sock = data.path().join("s.sock");
+    tokio::spawn(UnixServer::bind(state.clone(), &sock).await.unwrap().run());
+    let (c, _) = connect(&sock).await;
+    let fork = c
+        .call::<ThreadFork>(ThreadIdParams {
+            thread_id: original.id.clone(),
+        })
+        .await
+        .unwrap()
+        .thread;
+    assert_ne!(fork.id, original.id);
+    assert!(!fork.archived && !fork.pinned && !fork.unread);
+    assert_eq!(state.subscriber_count(&fork.id), 1);
+    let copied = state.store.transcripts.read(&fork.id).unwrap();
+    assert_eq!(copied.timestamps, [111, 222]);
+    assert_eq!(
+        copied.messages[0],
+        Message::User {
+            text: "original prompt".into()
+        }
+    );
+    let Message::ToolImages { images, .. } = &copied.messages[1] else {
+        panic!("picture")
+    };
+    let ImageSource::File { path } = &images[0].source else {
+        panic!("externalized")
+    };
+    assert!(path.contains(&fork.id));
+    c.call::<ThreadDelete>(ThreadIdParams {
+        thread_id: original.id,
+    })
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), b"hello");
+    assert!(
+        !c.call::<ThreadResume>(ThreadIdParams {
+            thread_id: fork.id.clone()
+        })
+        .await
+        .unwrap()
+        .turns
+        .is_empty()
+    );
+    let rt = state.runtime(&fork.id);
+    rt.begin(&state, "busy").await.unwrap();
+    assert!(
+        c.call::<ThreadFork>(ThreadIdParams {
+            thread_id: fork.id.clone()
+        })
+        .await
+        .is_err(),
+        "a partial tool batch is never copied"
+    );
+    rt.end(&state).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn simultaneous_sidebar_patches_do_not_erase_each_other() {
+    let data = tempfile::tempdir().unwrap();
+    let agent = fv_server::agent_with_builtin_tools(Arc::new(ScriptedModel::new([])));
+    let state = Arc::new(ServerState::new(data.path().to_path_buf(), agent).unwrap());
+    let sock = data.path().join("s.sock");
+    tokio::spawn(UnixServer::bind(state.clone(), &sock).await.unwrap().run());
+    let mut clients = Vec::new();
+    for _ in 0..12 {
+        clients.push(connect(&sock).await.0);
+    }
+    let jobs: Vec<_> = clients
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| {
+            tokio::spawn(async move {
+                c.call::<SettingsSet>(AppSettingsPatch {
+                    sidebar: Some(SidebarSettingsPatch {
+                        order: Some([(format!("project:{i}"), vec![format!("chat:{i}")])].into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            })
+        })
+        .collect();
+    for job in jobs {
+        job.await.unwrap();
+    }
+    let (c, _) = connect(&sock).await;
+    let prefs = c.call::<SettingsGet>(Empty {}).await.unwrap().sidebar;
+    assert_eq!(prefs.order.len(), 12);
 }

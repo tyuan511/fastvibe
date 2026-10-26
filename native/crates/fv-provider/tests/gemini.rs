@@ -27,6 +27,7 @@ fn config(url: &str) -> ModelConfig {
 
 fn request() -> ModelRequest {
     ModelRequest {
+        max_output_tokens: None,
         system: "Be brief.".into(),
         messages: vec![Message::User {
             text: "read a.txt".into(),
@@ -73,6 +74,7 @@ async fn the_request_uses_v1beta_the_model_path_and_the_google_key_header() {
 
     let mut second = request();
     second.messages.push(Message::Assistant(AssistantMessage {
+        duration_ms: None,
         content: vec![
             ContentBlock::Thinking {
                 text: String::new(),

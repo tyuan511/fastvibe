@@ -117,6 +117,7 @@ impl Workspace {
         };
         let folders = d.folders.clone();
         let editing = d.editing.clone();
+        let previous_primary = editing.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = match editing {
@@ -137,9 +138,16 @@ impl Workspace {
                 match result {
                     Ok(project) => {
                         this.project_dialog = None;
-                        // The new chat page starts in it, so the next message lands there.
-                        this.selected = None;
-                        this.draft_project = Some(project.path);
+                        if let Some(previous) = &previous_primary {
+                            if this.draft_project.as_ref() == Some(previous) {
+                                this.draft_project = Some(project.path.clone());
+                            }
+                            if let Some(id) = this.selected.clone() {
+                                this.load_view(id, cx);
+                            }
+                        } else {
+                            this.new_chat(Some(project.path), cx);
+                        }
                         this.refresh_projects(cx);
                     }
                     Err(e) => {

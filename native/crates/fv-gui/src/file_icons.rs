@@ -18,6 +18,12 @@ struct Variant {
     #[serde(default)]
     file_names: HashMap<String, String>,
     file: Option<String>,
+    #[serde(default)]
+    folder_names: HashMap<String, String>,
+    #[serde(default)]
+    folder_names_expanded: HashMap<String, String>,
+    folder: Option<String>,
+    folder_expanded: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -26,6 +32,10 @@ struct Manifest {
     file_extensions: HashMap<String, String>,
     file_names: HashMap<String, String>,
     file: String,
+    folder_names: HashMap<String, String>,
+    folder_names_expanded: HashMap<String, String>,
+    folder: String,
+    folder_expanded: String,
     #[serde(default)]
     light: Variant,
 }
@@ -36,13 +46,29 @@ struct Index {
     extension_map: HashMap<String, String>,
     file_names: HashMap<String, String>,
     file: String,
+    folder_names: HashMap<String, String>,
+    folder_names_expanded: HashMap<String, String>,
+    folder: String,
+    folder_expanded: String,
 }
 
 fn build(m: &Manifest, light: bool) -> Index {
     let mut extension_map = m.file_extensions.clone();
     let mut file_names = m.file_names.clone();
     let mut file = m.file.clone();
+    let mut folder_names = m.folder_names.clone();
+    let mut folder_names_expanded = m.folder_names_expanded.clone();
+    let mut folder = m.folder.clone();
+    let mut folder_expanded = m.folder_expanded.clone();
     if light {
+        folder_names.extend(m.light.folder_names.clone());
+        folder_names_expanded.extend(m.light.folder_names_expanded.clone());
+        if let Some(f) = &m.light.folder {
+            folder = f.clone();
+        }
+        if let Some(f) = &m.light.folder_expanded {
+            folder_expanded = f.clone();
+        }
         extension_map.extend(m.light.file_extensions.clone());
         file_names.extend(m.light.file_names.clone());
         if let Some(f) = &m.light.file {
@@ -59,6 +85,10 @@ fn build(m: &Manifest, light: bool) -> Index {
         extension_map,
         file_names,
         file,
+        folder_names,
+        folder_names_expanded,
+        folder,
+        folder_expanded,
     }
 }
 
@@ -97,4 +127,23 @@ pub fn resolve(name: &str, light: bool) -> &'static str {
 /// The asset path of a file's glyph.
 pub fn path(name: &str, light: bool) -> String {
     format!("file-icons/{}.svg", resolve(name, light))
+}
+
+/// Folder glyphs share Electron's named-folder and expanded fallback order.
+pub fn folder_path(name: &str, expanded: bool, light: bool) -> String {
+    let (dark, light_index) = indexes();
+    let index = if light { light_index } else { dark };
+    let name = name.to_lowercase();
+    let named = if expanded {
+        index.folder_names_expanded.get(&name)
+    } else {
+        None
+    }
+    .or_else(|| index.folder_names.get(&name));
+    let glyph = named.unwrap_or(if expanded {
+        &index.folder_expanded
+    } else {
+        &index.folder
+    });
+    format!("file-icons/{glyph}.svg")
 }

@@ -56,7 +56,7 @@ fn ctx(root: &Path, mode: SandboxMode, approval: ApprovalPolicy, user: &Arc<Scri
 }
 
 async fn exec(c: ToolCtx, args: serde_json::Value) -> fv_agent::ToolOutput {
-    ExecCommandTool.call(c, args).await
+    ExecCommandTool::default().call(c, args).await
 }
 
 async fn patch(c: ToolCtx, text: &str) -> fv_agent::ToolOutput {

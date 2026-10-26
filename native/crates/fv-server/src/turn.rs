@@ -1,9 +1,10 @@
+use futures_util::FutureExt;
 use std::sync::Arc;
 
 use fv_agent::{AgentContext, AgentEvent, TurnOutcome, base_instructions, run_turn};
 
 use crate::prompt::{ThreadUserInput, announce_resolved};
-use fv_protocol::types::{Item, TurnStatus};
+use fv_protocol::types::{Item, QueuePauseReason, TurnStatus};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -21,27 +22,44 @@ pub fn spawn_turn(
     text: String,
     cancel: CancellationToken,
 ) {
+    spawn_turn_inner(state, rt, thread_id, turn_id, text, cancel, false);
+}
+
+fn spawn_turn_inner(
+    state: Arc<ServerState>,
+    rt: Arc<ThreadRuntime>,
+    thread_id: String,
+    turn_id: String,
+    text: String,
+    cancel: CancellationToken,
+    wait_for_mcp: bool,
+) {
+    // The workspace as it is *before* this turn touches it, so a retry can run against the code
+    // the user asked about rather than the half-applied result of the attempt it retries.
+    capture_checkpoint(&state, &thread_id);
+    // A guess about a conversation that has moved on is worse than none: the user's own prompt
+    // already answered it. Publishing is a task of its own — the turn must start now.
+    if rt.forget_suggestion() {
+        let state = state.clone();
+        let rt = rt.clone();
+        tokio::spawn(async move {
+            rt.publish(&state, LogEvent::SuggestionChanged(None)).await;
+        });
+    }
     let worker = tokio::spawn(drive(
         state.clone(),
         rt.clone(),
-        thread_id,
+        thread_id.clone(),
         turn_id.clone(),
         text,
         cancel,
+        wait_for_mcp,
     ));
-    // A panic in the turn must not leave the thread claimed forever.
+    // A panic in the turn must not leave the thread claimed forever, nor keep a chained run
+    // (the next queued prompt) from being abandoned with it.
     tokio::spawn(async move {
         if worker.await.is_err() {
-            rt.publish(
-                &state,
-                LogEvent::TurnCompleted {
-                    turn_id,
-                    status: TurnStatus::Failed,
-                    error: Some("Internal error.".into()),
-                },
-            )
-            .await;
-            rt.end(&state).await;
+            recover_panic(&state, &rt, &thread_id, &turn_id).await;
         }
     });
 }
@@ -53,7 +71,9 @@ async fn drive(
     turn_id: String,
     text: String,
     cancel: CancellationToken,
-) {
+    wait_for_mcp: bool,
+) -> bool {
+    record_start(&state, &thread_id, &turn_id);
     rt.publish(
         &state,
         LogEvent::TurnStarted {
@@ -75,16 +95,31 @@ async fn drive(
     .await;
 
     let (withdrawn_tx, mut withdrawn_rx) = mpsc::unbounded_channel();
-    let ctx = build_context(&state, &rt, &thread_id, &turn_id, withdrawn_tx);
+    if wait_for_mcp {
+        state.mcp.start();
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => (),
+            _ = state.mcp.wait_ready(std::time::Duration::from_secs(11)) => (),
+        }
+    }
+    let ctx = build_context(
+        &state,
+        &rt,
+        &thread_id,
+        &turn_id,
+        withdrawn_tx,
+        Some(text.clone()),
+        &cancel,
+    )
+    .await;
     let first_prompt = text.clone();
     let mut history = rt.history();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut mapper = EventMapper::new(
-        turn_id.clone(),
-        fv_agent::context_window(ctx.model.as_ref()),
-    );
+    let mut mapper = EventMapper::new(turn_id.clone(), fv_agent::effective_context_window(&ctx));
     let outcome = {
-        let run = run_turn(&ctx, &mut history, text, &tx, &cancel);
+        let run = std::panic::AssertUnwindSafe(run_turn(&ctx, &mut history, text, &tx, &cancel))
+            .catch_unwind();
         tokio::pin!(run);
         loop {
             tokio::select! {
@@ -98,7 +133,7 @@ async fn drive(
                 Some(id) = withdrawn_rx.recv() => {
                     announce_resolved(&state, &thread_id, id).await;
                 }
-                outcome = &mut run => break outcome,
+                outcome = &mut run => break outcome.unwrap_or_else(|_| TurnOutcome::Failed("Internal error.".into())),
             }
         }
     };
@@ -112,40 +147,376 @@ async fn drive(
     while let Ok(id) = withdrawn_rx.try_recv() {
         announce_resolved(&state, &thread_id, id).await;
     }
-    rt.set_history(history);
+    rt.set_history(history.clone());
+    // The bill is part of the stats a client draws, and the catalog prices by the label each
+    // reply recorded: recompute it once the turn's messages are all in.
+    if let Some(stats) = rt.reprice(&state.catalog, &history) {
+        rt.publish(&state, LogEvent::StatsSnapshot(stats)).await;
+    }
 
     let (status, error) = match outcome {
         TurnOutcome::Completed => (TurnStatus::Completed, None),
         TurnOutcome::Interrupted => (TurnStatus::Interrupted, None),
-        TurnOutcome::Failed(message) => {
-            let item = Item::Error {
-                id: uuid::Uuid::new_v4().to_string(),
-                message: message.clone(),
-            };
-            rt.publish(
-                &state,
-                LogEvent::ItemCompleted {
-                    turn_id: turn_id.clone(),
-                    item,
-                },
-            )
-            .await;
-            (TurnStatus::Failed, Some(message))
-        }
+        TurnOutcome::Failed(message) => (TurnStatus::Failed, Some(message)),
     };
-    rt.publish(
-        &state,
-        LogEvent::TurnCompleted {
-            turn_id,
-            status,
-            error,
-        },
-    )
-    .await;
+    finish_turn(&state, &rt, &thread_id, &turn_id, status, error).await;
     state.touch_thread(&thread_id, Some(&first_prompt));
+    // Whatever was queued behind this turn goes next — unless this turn failed, in which case
+    // the queue stops where it is rather than being fed to a run that is already broken.
+    //
+    // The hand-off happens *before* the thread is reported idle: two prompts the user queued
+    // back to back are one stretch of work, and a client that saw an idle moment between them
+    // would drop the running mark and the 「来消息了」 state it drives. The caller then keeps the
+    // thread claimed for the next turn instead of ending it here.
+    if drain_queue(&state, &rt, &thread_id, status, &turn_id).await {
+        return true;
+    }
+    crate::queue::publish(&state, &rt, &thread_id).await;
     // "Running" ends only now, after the completion event: a client that sees the thread idle
     // has already seen everything the turn did.
     rt.end(&state).await;
+    // The guess at the user's next message is not part of the turn: it is started once the thread
+    // is idle, so it can never hold up the run that produced what it is guessing from.
+    //
+    // Never after a failure or a stop: the user's next message is about the problem, and guessing
+    // it from a half-written reply is exactly the wrong material.
+    if status == TurnStatus::Completed {
+        spawn_suggestion(state, rt, thread_id.to_string());
+    } else if rt.forget_suggestion() {
+        rt.publish(&state, LogEvent::SuggestionChanged(None)).await;
+    }
+    false
+}
+
+/// Ask the conversation's own model what the user is likely to say next, and publish it as the
+/// composer's placeholder.
+///
+/// Three things make this safe to fire after every turn: it runs on a task of its own (nothing
+/// waits for it), every failure is swallowed (the placeholder simply stays as it was), and the
+/// answer is withdrawn when it stops being true — a new turn, or a reply that is not prose.
+fn spawn_suggestion(state: Arc<ServerState>, rt: Arc<ThreadRuntime>, thread_id: String) {
+    // A setting, not a hidden default: the side request costs a round trip and some people would
+    // rather not spend it. Read at the moment the turn ends, so turning it off takes effect now.
+    let on = crate::settings::read(&state)
+        .map(|s| s.reply_suggestions)
+        .unwrap_or(true);
+    if !on {
+        return;
+    }
+    tokio::spawn(async move {
+        // Read from what the transcript already holds, so the same turn yields the same guess
+        // whether this runs now or the client reconnects later.
+        let turns = rt.turns();
+        let Some(thread) = state.thread(&thread_id).ok().flatten() else {
+            return;
+        };
+        let model = state.suggestion_model(&thread);
+        let answer = crate::suggestion::suggest(model, &turns).await;
+        let still_idle = !rt.is_running();
+        // A run that started while the model was thinking has made the guess stale: publish
+        // nothing rather than a placeholder about a turn that is over.
+        if !still_idle {
+            return;
+        }
+        rt.publish(&state, LogEvent::SuggestionChanged(answer))
+            .await;
+    });
+}
+
+/// Start the next queued prompt, if the thread is idle and the queue may drain.
+///
+/// Returns whether a turn was started. A failed turn pauses the queue instead: the user sees
+/// 「已暂停」 beside the prompts and decides whether to send them, which is what the Electron app
+/// does and the only thing that keeps one broken run from eating everything lined up behind it.
+pub(crate) async fn drain_queue(
+    state: &Arc<ServerState>,
+    rt: &Arc<ThreadRuntime>,
+    thread_id: &str,
+    status: TurnStatus,
+    previous_turn: &str,
+) -> bool {
+    // A failure and a stop both stop the queue, and they say different things: the prompts were
+    // not the problem in either case, but a stop was the user's own decision, and they may well
+    // have stopped *because* of what is queued. Both wait for 继续.
+    //
+    // 「立即」 is the one stop that is *about* the queue: it interrupted the run in order to send
+    // the prompt the user picked, so that prompt goes next instead of the queue stopping.
+    let sending_now = rt.preferred().is_some();
+    match status {
+        TurnStatus::Failed => {
+            crate::queue::pause(state, rt, thread_id, QueuePauseReason::Failed);
+            return false;
+        }
+        TurnStatus::Interrupted if !sending_now => {
+            crate::queue::pause(state, rt, thread_id, QueuePauseReason::Stopped);
+            return false;
+        }
+        _ => {}
+    }
+    // 「立即」 picks a specific prompt; otherwise the head of the queue goes.
+    let taken = match rt.take_preferred() {
+        Some(row) => {
+            if let Err(e) = state.store.db.remove_queued(thread_id, &row.id) {
+                eprintln!("cannot remove a sent prompt of {thread_id}: {e}");
+            }
+            Some(row)
+        }
+        None => crate::queue::take_next(state, rt, thread_id),
+    };
+    let Some(row) = taken else {
+        return false;
+    };
+    // The queue is announced as the prompt leaves it, before the next turn begins: a client
+    // that redraws on the new turn's first event must not still see the prompt it is running.
+    crate::queue::publish(state, rt, thread_id).await;
+    start_queued(
+        state.clone(),
+        rt.clone(),
+        thread_id.to_string(),
+        row,
+        previous_turn,
+    )
+    .await;
+    true
+}
+
+/// Start a queued prompt on a thread that has no run to chain onto (nothing was running when the
+/// client queued it, or 「立即」 was pressed on an idle chat).
+pub(crate) async fn start_next(state: Arc<ServerState>, rt: Arc<ThreadRuntime>, thread_id: &str) {
+    let taken = match rt.take_preferred() {
+        Some(row) => {
+            if let Err(e) = state.store.db.remove_queued(thread_id, &row.id) {
+                eprintln!("cannot remove a sent prompt of {thread_id}: {e}");
+            }
+            Some(row)
+        }
+        None => crate::queue::take_next(&state, &rt, thread_id),
+    };
+    let Some(row) = taken else {
+        crate::queue::publish(&state, &rt, thread_id).await;
+        return;
+    };
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    let Some(cancel) = rt.begin(&state, &turn_id).await else {
+        crate::queue::requeue_front(&state, &rt, thread_id, &row);
+        crate::queue::publish(&state, &rt, thread_id).await;
+        return;
+    };
+    spawn_turn_inner(
+        state,
+        rt,
+        thread_id.to_string(),
+        turn_id,
+        row.text,
+        cancel,
+        true,
+    );
+}
+
+/// Run one queued prompt as the thread's next turn, exactly as `turn/start` would.
+async fn start_queued(
+    state: Arc<ServerState>,
+    rt: Arc<ThreadRuntime>,
+    thread_id: String,
+    row: fv_store::QueuedPrompt,
+    previous_turn: &str,
+) {
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    let Some(cancel) = rt.chain(previous_turn) else {
+        // Someone started a turn in the gap; the prompt goes back to the front of the queue
+        // rather than being lost. It is the only copy.
+        crate::queue::requeue_front(&state, &rt, &thread_id, &row);
+        crate::queue::publish(&state, &rt, &thread_id).await;
+        return;
+    };
+    spawn_turn_inner(state, rt, thread_id, turn_id, row.text, cancel, true);
+}
+
+/// Snapshot the conversation's workspace for this turn.
+///
+/// Deliberately best-effort: a workspace that is not a git repository, or a `git` that is not
+/// installed, must not stop a turn. It is *cleared* by a capture that finds nothing, so a stale
+/// snapshot from an earlier turn can never be offered as this turn's undo.
+fn capture_checkpoint(state: &ServerState, thread_id: &str) {
+    let Some(cwd) = state
+        .thread(thread_id)
+        .ok()
+        .flatten()
+        .and_then(|t| t.cwd)
+        .map(std::path::PathBuf::from)
+    else {
+        return;
+    };
+    let captured = match fv_store::capture(&cwd, thread_id) {
+        Ok(captured) => captured,
+        Err(e) => {
+            eprintln!("cannot snapshot the workspace of {thread_id}: {e}");
+            None
+        }
+    };
+    let mut checkpoints = state.checkpoints.lock().unwrap();
+    match captured {
+        Some(checkpoint) => {
+            checkpoints.insert(thread_id.into(), checkpoint);
+        }
+        // No snapshot means nothing to undo, so an older turn's must not be offered as this
+        // turn's.
+        None => {
+            checkpoints.remove(thread_id);
+        }
+    }
+}
+
+/// Throw away the reply to `turn_id` (and everything after it), then run that turn again.
+///
+/// This is the retry and the edit in one call: a retry passes no words and the turn's own stay,
+/// an edit passes the corrected ones. The history is cut at the *user* message of that turn, so
+/// what is re-sent is what the model would have seen had the user written those words the first
+/// time. The transcript is not shortened — `rewind` appends a marker — so nothing a user wrote is
+/// destroyed by a mistake here.
+pub async fn rewind(
+    state: Arc<ServerState>,
+    rt: Arc<ThreadRuntime>,
+    thread_id: String,
+    turn_id: String,
+    text: Option<String>,
+    rewind_files: bool,
+) -> Result<fv_protocol::types::TurnRewindResponse, fv_protocol::ErrorObject> {
+    use fv_protocol::ErrorObject;
+    use fv_protocol::jsonrpc::code;
+    let new_turn_id = uuid::Uuid::new_v4().to_string();
+    let Some(cancel) = rt.begin(&state, &new_turn_id).await else {
+        return Err(ErrorObject::new(
+            code::THREAD_BUSY,
+            "stop the reply in flight before rewinding",
+        ));
+    };
+    // Claim before touching files/history, across *all* clients. A second start or retry
+    // cannot slip into the notification await between the rewind and its replacement run.
+    let result = rewind_claimed(&state, &rt, &thread_id, &turn_id, text, rewind_files);
+    let (words, files) = match result {
+        Ok(result) => result,
+        Err(error) => {
+            rt.end(&state).await;
+            return Err(error);
+        }
+    };
+    rt.publish(&state, LogEvent::Rewound { turn_id }).await;
+    spawn_turn(state, rt, thread_id, new_turn_id.clone(), words, cancel);
+    Ok(fv_protocol::types::TurnRewindResponse {
+        turn_id: new_turn_id,
+        files,
+    })
+}
+
+fn rewind_claimed(
+    state: &ServerState,
+    rt: &ThreadRuntime,
+    thread_id: &str,
+    turn_id: &str,
+    text: Option<String>,
+    rewind_files: bool,
+) -> Result<(String, fv_protocol::types::FilesRewound), fv_protocol::ErrorObject> {
+    use fv_protocol::ErrorObject;
+    use fv_protocol::jsonrpc::code;
+    // Use absolute transcript positions. The model's history starts at the last compaction;
+    // counting its user messages cannot locate an older turn or a turn containing a steer.
+    let loaded = state.store.transcripts.read(thread_id).map_err(|e| {
+        ErrorObject::new(
+            code::INTERNAL_ERROR,
+            format!("cannot read the transcript: {e}"),
+        )
+    })?;
+    if loaded.skipped > 0 {
+        return Err(ErrorObject::new(
+            code::INTERNAL_ERROR,
+            "Cannot rewind a damaged transcript",
+        ));
+    }
+    let cut = loaded.turn_start(turn_id);
+    let Some(cut) = cut else {
+        return Err(ErrorObject::new(
+            code::INVALID_PARAMS,
+            "that turn is not in this conversation's history",
+        ));
+    };
+    let kept = &loaded.messages[..cut];
+    // The words to run: the replacement, or the ones that turn already has.
+    let original = loaded
+        .turns()
+        .into_iter()
+        .find(|t| t.id == turn_id)
+        .and_then(|t| {
+            t.items.into_iter().find_map(|item| match item {
+                Item::UserMessage { text, .. } => Some(text),
+                _ => None,
+            })
+        });
+    let Some(original) = original else {
+        return Err(ErrorObject::new(
+            code::INVALID_PARAMS,
+            "that turn has no user prompt to retry",
+        ));
+    };
+    let words = text.unwrap_or(original);
+    if words.trim().is_empty() {
+        return Err(ErrorObject::new(
+            code::INVALID_PARAMS,
+            "a prompt cannot be empty",
+        ));
+    }
+    // History *before* the message is what the turn appends to, so the rewind keeps exactly the
+    // messages a fresh run would have started from.
+    let mut restored = fv_core::effective_history(kept);
+    // A failed file restore leaves the conversation intact. The runtime is already claimed,
+    // so no other client can start against the files while this is in progress.
+    let files = if rewind_files {
+        restore_checkpoint(state, thread_id)?
+    } else {
+        Default::default()
+    };
+    if let Err(e) = state
+        .store
+        .transcripts
+        .rewind_before(thread_id, cut, Some(turn_id))
+    {
+        return Err(ErrorObject::new(
+            code::INTERNAL_ERROR,
+            format!("cannot rewind the transcript: {e}"),
+        ));
+    }
+    rt.set_history(std::mem::take(&mut restored));
+    Ok((words, files))
+}
+
+/// Put the conversation's workspace back to its checkpoint, if it has one.
+fn restore_checkpoint(
+    state: &ServerState,
+    thread_id: &str,
+) -> Result<fv_protocol::types::FilesRewound, fv_protocol::ErrorObject> {
+    use fv_protocol::jsonrpc::code;
+    use fv_protocol::{ErrorObject, types::SkippedPath};
+    let checkpoint = state.checkpoints.lock().unwrap().remove(thread_id);
+    let Some(checkpoint) = checkpoint else {
+        return Ok(Default::default());
+    };
+    let result = fv_store::restore(&checkpoint).map_err(|e| {
+        ErrorObject::new(
+            code::INTERNAL_ERROR,
+            format!("cannot put the workspace back: {e}"),
+        )
+    })?;
+    fv_store::clear(thread_id, &checkpoint.root);
+    Ok(fv_protocol::types::FilesRewound {
+        restored: result.restored,
+        removed: result.removed,
+        skipped: result
+            .skipped
+            .into_iter()
+            .map(|(path, reason)| SkippedPath { path, reason })
+            .collect(),
+        had_checkpoint: true,
+    })
 }
 
 /// Messages reach the transcript as the agent adds them to its history, not when the turn ends:
@@ -153,7 +524,91 @@ async fn drive(
 fn persist(state: &ServerState, thread_id: &str, event: &AgentEvent) {
     if let AgentEvent::Committed(message) = event {
         state.persist(thread_id, message);
+        if let fv_core::Message::Assistant(reply) = message {
+            state.memory.note_reply(state, &reply.text());
+        }
     }
+}
+
+fn record_start(state: &ServerState, thread_id: &str, turn_id: &str) {
+    if let Err(e) = state.store.transcripts.start_turn(thread_id, turn_id) {
+        eprintln!("cannot record the start of {thread_id}/{turn_id}: {e}");
+    }
+}
+
+/// Store the terminal result before announcing it. It is UI metadata, never an authored
+/// message, so an upstream error cannot become a user instruction in the next request.
+async fn finish_turn(
+    state: &ServerState,
+    rt: &ThreadRuntime,
+    thread_id: &str,
+    turn_id: &str,
+    status: TurnStatus,
+    error: Option<String>,
+) {
+    let recorded_error = error
+        .as_ref()
+        .filter(|_| status == TurnStatus::Failed)
+        .map(|message| fv_store::RecordedError {
+            id: uuid::Uuid::new_v4().to_string(),
+            message: message.clone(),
+        });
+    if let Err(e) =
+        state
+            .store
+            .transcripts
+            .finish_turn(thread_id, turn_id, status, recorded_error.clone())
+    {
+        eprintln!("cannot record the result of {thread_id}/{turn_id}: {e}");
+    }
+    if let Some(error) = recorded_error {
+        rt.publish(
+            state,
+            LogEvent::ItemCompleted {
+                turn_id: turn_id.into(),
+                item: Item::Error {
+                    id: error.id,
+                    message: error.message,
+                },
+            },
+        )
+        .await;
+    }
+    rt.publish(
+        state,
+        LogEvent::TurnCompleted {
+            turn_id: turn_id.into(),
+            status,
+            error,
+        },
+    )
+    .await;
+}
+
+async fn recover_panic(
+    state: &Arc<ServerState>,
+    rt: &Arc<ThreadRuntime>,
+    thread_id: &str,
+    turn_id: &str,
+) {
+    // Committed events may already have reached disk before the worker panicked. Keeping an
+    // older runtime history would send a different conversation until the next restart.
+    if let Ok(loaded) = state.store.transcripts.read(thread_id) {
+        rt.set_history(fv_core::effective_history(&loaded.messages));
+    }
+    finish_turn(
+        state,
+        rt,
+        thread_id,
+        turn_id,
+        TurnStatus::Failed,
+        Some("Internal error.".into()),
+    )
+    .await;
+    crate::queue::pause(state, rt, thread_id, QueuePauseReason::Failed);
+    crate::queue::publish(state, rt, thread_id).await;
+    state.touch_thread(thread_id, None);
+    rt.end(state).await;
 }
 
 /// What a turn of this thread runs with: its own model (or the default), the working directory
@@ -244,12 +699,14 @@ fn permissions_for(
     })
 }
 
-fn build_context(
+async fn build_context(
     state: &Arc<ServerState>,
     rt: &Arc<ThreadRuntime>,
     thread_id: &str,
     turn_id: &str,
     withdrawn: mpsc::UnboundedSender<fv_protocol::RequestId>,
+    user_text: Option<String>,
+    cancel: &CancellationToken,
 ) -> AgentContext {
     let thread = state.thread(thread_id).ok().flatten();
     // Each conversation works in its own directory, and tells the model so.
@@ -263,6 +720,7 @@ fn build_context(
         Some(thread) => crate::providers::model_for(state, thread),
         None => state.agent.model.clone(),
     };
+    rt.sampling_model(model.as_ref());
     // A project with several folders says which they are; the model may use absolute paths in
     // all of them (there is no sandbox to extend, as there is none to begin with).
     let folders = thread
@@ -276,15 +734,63 @@ fn build_context(
         .map(|text| format!("\n\n{text}"))
         .unwrap_or_default();
     let permissions = permissions_for(state, rt, thread.as_ref(), thread_id, turn_id, &withdrawn);
+    let context_state = state.clone();
+    let context_cwd = cwd.clone();
+    let other_folders = thread
+        .as_ref()
+        .and_then(|t| t.project.as_deref())
+        .and_then(|project| crate::projects::of_thread(state, project))
+        .map(|project| {
+            let mut folders = project.folders;
+            // The worktree replaces the primary folder for this conversation. Loading the
+            // original tree as well would reintroduce its uncommitted instructions.
+            if !thread.as_ref().is_some_and(|t| t.worktree.is_some()) {
+                folders.insert(0, project.path);
+            }
+            folders
+        })
+        .unwrap_or_default();
+    let discovery = tokio::task::spawn_blocking(move || {
+        context_state.context.prompt_for_folders(
+            context_cwd.as_deref(),
+            &other_folders,
+            user_text.as_deref(),
+        )
+    });
+    // A file on an unavailable mount must not hold a stopped turn open.
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => (),
+        _ = tokio::time::timeout(std::time::Duration::from_secs(3), state.memory.refresh_snapshot()) => (),
+    }
+    let discovered = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => String::new(),
+        result = discovery => result.unwrap_or_else(|e| format!("\nContext discovery failed: {e}")),
+    };
+    state.mcp.start();
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => (),
+        _ = state.mcp.wait_ready(std::time::Duration::from_secs(3)) => (),
+    }
+    let mut mcp = state.mcp.snapshot(&state.agent.tools);
+    if state.agent.tools.get("exec_command").is_some() {
+        rt.exec_sessions.register(&mut mcp.tools);
+    }
+    let tools = Arc::new(mcp.tools);
     AgentContext {
         model,
-        // The base instructions, the project's folders, what the sandbox allows, then whatever
-        // the server was configured to add.
+        tools,
+        // Project context precedes the server's explicit additions; those stay last, so the
+        // caller can override a bundled default without losing the project's instructions.
         system: format!(
-            "{}{}\n\n{}{}",
+            "{}{}\n\n{}{}{}\n\n{}",
             base_instructions(cwd.as_deref()),
             folders,
             permissions_prompt(&permissions),
+            discovered,
+            mcp.instructions,
             state.agent.system
         ),
         cwd,
@@ -297,7 +803,9 @@ fn build_context(
             withdrawn,
         })),
         permissions: Some(permissions),
-        ..state.agent.clone()
+        steer: Some(rt.steers()),
+        memory: Some(state.memory.clone()),
+        budget: rt.budget.clone(),
     }
 }
 
@@ -313,22 +821,13 @@ pub fn spawn_compaction(
     let worker = tokio::spawn(drive_compaction(
         state.clone(),
         rt.clone(),
-        thread_id,
+        thread_id.clone(),
         turn_id.clone(),
         cancel,
     ));
     tokio::spawn(async move {
         if worker.await.is_err() {
-            rt.publish(
-                &state,
-                LogEvent::TurnCompleted {
-                    turn_id,
-                    status: TurnStatus::Failed,
-                    error: Some("Internal error.".into()),
-                },
-            )
-            .await;
-            rt.end(&state).await;
+            recover_panic(&state, &rt, &thread_id, &turn_id).await;
         }
     });
 }
@@ -340,6 +839,7 @@ async fn drive_compaction(
     turn_id: String,
     cancel: CancellationToken,
 ) {
+    record_start(&state, &thread_id, &turn_id);
     rt.publish(
         &state,
         LogEvent::TurnStarted {
@@ -348,15 +848,22 @@ async fn drive_compaction(
     )
     .await;
     let (withdrawn_tx, _unused) = mpsc::unbounded_channel();
-    let ctx = build_context(&state, &rt, &thread_id, &turn_id, withdrawn_tx);
+    let ctx = build_context(
+        &state,
+        &rt,
+        &thread_id,
+        &turn_id,
+        withdrawn_tx,
+        None,
+        &cancel,
+    )
+    .await;
     let mut history = rt.history();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut mapper = EventMapper::new(
-        turn_id.clone(),
-        fv_agent::context_window(ctx.model.as_ref()),
-    );
+    let mut mapper = EventMapper::new(turn_id.clone(), fv_agent::effective_context_window(&ctx));
     let result = {
-        let run = fv_agent::compact(&ctx, &mut history, &tx, &cancel);
+        let run = std::panic::AssertUnwindSafe(fv_agent::compact(&ctx, &mut history, &tx, &cancel))
+            .catch_unwind();
         tokio::pin!(run);
         loop {
             tokio::select! {
@@ -367,7 +874,7 @@ async fn drive_compaction(
                         rt.publish(&state, e).await;
                     }
                 }
-                result = &mut run => break result,
+                result = &mut run => break result.unwrap_or_else(|_| Err(fv_agent::CompactError::Failed("Internal error.".into()))),
             }
         }
     };
@@ -377,35 +884,142 @@ async fn drive_compaction(
             rt.publish(&state, e).await;
         }
     }
-    rt.set_history(history);
+    rt.set_history(history.clone());
+    // The bill is part of the stats a client draws, and the catalog prices by the label each
+    // reply recorded: recompute it once the turn's messages are all in.
+    if let Some(stats) = rt.reprice(&state.catalog, &history) {
+        rt.publish(&state, LogEvent::StatsSnapshot(stats)).await;
+    }
     let (status, error) = match result {
         Ok(()) => (TurnStatus::Completed, None),
         Err(fv_agent::CompactError::Interrupted) => (TurnStatus::Interrupted, None),
-        Err(fv_agent::CompactError::Failed(message)) => {
-            let item = Item::Error {
-                id: uuid::Uuid::new_v4().to_string(),
-                message: message.clone(),
-            };
-            rt.publish(
-                &state,
-                LogEvent::ItemCompleted {
-                    turn_id: turn_id.clone(),
-                    item,
-                },
-            )
-            .await;
-            (TurnStatus::Failed, Some(message))
-        }
+        Err(
+            fv_agent::CompactError::Failed(message) | fv_agent::CompactError::Capacity(message),
+        ) => (TurnStatus::Failed, Some(message)),
     };
-    rt.publish(
-        &state,
-        LogEvent::TurnCompleted {
-            turn_id,
-            status,
-            error,
-        },
-    )
-    .await;
+    finish_turn(&state, &rt, &thread_id, &turn_id, status, error).await;
     state.touch_thread(&thread_id, None);
     rt.end(&state).await;
+    // A compaction divider is not a place the user answers from, and guessing there would spend a
+    // request on material that says nothing about the work.
+    if rt.forget_suggestion() {
+        rt.publish(&state, LogEvent::SuggestionChanged(None)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fv_agent::testing::{Reply, ScriptedModel};
+
+    #[tokio::test]
+    async fn rewind_claims_the_thread_before_waiting_for_a_slow_client() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            ServerState::new(
+                dir.path().into(),
+                crate::agent_with_builtin_tools(Arc::new(ScriptedModel::new([
+                    Reply::new().then_hang()
+                ]))),
+            )
+            .unwrap(),
+        );
+        let thread = state.create_thread(None, None, None, None).unwrap();
+        state.persist(
+            &thread.id,
+            &fv_core::Message::User {
+                text: "original".into(),
+            },
+        );
+        let rt = state.runtime(&thread.id);
+        let original = std::fs::read(state.store.transcripts.path(&thread.id)).unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
+        let conn = state.register(tx.clone());
+        rt.subscribe(conn);
+        tx.try_send(fv_protocol::Message::Notification {
+            method: "full".into(),
+            params: serde_json::json!({}),
+        })
+        .unwrap();
+        let task = tokio::spawn(rewind(
+            state.clone(),
+            rt.clone(),
+            thread.id.clone(),
+            "t0".into(),
+            None,
+            false,
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !rt.is_running() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(rt.begin(&state, "competing-turn").await.is_none());
+        assert_eq!(
+            std::fs::read(state.store.transcripts.path(&thread.id)).unwrap(),
+            original
+        );
+        // Release the blocked delivery, and drain the subsequent rewind/start notifications.
+        tokio::pin!(task);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                tokio::select! {
+                    result = &mut task => { assert!(result.unwrap().is_ok()); break; }
+                    _ = rx.recv() => (),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        state.unregister(conn);
+        drop(rx);
+        rt.interrupt();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while rt.is_running() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_invalid_rewind_releases_its_claim_and_preserves_the_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            ServerState::new(
+                dir.path().into(),
+                crate::agent_with_builtin_tools(Arc::new(ScriptedModel::default())),
+            )
+            .unwrap(),
+        );
+        let thread = state.create_thread(None, None, None, None).unwrap();
+        state.persist(
+            &thread.id,
+            &fv_core::Message::User {
+                text: "keep".into(),
+            },
+        );
+        let rt = state.runtime(&thread.id);
+        let before = std::fs::read(state.store.transcripts.path(&thread.id)).unwrap();
+        assert!(
+            rewind(
+                state.clone(),
+                rt.clone(),
+                thread.id.clone(),
+                "missing".into(),
+                None,
+                false
+            )
+            .await
+            .is_err()
+        );
+        assert!(!rt.is_running());
+        assert_eq!(
+            std::fs::read(state.store.transcripts.path(&thread.id)).unwrap(),
+            before
+        );
+    }
 }

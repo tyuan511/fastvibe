@@ -70,10 +70,10 @@
 - **类型导出**：`schemars` 生成 JSON Schema 并提交进仓库（`native/schema/`），Flutter 端从 schema 生成 Dart 类型；
   GUI 直接用 Rust 类型。协议快照测试防止无意的破坏性改动。实验性方法用 `#[experimental]` 标注，握手声明后才可用。
 - **数据模型 Thread → Turn → Item**（codex `protocol/v2`）。FastVibe 的「会话」= thread，「一轮」= turn，
-  Item 至少有：`UserMessage`、`AgentMessage`、`Reasoning`、`ToolCall`（read/write/edit/bash/MCP/…，按工具族带结构化详情）、
-  `FileChange`、`Todo`、`Question`、`Subagent`、`Dag`、`Present`、`ContextCompaction`、`ModelSwitch`、`Error`。
+  Item 至少有：`UserMessage`、`AgentMessage`、`Reasoning`、`ToolCall`（exec_command/write_stdin/apply_patch/MCP/…，按工具族带结构化详情）、
+  `FileChange`、`Todo`、`Question`、`Subagent`、`Present`、`ContextCompaction`、`ModelSwitch`、`Error`。
 
-主要方法（节选，命名对齐 codex，FastVibe 特有的放在自己的前缀下）：
+方法架构草案（节选，包含未实现项；当前可调用方法以 `native/crates/fv-protocol/src/methods.rs` 为准）：
 
 | 类别 | 方法 |
 | --- | --- |
@@ -82,7 +82,7 @@
 | 回合 | `turn/start` `turn/steer` `turn/interrupt` `turn/continue` `turn/retry` `thread/compact/start` |
 | 队列 | `thread/queue/list` `thread/queue/add` `thread/queue/reorder` `thread/queue/sendNow` `thread/queue/remove` |
 | 工作区 | `project/*` `fs/readDir` `fs/readFile` `fs/writeFile` `fs/createEntry` `fs/renameEntry` `fs/deleteEntry` `fs/search` `git/*` `terminal/*` `office/*` |
-| 配置 | `provider/*` `model/list` `config/read` `config/write` `mcpServer/*` `skill/*` `memory/*` `schedule/*` `dag/*` |
+| 配置 | `provider/*` `model/list` `config/read` `config/write` `mcpServer/*` `skill/*` `memory/*` `schedule/*` |
 | 账号与远程 | `account/*` `remote/*`（远程连接上一律拒绝） |
 
 服务端通知：`thread/started|status/changed|archived|deleted|name/updated|tokenUsage/updated|queue/changed`、
@@ -160,7 +160,7 @@
 2. 组装请求：系统提示词 + 规范化后的历史 + 当前激活的工具。
 3. 流式采样：文本 / 思考 / 工具参数增量逐条发事件；收到完整工具调用即派发执行。
 4. 工具执行：读类工具并发、写类工具串行（照搬 codex `tools/parallel.rs` 的读写锁），结果按调用顺序回收并写回历史。
-5. 有工具结果 → 回到 2；模型自然结束 → 回合结束；之后检查排队消息、goal 续跑，全部完成才发 `Settled`。
+5. 有工具结果 → 回到 2；模型自然结束 → 回合结束；之后检查排队消息，全部完成才发 `Settled`。
 6. 「运行中」以 `Settled` 为界（不是单次请求结束），重试退避、压缩、续跑都在同一个 run 内。
 
 取消：每个 run 一个 `CancellationToken`，贯穿 HTTP 流、工具、子进程组；中止统一呈现为「已中断」，与失败分开。
@@ -222,13 +222,13 @@ codex 的现行版若绑定了它自己的内部 crate，就取最近一个自�
 
 | 工具 | codex 对应 | 状态 / 说明 |
 | --- | --- | --- |
-| `exec_command`、`write_stdin` | `shell_spec` / `unified_exec`：命令可转后台，返回 session id，再用 `write_stdin` 写入或轮询；可选 pty | `exec_command` 已做（跑到结束或超时）；会话式进程与 `write_stdin` 随 pty / 终端面板一起做。去掉沙箱与审批那一层（`with_escalated_permissions` 等） |
+| `exec_command`、`write_stdin` | `shell_spec` / `unified_exec`：命令可转后台，返回 session id，再用 `write_stdin` 写入或轮询；可选 pty | 已接通会话池、真实 PTY、增量输出、超时与取消。每个 ThreadRuntime 独立持有；保留现有沙箱与审批；Windows PTY 随平台交付补齐。验证见 native-completion.md |
 | `apply_patch` | `apply-patch` crate | 已做。唯一的编辑工具（新建 = Add File，整文件替换 = Delete + Add）；与 codex 的差异：全部能应用才写盘 |
 | `update_plan` | `plan` | 已做。工具只校验形状并回 `Plan updated`；清单在调用参数里，server 额外发 `turn/plan/updated`（整张清单，不是差量）给在看的客户端 |
 | `request_user_input` | `request_user_input` | 已做。工具把回合停住，server 向客户端发 `item/question/request`（服务端请求），回答作为工具结果（codex 的 JSON 形状）；客户端总是加一个自由输入的 Other |
 | `view_image` | `view_image` | 已做。大图先缩小再发（长边 > 2000px 或 > 1 MB → 1568px，有透明保留 PNG，否则 JPEG）；图片落盘，转写只存路径 |
-| MCP 工具与资源 | `mcp`、`mcp_resource`（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`），`rmcp` | 待做。每引擎连一次、所有会话共享 |
-| `tool_search` | `tool_search` | 已做（BM25）。codex 靠 Responses API 自带的延迟加载，这里改为通用做法：延迟工具不进请求，搜到才声明；暂时没有延迟工具（MCP 之后才有），此时它自己也不出现在请求里 |
+| MCP 工具与资源 | `mcp`、`mcp_resource`（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`），`rmcp` | 核心已接通：每引擎共享 stdio/HTTP 连接、工具快照、延迟搜索、资源和分页。字段表单、动态目录、诊断、图片产物、OAuth/刷新及客户端回调已接通；安装环境与最终验收见 native-completion.md |
+| `tool_search` | `tool_search` | 已做（BM25）。codex 靠 Responses API 自带的延迟加载，这里改为通用做法：延迟工具不进请求，搜到才声明；MCP 的延迟工具已接入；没有任何延迟工具时，搜索工具自己也不出现在请求里 |
 | 子 agent | `multi_agents`（`spawn_agent`、`send_input`、`wait`、`close_agent`、`resume_agent`） | 待做。进程内起一次性会话，沿用它的 agent 控制模型 |
 | 代码模式 | `code_mode`（执行与 `wait`） | 待做。沙箱、`tools.<name>()` 绑定和输出规则以它为准，运行时选型开工前对照上游定 |
 | `web_search` | 模型端托管的搜索 | 待做。仅在 Responses 协议下透传 |
@@ -321,6 +321,8 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
    对应 Electron 版 `createCssVariablesTheme` 映射到 `--code-*` 的做法；diff 的增删底色同样取自 token。
 7. **玻璃效果**：窗口创建时由设置决定是否带 `NSVisualEffectView`（`under-window`、`visualEffectState: active`）和透明底；
    `glassTokens` 把背景、侧栏、卡片、浮层改为带 alpha 的 token（背景 42% 暗 / 46% 亮，浮层 84% / 90%，数值照 AGENTS.md）。
+   原生浮层经 `Palette::overlay()` 加厚为 96% 暗 / 98% 亮：Electron 还有 28px 的浮层背板模糊，而原生窗口的 vibrancy
+   只模糊桌面，无法消除窗口内正文的透字。菜单、对话框与组件库 tooltip 共用这一个适配后的底色；共享主题 token 保持与 Electron 一致。
    Liquid Glass 的高光边框、浮层内亮边用 GPUI 自绘（渐变描边 + 内阴影）近似，并登记为「近似项」。
    窗口透明与原生阴影能否兼得需在 M1 验证（Electron 版同样为保住阴影不用 `transparent: true`）。
    窗口不在前台时 macOS 会把 vibrancy 压成灰，这一点沿用「始终 active」的处理。
@@ -370,6 +372,19 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   在其中开会话会自动加入）。`Thread` 多了 `pinned`。GUI：偏好设置页的外观、归档对话页（恢复 / 确认后删除）、侧栏置顶分组、
   行上悬停的置顶与归档按钮、右键菜单（重命名 / 置顶 / 归档）、原位重命名、「+」选文件夹添加项目、项目行的新对话与移除、
   转写里的思考与工具调用可点开（命令、补丁按增删着色、输出）。
+- **左侧会话树交互（2026-10-24）**：宽度拖动（220–520px，保留主区域空间，拖过折叠阈值收起、双击复位）、⌘B 折叠/恢复；
+  项目、置顶、聊天与各项目内会话分别拖拽排序，支持上下插入线与边缘自动滚动；菜单可切换手动/最近更新/创建时间/名称排序，
+  项目展开/折叠、展开更多、宽度与分组顺序通过 `settings/*` 保存并推送给其他客户端，旧设置缺省兼容。设置写入串行合并，
+  主文件夹变更时迁移项目分组的顺序与展开状态。前进后退（⌘[ / ⌘]）跳过已归档/删除的会话；新对话入口清除上一个项目选择。
+  会话菜单支持重命名（Enter/失焦保存、Esc 取消）、置顶/取消、归档、创建分支和确认后删除；项目支持编辑、显示目录、确认后移除。
+  `thread/fork` 复制完整已落盘历史并保留时间戳，图片独立复制，运行中的回合须结束后再分支。侧栏不画插件入口（原生版没有插件系统）。
+  定时任务与账号尚无原生服务接口，
+  入口显示具体未接入说明，不表示这些模块已经迁移。侧栏偏好变化不重建整套主题；宽度拖动请求完整窗口重绘，避免复用旧裁剪区域。
+- **宽度松手回弹修复（2026-10-24）**：直接运行 GUI 也经 `Daemon::connect_current` 核对构建与握手 `features`，
+  `sidebarSettings` 缺失的空闲旧进程会被替换；忙碌或无法报告活动的进程保留并提示稍后重开。过去服务端每次握手读取磁盘上的可执行文件，
+  重编译后旧进程会误报新文件的指纹；现在在服务端启动时固定指纹。回归测试模拟「指纹相同但不支持侧栏设置」的旧进程，
+  验证替换后宽度可保存与重连恢复、同版本进程复用、忙碌/未知活动的进程不退出。手动缩放后的 GPUI ClickEvent 还必须检查按下/松手距离，
+  快速连续拖动不能触发双击复位。
 - **发送、快捷键、搜索（2026-10-24）**：发送失败不再静默——文字放回输入框并在输入框上方说明原因，没有任何模型时直接提示去
   设置 → 模型与默认。快捷键：⌘N 新对话、⌘, 设置、⌘K 搜索、⌘Q 退出、Esc 依次关菜单 / 搜索 / 对话框 / 设置；macOS 菜单栏有对应条目。
   ⌘K 搜索按标题找对话并列出「新对话 / 设置」两个命令（正文搜索要服务端新增读转写的调用）。输入框左侧的上下文环按
@@ -380,8 +395,8 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   **智能体怎么知道**：会话所在项目有多个文件夹时，系统提示追加一段（照 `buildProjectFoldersPrompt`）：列出每个文件夹、当前工作目录、
   是否 git 仓库，并说明可用绝对路径读写其余文件夹；单文件夹项目一个字不加。codex 的 `--add-dir` 是把额外目录加进沙箱的可写根，
   这里没有沙箱，所以只需要告诉模型。GUI：侧栏项目旁「+」打开「创建项目」（名称、文件夹列表、主标记、悬停「设为主文件夹」与移除、
-  添加文件夹可一次多选），项目行 ⋯ →「编辑项目」同一个对话框。还没做：`@` 跨文件夹搜索、其余文件夹的 AGENTS.md / 技能提示、
-  每个仓库单独的 git 面板。
+  添加文件夹可一次多选），项目行 ⋯ →「编辑项目」同一个对话框。`@` 跨文件夹搜索与其余文件夹的 AGENTS.md / 技能提示已接通；
+  每个仓库单独的 git 面板仍待做。
 - **沙箱与审批（2026-10-24，老版没有，照 codex 新加）**：新 crate `fv-sandbox`（codex 的 macOS Seatbelt：`/usr/bin/sandbox-exec` + SBPL 策略，`.git` 只读保护，
   网络默认关）。模式 `read-only / workspace-write / danger-full-access`，审批策略 `untrusted / on-failure / on-request / never`，存在应用设置里（全局）。
   `exec_command` 在沙箱里跑，模型可带 `sandbox_permissions: require_escalated` + `justification` 申请沙箱外运行；`apply_patch` 由服务端按可写根检查。
@@ -394,15 +409,241 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   （只剩模糊），所以窗口对 GPUI 是 `Transparent`，由 `vibrancy.rs` 自己在 contentView 下面垫一个 `NSVisualEffectView`（UnderWindowBackground、BehindWindow、Active，
   和 Electron 同参数）。再把 `index.css` 的 Liquid Glass 移过来：`ui::glass_rim`（1px 渐变高光环，155° 强→透明→弱，两段渐变描边）、`glass_edge`（0.5px 暗边 + 顶部 sheen），
   用在侧栏、composer 卡片（聚焦时让位给焦点环）、弹层与对话框（圆角 14、无边框、`glass-shade` 双层阴影）。**没法在离屏截图里验证模糊本身**（模糊是系统在窗口外合成的），
-  所以这一项只对过参数与结构，没有逐像素对过。②markdown：仍用 gpui-component 的 `TextView`（保留选区与流式淡入），`markdown.rs` 把它的 `TextViewStyle` 调成 `.chat-markdown`：
+  透明度另外经真实 Metal 帧回归验证：窗口的组件 Root 清空底色，只让 Workspace 画一次主题 tint；`vendor/gpui-pre-apple` 修正两个最终管线的 destination alpha
+  （`One` → `OneMinusSourceAlpha`），避免多层 tint 的 alpha 被相加而显示成不透明灰色。外阴影也按 CSS 从卡片内部挖空，避免 composer 透出整块黑影。
+  补丁来源与移除条件见该目录的 `FASTVIBE.md`；`cargo test -p fv-gui --features capture --test glass -- --ignored` 实际开窗截图，检查页面、侧栏和 composer 的 source-over alpha 与颜色。
+  ②markdown：使用 gpui-base 的 `TextView`（保留原生选区），`markdown.rs` 把它的 `TextViewStyle` 调成 `.chat-markdown`：
   段间距 0.4em、标题 1.15 / 1.05 / 1rem、代码块圆角边框 + muted/40、行内代码 `code-inline-bg`、表格圆角边框 + 表头 muted/60、高亮主题取 `--code-*`。
-  还差：代码块头部「语言 + 复制」一行、列表圆点（库画的是小方点）、表格只留横线（库画全框）、代码高亮要库开 tree-sitter 语言才有色。
+  自定义块补上代码块头部「语言 + 复制」、分层列表标记与只留横线的可滚动表格；各块仍由 TextView 渲染行内格式和代码，代码块、列表项与表格单元拥有独立稳定的 ID。
+  tree-sitter 开启 TS/TSX/JS、Rust、Python、Bash、HTML/CSS、JSON、TOML/YAML，代码色取主题 `--code-*`。思考行使用与 Electron 相同的 16px Brain 图标。
   ③工具：`presentation::fold_runs` / `run_summary` 照 `collapseToolRuns` / `runSummary`——连续已完成的调用折成一行「已运行 2 个命令，读取 App.tsx」（图标 layers01、chevron 常显），
   进行中的调用、提问、计划、子智能体各占一行并截断批次；单个调用行是「图标 + 类别 + 等宽主体 + 更淡的目录」，chevron 悬停才显示，展开体左侧一条细线。
   工具族按 codex 的工具名（`exec_command`、`apply_patch`、`view_image`…）。预览：`--fixture markdown|process`。
 
-- **还缺（需要新的协议数据或组件）**：标题栏与新对话页的 git 分支 / 改动 chip、composer 的上下文环、压缩分隔线的
-  「接近上限 · 128.0K → 24.4K」、工具卡展开后的详细样式、各种弹出菜单的 Nova 皮肤、右侧面板与设置页。
+- **对话搜索、思考档位与手动压缩（2026-10-24）**：`thread/search {query, includeArchived}` 按更新时间返回最多 50 个命中（线程信息 + 正文摘要）。
+  大小写不敏感的字面子串匹配；标题、项目路径、用户消息、回复正文和工具输出可搜，思考、工具参数、图片数据与压缩摘要不参与。
+  未打开的转写逐行扫描，不加载成 runtime；已打开的线程搜索当前可见状态，包含尚未完成的回复。压缩前的原文仍可搜。
+  扫描放到阻塞线程，不占 agent 的异步执行器；目前没有跨查询索引，每次查询仍需扫描冷转写。
+  ⌘K 输入防抖 200ms，旧查询和已关闭面板的回复被丢弃；结果合并即时标题/项目匹配，显示命中附近摘要、高亮（最多 3 处）、加载与失败状态，支持包括归档。
+  正文结果打开后定位到命中回合，展开其处理过程与工具输出。composer 模型菜单可选六档思考强度或跟随默认；新对话保留待选档位，已有对话经
+  `thread/model/set` 保存，切换模型保留显式档位。上下文环可点开查看用量、比例并手动压缩，工作中禁用；压缩沿用可停止、有错误反馈的服务端回合。
+  预览：`--fixture theme --model-menu`、`--fixture theme --context-menu`、`--search 关键词`；验证覆盖 Unicode 摘要、字面匹配、私有内容排除、重启、归档过滤和流式搜索。
+
+- **上下文弹窗对齐 Electron（2026-10-24）**：288px 宽、14px 内边距；「上下文窗口 + 百分比」、6px 进度条、已用与剩余/总容量、整行描边「压缩上下文」按钮，分隔线下为
+  本轮 Token、会话 Token、输出速度、步骤、缓存命中率、费用。统计行悬停解释口径，计数使用 K/M，70% / 90% 改用警告 / 危险色。
+  `thread/resume.stats` 和有 seq 的 `thread/stats/updated` 与转写共用原子快照；每条持久化的用户/回复/压缩消息增量更新，重启从完整转写重建，压缩前的用量不会消失。
+  本轮从最近用户消息起计；步骤是会话内 assistant 请求数；缓存命中率只用读取 /（未缓存输入 + 缓存读取）。成功压缩请求的用量记在压缩记录里，计入 Token、不替换最新普通请求的速度。
+  每次模型请求在开始采样到完成间测量 `durationMs` 并随回复落盘，包含首 token 等待、排除工具等待；旧记录没耗时时显示「—」。
+  弹窗挂在上下文环自己的 28px 盒子里（`.relative()` 包住环 + `ui::float`），不是挂在 composer 卡片右缘：环在模型 chip 左边，贴卡片右缘会让弹窗离打开它的图标隔一整个 chip（Electron 是 `side="top" align="end"`，右边对齐环、上方 10px）。同理 `dialog_card` 的 `max_w(relative(0.92))` 是相对父级的，父级变成环之后会塌成 26px，所以卡片自带 `max_w(288px)`。实测（2x 截图）：弹窗右缘与环盒子右缘差 0、竖直间隔 10.5px。
+
+- **models.dev 与费用（2026-10-24）**：`fv-provider` 里那份 models.dev 解码器（`models_dev/meta.rs`，与 Electron 的决定
+  版本共用同一份 `resources/models-dev/index.json`，`build.rs` 编进二进制）接上了：`ServerState` 启动时读一次目录，
+  `provider/list`、`model/list` 与 `provider/fetchModels` 的每个模型都过 `with_catalog_meta` —— 窗口、输出上限、
+  是否看图、缺失的显示名来自目录，目录不认识的模型保持存下来的值（新加的模型因此第一次请求就有真实窗口）。
+  `engine_base_url` / 协议推断不变：目录只管参数，不管端点。
+  **价格**（`fv-provider/pricing.rs`）：一条回复按它自己记录的 `provider/model` 计价，长上下文档位按**整个 prompt**
+  （未缓存输入 + 缓存读取 + 缓存写入）选，与 pi 那边一个价率的差别就在这里。压缩摘要的用量也计价——
+  `Message::Compaction` 多了一个 `model` 字段（旧转写缺省为 `None`，那样就不计价）。**只存 token，不存价钱**：
+  `SessionStats.cost` 每次由转写重算（重启、改供应商、目录更新后同一份历史得到同一个数），有新的 `LogEvent::StatsSnapshot`
+  在重算值真的变了才推一次，所以没配价格的模型不会每轮推一条相同的统计。目录没有价格的模型费用显示「—」，不写「$0.000」。
+  目录格式化模块 `fold.rs`（把上游 `api.json` 折成快照）仍是坏的，没有接线：快照由 Electron 仓库的 `pnpm sync:models`
+  生成、两版共用，这里不需要第二个生成器。
+- **排队消息与立即发送（2026-10-24）**：`turn/enqueue` / `turn/queue/remove` / `turn/queue/sendNow` / `turn/queue/resume`，
+  推送 `thread/queue/changed`（整份队列，从不是增量），`thread/resume` 也带一份 —— 中途连上的客户端画得出同样的队列。
+  队列按行存进 `fastvibe.db` 的 `queue_items` / `queue_pauses`（schema 3）：一次改动写一行，崩溃改不动邻居。
+  **一次回复结束时队列在同一段运行里接着走**：服务端在报告「空闲」**之前**把下一个提示词接上（`ThreadRuntime::chain`
+  换掉运行中的 token），所以连排两条提示词是一段工作，客户端不会看到中间闪一下空闲——那一下会让侧栏的运行标记和
+  「正在工作」掉一帧。没有可接的运行（空闲时入队、或「立即」按在空闲会话上）才 `begin` 一个新回合。
+  **「立即」不先删行**：被点的那条留在队列里并以 `preferred` 记下，等服务端真正启动它才移除，断线重连的客户端
+  因此一直看得见它；同一条不会被发第二次。
+  **两种暂停各有自己的文案**：`QueuePauseReason::{Failed, Stopped}` 存在库里，重启后照旧生效（不靠推断）。
+  失败的回合和用户自己按的停止都让队列停下——停止往往是冲着队列里那些提示词按的，自动接着发等于否决这个决定；
+  唯一的例外是「立即」，它本来就是冲着队列按的。恢复只有 `turn/queue/resume` 或再按一次「立即」。GUI：composer 上方的队列条（行内「立即」「×」、最多 5 行内滚动、
+  暂停时警告色与「继续」），composer 的发送按钮在运行中变成「加入队列」，只有输入为空时才是停止。
+  标题栏的 `✕` 与 `⋯` 之外没有新入口；预览 `--fixture queue`、`--fixture queue-paused`。
+- **重试与编辑（2026-10-24）**：`turn/rewind {threadId, turnId, text?}` —— 不带 `text` 是重试（那一轮自己的话原样再发一次），
+  带 `text` 是编辑（换成新的话）。**历史从那一轮的用户消息处切断**，所以重发的是模型当初该看到的东西；
+  转写**不缩短**：`TranscriptStore::rewind` 追加一条 `{"type":"rewind","keep":n}` 标记，读的时候在标记处截断，
+  下一条消息仍然接在被留下的最后一条后面（`last_entry_id` 也认标记）。用户写下的东西因此不会被一次误点毁掉，
+  而磁盘上的旧回复仍然在文件里、可查。运行中不能 rewind（`THREAD_BUSY`）；客户端先停再重试。
+  被丢弃的回合连同它后面的一起从画面上消失（`turn/rewound` 事件 + `ThreadView` 截断），否则重试会画成同一句提示词的第二个回复。
+  GUI：用户行悬停的「复制 / 编辑」与回复页脚的「复制 / 创建分支 / 重试」都接上了；「编辑」把话放回输入框并在 composer 上
+  方显示一条「正在编辑这条提示词，发送会重写这一轮」，Esc 或「取消」退出编辑（切换会话也会退出，避免改到刚打开的会话里的回合）。
+- **插话与检查点（2026-10-24，照 codex）**：
+  - **`turn/steer { threadId, expectedTurnId, text }`** 是 codex 的 `turn/steer`：用户的话不是新回合、也不排队，
+    而是进到**正在跑的那一轮**里。`fv_agent::Steers` 是一个队列，`run_turn` 在**每次模型请求之前**（历史刚以
+    上一批工具结果结尾时）把它取出来作为用户消息提交 —— 所以在工具批次中间插进去的话，模型的**下一次判断**就带着它，
+    而不是等它把错的事做完。三条不变式：**不会把一条用户消息塞进调用和结果之间**（provider 会拒绝，模型也会缺一半上下文）；
+    **模型已经答完之后到的插话不会丢**（答完时若队列非空则 continue 再问一次）；**没有在跑就明确拒绝**
+    （`NO_ACTIVE_TURN`，客户端据此把话变成下一条提示词 —— codex 的客户端也是这么做的）。
+    `expectedTurnId` 是必填的前置条件：客户端拿错了回合，服务端按 codex 的做法**自己重试一次**并回传真正在跑的那个 id，
+    一次往返而不是两次。
+  - **composer 在运行中优先插话，插不进去才排队**（codex 的顺序：`fail → enqueue_rejected_steer`）。插话是更好的默认，
+    因为模型的下一步就已经带着更正；排队要等它把错事做完。发送按钮的提示因此是「加入队列」只在插话不可用时才出现。
+  - **`turn/rewind` 多了 `rewindFiles`**：重试前把工作区退回那一轮开始之前。检查点在 `fv-store/checkpoint.rs`，
+    用 git 写**临时 index**（`GIT_INDEX_FILE`）再 `write-tree/commit-tree`，挂在 `refs/fastvibe/checkpoints/<会话>` 下：
+    用户自己的暂存区一个字节都不动，而**未跟踪文件（命令刚生成的那些）也在快照里** —— 逐文件拷贝做不到这一点，
+    只看工具名的检查点也做不到（`exec_command` 写的文件它认不出来）。`git stash create` 也不行：它忽略未跟踪文件，
+    而这正好是命令产物的那一类。还原用 `git restore --source`（只动 worktree，不动 index），快照里没有而现在存在的
+    文件被删除；**不是 git 仓库就没有检查点**，重试照常、如实说「没有可退的东西」。
+    捕获发生在每轮开始时（`spawn_turn`），**捕获不到就清掉**，免得把上一轮的快照当成这一轮的撤销点。
+  - **重试先问文件**：对话框三个选项（取消 / 保留文件改动 / 退回文件并重试），因为「保留」是真实答案 ——
+    用户可能在提示词和重试之间自己动过文件。还原不全时列出未退回的路径（`FilesRewound.skipped`），不说成功。
+  - **composer 上方的提示分三档**：失败红、完成中性带勾、部分完成琥珀。曾经全部走同一个红色 `send_error`，
+    于是「已退回工作区：还原 1 个文件」看起来像出错。
+    预览：`--fixture rewound`。
+- **回复推荐（2026-10-24）**：一轮回复正常收尾（`Completed`，最后一项是助手文字）后，服务端用**这条对话自己的模型**
+  发一个旁路请求，猜用户下一句，画成 composer 的 placeholder，**Tab 填入**（`thread/suggestion/changed`，
+  `thread/resume` 也带一份）。`suggestion.rs` 是纯逻辑：`material_from` 决定值不值得猜（停在工具调用、失败、被截断、
+  没有文字都不猜），`clean` 决定答案是不是一句建议（首行、剥引号/项目符号/「下一条消息：」标签、`NONE`、超过 120 字
+  都当作没有），`completed_first_line` 让请求在**第一行写完就取消**。
+  几条不显然的：
+  - **只在正常收尾后猜**，且**压缩不猜**（压缩分隔线不是用户会接话的地方），失败或停止时**撤回**已有的推荐。
+  - **新一轮开始就撤回**：用户自己那句提示词已经回答了猜测。
+  - **旁路请求用对话自己的模型**，和 Electron 版同一条理由——换一个供应商猜，那个供应商可能就是刚被证明不通的那个。
+    `ServerState::set_suggestion_model` 只给测试用（脚本化模型会把对话的脚本吃掉），生产从不设置。
+  - **输出上限不给小值**：`max_tokens` 只是天花板，短答案在大小限下一样快；而小上限会把先思考的模型截成空
+    （思考计费在同一个预算里），于是根本没有推荐。省的钱来自「第一行写完就停」，不是来自把上限调小。
+  - **15 秒超时**、异常全吞、`spawn` 成独立任务：没有任何东西等它，失败就保持原 placeholder。
+  - 设置 → 偏好设置 → 外观 → **回复推荐**（`replySuggestions`，默认开）。`tests/common` 里有一个
+    `disable_reply_suggestions`，脚本化模型的测试用它，免得旁路请求吃掉对话的脚本回复。
+  - Tab 只在**输入框为空**时生效（`EmptyComposer` key context）：有字时 Tab 仍是编辑器的缩进。Tab 徽标画在
+    placeholder 前面，文字让出空间（Electron 的 `pl-14`）。
+    预览：`--fixture suggestion`。
+- **右侧面板 · 文件树与预览（2026-10-24，M3 开始）**：协议三个方法 `workspace/readDir` / `workspace/preview` /
+  `workspace/writeFile`，实现照 Electron 的 `engine/workspace-fs.ts` 与 `engine/file-preview.ts`（那一版是规格，
+  差异就是 bug）：
+  - **列目录**：`.git` 与 `node_modules` 永不出现；只列真实文件与目录（符号链接跳过——树预览的是它显示的那条路径，
+    跟着链接就会写到别处）；目录在前、文件在后、各自按名排序。
+  - **预览按种类分开**：图片 / 视频 / PDF 只报名字与 mime，不读字节（客户端按 URL 加载，200 MB 的片子不会变成 base64）；
+    Office 三种是**要渲染的页面**而不是要抽取的文本；旧版 Office / ODF / 启用宏的变体**明确列为不支持**而不是当文本读
+    （那样会把 `.doc` 显示成一屏乱码）；超过 4 MB 或含 NUL 字节的是二进制；`.md` 排版渲染、`.csv`/`.tsv` 解析成行、
+    `.diff`/`.patch` 走 diff 视图，其余是代码。
+  - **失败要说人话**：`reason` 是 `missing` / `permission` / `not-a-file` / `unknown` 之一（**必填**），`message` 是结论，
+    `detail` 才是宿主原话（`ENOENT: ...` 只出现在小字里），`directory` 给「它本该在的目录」——一个已经不在的文件
+    不能被「在文件夹中显示」。`test/workspace.rs` 钉住「结论里不含 errno」。
+  - **写入是原子的**，并且拒绝它做不到的事：符号链接、二进制、超过上限；原来是 CRLF 的写回还是 CRLF（否则一次保存
+    就重写整个文件的换行）。
+  - **文件树操作（2026-10-26）**：公共协议 `workspace/createEntry|renameEntry|deleteEntry` 与全局 `workspace/entryChanged`；GUI 根目录/条目右键菜单接通新建、重命名、废纸篓与明确的永久删除。路径受根目录与真实父目录约束，禁止 `.git`，排他创建与内核排他重命名拒绝覆盖。
+    默认废纸篓失败不改为永久删除；macOS 使用 NSFileManager。目录改名保留各标签和草稿，通知同步其它客户端，读取代次拒绝旧目录结果。多文件夹树与 `@` 搜索已带入其它根目录；逐仓库 Git 视图仍待下一批。验证边界见 `native-completion.md`。
+  - **GUI**：`workspace/pane.rs`，每个会话一套（一个标签页属于一个对话，切会话不会把 A 的文件带到 B）；树是懒加载的
+    （展开才读，一个 2000 项的仓库根不会一次画 2000 行）。
+    **窄面板切换而不是并排**：Electron 的 `@min-[32rem]/files` 规则——380px 的默认宽度下并排会让文件只剩约 150px，
+    那不是预览。所以默认显示树，打开文件后文件占满面板、标题行有「返回」；拖宽过 512px 才并排。
+    树的列宽可拖动（默认 224，最少 120，最多占面板 75%），和侧栏一样按 pointer 位置算。
+  - **编辑与保存（2026-10-24）**：`workspace/writeFile` 接上了 GUI。**哪些文件可编辑是有规则的**
+    （Electron 的 `editableFileText`）：代码、diff、`.md`/`.markdown`、HTML 的正文**就是文件本身**，所以能写回；
+    一份从 `.docx` 抽取出来的 Markdown 不是那个文档，写回去会把它替换成抽取结果，所以不能。
+    **代码和 diff 打开就是源码，Markdown / HTML 打开是渲染后的样子**（`prefersSourceEditor`），
+    标题栏右侧的眼睛按钮切到另一边。⌘S 保存（窗口级绑定，指针在树里也生效），保存成功才清 dirty 点。
+  - **编辑器用 `EditorState` + `Editor`，不是 `TextareaState`**（2026-10-24 修正）。`gpui-base` 的文档写得很清楚：
+    `TextareaState` 是"普通多行文本"，**语言、诊断、折叠、LSP 在它上面不存在**，那些方法只在 `EditorState` 上。
+    第一版用了 `TextareaState` + `auto_grow`（后者还把它降级成 `AutoGrow`，连行号都没了），于是只能自己画
+    gutter，并因为软换行而错位——`Editor` 自带 gutter、当前行高亮、缩进参考线、代码折叠和 tree-sitter 高亮。
+    **语法特性本来就在依赖树里**：`gpui-kit` 的 features 已经开着 `tree-sitter-{rust,typescript,tsx,javascript,python,bash,html,css,toml,yaml}`，
+    `gpui-component` 在渲染时自己装 `input_highlighter_factory`，只要语言名对就上色（实测 `Cargo.toml` 键名红、字符串绿、`false` 蓝）。
+  - **`Editor` 要 `h(relative(1.0))` 才会填满面板。** 它内部是 `size.height = relative(1)` 且
+    `min_size.height = rows * line_height`（`CodeEditor` 的 `rows` 默认 2），所以父容器没有确定高度时它就塌成两行。
+    实测：不加这一行，500 行的文件只显示 3 行；加上就撑满，文件在编辑器内部滚动、gutter 跟着滚。
+    另外**预览外面不能再套 `overflow_y_scroll`**：滚动容器按内容测量子元素，编辑器在里面同样塌掉。
+  - **设置顺序**：先 `set_value`，再 `set_highlighter(language, cx)`，最后 `refresh(cx)`——`set_highlighter` 会丢掉缓存的语法树，
+    值放在它后面会让第一帧没有颜色。
+  - 预览：`--fixture pane`（读本仓库的真实目录与 `AGENTS.md`，并打开源码视图——否则截图里看不到编辑器、
+    切换按钮和 dirty 点；fixture 走的是**同一套**判断，不是另写一份形状——否则截图拍到的会是一个不存在的 bug）。
+- **变更视图（2026-10-24）**：`git.rs`（服务端）+ `pane_git.rs`（GUI），照 Electron 的
+  `main/source-control.ts` 与 `main/workspace-git.ts`。九个方法：`workspace/gitStatus` / `gitDiff` /
+  `gitComparison` / `gitHistory` / `gitStage` / `gitUnstage` / `gitDiscard` / `gitDeleteUntracked` / `gitCommit`。
+  几条规则都是 Electron 那边踩出来的，原样带过来：
+  - **读操作一律 `--no-optional-locks`。** 面板在后台轮询 `status`，而同一棵树里智能体自己可能正在
+    `git add`；带锁的读会占住 `index.lock` 让对方的写失败。
+  - **路径一律 `--literal-pathspecs`。** 一个叫 `*.txt` 的文件是文件不是模式；不加这条，一次「丢弃」
+    可能作用在比那一行更多的文件上。
+  - **`-z` 记录而不是按行解析**：Unicode、空格、重命名的目标都原样保留，路径里有换行也仍是一条。
+  - **未跟踪文件的 diff 是 `--no-index` 对 `/dev/null`，退出码 1 表示「补丁生成成功」**而不是失败 ——
+    当成失败就是未跟踪文件点开永远是空白视图。
+  - **`revision` 只接受裸 hash**，不接受 revision 表达式：`HEAD~1^{tree}` 出现在一个自称 commit id 的字段里，
+    就是让 git 去取一个不是 commit 的东西。
+  - **分页钉住第一页的 tips**：两页之间来了新提交，否则每行都会移位，读者会看到同一个提交两次、
+    又漏掉另一个。
+  - **一个文件可以同时出现在两组**（已暂存 + 又改了），因为两行回答的是两个问题：「会被提交的是什么」和
+    「还没提交的是什么」。所以 **patch 从「这一行属于哪一组」读**，不是从文件名读 —— 按文件名读的结果是
+    点开一个已暂存的改动，视图是空的。
+  - **提交按钮先暂存整个树**（Electron 的「这个提交有问题」那条），但 `gitCommit` 本身仍然只提交 index，
+    所以故意只暂存一部分的调用方拿到的就是它暂存的那些。
+  - **丢弃会问，并且说清退回到哪里**：已跟踪文件回到 **index**（不是 HEAD —— 用户可能故意暂存过），
+    未跟踪文件是删除，而且只删状态里列出的那些路径，**绝不递归删目录**。
+  - 预览：`--fixture git`。fixture 读的是**同一批 git 命令**（真实仓库、真实补丁），不是自己编一份
+    变更列表 —— 否则截图拍到的是一个没人能有的视图。
+- **`@` 文件提及（2026-10-24）**：`project_files.rs`（服务端）+ `file_mention.rs`（GUI 的纯逻辑与面板），
+  照 Electron 的 `engine/project-files.ts` 与 `lib/file-mention.ts`。协议一个方法 `workspace/searchFiles
+  { cwd, query, otherFolders }`，`blocking` 执行（走一遍大目录树不能占住跑 agent 流的执行器）。
+  排序规则是原样搬过来的，因为那是读者唯一感觉得到的部分：
+  - **git 工作树用 `ls-files` 列，不遍历** —— 被忽略的构建产因此不出现在菜单里，这正是问 git 的理由；
+    一个把 `node_modules/**` 也列出来的 `@` 菜单是文件树自己都拒绝画的噪音。
+  - **不是仓库才遍历**，跳过同样那几个重目录，**不跟随符号链接**（那会离开项目），并且有上限。
+  - **列表缓存十秒**：菜单每次按键都过滤，而 spawn 一次 git 才是慢的那部分；文件集合按秒变，不按按键变。
+  - **分数说明这个文件为什么在这里**：完全同名 > 前缀 > 后缀 > 子串 > 路径里任意位置 > 模糊匹配，
+    而**模糊匹配只作用于文件名、且必须从一个边界开始** —— 跨整条路径的子序列几乎能匹配所有东西
+    （`nope` 在 `compact-notice` 里），那会把用户真正要的文件埋掉。
+  - **多文件夹项目每个文件夹都列**，以文件夹名开头（`web/src/App.tsx`），两个 `README.md` 因此分得清；
+    从两个根都能到的文件只列一次。
+  - **`@` 必须开启一个 token**：草稿开头、空白，或任何不可能属于邮箱本地部分的字符 —— `user@host` 是普通文本。
+    **空格结束提及**。
+  - **选中的文件变成附件，不是文本**：token 从草稿里移除（留下的 `@path` 会让它被发两次），
+    文件以 `<fastvibe-attachments>` 引用块附在提示词后面 —— 与 Electron 同一个标签，所以两边写下的转写读起来一样。
+    `prompt_with_attachments` 是唯一的拼装点，**每一条发送路径**（回合、排队、插话）都经过它，
+    所以文件不会被其中某一条悄悄丢掉。
+  - 菜单开着的三个键单独绑在 `MentionOpen` key context 上（↑ / ↓ 选、Esc 关掉并留下已输入的 `@query`）——
+    否则方向键动光标、Esc 去关别的东西。
+  - **顺带修正**：右侧面板现在**默认收起**，有标签页时才展开。之前默认展开，会话旁边永远挂着一列
+    读者没要过的 380px 空白。
+  - 预览：`--fixture mention`（用本仓库真实文件和同一套排序规则，fixture 不自己编文件列表）。
+- **隔离工作区（worktree，2026-10-24）**：`worktree.rs` + 四个方法 `thread/worktree/{create,bind,unbind,list}`，
+  照 Electron 的 `main/engine/worktree.ts` 与 `main/pi/git-worktree.ts`。`Thread` 多一个 `worktree { path, branch }`。
+  规则逐条保留，因为每条都对应一次能踩到的坑：
+  - **FastVibe 创建的 worktree 落在 `~/.fastvibe/worktree/<项目>/`**。别处的话，应用就分不清哪些 checkout 是自己的
+    —— 而它在删之前必须先知道这件事。
+  - **分支已存在就检出，不存在就从 `HEAD` 建**。两者只差一个 `-b`，所以「绑到 `dev`」不需要第二条命令。
+  - **分支名是校验，不是转义**：开头的 `-` 会被 git 当成选项，空白不可能是分支名，直接拒绝比引用更便宜。
+  - **显式路径已存在是错误；默认路径已存在加后缀**。用户写了路径就是那个路径；应用自己挑的名字可以绕开残留。
+  - **只有这个应用创建的 checkout 才会被删**。用户自己做的 checkout 不归它删，`remove` 在那种情况下的回答就是什么都不做。
+  - **绑定要求同一个仓库**：另一个项目的 worktree 会给这个会话一段和它项目毫无关系的历史。
+  - **解除绑定回到项目，不是回到草稿目录**：会话在隔离之前属于那个项目，之后也属于它。checkout 留在磁盘上
+    （界面上的「解除」不删目录），因为那次实验的 diff 可能还值得看。
+  - GUI：会话右键菜单里一行（「创建隔离工作区」/「解除隔离工作区」，按是否已绑定切换）。
+  - **踩到的坑（写下来免得再踩）**：`HOME` 是进程级的，所以这一组测试**不能并行**——实测没有串行时，四次运行里
+    有两到三次是某个测试的 `HOME` 在另一个测试调用中途把它换掉。`std::sync::Mutex` 的 guard 不能跨 `await`
+    （会堵住运行时，clippy 也拒绝），所以串行用的是 `Arc<tokio::sync::Mutex<()>>` 的 owned guard。串行之后连跑四次全过。
+- **变更视图的目录树、并排 diff 与真正的行号（2026-10-24）**：`workspace/diff.rs`（纯逻辑）+ `pane_git.rs`。
+  - **行号来自 diff 本身，不是数行数。** 之前那个补丁视图是自己数行，于是 pi 的内联格式（`- 12   label`）
+    和真实 `@@` 头都会给出错位的编号。`diff.rs` 是 Electron `lib/diff.ts` 的移植，两种形状都认：
+    带 `@@ -12,4 +12,4 @@` 的真实 diff 从头部推两个计数器；pi 的格式则把**烘进每一行的号码读回来**
+    （右对齐的号段 + 一个空格）。两者都没有的手写 ```diff 围栏**不画 gutter**——一个凭行数编出来的号码
+    比没有号码更糟。7 个测试钉住这几种形状，包括「一行看起来像带号码的散文不算 diff」。
+  - **并排只配对同一变更块里的相邻增删**；context 行和 hunk 头是边界。跨过一个 context 行去配对，
+    会把两边都没改的行画成「改过」。
+  - **差异保留源码空白并横向滚动**，统一与并排均不把长行折成一列字；并排的列宽由内容区约束。
+  - **普通面板给会话保留 420px**，需要更宽时用最大化按钮；还原恢复原宽。
+  - **目录树默认开**（字段为 `flat`）。按冲突、已暂存、未暂存分别建树；一个文件同时在两组时各画一行，
+    选中态跟随 diff 来源，避免点已暂存却高亮未暂存。
+- **面板样式与开合对齐 Electron（2026-10-25）**：`workspace/panel_motion.rs`、`pane.rs`、`sidebar.rs`、`transcript.rs`。
+  - 两侧以 280ms `cubic-bezier(.22,1,.36,1)` 过渡宽度；外层裁切、内容保持原宽。反向切换从当前宽度接续，拖动直接跟随指针。
+  - 左栏完全收至 0；展开、新对话与导航回到主区域顶栏，macOS 窗口按钮留白同步变化。右栏收起时主区域显示展开图标，展开后由右栏显示收起图标。
+  - 右栏与左栏共用 8px 外留白、16px 内圆角、主题色、玻璃表层和内描边。44px 标签栏、28px 标签、添加菜单、关闭按钮、中键关闭、右键关闭其他/全部、最大化/还原均按 Electron 排布。
+  - 空态使用同样文案与入口，窄时 48px 列表，内容宽度达到 480px 时使用 88px 网格。浏览器与辅助对话入口仍提示功能待移植。
+  - 文件树使用同一份 vscode-icons 的文件/文件夹映射、根目录分组及 40px 预览工具栏；切换标签保留草稿和编辑器。
+  - Git 为左侧提交/分组文件树/历史，右侧差异的布局；分栏可拖动、文件树可收起。侧栏默认宽 288px、范围 200–480px，与 Electron 一致。
+  - 代码验证覆盖动画连续反转、时间边界、直接拖动、曲线单调性及切换标签后恢复草稿。开发 fixture：`pane-empty`、`pane-maximized`、`panels-collapsed`。
+- **项目指令与技能（2026-10-25）**：`fv-server::context` 在阻塞线程读取会话 cwd 与其它项目文件夹的指令和技能；GUI 不直接读引擎数据。
+  AGENTS 从最近仓库根到 cwd 逐级拼接，同级优先非空 `AGENTS.override.md`，全局 `~/.agents/AGENTS.md` 先加载，兄弟文件夹指令有各自作用域。
+  每轮重读以支持即时修改；单文件上限 1 MiB、累计指令上限 2 MiB，读取失败或超限会写入上下文诊断，不假装已读完。
+  技能来源为项目 `.agents/skills`、数据目录 `skills`、`~/.agents/skills` 与内置目录；同名由项目、私有、全局、内置依次优先，冲突路径会展示。
+  模型常驻只接收元数据，明确 `/skill:名称` 才注入全文；手动技能不自动提供给模型。支持 YAML 多行说明、CRLF、符号链接发现与环路去重。
+  `skill/list|read|create|import|remove` 是公共协议，设置 → 技能用同一目录；导入支持单技能与集合及其资源，重名不覆盖、失败回滚本次创建的目录。
+  删除只作用于私有技能，来源目录不归应用删除。`skills/changed` 通知所有连接，不消耗会话事件 seq。
+  自动化测试覆盖作用域、override、同名覆盖、即时刷新、多文件夹、跨会话隔离、导入回滚及模型实际收到的上下文。
+- **还缺（需要新的协议数据或组件）**：标题栏与新对话页的 git 分支 / 改动 chip、压缩分隔线的
+  「接近上限 · 128.0K → 24.4K」、工具卡展开后的详细样式、各种弹出菜单的 Nova 皮肤、右侧面板的终端 / Git / 浏览器标签页与设置页。
 
 ## 5. 数据迁移
 
@@ -430,16 +671,17 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
 
 ## 7. 里程碑
 
-每个里程碑结束：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test` 全绿，真实启动窗口跑通，
-且该里程碑范围内的面板通过与 Electron 版的视觉回归（见 4.1）。`fv-theme` / `fv-ui` / 视觉回归基础设施在 M1 就位，
+每个里程碑结束：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test` 全绿。
+本轮按用户要求仅检查代码与自动化测试，不使用 computer use；窗口操作与视觉回归须用户另行指定，不能把无界面用例写成视觉验收。
+`fv-theme` / `fv-ui` / 视觉回归基础设施在 M1 就位，
 M1 工期因此增加约 1–2 周；24 套主题与玻璃效果的**机制**在 M1 做完，M5 只剩设置页与主题选择器。
 
 | 里程碑 | 范围 | 粗估 |
 | --- | --- | --- |
-| M1 第一条通路 | workspace、`fv-protocol` 骨架与 schema 导出、`fastvibe-server`（unix socket + stdio）、`fv-client`、`fv-daemon`；导入 providers；genai 四协议验证；read/write/edit/bash；回合循环、取消、重试、转写、会话目录；GPUI 窗口：侧栏、转写、composer、模型选择 | 4–5 周 |
-| M2 对话体验 | Anthropic / Google；models.dev 与价格；上下文环与用量统计；压缩；排队与立即发送；重试 / 编辑 / 分叉；检查点回退；标题；回复推荐；todo / question；各种折叠与报错呈现 | 5–6 周 |
-| M3 工作区 | 项目与多文件夹、`@` 搜索、右侧面板（文件树、预览编辑、终端、Git 变更 / 历史 / 提交）、worktree、apply_patch | 5–6 周 |
-| M4 能力 | 子 agent、DAG、记忆、MCP、代码模式、工具搜索、技能、present / 内联预览、wry（浏览器 / HTML / Office / KaTeX）、computer-use、web_search、定时任务、goal、handoff | 6–8 周 |
+| M1 第一条通路 | workspace、`fv-protocol` 骨架与 schema 导出、`fastvibe-server`（unix socket + stdio）、`fv-client`、`fv-daemon`；导入 providers；genai 四协议验证；exec_command / apply_patch；回合循环、取消、重试、转写、会话目录；GPUI 窗口：侧栏、转写、composer、模型选择 | 4–5 周 |
+| M2 对话体验 | Anthropic / Google；models.dev 与价格；上下文环与用量统计；压缩；排队与立即发送；重试 / 编辑 / 分叉；检查点回退；标题；回复推荐；todo / question；各种折叠与报错呈现 | 5–6 周（主要通路与错误持久化已做；压缩窗口自适应待补） |
+| M3 工作区 | 项目与多文件夹、`@` 搜索、右侧面板（文件树、预览编辑、终端、Git 变更 / 历史 / 提交）、worktree、apply_patch | 5–6 周（文件树操作、多目录 Git、hunk 跳转、PTY 基础与工作区重启恢复已做；终端输入法接口、选择复制和历史回滚等交互的 macOS 定向代码与自动化验收已通过；跨平台仍列入交付） |
+| M4 能力 | 子 agent、记忆、MCP、代码模式、工具搜索、技能、内联产物预览、wry（浏览器 / HTML / Office / KaTeX）、电脑操控、web_search、定时任务 | 6–8 周（长期记忆、MCP、工具搜索、技能加载/管理及输入框选择与徽标已做；其余待补，详见补齐清单） |
 | M5 外围 | 全部设置面板、24 套主题与玻璃、i18n、通知、Dock 角标、保持唤醒、命令面板、自动归档、账号、远程访问 + Flutter 适配、SSH 主机 Agent、从其他 Agent 导入、自动更新、签名打包 | 6–8 周 |
 | M6 切换 | 全量数据导入、对照测试、灰度、Electron 版下线 | 2–3 周 |
 
@@ -489,11 +731,12 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
   与 codex 的**一处行为差异**：补丁先对每个文件在内存里算出结果（后一个 hunk 能看到前一个的修改），**全部成功才写盘**，
   codex 是边算边写，失败时留下一半。接受相对路径（相对线程工作目录）和绝对路径；没有工作目录时相对路径直接拒绝，不猜。
   codex 的 freeform（自定义工具语法）形式 genai 表达不了，所以用 JSON 函数 `{input}`，也容忍模型直接传裸字符串或 `<<'EOF'` 包装。
-- **`exec_command`**：进程组启动，超时或调用被丢弃（用户停止回合）时杀掉**整个进程组**；两路输出按到达顺序合并；
-  内存里只留头 2 MiB 加尾 2 MiB，给模型的部分用 codex 的 `truncate_middle` 按 token 预算（默认 10000，4 字节一个）截中间；
-  命令退出后只再等 300 ms 收尾，后台进程握着管道不会挂住调用。
-  **与 codex 的差异**：命令跑到结束或超时（默认 120 s），没有「超过 `yield_time_ms` 返回 session id、再用 `write_stdin` 轮询」；
-  那一套要 pty，随终端面板一起做。因此基础提示词里写明「不要用它起服务或 watcher」。
+- **`exec_command` / `write_stdin`**：每个对话持有进程池，默认等 10 秒后返回仍在运行的 session id；后续回合可输入或轮询，只返回新输出。
+  可选真实 PTY；非 PTY 使用管道，stdin 同样可继续写入。显式 `timeout_ms` 表示等待完成，到期杀掉进程，不返回后台会话；省略则没有默认硬超时。
+  Stop 取消当前回合正在操作的进程，删除对话或退出 server 清理整个池；窗口断连与正常回合结束不清理。仍有命令运行时，升级握手报告忙碌。
+  进程组启动并清理；每流独立解码 UTF-8 后合并，内存保留头尾各 512 KiB，模型输出按 token 预算（默认 10000，4 字节一个）截中间。
+  退出后至多等 300 ms 排空输出；64 个运行会话上限，已结束未读取的结果在容量压力下可淘汰。PTY I/O 使用异步 readiness，满输入队列与取消不会占住阻塞读写线程。
+  保留沙箱与审批；发送新输入时检查当前策略不能收紧后继续操作更宽权限的旧进程。Windows PTY 尚在跨平台交付范围内。
 - 每个线程用自己的工作目录（`Thread.cwd`），基础提示词 `fv_agent::base_instructions` 自写（不照搬 codex 的），说明工具用法与工作目录。
 - **真实验证**：FastVibe 中转站的 `deepseek-v4.1-flash`，`responses` 与 `chat` 两种协议下都完成了
   「新建文件 → 修改文件 → 运行验证 → 汇报」，以及「列目录 → 找关键字 → 读文件」（后一项是在还有 `read_file` / `grep_files` 时测的；去掉专用工具、全走 `exec_command` 后重测见下）。
@@ -544,34 +787,33 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 - **存储**：schema 迁移到 2（`providers`、`settings` 两张表，旧库原地升级，旧会话新字段取默认）。
 - **真实验证**（FastVibe 中转站）：不带任何模型参数启动 → 拉到 40 个模型 → 保存 → 设默认 `fastvibe/deepseek-v4.1-flash` + high → 重启后新建会话直接跑通一轮；
   响应里没有密钥，`credentials.json` 为 0600，数据库字节里没有密钥。
-- 还没做：模型元数据（上下文窗口、价格、是否看图——要等 models.dev 快照，现在 `supportsImages` 默认 true、窗口为空）、
-  把 `ProviderUpsert` 的 OAuth 登录式供应商、命令行 `--protocol` 等参数现在只是没配供应商时的后备。
+- 模型元数据（上下文窗口、价格、是否看图）已接入 models.dev；OAuth 登录式供应商仍待做。
+  命令行 `--protocol` 等参数现在只是没配供应商时的后备。
 
 **上下文压缩（`fv-agent::compact`，`thread/compact/start`）**：照 codex 的内联压缩（`rust-v0.46.0` 的 `codex/compact.rs`）做，提示词和桥接文案取自它的模板（Apache-2.0）。
 
-- **触发**：每次请求前，用「provider 报告的上一次请求用量 + 其后新增内容的估算（4 字节一个 token）」判断，达到窗口的 **90%** 就先压缩；
-  窗口取 `Model::context_window()`（来自 `ModelInfo.contextWindow`），不知道时按 128k。provider 报「请求超窗」（`ModelError.overflow`，按各家的措辞识别：
-  `context_length_exceeded`、`prompt is too long`、`token count … exceeds`、413 等；429 的 token 限流**不算**，那是等一等的事）时也压缩一次再重试，
-  压缩后仍然超窗就如实失败，不循环。
+- **触发与容量**：每次请求前计算实际投影，包含系统指令、工具声明和记忆地图，并结合 provider 已报告的用量；达到窗口的 **90%** 前后按输出与安全余量留位。
+  初始窗口取 `Model::context_window()`，不知道时按 128k。真实 `ModelError.overflow` 按被拒绝请求学习实际容量，会话内按物理地址、协议、模型和声明窗口隔离；
+  压缩后的普通回复仍超窗可以继续有界恢复，总共最多六次缩减。鉴权、限流与网络失败不缩窗，容量学习不改供应商配置。容量耗尽的历史记录指纹，继续提示不会反复请求；编辑/回退、换物理模型/窗口或手动压缩可恢复。
 - **做法**：让同一个模型按 codex 的「写给下一位 agent 的备忘录」提示写摘要（不带工具），历史换成一条 `Message::Compaction { user_messages, summary }`。
-  模型看到的是**一条用户消息**：用户原话（累计，超过约 2 万 token 时取头尾、截中间）+ 摘要。因为 `user_messages` 随每次压缩累计，**用户的原话压缩多少次都留着**。
-  摘要请求自己超窗时，和 codex 一样**从最旧的消息开始丢再问**（每次丢完重新规整，孤儿工具结果不留）。
+  模型看到的是**一条用户消息**：用户原话的有界投影 + 摘要；原文预算受实际空间约束，最多 80 KiB，保留头尾。因为 `user_messages` 保存完整原文并随每次压缩累计，**转写里的用户原话不会被截短**。
+  摘要输入独立计量，超出预算时按 UTF-8 边界分片，逐片携带摘要，完整处理用户要求、工具调用与结果；旧摘要也可重排，不再丢最旧消息。各片用量累计，取消停止后续请求。
+  摘要输出最多 4K，并给后续普通请求的必需前缀留位。只有最终请求投影装得下、自动压缩确实变小时才提交；主动输出上限不会被当作普通回复的自动重跑理由，截断的工具调用以未执行结果收尾。
 - **落盘与恢复**：`Compaction` 是转写里追加的一行，之前的消息**全部还在**（界面照常显示，中间画一条「已压缩上下文」分隔）；
   重启后 `effective_history`（最后一条 `Compaction` 起）才是送给模型的历史。内存里的历史与重启后重建的一致，有测试钉住。
 - **失败与停止**：摘要失败或用户停止，历史**原样不动**（只发 `CompactionFailed` 收起进行中的条目），自动压缩失败时该回合失败并说明原因。
-- **手动**：`thread/compact/start` 是一个独立的回合（`turn/started` → 压缩条目 → `turn/completed`），可 `turn/interrupt`；线程忙返回 `THREAD_BUSY`，没有历史返回「nothing to summarize」。
-- **上下文环**：每次请求后发 `thread/tokenUsage/updated {used, window}`（带 `seq` 的线程事件），`thread/resume` 的回复里也带一份。
+- **手动**：`thread/compact/start` 是一个独立的回合，可 `turn/interrupt`；线程忙返回 `THREAD_BUSY`，没有历史返回「nothing to summarize」。手动压缩重新探测声明容量，失败或取消恢复此前保护，只有验证通过的压缩点才采用新预算。
+- **上下文环**：请求完成、容量学习和压缩提交后经 `thread/tokenUsage/updated {used, window}` 推送，带单调 `seq`；`thread/resume` 在同一把回合锁中读取最后的有效投影，避免把固定原文预算的旧估算当成新请求用量。
 - **真实验证**（`deepseek-v4.1-flash`，窗口设成 5000）：几轮长回复后自动压缩多次触发，最后问「项目叫什么、最爱的颜色、灯塔管理员是谁」仍答对。
-- 注意：窗口很小时系统提示与工具说明本身占 ~2.8k token，所以会每轮都压缩；真实窗口（128k 以上）下不会。还没做的是 Electron 版那套「按被拒绝的请求学习实际容量、缩小触发阈值」的自适应，以及按提供方的真实窗口（models.dev）填 `contextWindow`。
+- 必需指令本身已超出容量时明确失败，不循环压缩。models.dev 的 `contextWindow` 继续作为声明窗口；容量保护实现与本批验收见 `native-completion.md` 第十一批。通用偏好的自动压缩开关仍列在未完成设置范围。
 
 **存储（`fv-store`）**：`fastvibe.db`（目录，`PRAGMA user_version` 迁移、0600、`auto_vacuum` 先于 WAL、高版本拒绝打开）+
 `sessions/<id>.jsonl`（只追加，首行 header，之后每行一条消息并用 `parentId` 串成链）。写入跟着 agent 的 `Committed` 事件走：
 消息进入历史的那一刻就落盘（`sync_data`），崩溃最多丢当前这一条，写到一半的末行读取时跳过、下次追加前补换行。
-重启后线程的历史从转写读回，`turns_from_history` 用位置派生 id（`t3`、`t3i7`）重建快照，所以同一份转写总得到同样的 id。
+重启后线程的历史从转写读回；旧转写继续用位置派生 id（`t3`、`t3i7`），新转写的独立开始/结束记录保留原回合 id、时间和错误卡片。插话、自动压缩和后续回复仍归同一轮，错误元数据不进入模型消息。分叉复制有效回合结果，回退标记按完整转写中的绝对位置和回合边界切分，避免压缩后的偏移错误或恢复旧分支错误；详见 `native-completion.md` 第十批。
 首个提示词的第一行（最多 60 字）作为线程标题。
 
-尚未做：重试之外的恢复（压缩、排队消息、steer）、内置工具里的 todo / question / present 等、provider 配置经协议下发（目前只有命令行 `--protocol/--base-url/--model-id`，密钥走 `FV_API_KEY`）、
-失败的回合在重启后不再显示错误项（错误没有对应的消息）。
+尚未做：present。失败回合错误项已通过独立转写记录持久化，无需伪造对应的模型消息。
 
 ## 8. 风险
 

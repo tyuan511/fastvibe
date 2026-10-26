@@ -14,10 +14,22 @@ use gpui_kit::*;
 
 mod ask;
 mod composer;
+mod diff;
+mod file_mention;
+mod mcp;
+mod memory;
 mod palette;
+mod pane;
+mod pane_git;
+mod pane_terminal;
+mod panel_motion;
 mod projects;
+mod queue_tray;
 pub mod settings;
 mod sidebar;
+mod sidebar_actions;
+mod skill_picker;
+mod skills;
 mod transcript;
 
 use crate::backend::{Backend, BackendEvent};
@@ -27,7 +39,6 @@ use crate::view_model::{Applied, ThreadView};
 /// The Electron app's Chinese copy (`locales/zh`), word for word.
 mod text {
     pub const NEW_CHAT: &str = "新对话";
-    pub const PLUGINS: &str = "插件";
     pub const TASKS: &str = "定时任务";
     pub const PROJECTS: &str = "项目";
     pub const NO_PROJECTS: &str = "暂无项目";
@@ -46,12 +57,44 @@ mod text {
     pub const VIEW_CHANGES: &str = "查看变更";
     pub const PROCESSED: &str = "已处理";
     pub const UNTITLED: &str = "新对话";
+    pub const QUEUE_SEND_NOW: &str = "立即";
+    pub const QUEUE_RESUME: &str = "继续";
+    pub const QUEUE_UNIT: &str = "条排队中";
+    pub const QUEUE_PAUSED: &str = "上次回复出错，队列已暂停";
+    pub const QUEUE_PAUSED_STOPPED: &str = "已停止，队列已暂停";
+    pub const EDIT_HINT: &str = "正在编辑这条提示词，发送会重写这一轮";
+    pub const PANE_TERMINAL: &str = "终端";
+    pub const PANE_GIT: &str = "变更";
+    pub const GIT_COMMIT: &str = "提交";
+    pub const EDIT_CANCEL: &str = "取消";
 }
 
 enum Status {
     Connecting,
     Ready,
     Failed(String),
+}
+
+/// What the composer is saying about the last thing it did.
+///
+/// A failure is red; a rewind that worked is not. Putting the workspace back is a *good*
+/// outcome and draw it as an error taught people to read 「已退回工作区」 as a problem.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Notice {
+    /// Something did not happen. Red, with the reason.
+    Failed(String),
+    /// Something did happen, and it is worth knowing. Muted, beside a check.
+    Done(String),
+    /// It happened, but not completely. Amber: the retry runs and the tree is only partly back.
+    Partial(String),
+}
+
+impl Notice {
+    pub(super) fn text(&self) -> &str {
+        match self {
+            Self::Failed(text) | Self::Done(text) | Self::Partial(text) => text,
+        }
+    }
 }
 
 pub struct Workspace {
@@ -68,10 +111,14 @@ pub struct Workspace {
     defaults: ModelDefaults,
     /// The model picked on the empty page, before a conversation exists.
     pending_model: Option<String>,
+    pending_thinking: Option<ThinkingLevel>,
     /// The project a new conversation will start in (the composer's 选择项目 chip).
     draft_project: Option<String>,
     project_menu: bool,
     model_menu: bool,
+    thinking_menu: bool,
+    context_menu: bool,
+    compact_pending: HashSet<ThreadId>,
     input: Entity<TextareaState>,
     scroll: ScrollHandle,
     /// How far through each waiting question set the user is.
@@ -86,17 +133,80 @@ pub struct Workspace {
     /// Thoughts and tool calls the user opened, by item id.
     open_items: HashSet<String>,
     /// Projects whose chats the user folded away, by project path.
-    closed_projects: HashSet<String>,
+    sidebar_resize: Option<f32>,
+    sidebar_drag_offset: f32,
+    pane_drag_offset: f32,
+    sidebar_layout: Option<(f32, bool)>,
+    sidebar_motion: panel_motion::PanelMotion,
+    pane_motion: panel_motion::PanelMotion,
+    sidebar_scroll: ScrollHandle,
+    sidebar_scroll_direction: i8,
+    sidebar_scroll_task: Option<Task<()>>,
+    sidebar_drop: Option<(String, String, bool)>,
+    navigation: crate::sidebar_state::History,
+    sidebar_menu: Option<Point<Pixels>>,
+    sidebar_notice: Option<String>,
     /// Scroll to the end once the transcript has been laid out (opening a conversation).
     stick_to_bottom: bool,
     /// 设置, while it is open (it covers the workspace, which keeps its state behind it).
     settings: Option<settings::SettingsState>,
     /// ⌘K: the search box, while it is open.
     search_box: Option<Entity<InputState>>,
+    /// The turn the composer's next submission rewrites (编辑), if any.
+    editing_turn: Option<String>,
+    /// The `@` file menu, while the caret is inside a mention.
+    mention: Option<file_mention::MentionState>,
+    skill_picker: skill_picker::Picker,
+    /// A draft the capture fixture puts into the composer before opening the `@` menu.
+    pending_fixture_draft: Option<String>,
+    /// Files picked from `@`. They travel with the prompt as references, the same way a dropped
+    /// file does, so the draft itself does not carry `@path`.
+    attached_files: Vec<fv_protocol::types::FileHit>,
+    /// The right pane, per conversation: its tabs, the tree it has read and the file on show.
+    panes: HashMap<String, pane::PaneState>,
+    pane_storage: Option<crate::pane_layout::Storage>,
+    pane_save_pending: bool,
+    /// The terminal tabs, by tab id: their pty, the frame on screen, and the size last reported.
+    terminals: HashMap<String, pane_terminal::TerminalView>,
+    /// The keyboard focus a terminal needs before it can take keys.
+    terminal_focus: gpui_kit::FocusHandle,
+    terminal_copy_epoch: u64,
+    /// The 变更 tab's state, per conversation: git is a different reader from the file tree, and
+    /// its status, patch and history are not what the tree holds.
+    git_views: HashMap<String, pane_git::GitView>,
+    /// Whether the pane is collapsed, and how wide it is when it is not. Remembered per client,
+    /// not per conversation: the pane's width is a property of the window, not of a chat.
+    side_pane_collapsed: bool,
+    side_pane_width: f32,
+    side_pane_maximized: bool,
+    side_pane_resize: Option<f32>,
+    /// Actual inner width after window constraints (also used by responsive pane content).
+    pane_content_width: f32,
+    pane_menu: Option<(Point<Pixels>, Option<String>)>,
+    entry_menu: Option<pane::entries::EntryMenu>,
+    entry_dialog: Option<pane::entries::EntryDialog>,
+    /// The file tree's column while it is being dragged, if it is.
+    pane_tree_resize: Option<f32>,
+    /// A file the pane was asked to open by a click, which has no `Window` of its own. The next
+    /// render performs it — opening a file builds the editor, and that needs one.
+    pending_open: Option<(String, String)>,
+    /// 回复推荐: the standing guess, mirrored from the thread so a key handler can read it
+    /// without borrowing the view.
+    compose_suggestion: Option<String>,
+    /// The placeholder currently written into the text area, so a frame that changes nothing
+    /// writes nothing (and the guessed text is not re-set on every keystroke).
+    placeholder_shown: String,
+    search_results: palette::SearchResults,
+    search_task: Option<Task<()>>,
+    search_target: Option<(ThreadId, String)>,
+    search_anchor: ScrollAnchor,
+    search_jump_pending: bool,
     /// Dev only: send even with no model listed (the echo server has none).
     pub(super) skip_model_check: bool,
     /// Why the last send did not go through, shown above the composer.
-    send_error: Option<String>,
+    /// What the composer says about the last thing it did: a failure, or the result of a rewind
+    /// that worked — the two must not look alike, so each carries its own tone.
+    notice: Option<Notice>,
     /// 创建项目 / 编辑项目, while its dialog is open.
     project_dialog: Option<projects::ProjectDialog>,
     /// The folders the user works in, as the server lists them.
@@ -125,14 +235,52 @@ impl Workspace {
     ) -> Self {
         let mut this = Self::base(palette, window, cx);
         this.live_appearance = true;
+        let layout_path = data_dir.join("gui-workspace.json");
+        let recovery = cx
+            .background_executor()
+            .spawn(async move { crate::pane_layout::Storage::open(layout_path) });
+        cx.observe_self(|this, cx| this.schedule_pane_save(cx))
+            .detach();
+        cx.on_app_quit(|this, cx| {
+            let job = this.pane_save_job(cx);
+            cx.background_executor().spawn(async move {
+                if let Some(job) = job
+                    && let Err(error) = job.run()
+                {
+                    eprintln!("workspace recovery save: {error}");
+                }
+            })
+        })
+        .detach();
+        cx.on_release(|this, cx| {
+            if let Some(job) = this.pane_save_job(cx)
+                && let Err(error) = job.run()
+            {
+                eprintln!("workspace recovery save: {error}");
+            }
+        })
+        .detach();
         let (ready, mut events) = Backend::start(data_dir, server_bin);
         cx.spawn(async move |this, cx| {
+            let recovery = recovery.await;
             let backend = ready.await;
             this.update(cx, |this, cx| {
                 if let Some(b) = backend {
                     this.backend = Some(b);
                     this.status = Status::Ready;
+                    match recovery {
+                        Ok(storage) => this.restore_panes(storage),
+                        Err(error) => {
+                            this.notice = Some(Notice::Failed(format!(
+                                "无法读取工作区恢复信息，原文件已保留：{error}"
+                            )))
+                        }
+                    }
                     this.refresh_all(cx);
+                    if let Some(input) = &this.search_box {
+                        let query = input.read(cx).value().trim().to_lowercase();
+                        this.search_palette(query, cx);
+                    }
                     if let Some(id) = this.selected.clone() {
                         this.select(id, cx);
                     }
@@ -183,6 +331,9 @@ impl Workspace {
             .collect();
         this.models = fixture.models;
         this.defaults = fixture.defaults;
+        this.notice = fixture.rewound_notice.map(Notice::Done);
+        this.compose_suggestion = fixture.suggestion;
+        this.pending_fixture_draft = fixture.draft;
         if let Some(view) = fixture.view {
             this.selected = Some(view.thread.id.clone());
             this.views.insert(view.thread.id.clone(), view);
@@ -199,12 +350,20 @@ impl Workspace {
         // The composer has the keyboard from the start, as in the Electron app.
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter {
-                secondary: false,
-                shift: false,
-            } = ev
-            {
-                this.send(window, cx);
+            match ev {
+                // Every keystroke can open, narrow or close a `@` mention.
+                InputEvent::Change => this.composer_changed(window, cx),
+                InputEvent::Focus => this.composer_focus(true, cx),
+                InputEvent::Blur => this.composer_focus(false, cx),
+                // Enter takes the highlighted file while the `@` menu is open, rather than
+                // sending a half-typed path.
+                InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false,
+                } if !this.accept_skill(window, cx) && !this.accept_mention(window, cx) => {
+                    this.send(window, cx)
+                }
+                _ => {}
             }
         })
         .detach();
@@ -219,6 +378,8 @@ impl Workspace {
             },
         )
         .detach();
+        let scroll = ScrollHandle::new();
+        let search_anchor = ScrollAnchor::for_handle(scroll.clone());
         let this = Self {
             palette,
             backend: None,
@@ -231,11 +392,15 @@ impl Workspace {
             models: Vec::new(),
             defaults: ModelDefaults::default(),
             pending_model: None,
+            pending_thinking: None,
             draft_project: None,
             project_menu: false,
             model_menu: false,
+            thinking_menu: false,
+            context_menu: false,
+            compact_pending: HashSet::new(),
             input,
-            scroll: ScrollHandle::new(),
+            scroll,
             ask: HashMap::new(),
             ask_input,
             panel_focus: cx.focus_handle(),
@@ -244,12 +409,56 @@ impl Workspace {
             access_menu: false,
             open_folds: HashSet::new(),
             open_items: HashSet::new(),
-            closed_projects: HashSet::new(),
+            sidebar_resize: None,
+            sidebar_drag_offset: 0.0,
+            pane_drag_offset: 0.0,
+            sidebar_layout: None,
+            sidebar_motion: Default::default(),
+            pane_motion: Default::default(),
+            sidebar_scroll: ScrollHandle::new(),
+            sidebar_scroll_direction: 0,
+            sidebar_scroll_task: None,
+            sidebar_drop: None,
+            navigation: Default::default(),
+            sidebar_menu: None,
+            sidebar_notice: None,
             stick_to_bottom: true,
             settings: None,
             search_box: None,
+            editing_turn: None,
+            mention: None,
+            skill_picker: Default::default(),
+            pending_fixture_draft: None,
+            attached_files: Vec::new(),
+            panes: HashMap::new(),
+            pane_storage: None,
+            pane_save_pending: false,
+            terminals: HashMap::new(),
+            terminal_focus: cx.focus_handle(),
+            terminal_copy_epoch: 0,
+            git_views: HashMap::new(),
+            // Collapsed until something opens a tab in it: an empty 380px column beside the
+            // conversation is a column the reader did not ask for, and the Electron pane starts
+            // closed for the same reason. A tab appearing (a file, 变更) opens it.
+            side_pane_collapsed: true,
+            side_pane_width: pane::DEFAULT_WIDTH,
+            side_pane_maximized: false,
+            side_pane_resize: None,
+            pane_content_width: pane::DEFAULT_WIDTH - 16.0,
+            pane_menu: None,
+            entry_menu: None,
+            entry_dialog: None,
+            pane_tree_resize: None,
+            pending_open: None,
+            compose_suggestion: None,
+            placeholder_shown: text::PLACEHOLDER.to_string(),
+            search_results: Default::default(),
+            search_task: None,
+            search_target: None,
+            search_anchor,
+            search_jump_pending: false,
             skip_model_check: false,
-            send_error: None,
+            notice: None,
             project_dialog: None,
             projects: Vec::new(),
             project_row_menu: None,
@@ -273,6 +482,27 @@ impl Workspace {
             }
         })
         .detach();
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                let res = this.update(cx, |this, cx| {
+                    let running = this
+                        .selected
+                        .as_ref()
+                        .and_then(|id| this.views.get(id))
+                        .is_some_and(|v| v.running);
+                    if running {
+                        cx.notify();
+                    }
+                });
+                if res.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         this
     }
 
@@ -282,8 +512,9 @@ impl Workspace {
     }
 
     /// The right-click menu of a sidebar row.
-    fn thread_menu_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn thread_menu_view(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (id, at) = self.thread_menu.clone()?;
+        let at = sidebar_actions::popup_origin(at, 160.0, 176.0, window);
         let thread = self.threads.iter().find(|t| t.id == id)?;
         let p = &self.palette;
         let hover = p.c(Token::Accent);
@@ -293,92 +524,144 @@ impl Workspace {
                 .child(crate::ui::icon(glyph, 14.0, p.c(Token::MutedForeground)))
                 .child(label)
         };
-        let (rename_id, pin_id, archive_id) = (id.clone(), id.clone(), id);
-        let menu = settings::popover(p)
-            .absolute()
-            .left(at.x)
-            .top(at.y)
-            .w(px(160.0))
-            .child(
-                item("rename", "pencil-edit02", "重命名").on_click(cx.listener(
-                    move |this, _, window, cx| this.begin_rename(rename_id.clone(), window, cx),
-                )),
-            )
-            .child(
-                item("pin", "pin", if pinned { "取消置顶" } else { "置顶" }).on_click(cx.listener(
+        let fork_id = id.clone();
+        let bound = thread.worktree.clone();
+        let (rename_id, pin_id, archive_id, delete_id) =
+            (id.clone(), id.clone(), id.clone(), id.clone());
+        let (worktree_id, unbind_id) = (id.clone(), id);
+        let menu =
+            settings::popover(p)
+                .absolute()
+                .left(at.x)
+                .top(at.y)
+                .w(px(160.0))
+                .child(
+                    item("rename", "pencil-edit02", "重命名").on_click(cx.listener(
+                        move |this, _, window, cx| this.begin_rename(rename_id.clone(), window, cx),
+                    )),
+                )
+                .child(
+                    item("pin", "pin", if pinned { "取消置顶" } else { "置顶" }).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.thread_menu = None;
+                            this.update_thread(
+                                ThreadUpdateParams {
+                                    thread_id: pin_id.clone(),
+                                    title: None,
+                                    archived: None,
+                                    pinned: Some(!pinned),
+                                },
+                                cx,
+                            )
+                        }),
+                    ),
+                )
+                .child(item("archive", "archive04", "归档").on_click(cx.listener(
                     move |this, _, _, cx| {
                         this.thread_menu = None;
                         this.update_thread(
                             ThreadUpdateParams {
-                                thread_id: pin_id.clone(),
+                                thread_id: archive_id.clone(),
                                 title: None,
-                                archived: None,
-                                pinned: Some(!pinned),
+                                archived: Some(true),
+                                pinned: None,
                             },
                             cx,
                         )
                     },
-                )),
-            )
-            .child(item("archive", "archive04", "归档").on_click(cx.listener(
-                move |this, _, _, cx| {
-                    this.thread_menu = None;
-                    this.update_thread(
-                        ThreadUpdateParams {
-                            thread_id: archive_id.clone(),
-                            title: None,
-                            archived: Some(true),
-                            pinned: None,
+                )))
+                .child(item("fork", "message-square-plus", "创建分支").on_click(
+                    cx.listener(move |this, _, _, cx| this.fork_thread(fork_id.clone(), cx)),
+                ))
+                // One row, because the two states are one question: is this conversation running
+                // in its own checkout, and do you want it to? The label says where it is when it
+                // is, so the row is a statement and not just a command.
+                .child(match bound.is_some() {
+                    true => item("worktree", "git-branch", "解除隔离工作区").on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.thread_menu = None;
+                            this.unbind_worktree(unbind_id.clone(), cx)
                         },
-                        cx,
-                    )
-                },
-            )));
+                    )),
+                    false => item("worktree", "git-branch", "创建隔离工作区").on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.thread_menu = None;
+                            this.create_worktree(worktree_id.clone(), cx)
+                        }),
+                    ),
+                })
+                .child(
+                    item("delete", "delete02", "删除")
+                        .text_color(p.c(Token::Destructive))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.confirm_delete_thread(delete_id.clone(), window, cx)
+                        })),
+                );
         Some(crate::ui::float(menu).into_any_element())
     }
 
-    fn project_row_menu_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn project_row_menu_view(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (path, at) = self.project_row_menu.clone()?;
+        // Wide enough for the longest label *with* its glyph: 8+14+8 of chrome, then nine
+        // CJK cells at 14px. The Electron menu is `w-40` because its label is 在访达中显示.
+        let width = 180.0;
+        let at = sidebar_actions::popup_origin(at, width, 144.0, window);
         let p = &self.palette;
         let hover = p.c(Token::Accent);
+        // Every row carries a glyph: `menu_item` is a flex row with an 8px gap, so a row
+        // without one starts its text 22px to the left of its neighbours and the menu reads
+        // as two lists that happen to share a popover.
+        let item = |key: &'static str, glyph: &'static str, label: &'static str| {
+            settings::menu_item(SharedString::from(key), false, hover)
+                .child(crate::ui::icon(glyph, 14.0, p.c(Token::MutedForeground)))
+                .child(label)
+        };
         let edit_path = path.clone();
+        let reveal_path = path.clone();
+        let new_path = path.clone();
         let menu = settings::popover(p)
             .absolute()
             .left(at.x)
             .top(at.y)
-            .w(px(160.0))
+            .w(px(width))
+            .child(item("pm-new", "message-square-plus", "新对话").on_click(
+                cx.listener(move |this, _, _, cx| this.new_chat(Some(new_path.clone()), cx)),
+            ))
             .child(
-                settings::menu_item(SharedString::from("pm-edit"), false, hover)
-                    .child(crate::ui::icon(
-                        "pencil-edit02",
-                        14.0,
-                        p.c(Token::MutedForeground),
-                    ))
-                    .child("编辑项目")
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_project_dialog(Some(edit_path.clone()), window, cx)
-                    })),
+                item("pm-reveal", "folder-root", "在文件管理器中显示").on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.close_menus(cx);
+                        cx.reveal_path(std::path::Path::new(&reveal_path));
+                    },
+                )),
             )
             .child(
-                settings::menu_item(SharedString::from("pm-remove"), false, hover)
-                    .child(crate::ui::icon(
-                        "delete02",
-                        14.0,
-                        p.c(Token::MutedForeground),
-                    ))
-                    .child("移除项目")
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.remove_project(path.clone(), cx)),
-                    ),
+                item("pm-edit", "pencil-edit02", "编辑项目").on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        this.open_project_dialog(Some(edit_path.clone()), window, cx)
+                    },
+                )),
+            )
+            .child(
+                item("pm-remove", "delete02", "移除项目").on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        this.confirm_remove_project(path.clone(), window, cx)
+                    },
+                )),
             );
         Some(crate::ui::float(menu).into_any_element())
     }
 
     fn any_menu_open(&self) -> bool {
         self.model_menu
+            || self.thinking_menu
+            || self.context_menu
             || self.access_menu
             || self.approval_menu
             || self.project_menu
+            || self.pane_menu.is_some()
+            || self.entry_menu.is_some()
+            || self.sidebar_menu.is_some()
             || self.thread_menu.is_some()
             || self.project_row_menu.is_some()
             || self.settings.as_ref().is_some_and(|s| {
@@ -390,7 +673,12 @@ impl Workspace {
     }
 
     fn close_menus(&mut self, cx: &mut Context<Self>) {
+        self.pane_menu = None;
+        self.entry_menu = None;
+        self.sidebar_menu = None;
         self.model_menu = false;
+        self.thinking_menu = false;
+        self.context_menu = false;
         self.access_menu = false;
         self.approval_menu = false;
         self.project_menu = false;
@@ -419,6 +707,31 @@ impl Workspace {
         self.open_settings(section, window, cx);
     }
 
+    pub fn show_search(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_palette(window, cx);
+        if let Some(input) = self.search_box.clone() {
+            input.update(cx, |st, cx| st.set_value(query, window, cx));
+        }
+    }
+
+    pub fn show_context_menu(&mut self, cx: &mut Context<Self>) {
+        self.close_menus(cx);
+        self.context_menu = true;
+        cx.notify();
+    }
+
+    /// Dev only: open the first project row's menu, to look at what it holds.
+    pub fn show_project_row_menu(&mut self, cx: &mut Context<Self>) {
+        self.close_menus(cx);
+        let path = self
+            .projects
+            .first()
+            .map(|p| p.path.clone())
+            .unwrap_or_else(|| "/tmp".into());
+        self.project_row_menu = Some((path, point(px(150.0), px(180.0))));
+        cx.notify();
+    }
+
     /// Dev only: open every fold, thought and tool call, to look at what is inside.
     pub fn expand_all(&mut self, cx: &mut Context<Self>) {
         for view in self.views.values() {
@@ -441,6 +754,14 @@ impl Workspace {
     /// Dev only: open the composer's model list, to look at a popup.
     pub fn show_model_menu(&mut self, cx: &mut Context<Self>) {
         self.model_menu = true;
+        self.thinking_menu = false;
+        cx.notify();
+    }
+
+    /// Dev only: open the composer's model list and thinking submenu.
+    pub fn show_thinking_menu(&mut self, cx: &mut Context<Self>) {
+        self.model_menu = true;
+        self.thinking_menu = true;
         cx.notify();
     }
 
@@ -459,10 +780,7 @@ impl Workspace {
 
     /// Open a conversation by id once the list has loaded (used by the capture flow).
     pub fn open(&mut self, id: ThreadId, cx: &mut Context<Self>) {
-        self.selected = Some(id.clone());
-        if self.backend.is_some() {
-            self.select(id, cx);
-        }
+        self.select(id, cx);
     }
 
     // ---- talking to the server
@@ -496,15 +814,25 @@ impl Workspace {
 
     /// Change a shared appearance setting: shown at once, then told to the server.
     pub(super) fn patch_settings(&mut self, patch: AppSettingsPatch, cx: &mut Context<Self>) {
+        self.appearance_dirty |= patch.theme_mode.is_some()
+            || patch.light_theme.is_some()
+            || patch.dark_theme.is_some()
+            || patch.glass.is_some();
         self.app_settings.apply(patch.clone());
-        self.appearance_dirty = true;
         cx.notify();
         let Some(b) = self.backend.clone() else {
             return;
         };
         let call = b.call::<SettingsSet>(patch);
-        cx.spawn(async move |_, _| {
-            let _ = call.await;
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = call.await {
+                this.update(cx, |this, cx| {
+                    this.sidebar_notice = Some(format!("无法保存设置：{e}"));
+                    this.refresh_app_settings(cx);
+                    cx.notify();
+                })
+                .ok();
+            }
         })
         .detach();
     }
@@ -538,6 +866,7 @@ impl Workspace {
             if let Ok(r) = call.await {
                 this.update(cx, |this, cx| {
                     this.projects = r.projects;
+                    this.refresh_skills(cx);
                     cx.notify();
                 })
                 .ok();
@@ -558,8 +887,14 @@ impl Workspace {
         cx.notify();
         let call = b.call::<ProjectRemove>(ProjectPathParams { path });
         cx.spawn(async move |this, cx| {
-            let _ = call.await;
-            this.update(cx, |this, cx| this.refresh_projects(cx)).ok();
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                if let Err(e) = result {
+                    this.sidebar_notice = Some(format!("无法移除项目：{e}"));
+                }
+                this.refresh_projects(cx);
+            })
+            .ok();
         })
         .detach();
     }
@@ -587,8 +922,11 @@ impl Workspace {
         cx.notify();
         let call = b.call::<ThreadUpdate>(patch);
         cx.spawn(async move |this, cx| {
-            let _ = call.await;
+            let result = call.await;
             this.update(cx, |this, cx| {
+                if let Err(e) = result {
+                    this.sidebar_notice = Some(format!("无法更新对话：{e}"));
+                }
                 this.refresh_threads(cx);
                 this.refresh_archived(cx);
             })
@@ -607,10 +945,17 @@ impl Workspace {
         }
         self.threads.retain(|t| t.id != id);
         cx.notify();
-        let call = b.call::<ThreadDelete>(ThreadIdParams { thread_id: id });
+        let call = b.call::<ThreadDelete>(ThreadIdParams {
+            thread_id: id.clone(),
+        });
         cx.spawn(async move |this, cx| {
-            let _ = call.await;
+            let result = call.await;
             this.update(cx, |this, cx| {
+                if let Err(e) = result {
+                    this.sidebar_notice = Some(format!("无法删除对话：{e}"));
+                } else {
+                    this.forget_pane(&id, cx);
+                }
                 this.refresh_threads(cx);
                 this.refresh_archived(cx);
             })
@@ -660,8 +1005,22 @@ impl Workspace {
                     }
                     cx.notify();
                 }
-                InputEvent::Blur => {
+                // Leaving the field saves what is in it: an empty title is a cancel, not a
+                // rename to nothing.
+                InputEvent::Blur if this.rename.as_ref().is_some_and(|(id, _)| id == &target) => {
+                    let title = input.read(cx).value().trim().to_string();
                     this.rename = None;
+                    if !title.is_empty() {
+                        this.update_thread(
+                            ThreadUpdateParams {
+                                thread_id: target.clone(),
+                                title: Some(title),
+                                archived: None,
+                                pinned: None,
+                            },
+                            cx,
+                        );
+                    }
                     cx.notify();
                 }
                 _ => {}
@@ -731,8 +1090,23 @@ impl Workspace {
     }
 
     fn select(&mut self, id: ThreadId, cx: &mut Context<Self>) {
+        if self
+            .search_target
+            .as_ref()
+            .is_some_and(|(target, _)| target != &id)
+        {
+            self.search_target = None;
+            self.search_jump_pending = false;
+        }
+        self.navigation
+            .visit(self.selected.clone(), Some(id.clone()));
+        self.cancel_terminal_compositions(cx);
         self.selected = Some(id.clone());
-        self.model_menu = false;
+        self.close_menus(cx);
+        // A pending edit belongs to the conversation it was started in; switching away abandons
+        // it rather than silently rewriting a turn in the chat the user just opened. The words
+        // stay in the composer — they are still what the user typed.
+        self.cancel_edit(cx);
         cx.notify();
         self.load_view(id, cx);
     }
@@ -768,8 +1142,25 @@ impl Workspace {
                     for (rid, a) in mine {
                         view.ask_approval(rid, a);
                     }
+                    if let Some((target, query)) = &this.search_target
+                        && target == &id
+                        && this.selected.as_ref() == Some(&id)
+                        && let Some(turn) =
+                            view.turns.iter().find(|t| palette::turn_matches(t, query))
+                    {
+                        this.open_folds.insert(turn.id.clone());
+                        for item in &turn.items {
+                            if matches!(item, Item::ToolCall { .. }) {
+                                this.open_items
+                                    .insert(crate::view_model::item_id(item).to_string());
+                                this.open_items
+                                    .insert(format!("run:{}", crate::view_model::item_id(item)));
+                            }
+                        }
+                        this.search_jump_pending = true;
+                    }
                     this.views.insert(id, view);
-                    this.stick_to_bottom = true;
+                    this.stick_to_bottom = !this.search_jump_pending;
                     cx.notify();
                 })
                 .ok();
@@ -780,7 +1171,22 @@ impl Workspace {
 
     fn on_event(&mut self, event: BackendEvent, cx: &mut Context<Self>) {
         match event {
-            BackendEvent::Connected { .. } => {}
+            BackendEvent::Connected { version_mismatch } => {
+                self.refresh_mcp(cx);
+                self.refresh_skills(cx);
+                self.invalidate_skill_picker(cx);
+                if let Some(settings) = &mut self.settings {
+                    settings.memory = Default::default();
+                }
+                self.refresh_memory(cx);
+                if version_mismatch {
+                    self.sidebar_notice = Some(
+                        "应用更新尚未完成。请等待任务结束、关闭仍在运行的终端后重新打开窗口，以启用最新功能。"
+                            .into(),
+                    );
+                    cx.notify();
+                }
+            }
             BackendEvent::Failed(message) => {
                 self.status = Status::Failed(message);
                 cx.notify();
@@ -817,14 +1223,28 @@ impl Workspace {
                         self.refresh_archived(cx);
                     }
                     ServerNotification::SettingsChanged(s) => {
+                        self.appearance_dirty |= self.app_settings.theme_mode != s.theme_mode
+                            || self.app_settings.light_theme != s.light_theme
+                            || self.app_settings.dark_theme != s.dark_theme
+                            || self.app_settings.glass != s.glass;
                         self.app_settings = s.clone();
-                        self.appearance_dirty = true;
                     }
                     ServerNotification::ProvidersChanged(_) => {
                         self.refresh_models(cx);
                         if self.settings.is_some() {
                             self.refresh_providers(cx);
                         }
+                    }
+                    ServerNotification::SkillsChanged(_) => {
+                        self.refresh_skills(cx);
+                        self.invalidate_skill_picker(cx);
+                    }
+                    ServerNotification::McpChanged(_) => self.refresh_mcp(cx),
+                    ServerNotification::MemoryChanged(state) => {
+                        self.memory_changed(state.clone(), cx)
+                    }
+                    ServerNotification::WorkspaceEntryChanged(change) => {
+                        self.on_entry_changed(change, cx)
                     }
                     _ => {}
                 }
@@ -844,15 +1264,138 @@ impl Workspace {
                 ) {
                     self.refresh_threads(cx);
                 }
-                self.scroll.scroll_to_bottom();
+                if self.search_target.is_none() {
+                    self.scroll.scroll_to_bottom();
+                }
+                self.sync_suggestion();
                 cx.notify();
             }
         }
     }
 
     pub(super) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.entry_dialog.is_some() {
+            return;
+        }
         let text = self.input.read(cx).value().trim().to_string();
-        if text.is_empty() || self.palette_blocked() {
+        if text.is_empty() {
+            return;
+        }
+        // Editing a turn is a rewrite of it: the reply it produced is discarded and the corrected
+        // words run in its place. It cannot be an ordinary send — that would put the correction
+        // after the answer it was meant to replace.
+        if let Some(turn_id) = self.editing_turn.clone() {
+            let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
+                return;
+            };
+            if self.palette_blocked() {
+                return;
+            }
+            self.input
+                .update(cx, |state, cx| state.set_value("", window, cx));
+            self.editing_turn = None;
+            self.notice = None;
+            let handle_input = self.input.clone();
+            let window_handle = window.window_handle();
+            cx.spawn(async move |this, cx| {
+                let result = b
+                    .call::<TurnRewind>(TurnRewindParams {
+                        thread_id: id,
+                        turn_id,
+                        text: Some(text.clone()),
+                        // An edit is about the words; the files the turn changed are the user's
+                        // to keep until they ask otherwise.
+                        rewind_files: false,
+                    })
+                    .await;
+                if let Err(e) = result {
+                    let _ = cx.update_window(window_handle, |_, window, cx| {
+                        handle_input.update(cx, |st, cx| {
+                            st.set_value(crate::skill_draft::content(text.clone()), window, cx)
+                        });
+                    });
+                    this.update(cx, |this, cx| {
+                        this.fail(format!("无法重新发送：{e}"), cx);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            })
+            .detach();
+            return;
+        }
+        // A reply in flight does not block the composer. What happens to the words is codex's
+        // order: steer the live run first, and only fall back to the queue when there is no run
+        // to steer. Steering is the better default because the model's next decision already
+        // contains the correction; queueing waits until it has finished doing it wrong.
+        if let Some(id) = self.selected.clone()
+            && self.views.get(&id).is_some_and(|v| v.running)
+        {
+            let Some(b) = self.backend.clone() else {
+                return;
+            };
+            // No live turn id means the reply is in its last instant (or a queued prompt is
+            // about to start): there is nothing to steer, so the words go to the queue.
+            let Some(expected) = self.views.get(&id).and_then(|v| v.running_turn()) else {
+                self.queue_while_running(id, text, window, cx);
+                return;
+            };
+            self.input
+                .update(cx, |state, cx| state.set_value("", window, cx));
+            self.notice = None;
+            let sent_text = self.prompt_with_attachments(&text);
+            let handle_input = self.input.clone();
+            let window_handle = window.window_handle();
+            cx.spawn(async move |this, cx| {
+                let steered = b
+                    .call::<TurnSteer>(TurnSteerParams {
+                        thread_id: id.clone(),
+                        expected_turn_id: expected,
+                        text: sent_text.clone(),
+                    })
+                    .await;
+                let reason = match steered {
+                    Ok(_) => return,
+                    // Nothing is running any more: the words become the next prompt, not an
+                    // error the user has to retype.
+                    Err(fv_client::ClientError::Rpc(e))
+                        if e.code == fv_protocol::jsonrpc::code::NO_ACTIVE_TURN =>
+                    {
+                        None
+                    }
+                    Err(e) => Some(format!("无法插话：{e}")),
+                };
+                let queued = b
+                    .call::<TurnEnqueue>(TurnEnqueueParams {
+                        thread_id: id,
+                        text: sent_text.clone(),
+                    })
+                    .await;
+                if let Err(e) = queued {
+                    let _ = cx.update_window(window_handle, |_, window, cx| {
+                        handle_input.update(cx, |st, cx| {
+                            st.set_value(crate::skill_draft::content(text.clone()), window, cx)
+                        });
+                    });
+                    this.update(cx, |this, cx| {
+                        this.fail(format!("加入队列失败：{e}"), cx);
+                        cx.notify();
+                    })
+                    .ok();
+                } else if let Some(reason) = reason {
+                    // Steering was refused for a reason other than "it just ended": say so, and
+                    // that the words are at least queued.
+                    this.update(cx, |this, cx| {
+                        this.fail(format!("{reason}，已改为排队"), cx);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            })
+            .detach();
+            return;
+        }
+        if self.palette_blocked() {
             return;
         }
         let Some(b) = self.backend.clone() else {
@@ -860,27 +1403,37 @@ impl Workspace {
         };
         // Nothing can be answered without a model: say so, and keep what was typed.
         if self.models.is_empty() && !self.skip_model_check {
-            self.send_error = Some("还没有可用的模型：先到 设置 → 模型与默认 添加供应商。".into());
+            self.fail("还没有可用的模型：先到 设置 → 模型与默认 添加供应商。", cx);
             cx.notify();
             return;
         }
         self.input
             .update(cx, |state, cx| state.set_value("", window, cx));
-        self.send_error = None;
+        self.notice = None;
+        self.search_target = None;
         let selected = self.selected.clone();
         let pending_model = self.pending_model.clone();
+        let pending_thinking = self.pending_thinking;
         let project = self.draft_project.clone();
         let no_model = self.defaults.model.is_none() && pending_model.is_none();
+        // The files picked with `@` are consumed by the send, whether or not it succeeds: a
+        // failed send restores the words, and the reference block is appended again next time.
+        // Files picked with `@` travel as a reference block, the way the Electron composer sends
+        // them: the model is given paths it can open, and the reader's own sentence stays as they
+        // typed it. Built before the spawn because it consumes the attachment list.
+        let sent_text = self.prompt_with_attachments(&text);
         let handle_input = self.input.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             // A send that did not go through puts the words back and says why.
             let fail = |why: String, text: String, this: &WeakEntity<Self>, cx: &mut AsyncApp| {
                 let _ = cx.update_window(window_handle, |_, window, cx| {
-                    handle_input.update(cx, |st, cx| st.set_value(text, window, cx));
+                    handle_input.update(cx, |st, cx| {
+                        st.set_value(crate::skill_draft::content(text), window, cx)
+                    });
                 });
                 this.update(cx, |this, cx| {
-                    this.send_error = Some(why);
+                    this.fail(why, cx);
                     cx.notify();
                 })
                 .ok();
@@ -894,7 +1447,7 @@ impl Workspace {
                             cwd: project.clone(),
                             project,
                             model: pending_model,
-                            thinking: None,
+                            thinking: pending_thinking,
                         })
                         .await;
                     let started = match started {
@@ -912,8 +1465,11 @@ impl Workspace {
                         Err(e) => return fail(format!("无法打开对话：{e}"), text, &this, cx),
                     };
                     this.update(cx, |this, cx| {
+                        this.navigation
+                            .visit(this.selected.clone(), Some(id.clone()));
                         this.selected = Some(id.clone());
                         this.pending_model = None;
+                        this.pending_thinking = None;
                         this.views
                             .insert(id.clone(), ThreadView::from_snapshot(snapshot));
                         cx.notify();
@@ -922,10 +1478,11 @@ impl Workspace {
                     id
                 }
             };
+            let sent = sent_text.clone();
             let started = b
                 .call::<TurnStart>(TurnStartParams {
                     thread_id: id,
-                    text: text.clone(),
+                    text: sent,
                 })
                 .await;
             if let Err(e) = started {
@@ -936,6 +1493,323 @@ impl Workspace {
                 };
                 fail(why, text, &this, cx);
             }
+        })
+        .detach();
+    }
+
+    /// Bind this conversation to its own checkout, so an experiment does not dirty the tree the
+    /// user is working in. The branch and path are the app's to choose; 更多 options come later.
+    fn create_worktree(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(b) = self.backend.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = b
+                .call::<ThreadWorktreeCreate>(ThreadWorktreeCreateParams {
+                    thread_id: id.clone(),
+                    path: None,
+                    branch: None,
+                    label: None,
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(answer) => {
+                        this.apply_worktree(answer.thread);
+                        this.done("已创建隔离工作区", cx);
+                    }
+                    Err(e) => this.fail(format!("无法创建隔离工作区：{e}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Return to the project. The checkout stays on disk: an experiment's diff may still be worth
+    /// reading, and deleting a directory is not something an "unbind" row should do quietly.
+    fn unbind_worktree(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(b) = self.backend.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = b
+                .call::<ThreadWorktreeUnbind>(ThreadWorktreeUnbindParams {
+                    thread_id: id.clone(),
+                    remove: false,
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(answer) => {
+                        this.apply_worktree(answer.thread);
+                        this.done("已回到项目目录", cx);
+                    }
+                    Err(e) => this.fail(format!("无法解除隔离工作区：{e}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Take a thread the server just changed into the list and the open view.
+    fn apply_worktree(&mut self, thread: fv_protocol::types::Thread) {
+        if let Some(slot) = self.threads.iter_mut().find(|t| t.id == thread.id) {
+            *slot = thread.clone();
+        }
+        if let Some(view) = self.views.get_mut(&thread.id) {
+            view.thread = thread;
+        }
+    }
+
+    // ---- what a message's hover row can do
+
+    fn copy_text(&mut self, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
+        cx.notify();
+    }
+
+    /// 重试: ask for that turn again. Its reply is discarded and the same prompt re-sent, which
+    /// is the whole meaning of "run this again" in a conversation.
+    ///
+    /// The workspace is the other half of the question. A retry that leaves the tree alone runs
+    /// the prompt against whatever the abandoned attempt already changed — it reads edited files,
+    /// or its patch finds the change applied and does nothing — and either way the transcript
+    /// looks right. So the user is asked, and "keep my files" is a real answer: they may have
+    /// edited things by hand since the prompt.
+    fn retry(&mut self, turn_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let answer = window.prompt(
+            PromptLevel::Info,
+            "重试这一轮？",
+            Some("这一轮的回复会丢弃并重新生成。工作区文件可以一起退回到这一轮开始之前。"),
+            &[
+                PromptButton::cancel("取消"),
+                PromptButton::ok("保留文件改动"),
+                PromptButton::ok("退回文件并重试"),
+            ],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let Ok(choice) = answer.await else {
+                return;
+            };
+            match choice {
+                1 | 2 => {
+                    this.update(cx, |this, cx| {
+                        this.rewind_turn(turn_id, choice == 2, cx);
+                    })
+                    .ok();
+                }
+                _ => {}
+            }
+        })
+        .detach();
+    }
+
+    /// The call behind 重试: re-run the turn, with or without putting the workspace back.
+    fn rewind_turn(&mut self, turn_id: String, rewind_files: bool, cx: &mut Context<Self>) {
+        let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = b
+                .call::<TurnRewind>(TurnRewindParams {
+                    thread_id: id,
+                    turn_id,
+                    text: None,
+                    rewind_files,
+                })
+                .await;
+            match result {
+                Ok(answer) => {
+                    this.update(cx, |this, cx| {
+                        // A rewind that could not put everything back has to say so: the retry is
+                        // running, and the tree is only partly where it was.
+                        let files = answer.files;
+                        if !files.skipped.is_empty() {
+                            let names: Vec<&str> = files
+                                .skipped
+                                .iter()
+                                .map(|s| s.path.as_str())
+                                .take(5)
+                                .collect();
+                            this.notice = Some(Notice::Partial(format!(
+                                "{} 个文件没能退回：{}",
+                                files.skipped.len(),
+                                names.join("、")
+                            )));
+                        } else if rewind_files && files.had_checkpoint {
+                            this.done(
+                                format!(
+                                    "已退回工作区：还原 {} 个文件，删除 {} 个",
+                                    files.restored, files.removed
+                                ),
+                                cx,
+                            );
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                }
+                Err(e) => {
+                    this.update(cx, |this, cx| {
+                        this.fail(format!("无法重试：{e}"), cx);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 编辑: put the turn's words back in the composer, and remember which turn they came from.
+    /// Sending them rewrites that turn instead of adding a new one — otherwise the corrected
+    /// prompt would land *after* the reply it was meant to replace.
+    fn start_edit(
+        &mut self,
+        turn_id: String,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.input.update(cx, |state, cx| {
+            state.set_value(crate::skill_draft::content(text), window, cx)
+        });
+        self.input.update(cx, |state, cx| state.focus(window, cx));
+        self.editing_turn = Some(turn_id);
+        self.notice = None;
+        cx.notify();
+    }
+
+    /// The composer's own 取消, which lives in another module.
+    pub(super) fn cancel_edit_public(&mut self, cx: &mut Context<Self>) {
+        self.cancel_edit(cx);
+    }
+
+    /// Leave edit mode: the words stay in the composer, they just stop rewriting a turn.
+    pub(super) fn cancel_edit(&mut self, cx: &mut Context<Self>) {
+        if self.editing_turn.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Esc leaves edit mode before it closes anything else: what the composer would do next is
+    /// the most immediate thing on screen.
+    fn editing(&self) -> bool {
+        self.editing_turn.is_some()
+    }
+
+    /// Show or hide the right pane.
+    pub(super) fn toggle_side_pane(&mut self, cx: &mut Context<Self>) {
+        self.side_pane_collapsed = !self.side_pane_collapsed;
+        self.side_pane_maximized = false;
+        self.pane_menu = None;
+        cx.notify();
+    }
+
+    /// Say something failed, and redraw.
+    fn fail(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.notice = Some(Notice::Failed(text.into()));
+        cx.notify();
+    }
+
+    /// Say something happened that the user should know, without calling it a problem.
+    fn done(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.notice = Some(Notice::Done(text.into()));
+        cx.notify();
+    }
+
+    /// Put the words behind the reply in flight, for a run that cannot be steered into.
+    fn queue_while_running(
+        &mut self,
+        id: String,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(b) = self.backend.clone() else {
+            return;
+        };
+        self.input
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.notice = None;
+        let sent_text = self.prompt_with_attachments(&text);
+        let handle_input = self.input.clone();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let result = b
+                .call::<TurnEnqueue>(TurnEnqueueParams {
+                    thread_id: id,
+                    text: sent_text.clone(),
+                })
+                .await;
+            if let Err(e) = result {
+                let _ = cx.update_window(window_handle, |_, window, cx| {
+                    handle_input.update(cx, |st, cx| {
+                        st.set_value(crate::skill_draft::content(text.clone()), window, cx)
+                    });
+                });
+                this.update(cx, |this, cx| {
+                    this.fail(format!("加入队列失败：{e}"), cx);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    // ---- the queue behind the reply in flight
+
+    fn queue_remove(&mut self, item_id: String, cx: &mut Context<Self>) {
+        let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
+            return;
+        };
+        cx.spawn(async move |_, _| {
+            let _ = b
+                .call::<TurnQueueRemove>(QueueItemParams {
+                    thread_id: id,
+                    item_id,
+                })
+                .await;
+        })
+        .detach();
+    }
+
+    fn queue_send_now(&mut self, item_id: String, cx: &mut Context<Self>) {
+        let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = b
+                .call::<TurnQueueSendNow>(QueueItemParams {
+                    thread_id: id,
+                    item_id,
+                })
+                .await;
+            if let Err(e) = result {
+                this.update(cx, |this, cx| {
+                    this.fail(format!("无法立即发送：{e}"), cx);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn queue_resume(&mut self, cx: &mut Context<Self>) {
+        let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
+            return;
+        };
+        cx.spawn(async move |_, _| {
+            let _ = b
+                .call::<TurnQueueResume>(ThreadIdParams { thread_id: id })
+                .await;
         })
         .detach();
     }
@@ -961,10 +1835,56 @@ impl Workspace {
         .detach();
     }
 
+    fn explicit_thinking(&self) -> Option<ThinkingLevel> {
+        match self.selected.as_ref() {
+            Some(id) => self.views.get(id).and_then(|v| v.thread.thinking),
+            None => self.pending_thinking,
+        }
+    }
+
+    fn current_thinking(&self) -> Option<ThinkingLevel> {
+        self.explicit_thinking().or(self.defaults.thinking)
+    }
+
     fn pick_model(&mut self, label: String, cx: &mut Context<Self>) {
-        self.model_menu = false;
+        // Changing the model must not silently reset the conversation's chosen effort.
+        let thinking = self.explicit_thinking();
+        self.thinking_menu = false;
+        self.set_conversation_model(Some(label), thinking, cx);
+    }
+
+    fn pick_thinking(&mut self, thinking: Option<ThinkingLevel>, cx: &mut Context<Self>) {
+        // Preserve an inherited model as inherited, so later default changes still apply.
+        let model = match self.selected.as_ref().and_then(|id| self.views.get(id)) {
+            Some(v) => v.thread.model.clone(),
+            None => self.pending_model.clone(),
+        };
+        self.set_conversation_model(model, thinking, cx);
+    }
+
+    fn set_conversation_model(
+        &mut self,
+        model: Option<String>,
+        thinking: Option<ThinkingLevel>,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_conversation_model_internal(model, thinking, true, cx);
+    }
+
+    fn set_conversation_model_internal(
+        &mut self,
+        model: Option<String>,
+        thinking: Option<ThinkingLevel>,
+        close_menu: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if close_menu {
+            self.model_menu = false;
+            self.thinking_menu = false;
+        }
         let Some(id) = self.selected.clone() else {
-            self.pending_model = Some(label);
+            self.pending_model = model;
+            self.pending_thinking = thinking;
             cx.notify();
             return;
         };
@@ -973,22 +1893,59 @@ impl Workspace {
         };
         let call = b.call::<ThreadModelSet>(ThreadModelParams {
             thread_id: id.clone(),
-            model: Some(label),
-            thinking: None,
+            model,
+            thinking,
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(r) = call.await {
-                this.update(cx, |this, cx| {
-                    if let Some(v) = this.views.get_mut(&id) {
-                        v.thread = r.thread.clone();
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(r) => {
+                        if let Some(v) = this.views.get_mut(&id) {
+                            v.thread = r.thread.clone();
+                        }
+                        if let Some(t) = this.threads.iter_mut().find(|t| t.id == id) {
+                            *t = r.thread;
+                        }
                     }
-                    if let Some(t) = this.threads.iter_mut().find(|t| t.id == id) {
-                        *t = r.thread;
-                    }
-                    cx.notify();
-                })
-                .ok();
-            }
+                    Err(e) => this.fail(format!("无法切换模型或思考强度：{e}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn compact(&mut self, cx: &mut Context<Self>) {
+        self.context_menu = false;
+        self.search_target = None;
+        let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
+            return;
+        };
+        if self
+            .views
+            .get(&id)
+            .is_none_or(|v| v.running || v.turns.is_empty())
+            || !self.compact_pending.insert(id.clone())
+        {
+            return;
+        }
+        self.notice = None;
+        let call = b.call::<ThreadCompactStart>(ThreadIdParams {
+            thread_id: id.clone(),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                this.compact_pending.remove(&id);
+                if let Err(e) = result {
+                    this.fail(format!("无法压缩上下文：{e}"), cx);
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
         cx.notify();
@@ -1030,11 +1987,78 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let terminal_visible = !self.side_pane_collapsed
+            && self.settings.is_none()
+            && self.search_box.is_none()
+            && self.entry_dialog.is_none()
+            && self
+                .selected
+                .as_ref()
+                .and_then(|id| self.panes.get(id))
+                .and_then(|pane| pane.active_tab())
+                .is_some_and(|tab| matches!(tab.kind, pane::PaneTabKind::Terminal));
+        if !terminal_visible && self.terminal_focus.is_focused(window) {
+            self.input.update(cx, |input, cx| input.focus(window, cx));
+        }
+        self.sync_terminal_focus(window, cx);
         if self.appearance_dirty {
             self.appearance_dirty = false;
             if self.live_appearance {
                 self.apply_appearance(window, cx);
             }
+        }
+        let now = std::time::Instant::now();
+        let viewport = f32::from(window.viewport_size().width);
+        let sidebar_width = self.sidebar_resting_width(viewport);
+        let sidebar_target = if let Some(drag) = self.sidebar_resize {
+            drag.max(0.0)
+        } else if self.app_settings.sidebar.collapsed {
+            0.0
+        } else {
+            sidebar_width
+        };
+        let left_animating =
+            self.sidebar_motion
+                .update(sidebar_target, self.sidebar_resize.is_some(), now);
+        let pane_target = if self.side_pane_collapsed {
+            0.0
+        } else if self.side_pane_maximized {
+            (viewport - sidebar_target).max(0.0)
+        } else {
+            self.side_pane_resize
+                .map(|w| w.max(0.0))
+                .unwrap_or(self.side_pane_width.max(pane::MIN_WIDTH))
+                .min((viewport * 0.65).max(pane::MIN_WIDTH))
+                .min((viewport - self.sidebar_motion.width - 420.0).max(0.0))
+        };
+        let right_animating =
+            self.pane_motion
+                .update(pane_target, self.side_pane_resize.is_some(), now);
+        if pane_target > 0.0 {
+            let inset = if self.side_pane_maximized && !self.app_settings.sidebar.collapsed {
+                8.0
+            } else {
+                16.0
+            };
+            self.pane_content_width = (pane_target - inset).max(0.0);
+        }
+        if left_animating || right_animating {
+            window.request_animation_frame();
+            cx.notify();
+        }
+        let sidebar_layout = (
+            self.sidebar_resize
+                .unwrap_or(self.app_settings.sidebar.width),
+            self.app_settings.sidebar.collapsed,
+        );
+        if self.sidebar_layout != Some(sidebar_layout) {
+            self.sidebar_layout = Some(sidebar_layout);
+            // A peer can change the width too. Refresh all cached clipping regions once
+            // layout has adopted the new width, even when no local pointer event occurs.
+            window.on_next_frame(|window, _| window.refresh());
+        }
+        if !cx.has_active_drag() {
+            self.sidebar_drop = None;
         }
         self.focus_pending(window, cx);
         // The handle only knows the content's height after a layout, so the jump to the end
@@ -1045,15 +2069,79 @@ impl Render for Workspace {
         } else if self.stick_to_bottom {
             cx.notify();
         }
+        if self.search_jump_pending {
+            self.search_anchor.scroll_to(window, cx);
+            self.search_jump_pending = false;
+        }
         let p = self.palette.clone();
         let root = div()
             .relative()
             .size_full()
+            .id("workspace-root")
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
+                this.terminal_drag_selection(e, cx);
+                if this.side_pane_resize.is_some() && e.pressed_button == Some(MouseButton::Left) {
+                    this.side_pane_resize = Some(
+                        (f32::from(window.viewport_size().width)
+                            - f32::from(e.position.x)
+                            - this.pane_drag_offset)
+                            .max(0.0),
+                    );
+                    cx.notify();
+                }
+                this.move_pane_splitter(e, window, cx);
+                if this.sidebar_resize.is_some() {
+                    if e.pressed_button == Some(MouseButton::Left) {
+                        let max =
+                            (f32::from(window.viewport_size().width) * 0.4).clamp(200.0, 480.0);
+                        this.sidebar_resize = Some(
+                            (f32::from(e.position.x) - this.sidebar_drag_offset).clamp(0.0, max),
+                        );
+                        window.refresh();
+                        cx.notify();
+                    } else {
+                        this.finish_sidebar_resize(cx);
+                        window.refresh();
+                    }
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.finish_terminal_selection();
+                    this.finish_pane_resize(cx);
+                    if this.sidebar_resize.is_some() {
+                        this.finish_sidebar_resize(cx);
+                        window.refresh();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.finish_terminal_selection();
+                    this.finish_pane_resize(cx);
+                    if this.sidebar_resize.is_some() {
+                        this.finish_sidebar_resize(cx);
+                        window.refresh();
+                    }
+                }),
+            )
             .key_context("Workspace")
             .on_action(cx.listener(Self::on_new_chat))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_open_search))
             .on_action(cx.listener(Self::on_dismiss))
+            .on_action(cx.listener(Self::on_toggle_sidebar))
+            .on_action(cx.listener(|this, _: &ToggleSidePane, _, cx| this.toggle_side_pane(cx)))
+            .on_action(cx.listener(Self::on_go_back))
+            .on_action(cx.listener(Self::on_go_forward))
+            .on_action(cx.listener(Self::on_accept_suggestion))
+            .on_action(cx.listener(Self::on_save_preview))
+            .on_action(cx.listener(Self::on_mention_up))
+            .on_action(cx.listener(Self::on_mention_down))
+            .on_action(cx.listener(Self::on_mention_dismiss))
+            .on_action(cx.listener(Self::on_accept_skill))
             .font_family(crate::assets::UI_FONT)
             .bg(p.c(Token::Background))
             .text_color(p.c(Token::Foreground))
@@ -1061,12 +2149,14 @@ impl Render for Workspace {
         let root = if self.settings.is_some() {
             root.child(self.settings_view(window, cx))
         } else {
+            let pane = self.side_pane(window, cx);
             root.child(
                 div()
                     .size_full()
                     .flex()
-                    .child(self.sidebar(cx))
-                    .child(self.main(window, cx)),
+                    .child(self.sidebar(window, cx))
+                    .child(self.main(window, cx))
+                    .children(pane),
             )
         };
         // While a popup is open, a click anywhere else closes it. The catcher sits under the
@@ -1089,10 +2179,15 @@ impl Render for Workspace {
             )
             .with_priority(5)
         });
-        root.children(self.thread_menu_view(cx))
+        root.children(self.pane_menu_view(window, cx))
+            .children(self.entry_menu_view(window, cx))
+            .children(self.sidebar_menu_view(window, cx))
+            .children(self.sidebar_notice_view(cx))
+            .children(self.thread_menu_view(window, cx))
             .children(self.project_dialog_view(cx))
+            .children(self.entry_dialog_view(cx))
             .children(self.palette_view(cx))
-            .children(self.project_row_menu_view(cx))
+            .children(self.project_row_menu_view(window, cx))
             .children(self.settings_dialogs(cx))
             .children(catcher)
     }
@@ -1100,7 +2195,289 @@ impl Render for Workspace {
 
 // ---- keyboard
 
-actions!(fastvibe, [Quit, NewChat, OpenSettings, OpenSearch, Dismiss]);
+actions!(
+    fastvibe,
+    [
+        Quit,
+        NewChat,
+        OpenSettings,
+        OpenSearch,
+        Dismiss,
+        ToggleSidebar,
+        ToggleSidePane,
+        GoBack,
+        GoForward,
+        AcceptSuggestion,
+        SavePreview,
+        MentionUp,
+        MentionDown,
+        MentionDismiss,
+        AcceptSkill
+    ]
+);
+
+/// A terminal frame for the capture fixture: a prompt, coloured output and the cursor.
+///
+/// The fixture has no server, so nothing here starts a shell; the frame is laid out by hand in the
+/// same shape the server sends.
+pub(super) fn terminal_fixture(
+    cwd: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<
+    (
+        fv_protocol::types::TerminalSession,
+        fv_protocol::types::TerminalFrame,
+    ),
+    String,
+> {
+    use fv_protocol::types::{
+        TerminalColor, TerminalFrame, TerminalRow, TerminalSession, TerminalSpan,
+    };
+    let plain = |text: &str| TerminalSpan {
+        text: text.into(),
+        ..Default::default()
+    };
+    let coloured = |text: &str, index: u8, bold: bool| TerminalSpan {
+        text: text.into(),
+        fg: Some(TerminalColor::Indexed(index)),
+        bold,
+        ..Default::default()
+    };
+    let row = |spans: Vec<TerminalSpan>| TerminalRow {
+        text: spans.iter().map(|s| s.text.as_str()).collect(),
+        spans,
+        ..Default::default()
+    };
+    let dir = cwd.rsplit('/').next().unwrap_or(cwd);
+    let prompt = |command: &str| {
+        row(vec![
+            coloured(dir, 4, true),
+            plain(" "),
+            coloured("main", 2, false),
+            plain(" % "),
+            plain(command),
+        ])
+    };
+    let mut lines = vec![
+        prompt("printf 'FastVibe native terminal'"),
+        row(vec![
+            plain("FastVibe native "),
+            coloured("terminal", 2, true),
+        ]),
+        prompt("ls -1 native/crates"),
+        row(vec![coloured("fv-agent", 4, true)]),
+        row(vec![coloured("fv-gui", 4, true)]),
+        row(vec![coloured("fv-server", 4, true)]),
+        row(vec![plain("README.md")]),
+        prompt(""),
+    ];
+    let cursor_row = (lines.len() - 1) as u16;
+    let cursor_col = lines[lines.len() - 1].text.chars().count() as u16;
+    while lines.len() < rows as usize {
+        lines.push(TerminalRow::default());
+    }
+    Ok((
+        TerminalSession {
+            id: "fixture".into(),
+            cwd: cwd.into(),
+            cols,
+            rows,
+        },
+        TerminalFrame {
+            id: "fixture".into(),
+            cwd: cwd.into(),
+            cols,
+            rows,
+            lines,
+            cursor_row,
+            cursor_col,
+            cursor_hidden: false,
+            exited: false,
+            history: 0,
+            offset: 0,
+            anchor: Default::default(),
+            bracketed_paste: false,
+            application_cursor: false,
+            alternate_screen: false,
+        },
+    ))
+}
+
+/// Files under `root` that match `query`, ranked by the server's own rules, for the capture
+/// fixture. The ranking is the point of the picture, so it is the real one.
+pub(super) fn search_files_fixture(root: &str, query: &str) -> Vec<fv_protocol::types::FileHit> {
+    fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {
+        if out.len() > 8000 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if matches!(name.as_str(), ".git" | "node_modules" | "target") {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if kind.is_dir() {
+                walk(&path, base, out);
+            } else if kind.is_file()
+                && let Ok(relative) = path.strip_prefix(base)
+            {
+                out.push(relative.display().to_string());
+            }
+        }
+    }
+    let base = std::path::Path::new(root);
+    let mut files = Vec::new();
+    walk(base, base, &mut files);
+    let query = query.to_lowercase();
+    let mut scored: Vec<(String, i32)> = files
+        .into_iter()
+        .map(|file| {
+            let lower = file.to_lowercase();
+            let name = lower.rsplit('/').next().unwrap_or(&lower).to_string();
+            let score = if query.is_empty() {
+                100 - lower.split('/').count() as i32
+            } else if name.starts_with(&query) {
+                800 - name.len() as i32
+            } else if let Some(at) = name.find(&query) {
+                600 - at as i32
+            } else if let Some(at) = lower.find(&query) {
+                400 - at as i32
+            } else {
+                0
+            };
+            (file, score)
+        })
+        .filter(|(_, score)| query.is_empty() || *score > 0)
+        .collect();
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    scored
+        .into_iter()
+        .take(12)
+        .map(|(relative, _)| fv_protocol::types::FileHit {
+            path: format!("{root}/{relative}"),
+            relative,
+        })
+        .collect()
+}
+
+/// Reading the workspace for the capture fixture, which runs without a server.
+///
+/// This is the same code the server's handler runs, called in-process — the pane's drawing is
+/// what a fixture is for, and a fixture that stubbed its own file list would be drawing
+/// something nobody can have.
+pub(super) fn read_dir_fixture(path: &str) -> Result<Vec<DirEntry>, String> {
+    // The protocol type is what the pane draws, so the listing is converted rather than
+    // re-shaped: one field list, no second copy to drift.
+    let entries = std::fs::read_dir(path).map_err(|e| e.to_string())?;
+    let mut out: Vec<DirEntry> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == ".git" || name == "node_modules" || name == "target" {
+            continue;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let kind = if kind.is_dir() {
+            EntryKind::Directory
+        } else if kind.is_file() {
+            EntryKind::File
+        } else {
+            continue;
+        };
+        out.push(DirEntry {
+            name,
+            path: entry.path().display().to_string(),
+            kind,
+        });
+    }
+    out.sort_by(|a, b| match (a.kind, b.kind) {
+        (EntryKind::Directory, EntryKind::File) => std::cmp::Ordering::Less,
+        (EntryKind::File, EntryKind::Directory) => std::cmp::Ordering::Greater,
+        _ => a.name.cmp(&b.name),
+    });
+    Ok(out)
+}
+
+/// The preview the fixture shows: the server's own `preview` logic, run in-process.
+///
+/// A fixture that shaped its own `FilePreview` would be drawing something no real call can
+/// produce — a Markdown file typed as code, say — and the capture would be a picture of a bug
+/// that does not exist.
+pub(super) fn preview_fixture(path: &str) -> FilePreview {
+    // The server's module is not a dependency of the GUI, so the one thing the fixture needs is
+    // its shape: read the file and let the kind follow from the name, exactly as the server does.
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+    let ext = std::path::Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            let kind = match ext.as_str() {
+                "md" | "markdown" => FilePreviewKind::Markdown,
+                "html" | "htm" => FilePreviewKind::Html,
+                "diff" | "patch" => FilePreviewKind::Diff,
+                _ => FilePreviewKind::Code,
+            };
+            FilePreview::Text {
+                kind,
+                path: path.to_string(),
+                name,
+                // The same name the server's `code_language` produces for these extensions.
+                language: match ext.as_str() {
+                    "rs" => Some("rust".to_string()),
+                    "ts" | "mts" | "cts" => Some("typescript".to_string()),
+                    "tsx" => Some("tsx".to_string()),
+                    "js" | "mjs" | "cjs" => Some("javascript".to_string()),
+                    "py" => Some("python".to_string()),
+                    "sh" | "bash" | "zsh" => Some("shellscript".to_string()),
+                    "json" => Some("json".to_string()),
+                    "toml" => Some("toml".to_string()),
+                    "yaml" | "yml" => Some("yaml".to_string()),
+                    _ => None,
+                },
+                text: text.lines().take(60).collect::<Vec<_>>().join("\n"),
+            }
+        }
+        Err(e) => FilePreview::Error {
+            path: path.to_string(),
+            name,
+            message: "文件不存在".into(),
+            reason: PreviewFailure::Missing,
+            detail: Some(e.to_string()),
+            directory: None,
+        },
+    }
+}
+
+/// `1.4 MB` for a file size, in the app's own compact notation.
+pub(super) fn format_bytes(size: u64) -> String {
+    const K: f64 = 1024.0;
+    let n = size as f64;
+    if n >= K * K * K {
+        format!("{:.1} GB", n / (K * K * K))
+    } else if n >= K * K {
+        format!("{:.1} MB", n / (K * K))
+    } else if n >= K {
+        format!("{:.1} KB", n / K)
+    } else {
+        format!("{size} B")
+    }
+}
 
 /// Bind the app's shortcuts. The Electron app's: ⌘N new chat, ⌘, settings, ⌘K search.
 pub fn bind_keys(cx: &mut App) {
@@ -1109,10 +2486,25 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-n", NewChat, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-k", OpenSearch, None),
+        KeyBinding::new("cmd-b", ToggleSidebar, None),
+        KeyBinding::new("ctrl-alt-b", ToggleSidePane, None),
+        KeyBinding::new("cmd-[", GoBack, None),
+        KeyBinding::new("cmd-]", GoForward, None),
         KeyBinding::new("escape", Dismiss, None),
         KeyBinding::new("enter", ask::ApproveOnce, Some("ApprovalPanel")),
+        // ⌘S saves the file the pane has open. It is a window-level binding, not the editor's:
+        // the same key has to work while the pointer is in the tree.
+        KeyBinding::new("cmd-s", SavePreview, None),
+        KeyBinding::new("ctrl-s", SavePreview, None),
     ]);
+    // Composer menu keys and empty-draft Tab match at the input's depth; otherwise the
+    // input's own cursor/indent actions and global Escape would take precedence.
+    cx.bind_keys(skill_picker::bindings());
+    // Contextless bindings match the deepest node too; the terminal's null bindings must be
+    // registered afterwards to suppress these window-level actions before raw key handling.
+    cx.bind_keys(pane_terminal::passthrough_bindings());
     cx.on_action(|_: &Quit, cx| cx.quit());
+
     cx.set_menus(vec![Menu {
         name: "FastVibe".into(),
         items: vec![
@@ -1129,7 +2521,7 @@ pub fn bind_keys(cx: &mut App) {
 impl Workspace {
     fn on_new_chat(&mut self, _: &NewChat, _: &mut Window, cx: &mut Context<Self>) {
         self.settings = None;
-        self.selected = None;
+        self.new_chat(None, cx);
         self.close_menus(cx);
     }
 
@@ -1147,8 +2539,96 @@ impl Workspace {
     }
 
     /// Esc closes the topmost thing: a menu, then a dialog or the search, then 设置.
+    /// Mirror the thread's standing suggestion into the field the key handler reads.
+    ///
+    /// One copy, refreshed whenever a thread event lands, so Tab can take it without borrowing a
+    /// view — and it is per chat on screen: switching chats replaces it rather than carrying the
+    /// previous conversation's guess into this one.
+    fn sync_suggestion(&mut self) {
+        self.compose_suggestion = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.views.get(id))
+            .and_then(|v| v.suggestion.clone())
+            .filter(|text| !text.trim().is_empty());
+    }
+
+    /// ↑ / ↓ in the `@` menu: move the highlight, not the caret.
+    fn on_mention_up(&mut self, _: &MentionUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.skill_picker.open() {
+            self.move_skill(-1, cx);
+        } else {
+            self.move_mention(-1, cx);
+        }
+    }
+
+    fn on_mention_down(&mut self, _: &MentionDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.skill_picker.open() {
+            self.move_skill(1, cx);
+        } else {
+            self.move_mention(1, cx);
+        }
+    }
+
+    /// Escape in the `@` menu: close it and leave the typed `@query` where it is. Escape is how
+    /// somebody writes an `@` they did not mean as a reference.
+    fn on_mention_dismiss(&mut self, _: &MentionDismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if self.skill_picker.open() {
+            self.dismiss_skill(cx);
+        } else if self.mention.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn on_accept_skill(&mut self, _: &AcceptSkill, window: &mut Window, cx: &mut Context<Self>) {
+        self.accept_skill(window, cx);
+    }
+
+    /// ⌘S: write the pane's open file back.
+    fn on_save_preview(&mut self, _: &SavePreview, _: &mut Window, cx: &mut Context<Self>) {
+        self.save_preview(cx);
+    }
+
+    /// Tab: take 回复推荐 into the composer.
+    ///
+    /// Only an empty composer offers Tab — with text in it, Tab belongs to the editor (indent).
+    fn on_accept_suggestion(
+        &mut self,
+        _: &AcceptSuggestion,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.compose_suggestion.clone() else {
+            return;
+        };
+        // Taking it is a normal edit of the draft, not a send: the user may take it apart first.
+        self.input.update(cx, |state, cx| {
+            state.set_value(crate::skill_draft::content(text), window, cx)
+        });
+        self.compose_suggestion = None;
+        cx.notify();
+    }
+
     fn on_dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        if self.any_menu_open() {
+        // Esc closes one thing per press, and an edit in the composer is the most immediate of
+        // them: the words stay, they just stop replacing a turn the user already sent.
+        if self.editing() {
+            self.cancel_edit(cx);
+        } else if self.rename.take().is_some() || self.sidebar_notice.take().is_some() {
+            cx.notify();
+        } else if self.project_dialog.is_some() {
+            self.project_dialog = None;
+            cx.notify();
+        } else if self.entry_dialog.is_some() {
+            if self
+                .entry_dialog
+                .as_ref()
+                .is_some_and(|dialog| !dialog.busy)
+            {
+                self.entry_dialog = None;
+            }
+            cx.notify();
+        } else if self.any_menu_open() {
             self.close_menus(cx);
         } else if self.settings.is_none() && self.search_box.is_none() && self.dismiss_pending(cx) {
         } else if self.search_box.is_some() {

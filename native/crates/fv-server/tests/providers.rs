@@ -734,3 +734,82 @@ async fn a_remote_client_may_configure_providers_but_not_make_the_server_fetch_a
         code::FORBIDDEN
     );
 }
+
+/// A model's window, output ceiling and vision come from models.dev, not from what the client
+/// happened to send — and a model the catalog prices is billed, while one it does not stays
+/// unknown rather than being called free.
+#[tokio::test]
+async fn catalog_metadata_reaches_the_model_list_and_prices_the_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    // The snapshot has to be there before the server reads it: this is the refresh an install
+    // pulls, and the same decoder the Electron app uses.
+    std::fs::write(
+        dir.path().join("models-dev.json"),
+        serde_json::json!({
+            "v": 5,
+            "t": 1,
+            "s": "https://models.dev/api.json",
+            "m": [
+                ["catalog/known", "Known", 200_000, 8_000, 3, ["low"], [2.0, 12.0, 0.2, 0.4]],
+                ["catalog/unknown", "Unknown", 32_000, 4_000, 1, null, null]
+            ],
+            // The snapshot's alias map holds every name a model answers to; the bare id is
+            // what a provider lists, so it has to be there for a lookup to land.
+            "x": {"catalog-known": 0, "known": 0, "catalog-unknown": 1, "unknown": 1}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (_, sock) = run(dir.path(), "meta").await;
+    let (c, _n) = connect(&sock).await;
+    c.call::<ProviderUpsert>(upsert(
+        "catalog",
+        "https://relay.example/v1",
+        Some(KEY),
+        // A client that sends no metadata at all still gets the catalog's.
+        vec![model("known"), model("unknown")],
+    ))
+    .await
+    .unwrap();
+    let models = c.call::<ModelList>(Empty {}).await.unwrap().models;
+    let known = models.iter().find(|m| m.model.id == "known").unwrap();
+    assert_eq!(known.model.context_window, Some(200_000));
+    assert_eq!(known.model.max_output_tokens, Some(8_000));
+    assert!(known.model.supports_images);
+    assert_eq!(known.model.name.as_deref(), Some("Known"));
+    let unknown = models.iter().find(|m| m.model.id == "unknown").unwrap();
+    assert_eq!(unknown.model.context_window, Some(32_000));
+    assert!(!unknown.model.supports_images, "text-only in the catalog");
+
+    // Free and unpriced are different answers: only the priced model produces a bill.
+    let priced = fv_provider::history_cost(
+        &fv_provider::load_catalog(dir.path()),
+        &[fv_core::Message::Assistant(fv_core::AssistantMessage {
+            duration_ms: None,
+            content: vec![],
+            stop: fv_core::StopReason::Stop,
+            usage: fv_core::Usage {
+                input_tokens: 1_000_000,
+                output_tokens: 1_000_000,
+                ..Default::default()
+            },
+            model: Some("catalog/known".into()),
+        })],
+    )
+    .unwrap();
+    assert!((priced - 14.0).abs() < 1e-9, "{priced}");
+    let unpriced = fv_provider::history_cost(
+        &fv_provider::load_catalog(dir.path()),
+        &[fv_core::Message::Assistant(fv_core::AssistantMessage {
+            duration_ms: None,
+            content: vec![],
+            stop: fv_core::StopReason::Stop,
+            usage: fv_core::Usage {
+                input_tokens: 1_000_000,
+                ..Default::default()
+            },
+            model: Some("catalog/unknown".into()),
+        })],
+    );
+    assert_eq!(unpriced, None);
+}

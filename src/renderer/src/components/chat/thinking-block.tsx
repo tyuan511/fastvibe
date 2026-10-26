@@ -166,14 +166,14 @@ export const ThinkingBlock = memo(function ThinkingBlock({
       </CollapsibleTrigger>
 
       <CollapsibleContent>
-        <div className="pt-3">
+        <div className="pt-2">
           <div
             ref={bodyRef}
             data-slot="reasoning-body"
             onScroll={updateMask}
             style={bodyMask ? { WebkitMaskImage: bodyMask, maskImage: bodyMask } : undefined}
             className={cn(
-              "ml-2 max-h-60 overflow-auto border-l border-border pl-3.5",
+              "max-h-60 overflow-auto pl-6",
               "text-sm leading-5 whitespace-pre-wrap break-words text-muted-foreground/80 select-text",
             )}
           >

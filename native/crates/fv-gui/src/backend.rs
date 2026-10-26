@@ -14,6 +14,10 @@ use fv_client::{Client, ClientError};
 use fv_protocol::{RequestId, Rpc, ServerNotification, ServerRequest};
 use serde_json::Value;
 
+#[path = "mcp_oauth.rs"]
+mod mcp_oauth;
+pub(crate) use mcp_oauth::OAuthCancellation;
+
 /// What the server told us, or that we lost it.
 #[derive(Debug)]
 pub enum BackendEvent {
@@ -61,6 +65,7 @@ impl Backend {
                 };
                 let handle = runtime.handle().clone();
                 runtime.block_on(async move {
+                    fv_env::initialize().await;
                     let bin = match server_bin.map(Ok).unwrap_or_else(fv_daemon::find_server_binary)
                     {
                         Ok(b) => b,
@@ -71,7 +76,7 @@ impl Backend {
                         }
                     };
                     let daemon = fv_daemon::Daemon::new(data_dir, bin);
-                    let conn = match daemon.connect("fastvibe-gui", env!("CARGO_PKG_VERSION")).await
+                    let conn = match daemon.connect_current("fastvibe-gui", env!("CARGO_PKG_VERSION"), &["sidebarSettings", "skills", "mcp", "mcpConfigEdit", "mcpOAuth", "execSessions", "workspaceEntries", "terminalInteraction", "memory"]).await
                     {
                         Ok(c) => c,
                         Err(e) => {

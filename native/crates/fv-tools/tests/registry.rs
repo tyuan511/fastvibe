@@ -15,7 +15,8 @@ fn every_builtin_tool_is_registered_under_its_codex_name() {
             "exec_command",
             "request_user_input",
             "update_plan",
-            "view_image"
+            "view_image",
+            "write_stdin"
         ]
     );
     for spec in registry.specs() {

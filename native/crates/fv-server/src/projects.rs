@@ -169,6 +169,9 @@ pub fn update(
     };
     projects[index] = project.clone();
     write(state, &projects)?;
+    if params.path != project.path {
+        crate::settings::relocate_project(state, &params.path, &project.path)?;
+    }
     changed(state);
     Ok(info(&project))
 }

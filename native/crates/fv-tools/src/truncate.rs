@@ -40,6 +40,7 @@ pub fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>) {
         let start_tail = s.len().saturating_sub(right_budget);
         if let Some(tail) = s.get(start_tail..)
             && let Some(i) = tail.find('\n')
+            && i + 1 < tail.len()
         {
             return start_tail + i + 1;
         }
@@ -107,6 +108,15 @@ pub fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>) {
 #[cfg(test)]
 mod tests {
     use super::truncate_middle;
+
+    #[test]
+    fn a_long_final_line_keeps_its_suffix_even_when_it_ends_with_a_newline() {
+        let s = format!("开始\n{}结尾\n", "x".repeat(4096));
+        let (out, _) = truncate_middle(&s, 128);
+        assert!(out.starts_with("开始\n"));
+        assert!(out.ends_with("结尾\n"));
+        assert!(out.len() <= 129);
+    }
 
     #[test]
     fn truncate_middle_no_newlines_fallback() {

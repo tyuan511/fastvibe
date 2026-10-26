@@ -473,6 +473,17 @@ pub fn tool_title(name: &str, args: &serde_json::Value, running: bool) -> (Strin
             verb("已运行", "正在运行"),
             field("cmd").lines().next().unwrap_or("").to_string(),
         ),
+        "write_stdin" => (
+            if field("chars").is_empty() {
+                verb("已读取命令输出", "正在等待命令输出")
+            } else {
+                verb("已发送命令输入", "正在发送命令输入")
+            },
+            args.get("session_id")
+                .and_then(|id| id.as_u64())
+                .map(|id| format!("会话 {id}"))
+                .unwrap_or_default(),
+        ),
         "apply_patch" => {
             let files = patch_changes(field("input"));
             let detail = match files.as_slice() {

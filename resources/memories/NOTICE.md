@@ -15,3 +15,7 @@ Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
   FastVibe keeps the memory folder under a userData directory whose own name contains a space.
 
 The templates are instructions to a model and are read at run time (`src/main/engine/memory-templates.ts`).
+
+The native Rust implementation embeds these same templates at build time in
+`native/crates/fv-server/src/memory.rs`. Its consolidation session maps filesystem operations
+to a private, bounded in-memory `memory_workspace` tool; template provenance above is unchanged.

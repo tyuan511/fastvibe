@@ -12,6 +12,8 @@ use fv_server::{ServerState, UnixServer};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+mod common;
+
 type Notes = UnboundedReceiver<ServerNotification>;
 type Requests = UnboundedReceiver<ServerRequest>;
 
@@ -27,6 +29,9 @@ async fn start(model: ScriptedModel) -> Harness {
     let model = Arc::new(model);
     let agent = fv_server::agent_with_builtin_tools(model.clone());
     let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
+    // The 回复推荐 side request runs on the same model, so a scripted sequence would have one of
+    // its replies spent on the placeholder. It has its own tests; here the script is the point.
+    common::disable_reply_suggestions(&state);
     let sock = dir.path().join("s.sock");
     tokio::spawn(UnixServer::bind(state.clone(), &sock).await.unwrap().run());
     Harness {

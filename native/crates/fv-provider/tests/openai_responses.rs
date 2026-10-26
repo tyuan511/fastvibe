@@ -56,6 +56,7 @@ fn config(url: &str) -> ModelConfig {
 
 fn request() -> ModelRequest {
     ModelRequest {
+        max_output_tokens: None,
         system: "Be brief.".into(),
         messages: vec![Message::User {
             text: "read a.txt".into(),
@@ -109,6 +110,7 @@ async fn the_request_goes_to_responses_and_carries_the_encrypted_reasoning_back(
 
     let mut second = request();
     second.messages.push(Message::Assistant(AssistantMessage {
+        duration_ms: None,
         content: vec![
             ContentBlock::Thinking {
                 text: "Planning the read.".into(),

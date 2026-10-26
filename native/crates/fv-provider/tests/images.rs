@@ -24,12 +24,14 @@ fn b64(bytes: &[u8]) -> String {
 
 fn request(source: ImageSource) -> ModelRequest {
     ModelRequest {
+        max_output_tokens: None,
         system: "sys".into(),
         messages: vec![
             Message::User {
                 text: "look at a.png and list the dir".into(),
             },
             Message::Assistant(AssistantMessage {
+                duration_ms: None,
                 content: vec![
                     ContentBlock::ToolCall {
                         id: "p1".into(),

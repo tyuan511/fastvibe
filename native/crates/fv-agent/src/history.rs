@@ -51,10 +51,14 @@ pub fn normalize(history: &[Message]) -> Vec<Message> {
                         .collect();
                 }
                 match other {
+                    Message::MemoryContext { summary } => out.push(Message::User {
+                        text: Message::memory_context_text(summary),
+                    }),
                     // What a compaction replaced is shown to the model as one user message.
                     Message::Compaction {
                         user_messages,
                         summary,
+                        ..
                     } => out.push(Message::User {
                         text: Message::compaction_text(user_messages, summary),
                     }),

@@ -15,6 +15,8 @@ use fv_server::{ServerState, UnixServer};
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
 
+mod common;
+
 type Notes = UnboundedReceiver<ServerNotification>;
 
 async fn run(
@@ -25,6 +27,9 @@ async fn run(
     let model = Arc::new(model);
     let agent = fv_server::agent_with_builtin_tools(model.clone());
     let state = Arc::new(ServerState::new(dir.to_path_buf(), agent).unwrap());
+    // These tests pin a scripted sequence, so the 回复推荐 side request — which runs on the same
+    // model — is turned off here. It has its own tests (`suggestion.rs`, `tests/suggestion.rs`).
+    common::disable_reply_suggestions(&state);
     let sock = dir.join(format!("{name}.sock"));
     tokio::spawn(UnixServer::bind(state, &sock).await.unwrap().run());
     (model, sock)
@@ -97,12 +102,12 @@ async fn a_conversation_that_fills_its_window_is_summarized_and_remembered_so_af
             ScriptedModel::new([
                 Reply::new()
                     .tool("p1", "update_plan", plan_call())
-                    .input_tokens(950)
+                    .input_tokens(15_200)
                     .done(),
                 Reply::new().text("SUMMARY: the plan is in progress").done(),
                 Reply::new().text("carried on").done(),
             ])
-            .with_window(1000),
+            .with_window(16_000),
         )
         .await;
         let (c, mut notes) = connect(&sock).await;
@@ -126,7 +131,7 @@ async fn a_conversation_that_fills_its_window_is_summarized_and_remembered_so_af
             _ => None,
         });
         let usage = usage.expect("thread/tokenUsage/updated");
-        assert_eq!((usage.used, usage.window), (955, 1000));
+        assert_eq!((usage.used, usage.window), (15_205, 16_000));
         thread
     };
 
@@ -146,7 +151,7 @@ async fn a_conversation_that_fills_its_window_is_summarized_and_remembered_so_af
     let (model, sock) = run(
         data.path(),
         "b",
-        ScriptedModel::new([Reply::new().text("next").done()]).with_window(1000),
+        ScriptedModel::new([Reply::new().text("next").done()]).with_window(16_000),
     )
     .await;
     let (c, mut notes) = connect(&sock).await;
@@ -169,7 +174,7 @@ async fn a_conversation_that_fills_its_window_is_summarized_and_remembered_so_af
         })
         .collect();
     assert_eq!(kinds, ["user", "tool", "compaction", "agent"], "{kinds:?}");
-    assert!(snap.token_usage.is_some_and(|u| u.window == 1000));
+    assert!(snap.token_usage.is_some_and(|u| u.window == 16_000));
 
     say(&c, &mut notes, &thread, "and then?").await;
     let request = &model.requests()[0];
@@ -378,4 +383,71 @@ async fn a_summary_that_fails_is_reported_and_changes_nothing() {
         std::fs::read_to_string(data.path().join("sessions").join(format!("{thread}.jsonl")))
             .unwrap();
     assert!(!transcript.contains("compaction"));
+}
+
+#[tokio::test]
+async fn stats_are_pushed_at_each_request_and_restored_from_the_full_transcript() {
+    let data = tempfile::tempdir().unwrap();
+    let (_, sock) = run(
+        data.path(),
+        "stats-a",
+        ScriptedModel::new([
+            Reply::new()
+                .tool("p", "update_plan", plan_call())
+                .input_tokens(100)
+                .done(),
+            Reply::new().text("done").input_tokens(200).done(),
+            Reply::new().text("SUMMARY").input_tokens(400).done(),
+        ]),
+    )
+    .await;
+    let (c, mut notes) = connect(&sock).await;
+    let thread = c
+        .call::<ThreadStart>(ThreadStartParams::default())
+        .await
+        .unwrap()
+        .thread
+        .id;
+    let events = say(&c, &mut notes, &thread, "work").await;
+    let pushes: Vec<_> = events
+        .iter()
+        .filter_map(|n| match n {
+            ServerNotification::ThreadStatsUpdated(e) => Some(&e.body),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pushes.len(), 3, "user input and each of the two requests");
+    assert_eq!(pushes.last().unwrap().tokens.input, 300);
+    assert_eq!(pushes.last().unwrap().steps, 2);
+    c.call::<ThreadCompactStart>(ThreadIdParams {
+        thread_id: thread.clone(),
+    })
+    .await
+    .unwrap();
+    until_idle(&mut notes).await;
+    let snapshot = c
+        .call::<ThreadResume>(ThreadIdParams {
+            thread_id: thread.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot.stats.tokens.input, 700,
+        "compaction request counts too"
+    );
+    assert_eq!(snapshot.stats.steps, 2);
+    assert_eq!(
+        snapshot.stats.last_request.as_ref().unwrap().output_tokens,
+        5
+    );
+    let (_, sock) = run(data.path(), "stats-b", ScriptedModel::new([])).await;
+    let (reconnected, _) = connect(&sock).await;
+    let restored = reconnected
+        .call::<ThreadResume>(ThreadIdParams { thread_id: thread })
+        .await
+        .unwrap();
+    assert_eq!(
+        restored.stats, snapshot.stats,
+        "compacted history must still count after restart"
+    );
 }

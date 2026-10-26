@@ -131,7 +131,7 @@ impl LoadedTools {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ToolRegistry {
     tools: BTreeMap<String, Arc<dyn Tool>>,
 }
@@ -143,6 +143,12 @@ impl ToolRegistry {
 
     pub fn register(&mut self, tool: impl Tool + 'static) -> &mut Self {
         self.tools.insert(tool.spec().name, Arc::new(tool));
+        self
+    }
+
+    /// Extend a per-turn snapshot without changing a registry another turn is using.
+    pub fn register_shared(&mut self, tool: Arc<dyn Tool>) -> &mut Self {
+        self.tools.insert(tool.spec().name, tool);
         self
     }
 

@@ -16,6 +16,7 @@ fn thread(id: &str, updated_at: i64) -> Thread {
         archived: false,
         unread: false,
         pinned: false,
+        worktree: None,
         model: None,
         thinking: None,
     }
@@ -30,7 +31,7 @@ fn the_database_is_private_versioned_and_reopens_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fastvibe.db");
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 2);
+    assert_eq!(db.schema_version().unwrap(), 3);
     db.put_thread(&thread("a", 5)).unwrap();
     assert_eq!(mode(&path), 0o600);
     // The write-ahead log files are written by SQLite; they must not be wider than the database.
@@ -42,7 +43,7 @@ fn the_database_is_private_versioned_and_reopens_cleanly() {
     }
     drop(db);
     let again = Db::open(&path).unwrap();
-    assert_eq!(again.schema_version().unwrap(), 2);
+    assert_eq!(again.schema_version().unwrap(), 3);
     assert_eq!(again.get_thread("a").unwrap().unwrap().title, "thread a");
 }
 
@@ -55,7 +56,7 @@ fn a_database_from_a_newer_build_is_refused_untouched() {
     match Db::open(&path) {
         Err(StoreError::TooNew {
             found: 99,
-            known: 2,
+            known: 3,
         }) => {}
         other => panic!("{:?}", other.err()),
     }
@@ -100,6 +101,7 @@ fn user(t: &str) -> Message {
 
 fn assistant(content: Vec<ContentBlock>) -> Message {
     Message::Assistant(AssistantMessage {
+        duration_ms: None,
         content,
         stop: StopReason::Stop,
         usage: Default::default(),
@@ -371,7 +373,7 @@ fn a_database_from_before_providers_is_upgraded_in_place() {
     drop(conn);
 
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 2);
+    assert_eq!(db.schema_version().unwrap(), 3);
     let t = db.get_thread("old").unwrap().expect("the old conversation");
     assert_eq!(
         (t.title.as_str(), t.model, t.thinking),
@@ -450,6 +452,8 @@ fn a_compaction_is_a_divider_between_turns_and_hides_nothing() {
         user("first"),
         assistant(vec![ContentBlock::Text { text: "one".into() }]),
         Message::Compaction {
+            model: None,
+            usage: Default::default(),
             user_messages: vec!["first".into()],
             summary: "s".into(),
         },
@@ -473,6 +477,8 @@ fn a_compaction_survives_the_transcript_and_picks_the_models_view() {
     let dir = tempfile::tempdir().unwrap();
     let store = TranscriptStore::new(dir.path().join("sessions")).unwrap();
     let compaction = Message::Compaction {
+        model: None,
+        usage: Default::default(),
         user_messages: vec!["a".into()],
         summary: "s".into(),
     };

@@ -5,17 +5,25 @@
 //! database; a transcript is a log that only grows, so it stays a file that a crash can at
 //! worst cut short.
 
+mod checkpoint;
 mod credentials;
 mod db;
 mod history;
 mod images;
+mod search;
+mod stats;
 mod transcript;
+mod turn_record;
 
+pub use checkpoint::{Checkpoint, Restored, capture, clear, restore};
 pub use credentials::CredentialStore;
-pub use db::{Db, StoreError, StoredProvider};
+pub use db::{Db, QueuedPrompt, StoreError, StoredProvider};
 pub use history::{turns_from_history, turns_from_timed_history};
 pub use images::ImageStore;
+pub use search::search_snippet;
+pub use stats::{record_stats, stats_from_history};
 pub use transcript::{Loaded, TranscriptStore};
+pub use turn_record::RecordedError;
 
 use std::path::Path;
 

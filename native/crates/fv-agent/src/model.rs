@@ -8,6 +8,8 @@ pub struct ModelRequest {
     pub system: String,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolSpec>,
+    /// Per-request capacity guard. Providers also respect their configured output limit.
+    pub max_output_tokens: Option<u32>,
 }
 
 /// What a provider streams back. `Done` carries the complete message and is authoritative:
@@ -60,6 +62,15 @@ impl std::error::Error for ModelError {}
 
 /// A model the loop can sample. Dropping the stream cancels the request.
 pub trait Model: Send + Sync {
+    /// Stable physical route identity, excluding credentials. Unconfigured/test models use
+    /// instance identity so unrelated models never share a learned limit accidentally.
+    fn context_key(&self) -> String {
+        format!("{}:{:p}", std::any::type_name::<Self>(), self)
+    }
+
+    fn max_output_tokens(&self) -> Option<u32> {
+        None
+    }
     /// Whether the model can look at images. A tool that returns one (`view_image`) refuses
     /// when it cannot.
     fn supports_images(&self) -> bool {
@@ -68,6 +79,12 @@ pub trait Model: Send + Sync {
 
     /// The context window in tokens, when it is known.
     fn context_window(&self) -> Option<u32> {
+        None
+    }
+
+    /// `provider/model`, as it is recorded on every reply and priced by the catalog. Absent for
+    /// a model that has no configuration behind it (a scripted test model).
+    fn label(&self) -> Option<&str> {
         None
     }
 

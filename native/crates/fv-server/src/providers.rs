@@ -16,6 +16,29 @@ use fv_store::StoredProvider;
 
 use crate::state::ServerState;
 
+/// A model's parameters come from models.dev, which is the single source of truth for them: the
+/// window, the output ceiling and what it can look at (the Electron app's rule, and the reason a
+/// corrected catalog reaches an install that already saved a model). A model the catalog does not
+/// describe keeps what was stored for it, and the conservative defaults when it stored nothing.
+///
+/// `ModelInfo` has no "the user tuned this" bit — native has no per-model editor yet — so the
+/// catalog always wins where it has an answer.
+pub fn with_catalog_meta(catalog: &fv_provider::Catalog, model: &ModelInfo) -> ModelInfo {
+    let Some(meta) = catalog.describe(&model.id) else {
+        return model.clone();
+    };
+    ModelInfo {
+        name: model
+            .name
+            .clone()
+            .or_else(|| catalog.entry(&model.id).map(|e| e.name.clone())),
+        supports_images: meta.input.contains(&fv_provider::InputModality::Image),
+        context_window: Some(meta.context_window),
+        max_output_tokens: Some(meta.max_tokens),
+        ..model.clone()
+    }
+}
+
 fn invalid(message: impl Into<String>) -> ErrorObject {
     ErrorObject::new(code::INVALID_PARAMS, message)
 }
@@ -248,13 +271,20 @@ pub async fn fetch_models(
         .map_err(invalid)?;
     let models = fetched
         .into_iter()
-        .map(|m| ModelInfo {
-            protocol: None,
-            supports_images: true,
-            context_window: None,
-            max_output_tokens: None,
-            name: m.name,
-            id: m.id,
+        .map(|m| {
+            // A model the catalog knows arrives with the limits the model actually has, so the
+            // window guard and the bill are right from its first turn rather than after an edit.
+            with_catalog_meta(
+                &state.catalog,
+                &ModelInfo {
+                    id: m.id,
+                    name: m.name,
+                    protocol: None,
+                    supports_images: true,
+                    context_window: None,
+                    max_output_tokens: None,
+                },
+            )
         })
         .collect();
     Ok(FetchModelsResponse { models })
@@ -271,7 +301,7 @@ pub fn model_list(state: &ServerState) -> Result<ModelListResponse, ErrorObject>
                 provider_id: p.id.clone(),
                 provider_name: p.name.clone(),
                 label: format!("{}/{}", p.id, m.id),
-                model: m.clone(),
+                model: with_catalog_meta(&state.catalog, m),
             });
         }
     }
@@ -375,6 +405,7 @@ pub fn resolve(
         Some(p) => to_protocol(p),
         None => fv_provider::infer_protocol(&model.id, to_protocol(provider.protocol)),
     };
+    let model = with_catalog_meta(&state.catalog, model);
     let mut config = ModelConfig::new(label, &model.id, protocol, &provider.base_url, &key);
     config.thinking = thinking.map(thinking_level);
     config.max_output_tokens = model.max_output_tokens;
@@ -421,15 +452,4 @@ pub fn set_thread_model(
     state.store.db.put_thread(&thread).map_err(internal)?;
     state.broadcast(ServerNotification::CatalogChanged(CatalogChanged {}));
     Ok(thread)
-}
-
-/// How full a thread's context window is, for a client that has just opened it.
-pub fn token_usage(state: &ServerState, thread: &Thread, thread_id: &str) -> Option<TokenUsage> {
-    let model = model_for(state, thread);
-    let history = state.runtime(thread_id).history();
-    let used = fv_agent::context_used(&history);
-    (used > 0).then(|| TokenUsage {
-        used,
-        window: fv_agent::context_window(model.as_ref()),
-    })
 }

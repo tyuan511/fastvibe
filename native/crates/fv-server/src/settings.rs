@@ -21,8 +21,36 @@ pub fn read(state: &ServerState) -> Result<AppSettings, ErrorObject> {
 }
 
 pub fn set(state: &ServerState, patch: AppSettingsPatch) -> Result<AppSettings, ErrorObject> {
+    let _guard = state.settings_lock.lock().unwrap();
     let mut settings = read(state)?;
     settings.apply(patch);
+    write(state, settings)
+}
+
+/// The primary folder identifies a sidebar group; carry its preferences with its chats.
+pub fn relocate_project(state: &ServerState, old: &str, new: &str) -> Result<(), ErrorObject> {
+    let _guard = state.settings_lock.lock().unwrap();
+    let mut settings = read(state)?;
+    let sidebar = &mut settings.sidebar;
+    for paths in [
+        &mut sidebar.closed_projects,
+        &mut sidebar.expanded_projects,
+        &mut sidebar.project_order,
+    ] {
+        for path in paths.iter_mut() {
+            if path == old {
+                *path = new.into();
+            }
+        }
+    }
+    if let Some(ids) = sidebar.order.remove(&format!("project:{old}")) {
+        sidebar.order.insert(format!("project:{new}"), ids);
+    }
+    write(state, settings)?;
+    Ok(())
+}
+
+fn write(state: &ServerState, settings: AppSettings) -> Result<AppSettings, ErrorObject> {
     let text = serde_json::to_string(&settings).map_err(internal)?;
     state
         .store

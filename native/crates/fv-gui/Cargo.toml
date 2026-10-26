@@ -19,9 +19,15 @@ path = "src/main.rs"
 capture = ["dep:image", "dep:gpui-capture", "dep:gpui-macos-capture"]
 
 [dependencies]
-gpui-kit = "0.8.0"
+fv-env = { path = "../fv-env" }
+gpui-kit = { version = "0.8.0", features = [
+    "tree-sitter-typescript", "tree-sitter-tsx", "tree-sitter-javascript",
+    "tree-sitter-rust", "tree-sitter-python", "tree-sitter-bash",
+    "tree-sitter-html", "tree-sitter-css", "tree-sitter-toml", "tree-sitter-yaml",
+] }
 fv-theme = { path = "../fv-theme" }
 fv-protocol = { path = "../fv-protocol" }
+fv-core = { path = "../fv-core" }
 fv-client = { path = "../fv-client" }
 fv-daemon = { path = "../fv-daemon" }
 tokio.workspace = true
@@ -30,6 +36,8 @@ futures-channel = "0.3"
 libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
+url = "2"
+unicode-width = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Same crates gpui-kit already uses (it pins them exactly), named again only to switch on
 # their test-support features. Going through `gpui-kit/test-support` instead drags in the
@@ -41,6 +49,9 @@ gpui-macos-capture = { package = "gpui-pre-macos", version = "=0.3.9", features 
 # The window's own vibrancy view (see `vibrancy.rs`); both are already in the lockfile via GPUI.
 objc = "0.2"
 raw-window-handle = "0.6"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

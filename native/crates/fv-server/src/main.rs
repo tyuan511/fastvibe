@@ -55,8 +55,21 @@ fn thinking(name: &str) -> ThinkingLevel {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap_or_else(|error| fail(format!("cannot start runtime: {error}")));
+    runtime.block_on(run());
+    // Tokio's stdin reader uses a blocking OS read. In stdio mode it may still be waiting
+    // for the SSH client's next frame when SIGTERM arrives. Cleanup above has finished;
+    // never keep the whole server alive waiting for that pipe to close at runtime shutdown.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+}
+
+async fn run() {
+    // Read before accepting clients: a later build may atomically replace this path.
+    let _ = fv_server::build_fingerprint();
     let mut data_dir = None;
     let mut listen = Listen::Unix;
     let mut echo = false;
@@ -85,6 +98,15 @@ async fn main() {
     }
     let Some(data_dir) = data_dir else { usage() };
 
+    let environment = tokio::select! {
+        environment = fv_env::initialize() => environment,
+        _ = tokio::signal::ctrl_c() => return,
+        _ = terminated() => return,
+    };
+    if let Some(warning) = environment.warning {
+        eprintln!("{warning}");
+    }
+
     let model: Arc<dyn Model> = match (echo, proto, base_url, model_id) {
         (true, None, None, None) => Arc::new(EchoModel),
         (false, Some(protocol), Some(base_url), Some(model_id)) => {
@@ -110,16 +132,20 @@ async fn main() {
             .unwrap_or_else(|e| fail(format!("cannot open {}: {e}", data_dir.display()))),
     );
 
+    state.start_services();
     match listen {
         Listen::Stdio => {
             // stdout carries only protocol frames; anything human-readable goes to stderr.
-            serve_connection(
-                state.clone(),
-                ClientOrigin::Ssh,
-                tokio::io::stdin(),
-                tokio::io::stdout(),
-            )
-            .await;
+            tokio::select! {
+                _ = serve_connection(
+                    state.clone(),
+                    ClientOrigin::Ssh,
+                    tokio::io::stdin(),
+                    tokio::io::stdout(),
+                ) => {},
+                _ = tokio::signal::ctrl_c() => {},
+                _ = terminated() => {},
+            }
         }
         Listen::Unix => {
             let server = UnixServer::bind(state.clone(), &data_dir.join("server.sock"))
@@ -134,7 +160,12 @@ async fn main() {
         }
     }
     // A clean exit folds the write-ahead log back into the database file.
+    state.close_command_sessions();
     let _ = state.store.db.checkpoint();
+    state.mcp.shutdown().await;
+    // `Terminals` kills every pty when it drops, which is what this line is for: a shell left
+    // behind keeps its tty and any port it started open.
+    drop(state);
 }
 
 /// Resolves on SIGTERM, which is how the app (or a service manager) asks the server to stop:

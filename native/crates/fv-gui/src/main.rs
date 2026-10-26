@@ -21,10 +21,15 @@ struct Args {
     script_add: Option<String>,
     /// Dev only: start with the composer's model list open.
     model_menu: bool,
+    thinking_menu: bool,
+    context_menu: bool,
+    /// Dev only: open a project row's right-click menu.
+    project_menu: bool,
     /// Dev only: open every fold and tool call.
     expand: bool,
     /// Dev only: start with the ⌘K search open.
     palette: bool,
+    search: Option<String>,
     /// Dev only: type this into the composer and send it, then capture.
     script_send: Option<String>,
     /// Dev only: `name|folder|folder…`, created through the dialog.
@@ -49,8 +54,12 @@ fn parse_args() -> Args {
         settings: None,
         script_add: None,
         model_menu: false,
+        thinking_menu: false,
+        context_menu: false,
+        project_menu: false,
         expand: false,
         palette: false,
+        search: None,
         script_send: None,
         script_project: None,
         screenshot: None,
@@ -75,8 +84,12 @@ fn parse_args() -> Args {
             "--fixture" => a.fixture = it.next(),
             "--settings" => a.settings = it.next(),
             "--model-menu" => a.model_menu = true,
+            "--thinking-menu" => a.thinking_menu = true,
+            "--context-menu" => a.context_menu = true,
+            "--project-menu" => a.project_menu = true,
             "--expand" => a.expand = true,
             "--palette" => a.palette = true,
+            "--search" => a.search = it.next(),
             "--script-send" => a.script_send = it.next(),
             "--script-project" => a.script_project = it.next(),
             "--script-add" => a.script_add = it.next(),
@@ -121,8 +134,12 @@ fn main() {
             let fixture = args.fixture.clone();
             let settings = args.settings.clone();
             let model_menu = args.model_menu;
+            let thinking_menu = args.thinking_menu;
+            let context_menu = args.context_menu;
+            let project_menu = args.project_menu;
             let expand = args.expand;
             let palette_open = args.palette;
+            let search = args.search.clone();
             let (handle, workspace) = gpui_kit::open_window(options, cx, move |window, cx| {
                 fv_gui::vibrancy::set(window, glass);
                 let ws = cx.new(|cx| {
@@ -167,6 +184,91 @@ fn main() {
                                 cx,
                             );
                         }
+                        Some("queue") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::queued(),
+                                window,
+                                cx,
+                            );
+                        }
+                        Some("queue-paused") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::queued_paused(),
+                                window,
+                                cx,
+                            );
+                        }
+                        Some("terminal") => {
+                            let mut ws = Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::terminal(),
+                                window,
+                                cx,
+                            );
+                            ws.open_terminal_for_fixture(cx);
+                            return ws;
+                        }
+                        Some("mention") => {
+                            let mut ws = Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::mention(),
+                                window,
+                                cx,
+                            );
+                            ws.open_mention_for_fixture(window, cx);
+                            return ws;
+                        }
+                        Some("git") => {
+                            let mut ws = Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::side_pane(),
+                                window,
+                                cx,
+                            );
+                            ws.open_git_for_fixture(window, cx);
+                            return ws;
+                        }
+                        Some("pane") => {
+                            let mut ws = Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::side_pane(),
+                                window,
+                                cx,
+                            );
+                            ws.open_pane_for_fixture(window, cx);
+                            return ws;
+                        }
+                        Some(mode @ ("pane-empty" | "pane-maximized" | "panels-collapsed")) => {
+                            let mut ws = Workspace::fixture(palette, fv_gui::fixture::side_pane(), window, cx);
+                            ws.show_panel_fixture(mode, cx);
+                            return ws;
+                        }
+                        Some("suggestion") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::suggestion(),
+                                window,
+                                cx,
+                            );
+                        }
+                        Some("rewound") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::rewound_notice(),
+                                window,
+                                cx,
+                            );
+                        }
+                        Some("queue-stopped") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::queued_stopped(),
+                                window,
+                                cx,
+                            );
+                        }
                         Some("new") => {
                             return Workspace::fixture(
                                 palette,
@@ -176,7 +278,9 @@ fn main() {
                             );
                         }
                         Some(other) => {
-                            panic!("unknown fixture {other} (theme, approval, question, new)")
+                            panic!(
+                                "unknown fixture {other} (theme, approval, question, new, queue, queue-paused, markdown, process)"
+                            )
                         }
                         None => {}
                     }
@@ -189,11 +293,22 @@ fn main() {
                 if palette_open {
                     ws.update(cx, |ws, cx| ws.show_palette(window, cx));
                 }
+                if let Some(query) = search {
+                    ws.update(cx, |ws, cx| ws.show_search(query, window, cx));
+                }
                 if expand {
                     ws.update(cx, |ws, cx| ws.expand_all(cx));
                 }
-                if model_menu {
+                if thinking_menu {
+                    ws.update(cx, |ws, cx| ws.show_thinking_menu(cx));
+                } else if model_menu {
                     ws.update(cx, |ws, cx| ws.show_model_menu(cx));
+                }
+                if context_menu {
+                    ws.update(cx, |ws, cx| ws.show_context_menu(cx));
+                }
+                if project_menu {
+                    ws.update(cx, |ws, cx| ws.show_project_row_menu(cx));
                 }
                 if let Some(section) = settings.as_deref() {
                     ws.update(cx, |ws, cx| ws.show_settings_named(section, window, cx));
@@ -201,6 +316,16 @@ fn main() {
                 ws
             })
             .expect("failed to open window");
+
+            // WindowState paints its own (opaque, component-default) background before the
+            // workspace. Only the workspace should supply the app's background tint; an
+            // opaque root hides NSVisualEffectView even when the window is transparent.
+            cx.update_window(handle, |_, window, cx| {
+                gpui_kit::base::Root::update(window, cx, |root, _, _| {
+                    root.style().background = Some(Hsla::transparent_black().into());
+                });
+            })
+            .expect("failed to clear window root background");
 
             #[cfg(feature = "capture")]
             if let Some(spec) = args.script_project.clone() {

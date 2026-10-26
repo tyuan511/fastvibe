@@ -93,6 +93,9 @@ fn agent(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
             ui: None,
             loaded: LoadedTools::default(),
             permissions: None,
+            steer: None,
+            memory: None,
+            budget: Default::default(),
         },
         model,
     )
@@ -191,6 +194,7 @@ async fn pictures_follow_all_the_tool_results_of_their_batch() {
             }
             Message::ToolImages { .. } => "images",
             Message::Compaction { .. } => "compaction",
+            Message::MemoryContext { .. } => "memory",
         })
         .collect();
     assert_eq!(

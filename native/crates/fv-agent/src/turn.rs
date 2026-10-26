@@ -26,7 +26,110 @@ pub struct AgentContext {
     pub loaded: crate::LoadedTools,
     /// The sandbox and approval rules of this turn; absent means no limits.
     pub permissions: Option<Arc<crate::Permissions>>,
+    /// Words the user said while this run was working, added before the next model request.
+    pub steer: Option<Arc<crate::Steers>>,
+    pub memory: Option<Arc<dyn MemorySource>>,
+    pub budget: Arc<crate::ContextBudget>,
 }
+
+/// A changing memory map. The agent persists a new snapshot only when needed; the source
+/// can withdraw all snapshots immediately without changing the append-only transcript.
+pub trait MemorySource: Send + Sync {
+    fn snapshot(&self) -> Option<String>;
+    fn instructions(&self) -> String;
+}
+
+fn refresh_memory(ctx: &AgentContext, history: &mut Vec<Message>, events: &Events) {
+    let Some(summary) = ctx.memory.as_ref().and_then(|m| m.snapshot()) else {
+        return;
+    };
+    let previous = history.iter().rev().find_map(|m| match m {
+        Message::MemoryContext { summary } => Some(summary),
+        _ => None,
+    });
+    if previous != Some(&summary) {
+        commit(history, events, Message::MemoryContext { summary });
+    }
+}
+
+pub(crate) fn request_messages(ctx: &AgentContext, history: &[Message]) -> Vec<Message> {
+    let enabled = ctx.memory.as_ref().and_then(|m| m.snapshot()).is_some();
+    let projected: Vec<_> = history
+        .iter()
+        .filter(|m| enabled || !matches!(m, Message::MemoryContext { .. }))
+        .map(|m| {
+            if let Message::Compaction {
+                user_messages,
+                summary,
+                ..
+            } = m
+            {
+                let window = ctx.budget.window(ctx.model.as_ref());
+                let instructions = ctx
+                    .memory
+                    .as_ref()
+                    .map(|m| m.instructions())
+                    .unwrap_or_default();
+                let overhead = crate::budget::prefix_tokens(
+                    &format!("{instructions}{}", ctx.system),
+                    &ctx.tools.specs_for(&ctx.loaded),
+                );
+                let room = window
+                    .saturating_sub(overhead)
+                    .saturating_sub(crate::budget::reply_reserve(ctx.model.as_ref(), window))
+                    .saturating_sub(crate::budget::margin(window))
+                    .saturating_sub(summary.len() as u64 / 3)
+                    .saturating_sub(256);
+                Message::User {
+                    text: Message::compaction_text_with_budget(
+                        user_messages,
+                        summary,
+                        room.saturating_mul(3)
+                            .saturating_div(2)
+                            .min(usize::MAX as u64) as usize,
+                    ),
+                }
+            } else {
+                m.clone()
+            }
+        })
+        .collect();
+    normalize(&projected)
+}
+
+pub(crate) fn model_request(ctx: &AgentContext, history: &[Message]) -> ModelRequest {
+    let memory_instructions = ctx
+        .memory
+        .as_ref()
+        .map(|m| m.instructions())
+        .unwrap_or_default();
+    ModelRequest {
+        system: format!("{memory_instructions}{}", ctx.system),
+        messages: request_messages(ctx, history),
+        tools: ctx.tools.specs_for(&ctx.loaded),
+        max_output_tokens: None,
+    }
+}
+
+pub(crate) fn learn_capacity(ctx: &AgentContext, request: &ModelRequest, events: &Events) -> bool {
+    let used = crate::budget::request_tokens(request);
+    let output = request.max_output_tokens.map(u64::from).unwrap_or_else(|| {
+        crate::budget::reply_reserve(ctx.model.as_ref(), ctx.budget.window(ctx.model.as_ref()))
+    });
+    let changed = ctx.budget.reject(ctx.model.as_ref(), used, output);
+    if changed {
+        emit(
+            events,
+            AgentEvent::ContextBudgetChanged {
+                used,
+                window: ctx.budget.window(ctx.model.as_ref()),
+            },
+        );
+    }
+    changed
+}
+
+const CAPACITY_PAUSED: &str = "The conversation cannot fit the model's actual context capacity. Edit or retry an earlier turn, change the model, or compact manually to probe its capacity again.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TurnOutcome {
@@ -63,23 +166,40 @@ pub async fn run_turn(
     events: &Events,
     cancel: &CancellationToken,
 ) -> TurnOutcome {
+    refresh_memory(ctx, history, events);
     commit(history, events, Message::User { text: user_text });
+    if cancel.is_cancelled() {
+        return TurnOutcome::Interrupted;
+    }
+    if ctx.budget.blocked(ctx.model.as_ref(), history) {
+        return TurnOutcome::Failed(CAPACITY_PAUSED.into());
+    }
+    ctx.budget.recovered(ctx.model.as_ref());
     // Reads run side by side; a write waits for them and then runs alone. One lock for the
     // whole turn, shared by every batch, as in codex's `tools/parallel.rs`.
     let lock = Arc::new(RwLock::new(()));
-    // A request that was refused for being too large is answered by one summary; if that does
-    // not help, asking again would only repeat it.
-    let mut summarized_for_overflow = false;
+    let mut capacity_recovery = false;
 
     loop {
         if cancel.is_cancelled() {
             return TurnOutcome::Interrupted;
         }
+        // What the user said while the previous step was running, added *here* — at the top of
+        // the loop, where the history ends with a completed tool batch. Never mid-batch: a
+        // provider rejects a user message wedged between a call and its result, and the model
+        // would be deciding with half of its own work missing.
+        drain_steers(ctx, history, events);
+        refresh_memory(ctx, history, events);
         // Make room before the window is full, not after the provider has refused the request.
-        if crate::compact::needs_compaction(ctx, history) {
-            match crate::compact::compact(ctx, history, events, cancel).await {
+        if capacity_recovery || crate::compact::needs_compaction(ctx, history) {
+            capacity_recovery = false;
+            match crate::compact::compact_auto(ctx, history, events, cancel).await {
                 Ok(()) => {}
                 Err(crate::compact::CompactError::Interrupted) => return TurnOutcome::Interrupted,
+                Err(crate::compact::CompactError::Capacity(e)) => {
+                    ctx.budget.block(ctx.model.as_ref(), history);
+                    return TurnOutcome::Failed(format!("{e} {CAPACITY_PAUSED}"));
+                }
                 Err(crate::compact::CompactError::Failed(e)) => {
                     return TurnOutcome::Failed(format!(
                         "The conversation is full and could not be summarized: {e}"
@@ -87,16 +207,30 @@ pub async fn run_turn(
                 }
             }
             if crate::compact::needs_compaction(ctx, history) {
+                ctx.budget.block(ctx.model.as_ref(), history);
                 return TurnOutcome::Failed(
                     "The conversation is too large to continue, even after summarizing it.".into(),
                 );
             }
         }
-        let request = ModelRequest {
-            system: ctx.system.clone(),
-            messages: normalize(history),
-            tools: ctx.tools.specs_for(&ctx.loaded),
-        };
+        refresh_memory(ctx, history, events);
+        let mut request = model_request(ctx, history);
+        let used = crate::budget::request_tokens(&request);
+        let window = ctx.budget.window(ctx.model.as_ref());
+        if ctx.budget.learned(ctx.model.as_ref()) {
+            let room = window
+                .saturating_sub(used)
+                .saturating_sub(crate::budget::margin(window));
+            if room < crate::budget::reply_reserve(ctx.model.as_ref(), window).min(1024) {
+                capacity_recovery = true;
+                continue;
+            }
+            request.max_output_tokens = Some(
+                room.min(ctx.model.max_output_tokens().map(u64::from).unwrap_or(4096))
+                    .min(u32::MAX as u64) as u32,
+            );
+        }
+        let capacity_request = request.clone();
         match sample(ctx, request, events, cancel).await {
             Sampled::Done(message) => {
                 let stop = message.stop.clone();
@@ -108,14 +242,46 @@ pub async fn run_turn(
                 match stop {
                     StopReason::Error { message } => return TurnOutcome::Failed(message),
                     StopReason::Aborted => return TurnOutcome::Interrupted,
-                    StopReason::Length if calls.is_empty() => {
+                    StopReason::Length => {
+                        // A parsed JSON call can still belong to a truncated reply. Close
+                        // it without dispatching, so both live UI and persisted history
+                        // have a terminal result rather than an eternally pending tool.
+                        for (call_id, name, arguments) in calls {
+                            let output = "Tool call was not executed because the reply reached its output limit.".to_string();
+                            emit(
+                                events,
+                                AgentEvent::ToolResult {
+                                    call_id: call_id.clone(),
+                                    name: name.clone(),
+                                    arguments,
+                                    output: output.clone(),
+                                    is_error: true,
+                                },
+                            );
+                            commit(
+                                history,
+                                events,
+                                Message::ToolResult {
+                                    call_id,
+                                    name,
+                                    content: output,
+                                    is_error: true,
+                                },
+                            );
+                        }
                         return TurnOutcome::Failed(
                             "The reply was cut off at the output limit.".into(),
                         );
                     }
                     _ => {}
                 }
+                ctx.budget.recovered(ctx.model.as_ref());
                 if calls.is_empty() {
+                    // A steer that arrived after this request was built still has to be run: it
+                    // is the user's latest words and the answer above may not have seen them.
+                    if ctx.steer.as_ref().is_some_and(|s| !s.is_empty()) {
+                        continue;
+                    }
                     return TurnOutcome::Completed;
                 }
                 let results = execute_calls(ctx, calls, &lock, events, cancel).await;
@@ -148,19 +314,13 @@ pub async fn run_turn(
                 partial: None,
                 overflow: true,
                 ..
-            } if !summarized_for_overflow => {
-                summarized_for_overflow = true;
-                match crate::compact::compact(ctx, history, events, cancel).await {
-                    Ok(()) => continue,
-                    Err(crate::compact::CompactError::Interrupted) => {
-                        return TurnOutcome::Interrupted;
-                    }
-                    Err(crate::compact::CompactError::Failed(e)) => {
-                        return TurnOutcome::Failed(format!(
-                            "The conversation is too large for the model and could not be summarized: {e}"
-                        ));
-                    }
+            } => {
+                if !learn_capacity(ctx, &capacity_request, events) {
+                    ctx.budget.block(ctx.model.as_ref(), history);
+                    return TurnOutcome::Failed(CAPACITY_PAUSED.into());
                 }
+                capacity_recovery = true;
+                continue;
             }
             Sampled::Failed { partial, error, .. } => {
                 if let Some(m) = partial {
@@ -169,6 +329,19 @@ pub async fn run_turn(
                 return TurnOutcome::Failed(error);
             }
         }
+    }
+}
+
+/// Move waiting steers into the history as user messages.
+///
+/// Each one is committed on its own, so the transcript shows it as what the user said, in the
+/// order they said it, and a crash mid-drain keeps the ones already in.
+fn drain_steers(ctx: &AgentContext, history: &mut Vec<Message>, events: &Events) {
+    let Some(steer) = &ctx.steer else {
+        return;
+    };
+    for text in steer.take() {
+        commit(history, events, Message::User { text });
     }
 }
 
@@ -189,6 +362,7 @@ async fn sample(
     events: &Events,
     cancel: &CancellationToken,
 ) -> Sampled {
+    let started = std::time::Instant::now();
     let mut stream = ctx.model.stream(request);
     let mut blocks = Blocks::new(events);
     loop {
@@ -221,7 +395,8 @@ async fn sample(
             Some(Ok(ModelEvent::Thinking(d))) => blocks.delta(Open::Thinking, d),
             Some(Ok(ModelEvent::ToolCallStart { id, name })) => blocks.tool_start(id, name),
             Some(Ok(ModelEvent::ToolCallArgs { id, delta })) => blocks.tool_args(id, delta),
-            Some(Ok(ModelEvent::Done(message))) => {
+            Some(Ok(ModelEvent::Done(mut message))) => {
+                message.duration_ms = Some(started.elapsed().as_millis() as u64);
                 blocks.finish(&message);
                 emit(events, AgentEvent::MessageDone(message.clone()));
                 return Sampled::Done(message);
@@ -354,6 +529,7 @@ impl<'a> Blocks<'a> {
             return None;
         }
         Some(AssistantMessage {
+            duration_ms: None,
             content: self.done.clone(),
             stop: StopReason::Aborted,
             usage: Default::default(),

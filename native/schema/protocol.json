@@ -88,6 +88,13 @@
               "null"
             ]
           },
+          "replySuggestions": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "sandboxMode": {
             "anyOf": [
               {
@@ -105,6 +112,17 @@
               "boolean",
               "null"
             ]
+          },
+          "sidebar": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SidebarSettingsPatch"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "themeMode": {
             "anyOf": [
@@ -178,8 +196,98 @@
         ],
         "type": "object"
       },
+      "CreateEntryParams": {
+        "additionalProperties": false,
+        "description": "Create one empty file or folder in the project's tree. `path` names its parent.",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/EntryKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "path",
+          "name",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "CwdParams": {
+        "description": "A repository directory.",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "type": "object"
+      },
+      "DeleteEntryParams": {
+        "additionalProperties": false,
+        "description": "Default deletion uses the server machine's Trash. Failure never implies permanent deletion.",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "permanent": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cwd",
+          "path"
+        ],
+        "type": "object"
+      },
+      "DiffSource": {
+        "description": "Which layer a patch is read from.",
+        "oneOf": [
+          {
+            "const": "unstaged",
+            "description": "The working tree against the index.",
+            "type": "string"
+          },
+          {
+            "const": "staged",
+            "description": "The index against `HEAD`.",
+            "type": "string"
+          },
+          {
+            "const": "branch",
+            "description": "A branch (or one commit) against its base, from the upstream merge base.",
+            "type": "string"
+          },
+          {
+            "const": "lastTurn",
+            "description": "The working tree against `HEAD` — everything this branch has not committed.",
+            "type": "string"
+          }
+        ]
+      },
       "Empty": {
         "type": "object"
+      },
+      "EntryKind": {
+        "enum": [
+          "file",
+          "directory"
+        ],
+        "type": "string"
       },
       "FetchModelsParams": {
         "description": "Ask a provider which models it has: a saved one (`provider_id`, using its stored key) or one\nnot saved yet (`protocol`, `base_url`, `api_key`).",
@@ -219,6 +327,139 @@
         },
         "type": "object"
       },
+      "GitCommitParams": {
+        "properties": {
+          "amend": {
+            "default": false,
+            "type": "boolean"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "message"
+        ],
+        "type": "object"
+      },
+      "GitComparisonParams": {
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "revision": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "type": "object"
+      },
+      "GitDiffParams": {
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "path": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "default": null,
+            "description": "A bare commit id for a history comparison; never an expression.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/$defs/DiffSource",
+            "default": "unstaged"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "type": "object"
+      },
+      "GitHistoryParams": {
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/$defs/HistoryScope",
+            "default": "all"
+          },
+          "skip": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tips": {
+            "default": null,
+            "description": "The first page's tips, so later pages read the same commits.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "type": "object"
+      },
+      "GitPathsParams": {
+        "description": "Stage these paths, or the whole tree with `all`.",
+        "properties": {
+          "all": {
+            "default": false,
+            "type": "boolean"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "paths": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "type": "object"
+      },
+      "HistoryScope": {
+        "description": "`all` walks every branch and tag; `current` only the checked-out branch.",
+        "enum": [
+          "all",
+          "current"
+        ],
+        "type": "string"
+      },
       "InitializeParams": {
         "properties": {
           "capabilities": {
@@ -240,6 +481,252 @@
         "required": [
           "clientInfo",
           "protocolVersion"
+        ],
+        "type": "object"
+      },
+      "McpAuthBeginParams": {
+        "properties": {
+          "clientId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "clientSecret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "redirectUri": {
+            "type": "string"
+          },
+          "scopes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "serverId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverId",
+          "redirectUri"
+        ],
+        "type": "object"
+      },
+      "McpAuthCancelParams": {
+        "properties": {
+          "flowId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flowId"
+        ],
+        "type": "object"
+      },
+      "McpAuthCompleteParams": {
+        "properties": {
+          "callbackUrl": {
+            "type": "string"
+          },
+          "flowId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flowId",
+          "callbackUrl"
+        ],
+        "type": "object"
+      },
+      "McpImportParams": {
+        "properties": {
+          "json": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "json"
+        ],
+        "type": "object"
+      },
+      "McpResourceListParams": {
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "serverId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "McpResourceParams": {
+        "properties": {
+          "serverId": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverId",
+          "uri"
+        ],
+        "type": "object"
+      },
+      "McpServerConfig": {
+        "properties": {
+          "args": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deferred": {
+            "default": true,
+            "description": "Deferred tools are exposed by tool_search instead of filling every model request.",
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "transport": {
+            "$ref": "#/$defs/McpTransport"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "transport"
+        ],
+        "type": "object"
+      },
+      "McpServerParams": {
+        "properties": {
+          "serverId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverId"
+        ],
+        "type": "object"
+      },
+      "McpSetParams": {
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/$defs/McpServerConfig"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "servers"
+        ],
+        "type": "object"
+      },
+      "McpTransport": {
+        "enum": [
+          "stdio",
+          "http"
+        ],
+        "type": "string"
+      },
+      "McpUpdateParams": {
+        "description": "Compare-and-edit one server without overwriting other clients' configuration changes.\n`expected: null` creates, `config: null` removes; otherwise replaces the matching config.",
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/McpServerConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/McpServerConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "serverId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serverId"
+        ],
+        "type": "object"
+      },
+      "MemoryConfig": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "description": "Native provider/model label. None follows the default authenticated model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "enabled"
         ],
         "type": "object"
       },
@@ -315,6 +802,25 @@
         },
         "required": [
           "id"
+        ],
+        "type": "object"
+      },
+      "PreviewParams": {
+        "description": "`workspace/preview`: what the pane draws for one file.",
+        "properties": {
+          "cwd": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
         ],
         "type": "object"
       },
@@ -448,6 +954,63 @@
         ],
         "type": "object"
       },
+      "QueueItemParams": {
+        "description": "One queued prompt by id, for `turn/queue/remove` and `turn/queue/sendNow`.",
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "itemId"
+        ],
+        "type": "object"
+      },
+      "ReadDirParams": {
+        "description": "`workspace/readDir`: one directory, `.git` and `node_modules` hidden.",
+        "properties": {
+          "cwd": {
+            "default": null,
+            "description": "Resolves a relative path, so a client can pass what a listing gave it relative to the\nconversation instead of joining paths itself.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "RenameEntryParams": {
+        "additionalProperties": false,
+        "description": "Change only the final path component; never move across directories or replace a target.",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "path",
+          "name"
+        ],
+        "type": "object"
+      },
       "RequestId": {
         "anyOf": [
           {
@@ -478,6 +1041,361 @@
             "type": "string"
           }
         ]
+      },
+      "SearchFilesParams": {
+        "description": "`workspace/searchFiles`: the `@` menu's rows.",
+        "properties": {
+          "cwd": {
+            "default": null,
+            "description": "The project's primary folder. Absent means \"no project\", and the answer is empty.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "otherFolders": {
+            "default": [],
+            "description": "A multi-folder project's other folders; they are ranked together with the primary's.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "query": {
+            "default": null,
+            "description": "What has been typed so far. Empty lists the project's surface.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SidebarSettingsPatch": {
+        "properties": {
+          "closedProjects": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "collapsed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "expandedProjects": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "order": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "Merge section keys, preserving orders belonging to other sections.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "projectOrder": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sort": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SidebarSort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "width": {
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SidebarSort": {
+        "enum": [
+          "manual",
+          "updated",
+          "created",
+          "title"
+        ],
+        "type": "string"
+      },
+      "SkillCreateParams": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "body"
+        ],
+        "type": "object"
+      },
+      "SkillImportParams": {
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "SkillListParams": {
+        "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "otherFolders": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SkillNameParams": {
+        "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "otherFolders": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "TerminalAnchor": {
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "serial": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "serial"
+        ],
+        "type": "object"
+      },
+      "TerminalCopyParams": {
+        "properties": {
+          "end": {
+            "$ref": "#/$defs/TerminalPoint"
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "start": {
+            "$ref": "#/$defs/TerminalPoint"
+          }
+        },
+        "required": [
+          "id",
+          "epoch",
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "TerminalIdParams": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "TerminalPoint": {
+        "properties": {
+          "column": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "line",
+          "column"
+        ],
+        "type": "object"
+      },
+      "TerminalReadParams": {
+        "properties": {
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TerminalAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "type": "string"
+          },
+          "offset": {
+            "default": 0,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "TerminalResizeParams": {
+        "description": "`terminal/resize`: the client's grid changed.",
+        "properties": {
+          "cols": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "rows": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "cols",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "TerminalStartParams": {
+        "description": "`terminal/start`: a shell in a directory, at a size.",
+        "properties": {
+          "cols": {
+            "default": null,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "rows": {
+            "default": null,
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "type": "object"
+      },
+      "TerminalWriteParams": {
+        "description": "`terminal/write`: keystrokes, as the terminal sends them.",
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "data"
+        ],
+        "type": "object"
       },
       "ThemeMode": {
         "oneOf": [
@@ -554,6 +1472,22 @@
         ],
         "type": "object"
       },
+      "ThreadSearchParams": {
+        "description": "Literal, case-insensitive search of titles, project names and visible transcript text.",
+        "properties": {
+          "includeArchived": {
+            "default": false,
+            "type": "boolean"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
       "ThreadStartParams": {
         "properties": {
           "cwd": {
@@ -622,6 +1556,114 @@
         ],
         "type": "object"
       },
+      "ThreadWorktreeBindParams": {
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "path"
+        ],
+        "type": "object"
+      },
+      "ThreadWorktreeCreateParams": {
+        "description": "The thread these worktree calls act on, plus the call's own fields.",
+        "properties": {
+          "branch": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "type": "object"
+      },
+      "ThreadWorktreeUnbindParams": {
+        "properties": {
+          "remove": {
+            "default": false,
+            "type": "boolean"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "type": "object"
+      },
+      "TurnEnqueueParams": {
+        "description": "`turn/enqueue`: queue a prompt for after the reply in flight.",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "text"
+        ],
+        "type": "object"
+      },
+      "TurnRewindParams": {
+        "description": "`turn/rewind`: run the conversation again from one of its turns — the reply to it is thrown\naway and asked for once more, or (with `text`) the user's words are replaced first.\n\n`turn_id` names the turn to run *again*, so a retry names the last one and an edit names the\none being corrected. Everything after it is dropped from the history; the transcript keeps\nthe lines and records a rewind marker, so nothing is destroyed on disk.",
+        "properties": {
+          "rewindFiles": {
+            "default": false,
+            "description": "Put the workspace back to how it was before that turn's run first.\n\nA retry that leaves the tree alone re-runs the prompt against code the abandoned attempt\nalready changed — it reads files the first run edited, or its patch finds the change\nalready applied and does nothing. Both are silent. The caller asks the user, so this is\nnever implied: `false` means \"keep my files\", which is what someone repeating a prompt\nafter their own edits wants.",
+            "type": "boolean"
+          },
+          "text": {
+            "default": null,
+            "description": "Replacement words for that turn; absent keeps the ones it already has (a retry).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "turnId"
+        ],
+        "type": "object"
+      },
       "TurnStartParams": {
         "properties": {
           "text": {
@@ -633,6 +1675,49 @@
         },
         "required": [
           "threadId",
+          "text"
+        ],
+        "type": "object"
+      },
+      "TurnSteerParams": {
+        "description": "`turn/steer`: something the user says while a run is working.\n\nNot a new turn and not a queued prompt: the words join the run that is in flight, at the top\nof its next model request (codex's `turn/steer`). `expectedTurnId` is required and must match\nthe run that is live, so a steer can never land in a run the client did not mean — the answer\nnames the turn it actually found when they differ.",
+        "properties": {
+          "expectedTurnId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "expectedTurnId",
+          "text"
+        ],
+        "type": "object"
+      },
+      "WriteFileParams": {
+        "description": "`workspace/writeFile`: replace a text file the pane has open.",
+        "properties": {
+          "cwd": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
           "text"
         ],
         "type": "object"
@@ -672,6 +1757,26 @@
           },
           "params": {
             "$ref": "#/$defs/ThreadListParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/search",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadSearchParams"
           }
         },
         "required": [
@@ -767,7 +1872,127 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "turn/steer",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TurnSteerParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "turn/interrupt",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "turn/rewind",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TurnRewindParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "turn/enqueue",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TurnEnqueueParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "turn/queue/remove",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/QueueItemParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "turn/queue/sendNow",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/QueueItemParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "turn/queue/resume",
             "type": "string"
           },
           "params": {
@@ -807,7 +2032,107 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "thread/fork",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "thread/delete",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/worktree/create",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadWorktreeCreateParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/worktree/bind",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadWorktreeBindParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/worktree/unbind",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadWorktreeUnbindParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/worktree/list",
             "type": "string"
           },
           "params": {
@@ -1107,6 +2432,446 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "workspace/readDir",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ReadDirParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/preview",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/PreviewParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/searchFiles",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SearchFilesParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/writeFile",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/WriteFileParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/createEntry",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CreateEntryParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/renameEntry",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/RenameEntryParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/deleteEntry",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/DeleteEntryParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitStatus",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CwdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitDiff",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GitDiffParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitComparison",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GitComparisonParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitHistory",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GitHistoryParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitStage",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GitPathsParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitUnstage",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GitPathsParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitDiscard",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GitPathsParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitDeleteUntracked",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GitPathsParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitCommit",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GitCommitParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "terminal/start",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TerminalStartParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "terminal/write",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TerminalWriteParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "terminal/resize",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TerminalResizeParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "terminal/read",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TerminalReadParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "terminal/copy",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TerminalCopyParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "terminal/kill",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/TerminalIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "settings/get",
             "type": "string"
           },
@@ -1132,6 +2897,426 @@
           },
           "params": {
             "$ref": "#/$defs/AppSettingsPatch"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "skill/list",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SkillListParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "memory/read",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "memory/configure",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/MemoryConfig"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "memory/run",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "memory/clear",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "skill/read",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SkillNameParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "skill/create",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SkillCreateParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "skill/import",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SkillImportParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/list",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/set",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpSetParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/update",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpUpdateParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/auth/begin",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpAuthBeginParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/auth/complete",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpAuthCompleteParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/auth/cancel",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpAuthCancelParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/auth/forget",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpServerParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/import",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpImportParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/reconnect",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpServerParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/resources",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpResourceListParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/resourceTemplates",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpResourceListParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "mcp/readResource",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/McpResourceParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "skill/remove",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SkillNameParams"
           }
         },
         "required": [
@@ -1261,6 +3446,11 @@
           "lightTheme": {
             "type": "string"
           },
+          "replySuggestions": {
+            "default": true,
+            "description": "回复推荐: guess the user's next message and offer it as the composer's placeholder. On\nunless turned off, like the Electron app's `replySuggestions`.",
+            "type": "boolean"
+          },
           "sandboxMode": {
             "$ref": "#/$defs/SandboxMode",
             "default": "workspaceWrite",
@@ -1270,6 +3460,18 @@
             "default": false,
             "description": "Whether sandboxed commands may use the network.",
             "type": "boolean"
+          },
+          "sidebar": {
+            "$ref": "#/$defs/SidebarSettings",
+            "default": {
+              "closedProjects": [],
+              "collapsed": false,
+              "expandedProjects": [],
+              "order": {},
+              "projectOrder": [],
+              "sort": "manual",
+              "width": 288.0
+            }
           },
           "themeMode": {
             "$ref": "#/$defs/ThemeMode"
@@ -1311,8 +3513,44 @@
       "CatalogChanged": {
         "type": "object"
       },
+      "DirEntry": {
+        "description": "One row of a directory listing.",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/EntryKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute, so a client can ask for it back without knowing the tree's root.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "kind"
+        ],
+        "type": "object"
+      },
       "Empty": {
         "type": "object"
+      },
+      "EntryChangeKind": {
+        "enum": [
+          "created",
+          "renamed",
+          "deleted"
+        ],
+        "type": "string"
+      },
+      "EntryKind": {
+        "enum": [
+          "file",
+          "directory"
+        ],
+        "type": "string"
       },
       "Item": {
         "oneOf": [
@@ -1447,6 +3685,86 @@
           }
         ]
       },
+      "MemoryConfig": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "description": "Native provider/model label. None follows the default authenticated model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "MemoryPhase": {
+        "enum": [
+          "idle",
+          "extracting",
+          "consolidating"
+        ],
+        "type": "string"
+      },
+      "MemoryState": {
+        "properties": {
+          "config": {
+            "$ref": "#/$defs/MemoryConfig"
+          },
+          "conversations": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "folder": {
+            "type": "string"
+          },
+          "lastRunAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pending": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phase": {
+            "$ref": "#/$defs/MemoryPhase"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "config",
+          "phase",
+          "conversations",
+          "pending",
+          "ready",
+          "folder"
+        ],
+        "type": "object"
+      },
       "PlanStatus": {
         "enum": [
           "pending",
@@ -1470,6 +3788,43 @@
         ],
         "type": "object"
       },
+      "QueueItem": {
+        "description": "One prompt waiting its turn: what the user typed while a reply was still being written.",
+        "properties": {
+          "at": {
+            "default": 0,
+            "description": "When it was queued, by the server's clock.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "QueuePauseReason": {
+        "description": "Why the queue is standing still. Each one is a different sentence beside the prompts, and\nonly the user's own 继续 starts it again.",
+        "oneOf": [
+          {
+            "const": "stopped",
+            "description": "The user stopped the reply. The prompts after it were not meant to be abandoned, but\nnothing should run without them saying so.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The reply failed. Sending the rest of the queue would feed a run that is already broken.",
+            "type": "string"
+          }
+        ]
+      },
       "RequestId": {
         "anyOf": [
           {
@@ -1480,6 +3835,27 @@
             "type": "string"
           }
         ]
+      },
+      "RequestUsage": {
+        "properties": {
+          "durationMs": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "outputTokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "outputTokens"
+        ],
+        "type": "object"
       },
       "SandboxMode": {
         "description": "How much of the machine a command may touch.",
@@ -1500,6 +3876,65 @@
             "type": "string"
           }
         ]
+      },
+      "SidebarSettings": {
+        "properties": {
+          "closedProjects": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "collapsed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "expandedProjects": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "order": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "default": {},
+            "description": "Each section owns its order: \"pinned\", \"chats\", or \"project:<absolute path>\".",
+            "type": "object"
+          },
+          "projectOrder": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sort": {
+            "$ref": "#/$defs/SidebarSort",
+            "default": "manual"
+          },
+          "width": {
+            "default": 288.0,
+            "format": "float",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "SidebarSort": {
+        "enum": [
+          "manual",
+          "updated",
+          "created",
+          "title"
+        ],
+        "type": "string"
       },
       "ThemeMode": {
         "oneOf": [
@@ -1586,6 +4021,18 @@
           "updatedAt": {
             "format": "int64",
             "type": "integer"
+          },
+          "worktree": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThreadWorktree"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The isolated checkout this conversation runs in, when it is bound to one."
           }
         },
         "required": [
@@ -1626,6 +4073,78 @@
           "threadId",
           "seq",
           "turnId"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent10": {
+        "description": "A turn and everything after it was dropped, because it is running again (a retry or an edit).",
+        "properties": {
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "turnId"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent11": {
+        "description": "回复推荐: what the user is likely to say next, offered as the composer's placeholder until they\ntype. `None` withdraws it — the guess was not worth showing, or a new run has made it stale.",
+        "properties": {
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent12": {
+        "description": "A request to the client has been answered or withdrawn (by whichever client got there\nfirst, or because the turn was stopped); every other client takes its prompt down.",
+        "properties": {
+          "requestId": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "requestId"
         ],
         "type": "object"
       },
@@ -1793,6 +4312,63 @@
         "type": "object"
       },
       "ThreadEvent7": {
+        "description": "Whole-transcript totals survive compaction; `turn` starts at the latest user input.\nSpeed always pairs the latest completed assistant request's output with its own time.",
+        "properties": {
+          "cost": {
+            "description": "USD; absent until model pricing is known, never a guessed zero.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lastRequest": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RequestUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "steps": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "tokens": {
+            "$ref": "#/$defs/TokenCounts"
+          },
+          "turn": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TokenCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "tokens",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent8": {
         "description": "How much of the model's context window the conversation takes. Summarizing starts at 90%.",
         "properties": {
           "seq": {
@@ -1823,11 +4399,26 @@
         ],
         "type": "object"
       },
-      "ThreadEvent8": {
-        "description": "A request to the client has been answered or withdrawn (by whichever client got there\nfirst, or because the turn was stopped); every other client takes its prompt down.",
+      "ThreadEvent9": {
+        "description": "A conversation's queue, in the order the prompts will be sent.",
         "properties": {
-          "requestId": {
-            "$ref": "#/$defs/RequestId"
+          "items": {
+            "items": {
+              "$ref": "#/$defs/QueueItem"
+            },
+            "type": "array"
+          },
+          "pause": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QueuePauseReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set when the queue stopped on its own: nothing is sent until the user says so. `None`\nmeans it will drain as replies finish."
           },
           "seq": {
             "description": "Monotonic per thread.",
@@ -1842,7 +4433,56 @@
         "required": [
           "threadId",
           "seq",
-          "requestId"
+          "items"
+        ],
+        "type": "object"
+      },
+      "ThreadWorktree": {
+        "description": "The isolated checkout a conversation is bound to, instead of its project's own tree.",
+        "properties": {
+          "branch": {
+            "description": "The branch checked out there, or `HEAD` when detached.",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "branch"
+        ],
+        "type": "object"
+      },
+      "TokenCounts": {
+        "description": "Cumulative uncached input/output and cache traffic. Cache writes are not cache hits.",
+        "properties": {
+          "cacheRead": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cacheWrite": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input",
+          "output",
+          "cacheRead",
+          "cacheWrite"
         ],
         "type": "object"
       },
@@ -1861,6 +4501,37 @@
             "type": "string"
           }
         ]
+      },
+      "WorkspaceEntryChange": {
+        "description": "Global workspace notification: invalidate listings, and remap open paths after a rename.",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "entry": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DirEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/EntryChangeKind"
+          },
+          "path": {
+            "description": "Old path for rename/delete; the new path for creation.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "path",
+          "kind"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1921,6 +4592,70 @@
           },
           "params": {
             "$ref": "#/$defs/AppSettings"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "skills/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "memory/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/MemoryState"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "mcp/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "workspace/entryChanged",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/WorkspaceEntryChange"
           }
         },
         "required": [
@@ -2076,7 +4811,7 @@
       {
         "properties": {
           "method": {
-            "const": "thread/tokenUsage/updated",
+            "const": "thread/stats/updated",
             "type": "string"
           },
           "params": {
@@ -2092,11 +4827,75 @@
       {
         "properties": {
           "method": {
-            "const": "serverRequest/resolved",
+            "const": "thread/tokenUsage/updated",
             "type": "string"
           },
           "params": {
             "$ref": "#/$defs/ThreadEvent8"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "thread/queue/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent9"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "turn/rewound",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent10"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "thread/suggestion/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent11"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "serverRequest/resolved",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent12"
           }
         },
         "required": [

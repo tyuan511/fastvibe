@@ -94,6 +94,27 @@ impl ImageStore {
         }
     }
 
+    /// A fork owns its pictures so deleting its parent cannot break it.
+    pub fn copy_message(
+        &self,
+        conversation_id: &str,
+        message: &Message,
+    ) -> Result<Message, StoreError> {
+        let mut message = message.clone();
+        if let Message::ToolImages { images, .. } = &mut message {
+            for image in images {
+                if let ImageSource::File { path } = &image.source {
+                    image.source = ImageSource::Base64 {
+                        data: base64::engine::general_purpose::STANDARD
+                            .encode(std::fs::read(path)?),
+                    };
+                }
+                *image = self.save(conversation_id, image)?;
+            }
+        }
+        Ok(message)
+    }
+
     pub fn delete(&self, conversation_id: &str) -> Result<(), StoreError> {
         match std::fs::remove_dir_all(self.folder(conversation_id)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),

@@ -101,6 +101,9 @@ async fn main() {
         ui: None,
         loaded: Default::default(),
         permissions: None,
+        steer: None,
+        memory: None,
+        budget: Default::default(),
     };
 
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -108,6 +111,9 @@ async fn main() {
         let (mut thinking_chars, mut text_chars, mut calls) = (0, 0, 0);
         while let Some(e) = rx.recv().await {
             match e {
+                AgentEvent::ContextBudgetChanged { used, window } => {
+                    println!("  context {used}/{window}")
+                }
                 AgentEvent::BlockDelta { delta, .. } => text_chars += delta.len(),
                 AgentEvent::BlockStarted { kind, .. } => println!("  start {kind:?}"),
                 AgentEvent::BlockDone { block, .. } => {

@@ -163,6 +163,9 @@ pub enum ThemeMenu {
 }
 
 pub struct SettingsState {
+    pub memory: super::memory::MemorySettings,
+    pub mcp: super::mcp::McpSettings,
+    pub skills: super::skills::SkillSettings,
     pub theme_menu: Option<ThemeMenu>,
     /// 归档对话: what the sidebar leaves out.
     pub archived: Option<Vec<Thread>>,
@@ -202,6 +205,9 @@ impl Workspace {
     ) {
         if self.settings.is_none() {
             self.settings = Some(SettingsState {
+                memory: Default::default(),
+                mcp: super::mcp::McpSettings::new(window, cx),
+                skills: super::skills::SkillSettings::new(window, cx),
                 section,
                 providers: None,
                 edit: None,
@@ -214,6 +220,17 @@ impl Workspace {
                 add_models: None,
                 notice: None,
             });
+            let query = self.settings.as_ref().unwrap().skills.query.clone();
+            cx.subscribe_in(
+                &query,
+                window,
+                |_, _, event: &gpui_kit::component::input::InputEvent, _, cx| {
+                    if matches!(event, gpui_kit::component::input::InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            )
+            .detach();
         }
         if let Some(s) = &mut self.settings {
             s.section = section;
@@ -223,6 +240,9 @@ impl Workspace {
         self.refresh_providers(cx);
         self.refresh_models(cx);
         self.refresh_archived(cx);
+        self.refresh_skills(cx);
+        self.refresh_mcp(cx);
+        self.refresh_memory(cx);
         cx.notify();
     }
 
@@ -677,6 +697,9 @@ impl Workspace {
                                 }
                                 Section::General => self.general_pane(s, cx).into_any_element(),
                                 Section::Archived => self.archived_pane(s, cx).into_any_element(),
+                                Section::Skills => self.skills_pane(cx),
+                                Section::Mcp => self.mcp_pane(cx),
+                                Section::Memory => self.memory_pane(cx),
                                 _ => self.not_yet().into_any_element(),
                             }),
                     ),
@@ -1167,6 +1190,7 @@ impl Workspace {
     fn appearance_section(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
         let a = &self.app_settings;
+        let reply_suggestions = a.reply_suggestions;
         let hover = p.c(Token::Accent);
         let mode_label = |m: ThemeMode| match m {
             ThemeMode::System => "跟随系统",
@@ -1362,6 +1386,26 @@ impl Workspace {
                                 )
                             },
                         )),
+                    ))
+                    .child(setting_row(
+                        "回复推荐",
+                        "回复结束后猜测你下一句，显示在输入框里，按 Tab 填入",
+                        true,
+                        p,
+                        switch(
+                            SharedString::from("reply-suggestions"),
+                            reply_suggestions,
+                            p,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.patch_settings(
+                                AppSettingsPatch {
+                                    reply_suggestions: Some(!reply_suggestions),
+                                    ..Default::default()
+                                },
+                                cx,
+                            )
+                        })),
                     )),
             )
     }
@@ -2399,7 +2443,7 @@ fn overlay_surface(d: Div, radius: f32, p: &crate::theme::Palette) -> Div {
 
 pub(super) fn popover(p: &crate::theme::Palette) -> Div {
     overlay_surface(div().p(px(4.0)), 10.0, p)
-        .bg(p.get(Token::GlassOverlay).unwrap_or(p.c(Token::Popover)))
+        .bg(p.overlay())
         .text_color(p.c(Token::PopoverForeground))
         .flex()
         .flex_col()
@@ -2477,7 +2521,7 @@ pub(super) fn checkbox(on: bool, p: &crate::theme::Palette) -> Div {
 
 pub(super) fn dialog_card(p: &crate::theme::Palette, width: f32) -> Div {
     overlay_surface(div().w(px(width)).max_w(relative(0.92)), 16.0, p)
-        .bg(p.get(Token::GlassOverlay).unwrap_or(p.c(Token::Popover)))
+        .bg(p.overlay())
         .text_color(p.c(Token::PopoverForeground))
         .flex()
         .flex_col()

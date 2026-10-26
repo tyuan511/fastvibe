@@ -7,6 +7,7 @@ use fv_provider::{GenaiModel, ModelConfig, Protocol};
 
 fn request() -> ModelRequest {
     ModelRequest {
+        max_output_tokens: None,
         system: String::new(),
         messages: vec![Message::User { text: "hi".into() }],
         tools: vec![],

@@ -183,3 +183,164 @@ fn the_server_binary_is_found_where_it_is_told() {
     assert!(fv_daemon::find_server_binary().is_err());
     unsafe { std::env::remove_var("FASTVIBE_SERVER_BIN") };
 }
+
+/// A resident process from before sidebar settings existed. It reproduces the old bug:
+/// its reported fingerprint matches the new binary on disk, but its feature list is absent.
+#[test]
+#[ignore = "subprocess fixture for direct desktop startup tests"]
+fn legacy_resident_fixture() {
+    use std::io::{BufRead, Write};
+    let Ok(dir) = std::env::var("FV_DAEMON_FIXTURE_DIR") else {
+        return;
+    };
+    let listener =
+        std::os::unix::net::UnixListener::bind(std::path::Path::new(&dir).join("server.sock"))
+            .unwrap();
+    let fingerprint = std::env::var("FV_DAEMON_FIXTURE_FINGERPRINT").unwrap();
+    let activity = std::env::var("FV_DAEMON_FIXTURE_ACTIVITY").unwrap();
+    for stream in listener.incoming() {
+        let mut stream = stream.unwrap();
+        let (dir, fingerprint, activity) = (dir.clone(), fingerprint.clone(), activity.clone());
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                let Ok(request) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                let mut result = serde_json::json!({
+                    "serverVersion": "0.1.0", "protocolVersion": 1, "dataDir": dir,
+                    "buildFingerprint": fingerprint,
+                });
+                match activity.as_str() {
+                    "idle" => result["hasRunningTurns"] = false.into(),
+                    "busy" => result["hasRunningTurns"] = true.into(),
+                    _ => {}
+                }
+                let reply = serde_json::json!({"id": request["id"], "result": result});
+                if writeln!(stream, "{reply}").is_err() {
+                    break;
+                }
+            }
+        });
+    }
+}
+
+struct LegacyResident(std::process::Child);
+impl Drop for LegacyResident {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+async fn legacy_resident(dir: &std::path::Path, activity: &str) -> LegacyResident {
+    use sha2::{Digest, Sha256};
+    // Build before starting the fixture: its dishonest fingerprint must match the current file.
+    let fingerprint = format!("{:x}", Sha256::digest(std::fs::read(server_bin()).unwrap()));
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "legacy_resident_fixture",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("FV_DAEMON_FIXTURE_DIR", dir)
+        .env("FV_DAEMON_FIXTURE_FINGERPRINT", fingerprint)
+        .env("FV_DAEMON_FIXTURE_ACTIVITY", activity)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    std::fs::write(dir.join("server.pid"), child.id().to_string()).unwrap();
+    let guard = LegacyResident(child);
+    for _ in 0..100 {
+        if tokio::net::UnixStream::connect(dir.join("server.sock"))
+            .await
+            .is_ok()
+        {
+            return guard;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("legacy fixture did not listen");
+}
+
+#[tokio::test]
+async fn direct_startup_replaces_an_idle_legacy_server_even_when_it_reports_the_new_fingerprint() {
+    use fv_protocol::methods::{SettingsGet, SettingsSet};
+    use fv_protocol::types::{AppSettingsPatch, Empty, SidebarSettingsPatch};
+    let dir = tempfile::tempdir().unwrap();
+    let _old = legacy_resident(dir.path(), "idle").await;
+    let old_pid = pid_of(dir.path());
+    let daemon = Daemon::new(dir.path().to_path_buf(), server_bin());
+    let conn = daemon
+        .connect_current("desktop", "0.1.0", &["sidebarSettings"])
+        .await
+        .unwrap();
+    assert_ne!(
+        pid_of(dir.path()),
+        old_pid,
+        "an old process must not silently discard sidebar fields"
+    );
+    assert!(!conn.version_mismatch);
+    assert!(conn.features.iter().any(|f| f == "sidebarSettings"));
+    conn.client
+        .call::<SettingsSet>(AppSettingsPatch {
+            sidebar: Some(SidebarSettingsPatch {
+                width: Some(416.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let current_pid = pid_of(dir.path());
+    drop(conn);
+    let reopened = daemon
+        .connect_current("desktop", "0.1.0", &["sidebarSettings"])
+        .await
+        .unwrap();
+    assert_eq!(
+        pid_of(dir.path()),
+        current_pid,
+        "an unchanged server is reused"
+    );
+    assert_eq!(
+        reopened
+            .client
+            .call::<SettingsGet>(Empty {})
+            .await
+            .unwrap()
+            .sidebar
+            .width,
+        416.0
+    );
+    drop(reopened);
+    daemon.stop().unwrap();
+    wait_gone(current_pid).await;
+}
+
+#[tokio::test]
+async fn direct_startup_keeps_busy_or_unknown_legacy_servers_running() {
+    for activity in ["busy", "unknown"] {
+        let dir = tempfile::tempdir().unwrap();
+        let _old = legacy_resident(dir.path(), activity).await;
+        let old_pid = pid_of(dir.path());
+        let daemon = Daemon::new(dir.path().to_path_buf(), server_bin());
+        let conn = daemon
+            .connect_current("desktop", "0.1.0", &["sidebarSettings"])
+            .await
+            .unwrap();
+        assert_eq!(pid_of(dir.path()), old_pid);
+        assert!(
+            alive(old_pid),
+            "work is never interrupted to update the sidebar"
+        );
+        assert!(
+            conn.version_mismatch,
+            "the UI must explain why new features are unavailable"
+        );
+    }
+}

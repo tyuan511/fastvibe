@@ -10,8 +10,16 @@ mod config;
 mod convert;
 mod error;
 mod model;
+mod models_dev;
 mod models_list;
+mod pricing;
 mod url;
+
+pub use models_dev::{
+    Catalog, InputModality, ModelMeta, Price, PriceTier, default_context_window, default_meta,
+    load_catalog,
+};
+pub use pricing::{history_cost, message_cost, price_message, select_price};
 
 pub use config::{ModelConfig, Protocol, ThinkingLevel};
 pub use error::classify;

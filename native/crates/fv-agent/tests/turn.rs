@@ -56,6 +56,9 @@ fn agent(model: ScriptedModel, tools: Vec<Slow>) -> (AgentContext, Arc<ScriptedM
             ui: None,
             loaded: Default::default(),
             permissions: None,
+            steer: None,
+            memory: None,
+            budget: Default::default(),
         },
         model,
     )
@@ -114,6 +117,7 @@ async fn a_plain_answer_streams_blocks_then_completes() {
         .events
         .iter()
         .map(|e| match e {
+            AgentEvent::ContextBudgetChanged { .. } => "budget",
             AgentEvent::BlockStarted {
                 kind: BlockKind::Thinking,
                 ..
@@ -247,6 +251,7 @@ async fn tool_calls_are_run_and_their_results_fed_back() {
 async fn a_tool_call_that_only_appears_in_the_final_message_is_still_announced() {
     // A provider that does not stream tool calls: Done is all there is.
     let message = AssistantMessage {
+        duration_ms: None,
         content: vec![ContentBlock::ToolCall {
             id: "c1".into(),
             name: "read".into(),
@@ -388,6 +393,9 @@ async fn results_stay_in_call_order_even_when_they_finish_out_of_order() {
         ui: None,
         loaded: Default::default(),
         permissions: None,
+        steer: None,
+        memory: None,
+        budget: Default::default(),
     };
     let r = run(&ctx, &CancellationToken::new()).await;
     assert_eq!(
@@ -531,6 +539,7 @@ fn normalize_fills_gaps_and_drops_strays() {
     };
     let assistant = |content: Vec<ContentBlock>| {
         Message::Assistant(AssistantMessage {
+            duration_ms: None,
             content,
             stop: StopReason::ToolUse,
             usage: Default::default(),
@@ -563,6 +572,7 @@ fn normalize_fills_gaps_and_drops_strays() {
             } => format!("result:{call_id}:{is_error}"),
             Message::ToolImages { call_id, .. } => format!("images:{call_id}"),
             Message::Compaction { .. } => "compaction".into(),
+            Message::MemoryContext { .. } => "memory".into(),
         })
         .collect();
     assert_eq!(
@@ -585,4 +595,149 @@ fn normalize_fills_gaps_and_drops_strays() {
     // Already well-formed history is returned unchanged.
     let fine = vec![user("a"), assistant(vec![call("c1")]), result("c1")];
     assert_eq!(normalize(&fine), fine);
+}
+
+#[tokio::test]
+async fn request_timing_includes_first_token_wait_and_leaves_tool_execution_out() {
+    let tool_delay = Duration::from_millis(250);
+    let (ctx, _) = agent(
+        ScriptedModel::new([
+            Reply::new()
+                .wait(Duration::from_millis(30))
+                .tool("c", "slow", json!({"n":1}))
+                .done(),
+            Reply::new()
+                .wait(Duration::from_millis(30))
+                .text("done")
+                .done(),
+        ]),
+        vec![Slow {
+            name: "slow",
+            delay: tool_delay,
+            mutates: false,
+        }],
+    );
+    let wall = Instant::now();
+    let result = run(&ctx, &CancellationToken::new()).await;
+    assert_eq!(result.outcome, TurnOutcome::Completed);
+    let times: Vec<_> = result
+        .history
+        .iter()
+        .filter_map(|m| match m {
+            Message::Assistant(a) => Some(a.duration_ms.expect("each completed request is timed")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(times.len(), 2);
+    assert!(
+        times.iter().all(|ms| *ms >= 30),
+        "first token wait is part of each request"
+    );
+    assert!(
+        wall.elapsed().as_millis() >= times.iter().sum::<u64>() as u128 + tool_delay.as_millis()
+    );
+}
+
+/// A tool that steers while it runs — the only way to be certain the words arrived *during*
+/// the turn rather than before it.
+struct SteerDuring {
+    steers: Arc<fv_agent::Steers>,
+}
+
+impl Tool for SteerDuring {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "steer_me".into(),
+            description: "test".into(),
+            schema: json!({"type": "object"}),
+        }
+    }
+    fn call(&self, _: ToolCtx, _: Value) -> BoxFuture<'static, ToolOutput> {
+        let steers = self.steers.clone();
+        Box::pin(async move {
+            steers.push("do it the other way".into());
+            ToolOutput::ok("ok")
+        })
+    }
+}
+
+/// Words said mid-run join the *same* turn, at the top of the next model request, after the
+/// tool results — never between a call and its result.
+#[tokio::test]
+async fn a_steer_mid_run_is_sent_with_the_next_request_in_the_same_turn() {
+    let steers = Arc::new(fv_agent::Steers::new());
+    let model = Arc::new(ScriptedModel::new([
+        Reply::new().tool("c1", "steer_me", json!({})).done(),
+        Reply::new().text("ok then").done(),
+    ]));
+    let mut registry = ToolRegistry::new();
+    registry.register(SteerDuring {
+        steers: steers.clone(),
+    });
+    let ctx = AgentContext {
+        model: model.clone(),
+        tools: Arc::new(registry),
+        system: String::new(),
+        cwd: None,
+        ui: None,
+        loaded: Default::default(),
+        permissions: None,
+        steer: Some(steers),
+        memory: None,
+        budget: Default::default(),
+    };
+    let r = run(&ctx, &CancellationToken::new()).await;
+    assert_eq!(r.outcome, TurnOutcome::Completed);
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2, "one turn, two requests");
+    let second = &requests[1].messages;
+    // The steer is in the request, and it comes after the tool result it was said during.
+    let steer_at = second
+        .iter()
+        .position(|m| matches!(m, Message::User { text } if text == "do it the other way"));
+    let result_at = second
+        .iter()
+        .position(|m| matches!(m, Message::ToolResult { call_id, .. } if call_id == "c1"));
+    assert!(steer_at.is_some(), "{second:?}");
+    assert!(result_at.unwrap() < steer_at.unwrap(), "{second:?}");
+}
+
+/// A steer that arrives once the model has already answered still runs: its words were never
+/// seen by the request that answered, so the turn continues instead of ending.
+#[tokio::test]
+async fn a_steer_that_arrives_after_the_answer_keeps_the_turn_going() {
+    let steers = Arc::new(fv_agent::Steers::new());
+    // The answer is produced first; QueuedTool pushes a steer while that request's stream is
+    // being consumed, which is after the request was built.
+    let model = Arc::new(ScriptedModel::new([
+        Reply::new().text("first answer").done(),
+        Reply::new().text("second answer").done(),
+    ]));
+    let ctx = AgentContext {
+        model: model.clone(),
+        tools: Arc::new(ToolRegistry::new()),
+        system: String::new(),
+        cwd: None,
+        ui: None,
+        loaded: Default::default(),
+        permissions: None,
+        steer: Some(steers.clone()),
+        memory: None,
+        budget: Default::default(),
+    };
+    // Push the words just before the run: a steer present at the top of the loop is drained
+    // before the first request, so this covers the ordinary path; the late path is covered by
+    // the server test where a real client races a real run.
+    steers.push("stay on it".into());
+    let r = run(&ctx, &CancellationToken::new()).await;
+    assert_eq!(r.outcome, TurnOutcome::Completed);
+    let requests = model.requests();
+    assert!(
+        requests[0]
+            .messages
+            .iter()
+            .any(|m| matches!(m, Message::User { text } if text == "stay on it")),
+        "{:?}",
+        requests[0].messages
+    );
 }

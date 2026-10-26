@@ -13,6 +13,7 @@ fn thread() -> Thread {
         archived: false,
         unread: false,
         pinned: false,
+        worktree: None,
         model: None,
         thinking: None,
     }
@@ -20,11 +21,14 @@ fn thread() -> Thread {
 
 fn view(seq: u64, turns: Vec<Turn>) -> ThreadView {
     ThreadView::from_snapshot(ThreadResumeResponse {
+        stats: Default::default(),
         thread: thread(),
         token_usage: None,
         turns,
         seq,
         running: false,
+        queue: QueueState::default(),
+        suggestion: None,
     })
 }
 
@@ -272,4 +276,188 @@ fn a_tool_call_item_is_replaced_by_its_finished_form() {
     )));
     assert_eq!(v.turns[0].items.len(), 1);
     assert!(matches!(&v.turns[0].items[0], Item::ToolCall { output: Some(o), .. } if o == "a\nb"));
+}
+
+#[test]
+fn stats_restore_with_the_snapshot_and_only_new_sequenced_updates_replace_them() {
+    let initial = SessionStats {
+        steps: 3,
+        ..Default::default()
+    };
+    let mut v = ThreadView::from_snapshot(ThreadResumeResponse {
+        thread: thread(),
+        token_usage: None,
+        stats: initial.clone(),
+        turns: vec![],
+        seq: 7,
+        running: false,
+        queue: QueueState::default(),
+        suggestion: None,
+    });
+    assert_eq!(v.stats, initial);
+    let updated = SessionStats {
+        steps: 4,
+        ..Default::default()
+    };
+    let note = N::ThreadStatsUpdated(ev(8, updated.clone()));
+    assert_eq!(v.apply(&note), Applied::Changed);
+    assert_eq!(v.stats, updated);
+    assert_eq!(
+        v.apply(&N::ThreadStatsUpdated(ev(7, initial))),
+        Applied::Ignored
+    );
+    assert_eq!(v.stats, updated);
+}
+
+#[test]
+fn reasoning_tracks_duration_and_timing() {
+    let mut v = view(0, vec![]);
+    v.apply(&N::TurnStarted(ev(
+        1,
+        TurnRef {
+            turn_id: "u1".into(),
+            at: Some(1000),
+        },
+    )));
+    v.apply(&N::ItemStarted(ev(
+        2,
+        ItemRef {
+            turn_id: "u1".into(),
+            item: Item::Reasoning {
+                id: "r1".into(),
+                text: String::new(),
+            },
+            at: Some(1000),
+        },
+    )));
+    assert_eq!(v.reasoning_starts.get("r1").copied(), Some(1000));
+    v.apply(&N::ReasoningDelta(ev(
+        3,
+        Delta {
+            turn_id: "u1".into(),
+            item_id: "r1".into(),
+            delta: "Thinking...".into(),
+        },
+    )));
+    // 3500ms elapsed -> Math.ceil(3.5) = 4s
+    v.apply(&N::ItemCompleted(ev(
+        4,
+        ItemRef {
+            turn_id: "u1".into(),
+            item: Item::Reasoning {
+                id: "r1".into(),
+                text: "Thinking...".into(),
+            },
+            at: Some(4500),
+        },
+    )));
+    assert_eq!(v.reasoning_durations.get("r1").copied(), Some(4));
+}
+
+#[test]
+fn reasoning_falls_back_to_turn_started_at_if_item_start_missing() {
+    let mut v = view(0, vec![]);
+    v.apply(&N::TurnStarted(ev(
+        1,
+        TurnRef {
+            turn_id: "u1".into(),
+            at: Some(2000),
+        },
+    )));
+    v.apply(&N::ItemCompleted(ev(
+        2,
+        ItemRef {
+            turn_id: "u1".into(),
+            item: Item::Reasoning {
+                id: "r2".into(),
+                text: "Thought".into(),
+            },
+            at: Some(5100),
+        },
+    )));
+    // 5100 - 2000 = 3100ms -> ceil is 4s
+    assert_eq!(v.reasoning_durations.get("r2").copied(), Some(4));
+}
+
+/// A retry takes the turn and everything after it out of the drawn transcript, so the run that
+/// replaces it appears once rather than as a second reply to the same prompt.
+#[test]
+fn a_rewind_drops_the_turn_and_what_followed_it() {
+    let mut v = view(
+        0,
+        vec![
+            Turn::new(
+                "t0".into(),
+                vec![Item::UserMessage {
+                    id: "a".into(),
+                    text: "first".into(),
+                }],
+            ),
+            Turn::new(
+                "t1".into(),
+                vec![Item::UserMessage {
+                    id: "b".into(),
+                    text: "second".into(),
+                }],
+            ),
+        ],
+    );
+    let note = N::TurnRewound(ev(
+        1,
+        Rewound {
+            turn_id: "t1".into(),
+        },
+    ));
+    assert_eq!(v.apply(&note), Applied::Changed);
+    assert_eq!(
+        v.turns.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        ["t0"]
+    );
+    // A turn that is not there changes nothing (a late event after a reload).
+    let again = N::TurnRewound(ev(
+        2,
+        Rewound {
+            turn_id: "t9".into(),
+        },
+    ));
+    assert_eq!(v.apply(&again), Applied::Changed);
+    assert_eq!(v.turns.len(), 1);
+}
+
+/// The queue the server pushes is what the tray draws, pause flag included.
+#[test]
+fn the_queue_arrives_whole_and_replaces_the_previous_one() {
+    let mut v = view(0, vec![]);
+    let note = N::ThreadQueueChanged(ev(
+        1,
+        QueueState {
+            items: vec![
+                QueueItem {
+                    id: "q1".into(),
+                    text: "first".into(),
+                    at: 1,
+                },
+                QueueItem {
+                    id: "q2".into(),
+                    text: "second".into(),
+                    at: 2,
+                },
+            ],
+            pause: Some(QueuePauseReason::Failed),
+        },
+    ));
+    assert_eq!(v.apply(&note), Applied::Changed);
+    assert_eq!(v.queue.items.len(), 2);
+    assert_eq!(v.queue.pause, Some(QueuePauseReason::Failed));
+    // A later push is the whole queue again, not a delta to merge.
+    let note = N::ThreadQueueChanged(ev(
+        2,
+        QueueState {
+            items: vec![],
+            pause: None,
+        },
+    ));
+    assert_eq!(v.apply(&note), Applied::Changed);
+    assert!(v.queue.items.is_empty());
+    assert_eq!(v.queue.pause, None);
 }

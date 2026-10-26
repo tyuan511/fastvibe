@@ -39,6 +39,10 @@ impl EventMapper {
     pub fn map(&mut self, event: AgentEvent) -> Vec<LogEvent> {
         let turn_id = self.turn_id.clone();
         match event {
+            AgentEvent::ContextBudgetChanged { used, window } => {
+                self.window = window;
+                vec![LogEvent::TokenUsage { used, window }]
+            }
             AgentEvent::BlockStarted { id, kind } => {
                 let (k, item) = match kind {
                     BlockKind::Text => (
@@ -91,7 +95,10 @@ impl EventMapper {
                 ContentBlock::Text { text } => {
                     vec![LogEvent::ItemCompleted {
                         turn_id,
-                        item: Item::AgentMessage { id, text },
+                        item: Item::AgentMessage {
+                            id,
+                            text: fv_core::strip_memory_citation(&text),
+                        },
                     }]
                 }
                 ContentBlock::Thinking { text, .. } => {
@@ -120,7 +127,12 @@ impl EventMapper {
                     window: self.window,
                 }]
             }
-            AgentEvent::Committed(_) => Vec::new(),
+            AgentEvent::Committed(message) => match message {
+                fv_core::Message::User { .. }
+                | fv_core::Message::Assistant(_)
+                | fv_core::Message::Compaction { .. } => vec![LogEvent::StatsMessage(message)],
+                _ => Vec::new(),
+            },
             AgentEvent::CompactionStarted { id } => vec![LogEvent::ItemStarted {
                 turn_id,
                 item: Item::ContextCompaction { id },

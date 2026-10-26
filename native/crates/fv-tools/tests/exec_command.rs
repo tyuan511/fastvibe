@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 async fn exec(cwd: Option<&Path>, args: Value) -> ToolOutput {
-    ExecCommandTool
+    ExecCommandTool::default()
         .call(
             ToolCtx::new(CancellationToken::new(), cwd.map(Path::to_path_buf)),
             args,

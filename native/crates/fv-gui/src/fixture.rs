@@ -8,6 +8,14 @@ use crate::view_model::ThreadView;
 
 pub struct Fixture {
     pub threads: Vec<Thread>,
+    /// A one-line notice above the composer (the result of a retry's file rewind).
+    pub rewound_notice: Option<String>,
+    /// 回复推荐's standing guess, drawn as the composer's placeholder.
+    pub suggestion: Option<String>,
+    /// A draft already in the composer.
+    pub draft: Option<String>,
+    /// Open the terminal tab, for the capture fixture.
+    pub terminal: bool,
     pub models: Vec<ModelEntry>,
     pub defaults: ModelDefaults,
     pub view: Option<ThreadView>,
@@ -28,6 +36,7 @@ fn thread(id: &str, title: &str, project: Option<&str>, updated: i64) -> Thread 
         archived: false,
         unread: false,
         pinned: false,
+        worktree: None,
         model: None,
         thinking: None,
     }
@@ -191,6 +200,26 @@ pub fn theme_conversation() -> Fixture {
         ),
     ];
     let snapshot = ThreadResumeResponse {
+        stats: SessionStats {
+            tokens: TokenCounts {
+                input: 48_210,
+                output: 3_180,
+                cache_read: 12_400,
+                cache_write: 2_048,
+            },
+            turn: Some(TokenCounts {
+                input: 12_940,
+                output: 620,
+                cache_read: 34_100,
+                cache_write: 512,
+            }),
+            last_request: Some(RequestUsage {
+                output_tokens: 320,
+                duration_ms: Some(4000),
+            }),
+            steps: 4,
+            cost: None,
+        },
         thread: threads[0].clone(),
         token_usage: Some(TokenUsage {
             used: 24_400,
@@ -199,9 +228,15 @@ pub fn theme_conversation() -> Fixture {
         turns,
         seq: 0,
         running: false,
+        queue: QueueState::default(),
+        suggestion: None,
     };
     Fixture {
         threads,
+        rewound_notice: None,
+        suggestion: None,
+        draft: None,
+        terminal: false,
         models: vec![ModelEntry {
             provider_id: "deepseek".into(),
             provider_name: "DeepSeek".into(),
@@ -215,6 +250,95 @@ pub fn theme_conversation() -> Fixture {
         view: Some(ThreadView::from_snapshot(snapshot)),
         draft_project: None,
     }
+}
+
+/// A reply in flight with prompts queued behind it: what the tray above the composer looks like,
+/// including the paused state a failed turn leaves behind.
+pub fn queued() -> Fixture {
+    let mut fixture = theme_conversation();
+    if let Some(view) = &mut fixture.view {
+        view.running = true;
+        view.active_turn = Some("t-live".into());
+        view.queue = QueueState {
+            items: vec![
+                QueueItem {
+                    id: "q1".into(),
+                    text: "把刚才那两个测试也补上".into(),
+                    at: 1,
+                },
+                QueueItem {
+                    id: "q2".into(),
+                    text: "顺手更新一下 docs/native-rewrite.md 的进度一节".into(),
+                    at: 2,
+                },
+            ],
+            pause: None,
+        };
+    }
+    fixture
+}
+
+/// The same queue after a turn failed: nothing drains until the user says so.
+pub fn queued_paused() -> Fixture {
+    let mut fixture = queued();
+    if let Some(view) = &mut fixture.view {
+        view.running = false;
+        view.queue.pause = Some(QueuePauseReason::Failed);
+    }
+    fixture
+}
+
+/// The right pane open on a real directory, so the tree and the preview can be looked at without
+/// a running server: the fixture points it at this checkout.
+pub fn side_pane() -> Fixture {
+    let mut fixture = theme_conversation();
+    if let Some(view) = &mut fixture.view {
+        view.thread.cwd = Some("/Users/yuantang/code/fastvibe".into());
+    }
+    fixture
+}
+
+/// The terminal tab, running a real shell in this checkout.
+pub fn terminal() -> Fixture {
+    let mut fixture = theme_conversation();
+    if let Some(view) = &mut fixture.view {
+        view.thread.cwd = Some("/Users/yuantang/code/fastvibe".into());
+    }
+    fixture.terminal = true;
+    fixture
+}
+
+/// A composer mid-`@`: the file menu open over a half-typed path.
+pub fn mention() -> Fixture {
+    let mut fixture = theme_conversation();
+    if let Some(view) = &mut fixture.view {
+        view.thread.cwd = Some("/Users/yuantang/code/fastvibe".into());
+    }
+    fixture.draft = Some("看一下 @native/crates/fv-gui/src/".into());
+    fixture
+}
+
+/// An empty composer offering 回复推荐 as its placeholder.
+pub fn suggestion() -> Fixture {
+    let mut fixture = new_chat();
+    fixture.suggestion = Some("把这两个测试也补上，再顺手跑一遍 pnpm test".into());
+    fixture
+}
+
+/// The notice a retry leaves behind when it put the workspace back.
+pub fn rewound_notice() -> Fixture {
+    let mut fixture = theme_conversation();
+    fixture.rewound_notice = Some("已退回工作区：还原 1 个文件，删除 1 个".into());
+    fixture
+}
+
+/// The queue after the user pressed 停止: the same pause, but its own sentence.
+pub fn queued_stopped() -> Fixture {
+    let mut fixture = queued_paused();
+    if let Some(view) = &mut fixture.view {
+        view.queue.pause = Some(QueuePauseReason::Stopped);
+    }
+    fixture
 }
 
 /// The conversation with a command waiting for the user's say-so.

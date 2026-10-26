@@ -19,6 +19,7 @@ use fv_client::Client;
 use fv_protocol::methods::Initialize;
 use fv_protocol::types::{ClientCapabilities, ClientInfo, InitializeParams};
 use fv_protocol::{PROTOCOL_VERSION, ServerNotification, ServerRequest};
+use sha2::{Digest, Sha256};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -81,6 +82,7 @@ pub struct Connection {
     pub notifications: UnboundedReceiver<ServerNotification>,
     pub requests: UnboundedReceiver<ServerRequest>,
     pub server_version: String,
+    pub features: Vec<String>,
     /// The server is from a different build than this app; it should be restarted when idle.
     pub version_mismatch: bool,
     /// Digest of the running executable, absent on servers built before this handshake field.
@@ -119,8 +121,8 @@ pub fn find_server_binary() -> Result<PathBuf, DaemonError> {
             return Ok(sibling);
         }
     }
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
+    if let Some(path) = fv_env::snapshot().get(std::ffi::OsStr::new("PATH")) {
+        for dir in std::env::split_paths(path) {
             let candidate = dir.join("fastvibe-server");
             if candidate.is_file() {
                 return Ok(candidate);
@@ -186,12 +188,14 @@ impl Daemon {
     }
 
     async fn start(&self) -> Result<(), DaemonError> {
+        let environment = fv_env::initialize().await;
         let log = OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.log_file())?;
         let mut command = Command::new(&self.server_bin);
         command
+            .envs(&environment.values)
             .arg("--data-dir")
             .arg(&self.data_dir)
             .arg("--listen")
@@ -246,6 +250,77 @@ impl Daemon {
     ) -> Result<Connection, DaemonError> {
         let socket = self.ensure_running().await?;
         connect_to(&socket, client_name, client_version).await
+    }
+
+    /// Desktop startup must compare builds, even when both are version 0.1.0. Otherwise a
+    /// resident server can silently discard new preference fields and push defaults back.
+    /// Keep a busy (or too old to report activity) server alive and flag the mismatch instead.
+    pub async fn connect_current(
+        &self,
+        client_name: &str,
+        client_version: &str,
+        required_features: &[&str],
+    ) -> Result<Connection, DaemonError> {
+        let mut connection = self.connect(client_name, client_version).await?;
+        let binary = self.server_bin.clone();
+        let built = tokio::task::spawn_blocking(move || {
+            let mut file = std::fs::File::open(binary)?;
+            let mut digest = Sha256::new();
+            std::io::copy(&mut file, &mut digest)?;
+            Ok::<_, std::io::Error>(format!("{:x}", digest.finalize()))
+        })
+        .await
+        .map_err(|e| DaemonError::Rpc(e.to_string()))??;
+        let current = |connection: &Connection| {
+            connection.build_fingerprint.as_deref() == Some(&built)
+                && required_features
+                    .iter()
+                    .all(|feature| connection.features.iter().any(|f| f == feature))
+        };
+        if current(&connection) {
+            return Ok(connection);
+        }
+
+        // Serialize replacement with other apps starting/replacing this same data directory.
+        // The blocking task owns the file, so cancellation cannot leave flock using a closed fd.
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.data_dir.join("server.lock"))?;
+        let _lock = tokio::task::spawn_blocking(move || {
+            if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(lock)
+        })
+        .await
+        .map_err(|e| DaemonError::Rpc(e.to_string()))??;
+        // Another app may already have replaced it while we waited. Recheck build and activity.
+        drop(connection);
+        if !self.reachable().await {
+            self.start().await?;
+        }
+        connection = connect_to(&self.socket(), client_name, client_version).await?;
+        if !current(&connection) {
+            if connection.has_running_turns == Some(false) {
+                drop(connection);
+                if !self.stop()? {
+                    return Err(DaemonError::DidNotStop);
+                }
+                let started = Instant::now();
+                while self.reachable().await {
+                    if started.elapsed() > START_TIMEOUT {
+                        return Err(DaemonError::DidNotStop);
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                self.start().await?;
+                connection = connect_to(&self.socket(), client_name, client_version).await?;
+            }
+            connection.version_mismatch |= !current(&connection);
+        }
+        Ok(connection)
     }
 
     /// Stop the current server and wait for its socket to close before returning. Development
@@ -310,6 +385,7 @@ pub async fn connect_to(
         notifications,
         requests,
         server_version: hello.server_version,
+        features: hello.features,
         version_mismatch,
         build_fingerprint: hello.build_fingerprint,
         has_running_turns: hello.has_running_turns,

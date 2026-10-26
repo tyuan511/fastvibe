@@ -593,7 +593,7 @@ function groupParts(parts: MessagePart[]): RenderPart[] { ... }
 
 | 项 | 改造前 | 改造后 |
 |---|---|---|
-| 正文容器 | `rounded-lg border bg-muted/40 p-2.5 max-h-48` | `ml-2 border-l border-border pl-3.5 max-h-60`，**无填充、无圆角** |
+| 正文容器 | `rounded-lg border bg-muted/40 p-2.5 max-h-48` | `pl-6 max-h-60`，**无引用竖线、无填充、与标题文本对齐** |
 | 正文颜色 | `text-muted-foreground` | `text-muted-foreground/80`，12px/20px |
 | 收起态 | 流式时自动展开，塞满文字 | **默认收起**，流式时标签右侧滚动**末行 ticker** |
 | 流式标签 | spinner + 「思考中 · 3s」 | `.animated-gradient-text` 的「正在思考」 |
@@ -688,10 +688,10 @@ pnpm build              # 通过
 
 ```
 [data-slot="reasoning-body"]
-  borderLeftWidth: 1px          ← 左侧竖线
+  borderLeftWidth: 0px           ← 无引用竖线
   background:      rgba(0,0,0,0) ← 无填充
   borderRadius:    0px           ← 无圆角盒
-  paddingLeft:     14px
+  paddingLeft:     24px          ← 对齐上方「思考」标题文本
   maxHeight:       240px
   fontSize:        12px / lineHeight 20px
   color:           oklab(0.556 0 0 / 0.8)

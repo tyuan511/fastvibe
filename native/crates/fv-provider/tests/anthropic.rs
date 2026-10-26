@@ -63,6 +63,7 @@ fn config(url: &str) -> ModelConfig {
 
 fn request() -> ModelRequest {
     ModelRequest {
+        max_output_tokens: None,
         system: "You are terse.".into(),
         messages: vec![Message::User {
             text: "read a.txt".into(),
@@ -156,6 +157,7 @@ async fn the_request_has_the_shape_the_protocol_wants() {
 async fn thinking_signatures_go_back_to_their_author_only() {
     let assistant = |model: &str| {
         Message::Assistant(AssistantMessage {
+            duration_ms: None,
             content: vec![
                 ContentBlock::Thinking {
                     text: "hmm".into(),

@@ -12,6 +12,10 @@ pub enum BlockKind {
 /// tool call's block id is the call id the model gave it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentEvent {
+    ContextBudgetChanged {
+        used: u64,
+        window: u64,
+    },
     BlockStarted {
         id: String,
         kind: BlockKind,

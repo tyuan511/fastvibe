@@ -3,17 +3,28 @@
 //! beyond the [`ClientOrigin`] its connection was accepted with.
 
 mod connection;
+pub mod context;
+mod git;
 mod listener;
 mod log;
 mod mapping;
+pub mod memory;
 mod policy;
+mod project_files;
 mod projects;
 mod prompt;
 mod providers;
+mod queue;
 mod runtime;
+mod search;
 mod settings;
 mod state;
+mod suggestion;
+mod terminal;
 mod turn;
+mod workspace;
+mod workspace_entries;
+mod worktree;
 
 pub use connection::serve_connection;
 pub use listener::{ListenError, UnixServer};
@@ -23,12 +34,16 @@ pub use state::ServerState;
 /// What `initialize` reports as the server's version.
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Identify this exact server executable, including uncommitted code and build-configuration
-/// changes. `None` only when the executable cannot be read (for example after it was replaced).
+/// Captured once at process startup, never from a replacement executable on disk.
 pub fn build_fingerprint() -> Option<String> {
     use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
-    Some(format!("{:x}", Sha256::digest(bytes)))
+    static STARTED_WITH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    STARTED_WITH
+        .get_or_init(|| {
+            let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
+            Some(format!("{:x}", Sha256::digest(bytes)))
+        })
+        .clone()
 }
 
 /// The agent every server runs: the given model, and all of the built-in tools. `main` and the
@@ -46,5 +61,8 @@ pub fn agent_with_builtin_tools(
         ui: None,
         loaded: Default::default(),
         permissions: None,
+        steer: None,
+        memory: None,
+        budget: Default::default(),
     }
 }

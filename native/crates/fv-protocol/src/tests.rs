@@ -187,3 +187,25 @@ fn model_info_defaults_to_seeing_images() {
     let m: types::ModelInfo = serde_json::from_value(json!({"id": "m", "name": null})).unwrap();
     assert!(m.supports_images && m.protocol.is_none());
 }
+
+#[test]
+fn sidebar_preferences_accept_old_settings_and_merge_only_the_named_sections() {
+    use crate::types::{AppSettings, SidebarSettings, SidebarSettingsPatch};
+    let settings: AppSettings = serde_json::from_str(r#"{"themeMode":"system","lightTheme":"github-light","darkTheme":"github-dark","glass":false}"#).unwrap();
+    assert_eq!(settings.sidebar, SidebarSettings::default());
+    let mut sidebar = settings.sidebar;
+    sidebar.apply(SidebarSettingsPatch {
+        width: Some(1.0),
+        order: Some([("pinned".into(), vec!["a".into()])].into()),
+        ..Default::default()
+    });
+    assert_eq!(sidebar.width, 200.0);
+    sidebar.apply(SidebarSettingsPatch {
+        width: Some(f32::NAN),
+        order: Some([("chats".into(), vec!["b".into()])].into()),
+        ..Default::default()
+    });
+    assert_eq!(sidebar.width, 200.0);
+    assert_eq!(sidebar.order["pinned"], ["a"]);
+    assert_eq!(sidebar.order["chats"], ["b"]);
+}

@@ -2,13 +2,13 @@
 
 use fv_protocol::types::*;
 use fv_theme::Token;
-use gpui_kit::component::text::TextView;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Status, Workspace, text};
 use crate::presentation::{self, FileChange, TurnLayout};
-use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon, icon_button};
+use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon, icon_button, shimmer, spinner};
+use crate::view_model::ThreadView;
 
 /// The reading column: `max-w-3xl` with `px-6`, so 720px of content.
 pub const THREAD_MAX: f32 = 768.0;
@@ -17,17 +17,17 @@ pub const THREAD_PAD: f32 = 24.0;
 const REPLY_MAX: f32 = 672.0;
 
 impl Workspace {
-    pub(super) fn main(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let empty = self.selected.is_none() && matches!(self.status, Status::Ready);
         div()
             .flex_1()
             .min_w_0()
             .h_full()
             .pt(px(8.0))
-            .mr(px(10.0))
+            .overflow_hidden()
             .flex()
             .flex_col()
-            .child(self.header())
+            .child(self.header(window, cx))
             .map(|d| {
                 if empty {
                     d.child(self.hero(window, cx))
@@ -38,7 +38,7 @@ impl Workspace {
             })
     }
 
-    fn header(&self) -> impl IntoElement {
+    fn header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
         let thread = self
             .selected
@@ -70,14 +70,61 @@ impl Workspace {
                     .text_color(p.c(Token::Foreground)),
             );
         }
+        let sidebar_closed = self.app_settings.sidebar.collapsed;
+        let open_fraction = (self.sidebar_motion.width
+            / self.sidebar_resting_width(f32::from(window.viewport_size().width)))
+        .clamp(0.0, 1.0);
+        let left_inset = if cfg!(target_os = "macos") {
+            96.0 - 80.0 * open_fraction
+        } else {
+            16.0
+        };
+        let sidebar_chrome = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(2.0))
+            .child(
+                icon_button("expand-sidebar", "panel-left-open", p)
+                    .aria_label("展开侧边栏")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.on_toggle_sidebar(&super::ToggleSidebar, window, cx)
+                    })),
+            )
+            .child(
+                icon_button("header-new-chat", "message-square-plus", p)
+                    .aria_label("新对话")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.on_new_chat(&super::NewChat, window, cx)
+                    })),
+            )
+            .child(
+                icon_button("header-back", "arrow-left01", p)
+                    .opacity(if self.navigation.can_back() {
+                        1.0
+                    } else {
+                        0.35
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.navigate(false, cx))),
+            )
+            .child(
+                icon_button("header-forward", "arrow-right01", p)
+                    .opacity(if self.navigation.can_forward() {
+                        1.0
+                    } else {
+                        0.35
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.navigate(true, cx))),
+            );
         div()
             .h(px(44.0))
             .flex_none()
-            .pl(px(17.0))
+            .pl(px(left_inset))
             .pr(px(8.0))
             .flex()
             .items_center()
             .gap(px(8.0))
+            .children(sidebar_closed.then_some(sidebar_chrome))
             .child(left)
             .child(
                 div()
@@ -85,12 +132,18 @@ impl Workspace {
                     .items_center()
                     .gap(px(4.0))
                     .child(icon_button("resources", "ai-expand", p))
-                    .child(icon_button("expand-side-pane", "panel-right-open", p)),
+                    .when(self.side_pane_collapsed, |d| {
+                        d.child(
+                            icon_button("expand-side-pane", "panel-right-open", p)
+                                .aria_label("展开侧边面板")
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_side_pane(cx))),
+                        )
+                    }),
             )
     }
 
     /// A new conversation: the greeting above the composer, the composer a little above centre.
-    fn hero(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn hero(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let hour = local_hour();
         let greeting = match hour {
             5..=10 => "早上好呀，新的一天开始啦",
@@ -278,13 +331,49 @@ impl Workspace {
                         .child(SharedString::from(m.clone())),
                 )
             }
-            (Status::Connecting, _) => body = body.child(div().muted(p).child(text::CONNECTING)),
+            (Status::Connecting, _) => {
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .muted(p)
+                        .child(spinner(
+                            "connecting-spinner",
+                            14.0,
+                            p.c(Token::MutedForeground),
+                        ))
+                        .child(text::CONNECTING),
+                )
+            }
             (Status::Ready, None) => {}
             (Status::Ready, Some(view)) => {
                 let last = view.turns.len().saturating_sub(1);
+                let target_turn = self
+                    .search_target
+                    .as_ref()
+                    .filter(|(id, _)| Some(id) == self.selected.as_ref())
+                    .and_then(|(_, query)| {
+                        view.turns
+                            .iter()
+                            .position(|t| super::palette::turn_matches(t, query))
+                    });
                 for (i, turn) in view.turns.iter().enumerate() {
                     let running = view.running && i == last;
-                    body = body.children(self.turn(turn, running, cx));
+                    let rows = self.turn(turn, running, cx);
+                    if target_turn == Some(i) {
+                        body = body.child(
+                            div()
+                                .id("search-target-turn")
+                                .flex()
+                                .flex_col()
+                                .gap(px(28.0))
+                                .anchor_scroll(Some(self.search_anchor.clone()))
+                                .children(rows),
+                        );
+                    } else {
+                        body = body.children(rows);
+                    }
                 }
             }
         }
@@ -307,7 +396,7 @@ impl Workspace {
         let items: Vec<Item> = items.into_iter().cloned().collect();
         let layout = presentation::layout(&items, running);
         if let Some(user) = layout.user {
-            rows.push(self.user_row(user, turn.started_at));
+            rows.push(self.user_row(&turn.id, user, turn.started_at, cx));
         }
         for c in compactions {
             rows.push(self.compaction(c, running && layout.answer.is_empty()));
@@ -318,12 +407,43 @@ impl Workspace {
         rows
     }
 
-    fn user_row(&self, item: &Item, at: Option<i64>) -> AnyElement {
+    fn user_row(
+        &self,
+        turn_id: &str,
+        item: &Item,
+        at: Option<i64>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let p = &self.palette;
         let Item::UserMessage { id, text } = item else {
             return div().into_any_element();
         };
+        // Edit puts the words back in the composer: correcting a prompt is a rewrite of that
+        // turn, and sending it again would only add a second one after the reply it corrects.
+        let edit_text = text.clone();
+        let edit_turn = turn_id.to_string();
+        let edit = action_button(
+            SharedString::from(format!("edit-{id}")),
+            "pencil-edit02",
+            "编辑",
+            p,
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.start_edit(edit_turn.clone(), edit_text.clone(), window, cx);
+        }));
+        let copy_text = text.clone();
+        let copy = action_button(
+            SharedString::from(format!("copy-{id}")),
+            "copy01",
+            "复制",
+            p,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.copy_text(copy_text.clone(), cx);
+        }));
         let group = SharedString::from(format!("row-{id}"));
+        let skill = crate::skill_draft::invocation(text);
+        let body = skill.as_ref().map(|s| s.text).unwrap_or(text);
         div()
             .group(group.clone())
             .w_full()
@@ -331,21 +451,28 @@ impl Workspace {
             .flex_col()
             .items_end()
             .gap(px(11.0))
-            .child(
-                div()
-                    .max_w(relative(0.85))
-                    .px(px(13.0))
-                    .py(px(9.0))
-                    .rounded(px(14.0))
-                    .bg(p.c(Token::Muted))
-                    .text_size(px(TEXT_SM))
-                    .line_height(px(24.0))
-                    .child(SharedString::from(text.clone())),
+            .children(
+                skill
+                    .as_ref()
+                    .map(|s| super::skill_picker::badge(s.name, p)),
             )
+            .when(!body.is_empty(), |d| {
+                d.child(
+                    div()
+                        .max_w(relative(0.85))
+                        .px(px(13.0))
+                        .py(px(9.0))
+                        .rounded(px(14.0))
+                        .bg(p.c(Token::Muted))
+                        .text_size(px(TEXT_SM))
+                        .line_height(px(24.0))
+                        .child(SharedString::from(body.to_string())),
+                )
+            })
             .child(actions(
                 &group,
                 at.map(|t| (clock(t), None)),
-                &["copy01", "pencil-edit02", "rotate-ccw"],
+                vec![copy.into_any_element(), edit.into_any_element()],
                 p,
             ))
             .into_any_element()
@@ -356,6 +483,17 @@ impl Workspace {
         let Item::ContextCompaction { .. } = item else {
             return div().into_any_element();
         };
+        let label: AnyElement = if live {
+            shimmer("compaction-live", text::COMPACTING)
+                .text_color(p.c(Token::Foreground))
+                .into_any_element()
+        } else {
+            div()
+                .flex_none()
+                .text_color(p.c(Token::MutedForeground).opacity(0.6))
+                .child(text::COMPACTED)
+                .into_any_element()
+        };
         div()
             .w_full()
             .flex()
@@ -364,16 +502,7 @@ impl Workspace {
             .text_size(px(TEXT_XS))
             .line_height(px(16.0))
             .child(ui::rule(p))
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(p.c(Token::MutedForeground).opacity(0.6))
-                    .child(if live {
-                        text::COMPACTING
-                    } else {
-                        text::COMPACTED
-                    }),
-            )
+            .child(label)
             .child(ui::rule(p))
             .into_any_element()
     }
@@ -395,11 +524,29 @@ impl Workspace {
             .flex_col()
             .items_start()
             .gap(px(10.0));
-        if layout.folded {
+        if running {
+            let start = turn.started_at.unwrap_or_else(now_ms);
+            let elapsed = (now_ms() - start).max(1000) as u64;
+            let progress = div().w_full().max_w(px(REPLY_MAX)).flex().flex_col().child(
+                div()
+                    .pt(px(8.0))
+                    .pb(px(8.0))
+                    .border_b_1()
+                    .border_color(p.c(Token::Border))
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .line_height(px(20.0))
+                            .muted(p)
+                            .child(format!("已处理 {}", presentation::format_duration(elapsed))),
+                    ),
+            );
+            col = col.child(progress);
+        } else if layout.folded {
             let open = self.open_folds.contains(turn_id);
             let key = turn_id.to_string();
             // 用时: the work the fold hides, up to where the answer began.
-            let label = match (turn.started_at, turn.process_ended_at) {
+            let label = match (turn.started_at, turn.process_ended_at.or(turn.completed_at)) {
                 (Some(a), Some(b)) if b >= a => {
                     format!("用时 {}", presentation::format_duration((b - a) as u64))
                 }
@@ -443,17 +590,34 @@ impl Workspace {
             col = col.child(fold);
         }
         col = col.children(self.parts(&layout.answer, running, cx));
-        let ends_live = layout
+        let live_tail = layout
             .answer
-            .last()
-            .is_some_and(|i| matches!(i, Item::AgentMessage { .. } | Item::Reasoning { .. }));
-        if running && !ends_live {
+            .iter()
+            .any(|i| matches!(i, Item::ToolCall { output: None, .. }))
+            || layout
+                .answer
+                .last()
+                .is_some_and(|i| matches!(i, Item::AgentMessage { .. } | Item::Reasoning { .. }));
+        if running && !live_tail {
             col = col.child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
                     .text_size(px(TEXT_SM))
                     .line_height(px(20.0))
-                    .muted(p)
-                    .child(text::WORKING),
+                    .child(spinner(
+                        SharedString::from(format!("working-spin-{}", turn.id)),
+                        16.0,
+                        p.c(Token::MutedForeground),
+                    ))
+                    .child(
+                        shimmer(
+                            SharedString::from(format!("working-text-{}", turn.id)),
+                            text::WORKING,
+                        )
+                        .text_color(p.c(Token::Foreground)),
+                    ),
             );
         }
         if !running && !layout.changes.is_empty() {
@@ -468,10 +632,51 @@ impl Workspace {
                     .map(|s| format!("耗时 {}", presentation::format_duration((end - s) as u64)));
                 (clock(end), took)
             });
+            // The answer as text, without the process the fold hides.
+            let answer: String = layout
+                .answer
+                .iter()
+                .filter_map(|i| match i {
+                    Item::AgentMessage { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let copy = action_button(
+                SharedString::from(format!("copy-reply-{turn_id}")),
+                "copy01",
+                "复制",
+                p,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.copy_text(answer.clone(), cx)));
+            let fork_id = turn_id.to_string();
+            let fork = action_button(
+                SharedString::from(format!("fork-{turn_id}")),
+                "git-fork",
+                "创建分支",
+                p,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.fork_thread(fork_id.clone(), cx)));
+            // 重试 asks for this turn again: its reply is thrown away and the same prompt is
+            // re-sent, which is the only sense in which a reply can be "run again".
+            let retry_id = turn_id.to_string();
+            let retry = action_button(
+                SharedString::from(format!("retry-{turn_id}")),
+                "rotate-ccw",
+                "重试",
+                p,
+            )
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.retry(retry_id.clone(), window, cx)),
+            );
             col = col.child(actions(
                 &group,
                 stamp,
-                &["copy01", "git-fork", "rotate-ccw"],
+                vec![
+                    copy.into_any_element(),
+                    fork.into_any_element(),
+                    retry.into_any_element(),
+                ],
                 p,
             ));
         }
@@ -483,13 +688,39 @@ impl Workspace {
             .w_full()
             .text_size(px(TEXT_SM))
             .line_height(px(24.0))
-            .child(
-                TextView::markdown(
-                    SharedString::from(format!("a-{id}")),
-                    SharedString::from(text.to_string()),
-                )
-                .style(crate::markdown::style(&self.palette)),
-            )
+            .child(crate::markdown::view(
+                SharedString::from(format!("a-{id}")),
+                SharedString::from(fv_core::strip_memory_citation(text)),
+                &self.palette,
+            ))
+    }
+
+    pub(super) fn reasoning_duration(&self, item_id: &str) -> Option<u64> {
+        let current_view = self.selected.as_ref().and_then(|id| self.views.get(id));
+        let views: Box<dyn Iterator<Item = &ThreadView>> = match current_view {
+            Some(v) => Box::new(std::iter::once(v)),
+            None => Box::new(self.views.values()),
+        };
+        for view in views {
+            if let Some(&secs) = view.reasoning_durations.get(item_id) {
+                return Some(secs);
+            }
+            for turn in &view.turns {
+                if turn.items.iter().any(|i| match i {
+                    Item::Reasoning { id, .. } => id == item_id,
+                    _ => false,
+                }) {
+                    if let Some(start) = turn.started_at
+                        && let Some(end) = turn.process_ended_at.or(turn.completed_at)
+                        && end >= start
+                    {
+                        return Some(((end - start + 999) / 1000).max(1) as u64);
+                    }
+                    break;
+                }
+            }
+        }
+        None
     }
 
     fn process_item(&self, item: &Item, cx: &mut Context<Self>) -> Div {
@@ -501,28 +732,74 @@ impl Workspace {
         let p = &self.palette;
         let (id, header, body): (String, Div, Option<Div>) = match item {
             Item::Reasoning { id, text: body } => {
-                let first = body.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-                let header = div().flex_none().muted(p).child(if live {
-                    "正在思考"
+                let header = if live {
+                    div().flex_none().child(
+                        shimmer(SharedString::from(format!("think-live-{id}")), "正在思考")
+                            .text_color(p.c(Token::MutedForeground)),
+                    )
                 } else {
-                    text::THINKING
-                });
-                let preview = ui::truncate(first.to_string())
-                    .flex_1()
-                    .text_color(p.c(Token::MutedForeground).opacity(0.7));
-                let row = div()
+                    let elapsed = self.reasoning_duration(id);
+                    if let Some(secs) = elapsed {
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .line_height(px(20.0))
+                                    .muted(p)
+                                    .child(text::THINKING),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .line_height(px(20.0))
+                                    .text_color(p.c(Token::MutedForeground).opacity(0.4))
+                                    .child("·"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .line_height(px(20.0))
+                                    .text_color(p.c(Token::MutedForeground).opacity(0.6))
+                                    .child(format!("{secs} 秒")),
+                            )
+                    } else {
+                        div()
+                            .flex_none()
+                            .text_size(px(TEXT_SM))
+                            .line_height(px(20.0))
+                            .muted(p)
+                            .child(text::THINKING)
+                    }
+                };
+                let preview_line = if live {
+                    body.lines()
+                        .rev()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("")
+                } else {
+                    ""
+                };
+                let mut row = div()
                     .w_full()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .child(header)
-                    .child(preview);
+                    .gap(px(8.0))
+                    .child(icon("brain", 16.0, p.c(Token::MutedForeground)))
+                    .child(header);
+                if live && !preview_line.is_empty() {
+                    let preview = ui::truncate(preview_line.to_string())
+                        .flex_1()
+                        .text_color(p.c(Token::MutedForeground).opacity(0.7));
+                    row = row.child(preview);
+                }
                 let open = self.open_items.contains(id);
                 let detail = open.then(|| {
                     div()
-                        .pl(px(10.0))
-                        .border_l_2()
-                        .border_color(p.c(Token::Border))
+                        .pl(px(24.0))
                         .text_size(px(TEXT_SM))
                         .line_height(px(22.0))
                         .muted(p)
@@ -538,7 +815,7 @@ impl Workspace {
                 is_error,
             } => {
                 let view = presentation::describe(name, arguments, output.is_none());
-                let row = self.tool_head(&view, *is_error, output.is_none());
+                let row = self.tool_head(id, &view, *is_error, output.is_none());
                 let open = self.open_items.contains(id);
                 let detail =
                     open.then(|| self.tool_detail(name, arguments, output.as_deref(), *is_error));
@@ -610,28 +887,44 @@ impl Workspace {
 
     /// The row a call opens with: its family's icon, the category in muted words, what it acted
     /// on in mono, and the directory or glob after that in fainter mono.
-    fn tool_head(&self, v: &presentation::ToolView, failed: bool, running: bool) -> Div {
+    fn tool_head(&self, id: &str, v: &presentation::ToolView, failed: bool, running: bool) -> Div {
         let p = &self.palette;
+        let icon_el: AnyElement = if running {
+            spinner(
+                SharedString::from(format!("tool-spin-{id}")),
+                14.0,
+                p.c(Token::MutedForeground),
+            )
+            .into_any_element()
+        } else {
+            ui::icon(
+                presentation::family_icon(v.family, true),
+                14.0,
+                p.c(Token::MutedForeground),
+            )
+            .into_any_element()
+        };
+        let label_el: AnyElement = if running {
+            shimmer(
+                SharedString::from(format!("tool-label-{id}")),
+                v.label.clone(),
+            )
+            .text_color(p.c(Token::Foreground))
+            .into_any_element()
+        } else {
+            div()
+                .flex_none()
+                .text_color(p.c(Token::MutedForeground))
+                .child(SharedString::from(v.label.clone()))
+                .into_any_element()
+        };
         div()
             .w_full()
             .flex()
             .items_center()
             .gap(px(8.0))
-            .child(ui::icon(
-                presentation::family_icon(v.family, true),
-                14.0,
-                p.c(Token::MutedForeground),
-            ))
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(if running {
-                        p.c(Token::Foreground)
-                    } else {
-                        p.c(Token::MutedForeground)
-                    })
-                    .child(SharedString::from(v.label.clone())),
-            )
+            .child(icon_el)
+            .child(label_el)
             .when(!v.subject.is_empty(), |d| {
                 d.child(
                     ui::truncate(v.subject.clone())
@@ -748,6 +1041,26 @@ impl Workspace {
                 .get("cmd")
                 .and_then(|v| v.as_str())
                 .map(|c| self.code_block(&format!("$ {c}"), false)),
+            "write_stdin" => Some(self.code_block(
+                &format!(
+                        "session {}\n{}",
+                        arguments
+                            .get("session_id")
+                            .map(|id| id.to_string())
+                            .unwrap_or_default(),
+                        match arguments
+                            .get("chars")
+                            .and_then(|chars| chars.as_str())
+                            .unwrap_or("")
+                        {
+                            "" => "等待新输出",
+                            "\u{3}" => "Ctrl-C",
+                            "\u{4}" => "Ctrl-D",
+                            chars => chars,
+                        }
+                    ),
+                false,
+            )),
             "apply_patch" => arguments
                 .get("input")
                 .and_then(|v| v.as_str())
@@ -942,13 +1255,32 @@ impl Workspace {
 
 /// `MessageActions`: the time (and how long the turn took), then 18px buttons, shown while
 /// the pointer is over the message.
+/// A clickable 14px glyph in the hover row under a message.
+fn action_button(
+    id: impl Into<ElementId>,
+    glyph: &'static str,
+    label: &'static str,
+    p: &crate::theme::Palette,
+) -> gpui_kit::Stateful<Div> {
+    let hover = p.c(Token::Muted);
+    div()
+        .id(id)
+        .p(px(2.0))
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .hover(move |d| d.bg(hover))
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(label).build(window, cx)
+        })
+        .child(icon(glyph, 14.0, p.c(Token::MutedForeground)))
+}
+
 fn actions(
     group: &SharedString,
     stamp: Option<(String, Option<String>)>,
-    glyphs: &[&str],
+    buttons: Vec<AnyElement>,
     p: &crate::theme::Palette,
 ) -> Div {
-    let hover = p.c(Token::Muted);
     let mut row = div()
         .h(px(20.0))
         .flex()
@@ -973,16 +1305,7 @@ fn actions(
                 }),
         );
     }
-    for g in glyphs {
-        row = row.child(
-            div()
-                .p(px(2.0))
-                .rounded(px(6.0))
-                .hover(move |d| d.bg(hover))
-                .child(icon(g, 14.0, p.c(Token::MutedForeground))),
-        );
-    }
-    row
+    row.children(buttons)
 }
 
 /// `HH:MM` in local time.

@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+fv-env = { path = "../fv-env" }
 fv-agent = { path = "../fv-agent" }
 fv-core = { path = "../fv-core" }
 fv-sandbox = { path = "../fv-sandbox" }
@@ -17,6 +18,8 @@ futures-util.workspace = true
 similar = "2"
 thiserror = "2"
 libc = "0.2"
+portable-pty = "0.9"
+uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 

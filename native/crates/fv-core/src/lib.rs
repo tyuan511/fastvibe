@@ -5,6 +5,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod memory;
+pub use memory::{memory_citation_ids, strip_memory_citation};
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -59,6 +62,9 @@ pub enum StopReason {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantMessage {
+    /// Time for this model request, including first-token wait, excluding tool execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     pub content: Vec<ContentBlock>,
     pub stop: StopReason,
     #[serde(default)]
@@ -111,6 +117,11 @@ pub enum Message {
     User {
         text: String,
     },
+    /// Hidden, persisted memory map. Kept separate from authored user messages so disabling
+    /// memory can remove it from requests without rewriting the transcript or a user's words.
+    MemoryContext {
+        summary: String,
+    },
     Assistant(AssistantMessage),
     ToolResult {
         call_id: String,
@@ -129,6 +140,13 @@ pub enum Message {
     /// The conversation so far was summarized to make room. Everything before this message is
     /// no longer sent to the model; it stays in the transcript, which only ever grows.
     Compaction {
+        /// Usage of the summary request; old transcripts did not record it.
+        #[serde(default)]
+        usage: Usage,
+        /// Which model wrote the summary, so its own price applies to that usage. Absent on
+        /// summaries written before this was recorded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
         /// Every message the user wrote before this point (the earlier ones carried over from
         /// previous compactions), so their own words survive however many times this happens.
         user_messages: Vec<String>,
@@ -140,15 +158,30 @@ pub enum Message {
 const KEPT_USER_MESSAGE_BYTES: usize = 80_000;
 
 impl Message {
+    pub fn memory_context_text(summary: &str) -> String {
+        format!(
+            "========= MEMORY_SUMMARY BEGINS =========\n{summary}\n========= MEMORY_SUMMARY ENDS ========="
+        )
+    }
     /// The text a model is shown in place of everything a compaction replaced: what the user
     /// asked, then the summary of what was done about it. After codex's `history_bridge.md`.
     pub fn compaction_text(user_messages: &[String], summary: &str) -> String {
+        Self::compaction_text_with_budget(user_messages, summary, KEPT_USER_MESSAGE_BYTES)
+    }
+
+    /// Request-only projection for a smaller physical window. Original user messages stay
+    /// in the persisted checkpoint; its summary also carries their requirements.
+    pub fn compaction_text_with_budget(
+        user_messages: &[String],
+        summary: &str,
+        max_user_bytes: usize,
+    ) -> String {
         let users = if user_messages.is_empty() {
             "(none)".to_string()
         } else {
             user_messages.join("\n\n")
         };
-        let users = truncate_middle(&users, KEPT_USER_MESSAGE_BYTES);
+        let users = truncate_middle(&users, max_user_bytes.min(KEPT_USER_MESSAGE_BYTES));
         let summary = if summary.trim().is_empty() {
             "(no summary available)"
         } else {
@@ -195,6 +228,7 @@ pub fn estimate_tokens(messages: &[Message]) -> u64 {
         .iter()
         .map(|m| match m {
             Message::User { text } => text.len() as u64,
+            Message::MemoryContext { summary } => summary.len() as u64,
             Message::Assistant(a) => a
                 .content
                 .iter()
@@ -212,6 +246,7 @@ pub fn estimate_tokens(messages: &[Message]) -> u64 {
             Message::Compaction {
                 user_messages,
                 summary,
+                ..
             } => Message::compaction_text(user_messages, summary).len() as u64,
         })
         .sum();
@@ -280,6 +315,8 @@ mod tests {
     #[test]
     fn the_model_is_shown_only_what_follows_the_last_compaction() {
         let compaction = Message::Compaction {
+            usage: Default::default(),
+            model: None,
             user_messages: vec!["a".into()],
             summary: "s".into(),
         };
@@ -291,11 +328,15 @@ mod tests {
         // A later compaction supersedes an earlier one.
         let two = vec![
             Message::Compaction {
+                usage: Default::default(),
+                model: None,
                 user_messages: vec![],
                 summary: "old".into(),
             },
             user("x"),
             Message::Compaction {
+                usage: Default::default(),
+                model: None,
                 user_messages: vec!["x".into()],
                 summary: "new".into(),
             },
@@ -326,6 +367,7 @@ mod tests {
     fn size_is_estimated_by_bytes() {
         assert_eq!(estimate_tokens(&[user(&"x".repeat(400))]), 100);
         let call = Message::Assistant(AssistantMessage {
+            duration_ms: None,
             content: vec![ContentBlock::ToolCall {
                 id: "c".into(),
                 name: "read".into(),

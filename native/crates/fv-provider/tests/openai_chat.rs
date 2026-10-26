@@ -52,6 +52,7 @@ fn config(url: &str) -> ModelConfig {
 
 fn request() -> ModelRequest {
     ModelRequest {
+        max_output_tokens: None,
         system: "Be brief.".into(),
         messages: vec![Message::User {
             text: "read a.txt".into(),
@@ -62,6 +63,56 @@ fn request() -> ModelRequest {
             schema: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
         }],
     }
+}
+
+#[tokio::test]
+async fn a_request_output_budget_reaches_the_provider_without_raising_its_configured_limit() {
+    let mock = serve(vec![Reply::sse(TEXT_TURN), Reply::sse(TEXT_TURN)]).await;
+    let mut cfg = config(&mock.url);
+    cfg.max_output_tokens = Some(128);
+    let model = GenaiModel::new(cfg).unwrap();
+    let mut req = request();
+    req.max_output_tokens = Some(64);
+    collect(&model, req.clone()).await;
+    req.max_output_tokens = Some(512);
+    collect(&model, req).await;
+    let captured = mock.captured.lock().unwrap();
+    let limit = |body: &serde_json::Value| {
+        body["max_tokens"]
+            .as_u64()
+            .or_else(|| body["max_completion_tokens"].as_u64())
+    };
+    assert_eq!(limit(&captured[0].body), Some(64));
+    assert_eq!(limit(&captured[1].body), Some(128));
+}
+
+#[test]
+fn learned_windows_are_isolated_by_physical_route_model_and_declared_window() {
+    use fv_agent::Model;
+    let mut cfg = config("http://localhost:12345");
+    cfg.context_window = Some(100_000);
+    let model = GenaiModel::new(cfg.clone()).unwrap();
+    let budget = fv_agent::ContextBudget::default();
+    assert!(budget.reject(&model, 30_000, 4096));
+    let learned = budget.window(&model);
+    let mut same = cfg.clone();
+    same.label = "different-provider-alias".into();
+    same.api_key = "changed-credential".into();
+    let same = GenaiModel::new(same).unwrap();
+    assert_eq!(same.context_key(), model.context_key());
+    assert_eq!(budget.window(&same), learned);
+    let mut other = cfg.clone();
+    other.base_url = "http://localhost:54321/v1".into();
+    assert_eq!(budget.window(&GenaiModel::new(other).unwrap()), 100_000);
+    let mut other = cfg.clone();
+    other.model_id = "other-model".into();
+    assert_eq!(budget.window(&GenaiModel::new(other).unwrap()), 100_000);
+    let mut other = cfg.clone();
+    other.protocol = Protocol::OpenAiResponses;
+    assert_eq!(budget.window(&GenaiModel::new(other).unwrap()), 100_000);
+    let mut other = cfg;
+    other.context_window = Some(200_000);
+    assert_eq!(budget.window(&GenaiModel::new(other).unwrap()), 200_000);
 }
 
 #[tokio::test]
@@ -133,6 +184,7 @@ async fn a_tool_exchange_is_sent_back_in_the_openai_shape() {
     let model = GenaiModel::new(config(&mock.url)).unwrap();
     let mut req = request();
     req.messages.push(Message::Assistant(AssistantMessage {
+        duration_ms: None,
         content: vec![
             ContentBlock::Text {
                 text: "Reading it now.".into(),

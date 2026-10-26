@@ -73,6 +73,21 @@ const MIGRATIONS: &[&str] = &[
          key   TEXT PRIMARY KEY,
          value TEXT NOT NULL
      );",
+    // 3: prompts queued behind a reply, one row per prompt so reordering is an update and a
+    // crash cannot rewrite a neighbour's entry. The pause flag sits beside them: a queue that
+    // stopped on its own must not start draining again just because the app restarted.
+    "CREATE TABLE queue_items (
+         thread_id TEXT NOT NULL,
+         id        TEXT NOT NULL,
+         position  INTEGER NOT NULL,
+         at        INTEGER NOT NULL,
+         text      TEXT NOT NULL,
+         PRIMARY KEY (thread_id, id)
+     );
+     CREATE TABLE queue_pauses (
+         thread_id TEXT PRIMARY KEY,
+         reason    TEXT NOT NULL DEFAULT 'failed'
+     );",
 ];
 
 /// A provider as stored: everything but its key.
@@ -85,6 +100,15 @@ pub struct StoredProvider {
     pub base_url: String,
     pub enabled: bool,
     pub models: Vec<ModelInfo>,
+}
+
+/// A prompt waiting behind a reply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuedPrompt {
+    pub id: String,
+    pub text: String,
+    pub at: i64,
 }
 
 pub struct Db {
@@ -250,6 +274,92 @@ impl Db {
             None => conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?,
         };
         Ok(())
+    }
+
+    pub fn queue(&self, thread_id: &str) -> Result<Vec<QueuedPrompt>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, text, at FROM queue_items WHERE thread_id = ?1 ORDER BY position, id",
+        )?;
+        let rows = stmt.query_map(params![thread_id], |r| {
+            Ok(QueuedPrompt {
+                id: r.get(0)?,
+                text: r.get(1)?,
+                at: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Why this thread's queue is standing still, if it is. Stored rather than inferred: a queue
+    /// that stopped before the last restart must not start draining because the process changed.
+    pub fn queue_pause(&self, thread_id: &str) -> Result<Option<String>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT reason FROM queue_pauses WHERE thread_id = ?1",
+                params![thread_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn set_queue_pause(&self, thread_id: &str, reason: Option<&str>) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        match reason {
+            Some(reason) => conn.execute(
+                "INSERT INTO queue_pauses (thread_id, reason) VALUES (?1, ?2)
+                 ON CONFLICT(thread_id) DO UPDATE SET reason = ?2",
+                params![thread_id, reason],
+            )?,
+            None => conn.execute(
+                "DELETE FROM queue_pauses WHERE thread_id = ?1",
+                params![thread_id],
+            )?,
+        };
+        Ok(())
+    }
+
+    /// Append to the end of the queue.
+    pub fn push_queued(&self, thread_id: &str, item: &QueuedPrompt) -> Result<(), StoreError> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO queue_items (thread_id, id, position, at, text)
+             VALUES (?1, ?2, COALESCE((SELECT MAX(position) + 1 FROM queue_items WHERE thread_id = ?1), 0), ?3, ?4)",
+            params![thread_id, item.id, item.at, item.text],
+        )?;
+        Ok(())
+    }
+
+    /// Put a prompt back at the front, for a send that could not happen after all.
+    pub fn requeue_front(&self, thread_id: &str, item: &QueuedPrompt) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE queue_items SET position = position + 1 WHERE thread_id = ?1",
+            params![thread_id],
+        )?;
+        tx.execute(
+            "INSERT INTO queue_items (thread_id, id, position, at, text) VALUES (?1, ?2, 0, ?3, ?4)
+             ON CONFLICT(thread_id, id) DO UPDATE SET position = 0",
+            params![thread_id, item.id, item.at, item.text],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn remove_queued(&self, thread_id: &str, id: &str) -> Result<bool, StoreError> {
+        Ok(self.conn.lock().unwrap().execute(
+            "DELETE FROM queue_items WHERE thread_id = ?1 AND id = ?2",
+            params![thread_id, id],
+        )? > 0)
+    }
+
+    /// The most recently queued prompt, for a turn that starts with one.
+    pub fn queued(&self, thread_id: &str, id: &str) -> Result<Option<QueuedPrompt>, StoreError> {
+        Ok(self
+            .queue(thread_id)?
+            .into_iter()
+            .find(|item| item.id == id))
     }
 
     /// Flush the write-ahead log into the main file; for a clean shutdown.

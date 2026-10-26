@@ -24,6 +24,9 @@ pub mod code {
     pub const FORBIDDEN: i64 = -32004;
     /// A turn is already running in this thread.
     pub const THREAD_BUSY: i64 = -32005;
+    /// Nothing is running in this thread, so a steer has nothing to join. The words are a
+    /// prompt of their own; the client turns them into one (codex's client does the same).
+    pub const NO_ACTIVE_TURN: i64 = -32006;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

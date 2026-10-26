@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use fv_protocol::ErrorObject;
 use fv_protocol::jsonrpc::code;
 use fv_protocol::types::{Thread, ThreadId};
 use fv_protocol::{Message, ServerNotification};
-use fv_store::{Store, StoreError, turns_from_timed_history};
+use fv_store::{Store, StoreError};
 use tokio::sync::mpsc;
 
 use crate::runtime::ThreadRuntime;
@@ -43,10 +43,26 @@ pub const OUTBOUND_CAPACITY: usize = 256;
 pub struct ServerState {
     pub data_dir: PathBuf,
     pub agent: AgentContext,
+    pub context: crate::context::ContextLoader,
+    pub mcp: Arc<fv_mcp::Manager>,
+    pub memory: Arc<crate::memory::Memory>,
+    pub(crate) services_started: AtomicBool,
     pub store: Store,
+    /// The side pane's shells. One per terminal, with its own pty and parsed screen.
+    pub(crate) terminals: crate::terminal::Terminals,
+    /// models.dev, as this install knows it: a model's window, output ceiling, modalities and
+    /// prices. Read once at startup — refreshing it needs a restart, as in the Electron app.
+    pub catalog: fv_provider::Catalog,
     connections: Mutex<HashMap<ConnId, mpsc::Sender<Message>>>,
     runtimes: Mutex<HashMap<ThreadId, Arc<ThreadRuntime>>>,
     prompts: Mutex<HashMap<fv_protocol::RequestId, PendingPrompt>>,
+    pub(crate) settings_lock: Mutex<()>,
+    pub(crate) workspace_entries_lock: Mutex<()>,
+    /// Each conversation's workspace as it was before its current turn ran (see `turn::rewind`).
+    pub(crate) checkpoints: Mutex<HashMap<ThreadId, fv_store::Checkpoint>>,
+    /// A model set aside for 回复推荐, for tests that pin the conversation's own script. Production
+    /// never sets it: the guess runs on the conversation's model, deliberately.
+    suggestion_model: Mutex<Option<std::sync::Arc<dyn fv_agent::Model>>>,
     next_conn: AtomicU64,
 }
 
@@ -58,17 +74,60 @@ pub fn now_ms() -> i64 {
 }
 
 impl ServerState {
+    /// Start process-wide services once. The watcher owns only a weak state reference.
+    pub fn start_services(self: &Arc<Self>) {
+        if self.services_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let mut changes = self.mcp.subscribe();
+        self.mcp.start();
+        self.memory.start_timer(self);
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            while changes.changed().await.is_ok() {
+                let Some(state) = weak.upgrade() else {
+                    break;
+                };
+                state.broadcast(ServerNotification::McpChanged(fv_protocol::types::Empty {}));
+            }
+        });
+    }
+
     pub fn new(data_dir: PathBuf, agent: AgentContext) -> Result<Self, StoreError> {
         let store = Store::open(&data_dir)?;
+        let catalog = fv_provider::load_catalog(&data_dir);
         Ok(Self {
+            memory: crate::memory::Memory::open(&data_dir, &store.db)?,
+            mcp: fv_mcp::Manager::open(&data_dir)?,
+            services_started: AtomicBool::new(false),
+            context: crate::context::ContextLoader::new(&data_dir),
             data_dir,
             agent,
             store,
+            catalog,
+            terminals: crate::terminal::Terminals::default(),
             connections: Mutex::default(),
             runtimes: Mutex::default(),
             prompts: Mutex::default(),
+            settings_lock: Mutex::new(()),
+            workspace_entries_lock: Mutex::new(()),
+            checkpoints: Mutex::default(),
+            suggestion_model: Mutex::default(),
             next_conn: AtomicU64::new(1),
         })
+    }
+
+    /// Give 回复推荐 a model of its own. Only a test does this.
+    pub fn set_suggestion_model(&self, model: std::sync::Arc<dyn fv_agent::Model>) {
+        *self.suggestion_model.lock().unwrap() = Some(model);
+    }
+
+    /// The model a suggestion request uses: the one set aside for it, else the thread's own.
+    pub fn suggestion_model(&self, thread: &Thread) -> std::sync::Arc<dyn fv_agent::Model> {
+        if let Some(model) = self.suggestion_model.lock().unwrap().clone() {
+            return model;
+        }
+        crate::providers::model_for(self, thread)
     }
 
     pub(crate) fn register(&self, tx: mpsc::Sender<Message>) -> ConnId {
@@ -78,6 +137,7 @@ impl ServerState {
     }
 
     pub(crate) fn unregister(&self, id: ConnId) {
+        self.mcp.auth_disconnected(id);
         self.connections.lock().unwrap().remove(&id);
         let runtimes: Vec<_> = self.runtimes.lock().unwrap().values().cloned().collect();
         for rt in runtimes {
@@ -97,7 +157,7 @@ impl ServerState {
         if let Some(rt) = runtimes.get(thread_id) {
             return rt.clone();
         }
-        let (history, times) = match self.store.transcripts.read(thread_id) {
+        let (history, turns) = match self.store.transcripts.read(thread_id) {
             Ok(loaded) => {
                 if loaded.skipped > 0 {
                     eprintln!(
@@ -105,7 +165,8 @@ impl ServerState {
                         loaded.skipped
                     );
                 }
-                (loaded.messages, loaded.timestamps)
+                let turns = loaded.turns();
+                (loaded.messages, turns)
             }
             Err(e) => {
                 eprintln!("cannot read the transcript of {thread_id}: {e}");
@@ -113,13 +174,17 @@ impl ServerState {
             }
         };
         // The thread is drawn in full; the model is sent only what follows the last summary.
-        let turns = turns_from_timed_history(&history, &times);
-        let history = fv_core::effective_history(&history);
+        // Give restoration the full transcript, so usage before compaction still counts.
         let rt = Arc::new(ThreadRuntime::restored(
             thread_id.to_string(),
-            history,
+            history.clone(),
             turns,
         ));
+        // The bill is re-derived from that transcript at today's prices, so an edited provider
+        // or a corrected catalog applies to history a client has not looked at yet.
+        rt.reprice(&self.catalog, &history);
+        // Prompts queued when the last process stopped come back with the thread.
+        crate::queue::restore(self, &rt, thread_id);
         runtimes.insert(thread_id.to_string(), rt.clone());
         rt
     }
@@ -187,10 +252,64 @@ impl ServerState {
         Ok(thread)
     }
 
+    /// Fork completed history, including independent picture files, before publishing it.
+    pub fn fork_thread(&self, id: &str) -> Result<Thread, ErrorObject> {
+        let original = self
+            .thread(id)?
+            .ok_or_else(|| ErrorObject::new(code::INVALID_PARAMS, "no such thread"))?;
+        if self.loaded_runtime(id).is_some_and(|rt| rt.is_running()) {
+            return Err(ErrorObject::new(
+                code::INVALID_PARAMS,
+                "Wait for the running turn to finish before forking",
+            ));
+        }
+        let loaded = self.store.transcripts.read(id).map_err(internal)?;
+        if loaded.skipped > 0 {
+            return Err(ErrorObject::new(
+                code::INTERNAL_ERROR,
+                "Cannot fork a damaged transcript",
+            ));
+        }
+        let now = now_ms();
+        let thread = Thread {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: format!("{}（分支）", original.title),
+            created_at: now,
+            updated_at: now,
+            archived: false,
+            pinned: false,
+            unread: false,
+            worktree: None,
+            ..original
+        };
+        let result = (|| {
+            let messages = loaded
+                .messages
+                .iter()
+                .map(|m| self.store.images.copy_message(&thread.id, m))
+                .collect::<Result<Vec<_>, _>>()?;
+            self.store
+                .transcripts
+                .copy_loaded(&thread.id, &loaded, &messages)?;
+            self.store.db.put_thread(&thread)
+        })();
+        if let Err(e) = result {
+            let _ = self.store.transcripts.delete(&thread.id);
+            let _ = self.store.images.delete(&thread.id);
+            return Err(internal(e));
+        }
+        self.broadcast(ServerNotification::ThreadStarted(thread.clone()));
+        self.broadcast(ServerNotification::CatalogChanged(
+            fv_protocol::types::CatalogChanged {},
+        ));
+        Ok(thread)
+    }
+
     /// Remove a thread for good: a run in progress is stopped, then its record, transcript and
     /// pictures go. A thread that is already gone is not an error.
     pub fn delete_thread(&self, id: &str) -> Result<(), ErrorObject> {
         if let Some(rt) = self.runtimes.lock().unwrap().remove(id) {
+            rt.exec_sessions.close();
             rt.interrupt();
         }
         self.store.transcripts.delete(id).map_err(internal)?;
@@ -202,13 +321,27 @@ impl ServerState {
         Ok(())
     }
 
-    /// A restart may replace the server only when no conversation has work in flight.
+    /// A restart may replace the server only when no conversation has work in flight,
+    /// including commands that yielded and outlived their launching turn, and pane PTYs.
     pub fn has_running_turns(&self) -> bool {
-        self.runtimes
-            .lock()
-            .unwrap()
-            .values()
-            .any(|runtime| runtime.is_running())
+        self.terminals.has_running()
+            || self
+                .runtimes
+                .lock()
+                .unwrap()
+                .values()
+                .any(|runtime| runtime.is_running() || runtime.exec_sessions.has_running())
+    }
+
+    pub fn close_command_sessions(&self) {
+        for runtime in self.runtimes.lock().unwrap().values() {
+            runtime.exec_sessions.close();
+        }
+    }
+
+    /// Look up an already open runtime without reading a transcript or retaining a new one.
+    pub(crate) fn loaded_runtime(&self, id: &str) -> Option<Arc<ThreadRuntime>> {
+        self.runtimes.lock().unwrap().get(id).cloned()
     }
 
     pub fn threads(&self, include_archived: bool) -> Result<Vec<Thread>, ErrorObject> {
@@ -242,6 +375,7 @@ impl ServerState {
             model,
             thinking,
             pinned: false,
+            worktree: None,
         };
         self.store.db.put_thread(&thread).map_err(internal)?;
         if let Some(project) = &thread.project {

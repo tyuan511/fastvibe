@@ -5,20 +5,24 @@
 //! behind [`Tool`]. The loop knows nothing about threads, clients or storage: it appends to a
 //! history it is handed and reports what happens on an event channel.
 
+pub mod budget;
 mod compact;
+mod compact_input;
 mod event;
 mod history;
 mod model;
 mod permissions;
 mod prompt;
+mod steer;
 mod tool;
 mod turn;
 
 pub mod testing;
 
+pub use budget::ContextBudget;
 pub use compact::{
     CompactError, DEFAULT_CONTEXT_WINDOW, SUMMARIZATION_PROMPT, compact, context_used,
-    context_window, needs_compaction,
+    context_window, effective_context_window, needs_compaction,
 };
 pub use event::{AgentEvent, BlockKind};
 pub use history::normalize;
@@ -28,5 +32,6 @@ pub use permissions::{
     SandboxMode,
 };
 pub use prompt::base_instructions;
+pub use steer::Steers;
 pub use tool::{LoadedTools, Tool, ToolCtx, ToolOutput, ToolRegistry, ToolSpec, UserInput};
-pub use turn::{AgentContext, TurnOutcome, run_turn};
+pub use turn::{AgentContext, MemorySource, TurnOutcome, run_turn};

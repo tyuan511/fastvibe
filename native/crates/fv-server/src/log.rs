@@ -49,10 +49,22 @@ pub enum LogEvent {
         error: Option<String>,
     },
     Running(bool),
+    StatsMessage(fv_core::Message),
+    /// The stats as they now stand, after a recomputation the client should see (the bill).
+    StatsSnapshot(SessionStats),
     /// How full the context window is after a request.
     TokenUsage {
         used: u64,
         window: u64,
+    },
+    /// The prompts waiting behind the reply in flight, whole.
+    QueueChanged(QueueState),
+    /// The standing guess at the user's next message; `None` withdraws it.
+    SuggestionChanged(Option<String>),
+    /// That turn, and everything after it, is gone: it is about to run again. Clients drop the
+    /// turns from that id on, which is what makes a retry show one turn rather than two.
+    Rewound {
+        turn_id: TurnId,
     },
     PlanUpdated {
         turn_id: TurnId,
@@ -67,9 +79,13 @@ pub enum LogEvent {
 
 pub struct ThreadLog {
     thread_id: ThreadId,
+    /// 回复推荐's standing answer, so `thread/resume` can offer it after a reconnect.
+    pub suggestion: Option<String>,
     pub turns: Vec<Turn>,
     pub seq: u64,
     pub running: bool,
+    pub stats: SessionStats,
+    pub token_usage: Option<TokenUsage>,
 }
 
 pub fn item_id(item: &Item) -> &str {
@@ -87,18 +103,24 @@ impl ThreadLog {
     pub fn new(thread_id: ThreadId) -> Self {
         Self {
             thread_id,
+            suggestion: None,
             turns: Vec::new(),
             seq: 0,
             running: false,
+            stats: SessionStats::default(),
+            token_usage: None,
         }
     }
 
     pub fn with_turns(thread_id: ThreadId, turns: Vec<Turn>) -> Self {
         Self {
             thread_id,
+            suggestion: None,
             turns,
             seq: 0,
             running: false,
+            stats: SessionStats::default(),
+            token_usage: None,
         }
     }
 
@@ -109,6 +131,22 @@ impl ThreadLog {
     /// Record the event, give it the next sequence number, and return the notification to send.
     /// Applying and numbering happen together, so a snapshot taken between two events is
     /// always consistent with the number it reports.
+    /// Price the thread's usage against the catalog. Called after a message lands and on
+    /// restoration, so `stats.cost` is either the real bill or absent — never a guessed zero.
+    /// The new stats come back only when the figure actually moved, so a thread on an unlisted
+    /// model (or with pricing not yet configured) does not push an identical update every turn.
+    pub fn reprice(
+        &mut self,
+        catalog: &fv_provider::Catalog,
+        history: &[fv_core::Message],
+    ) -> Option<SessionStats> {
+        let cost = fv_provider::history_cost(catalog, history);
+        (cost != self.stats.cost).then(|| {
+            self.stats.cost = cost;
+            self.stats.clone()
+        })
+    }
+
     pub fn append(&mut self, event: LogEvent) -> ServerNotification {
         self.seq += 1;
         let (thread_id, seq) = (self.thread_id.clone(), self.seq);
@@ -122,6 +160,14 @@ impl ThreadLog {
             };
         }
         match event {
+            LogEvent::StatsMessage(message) => {
+                fv_store::record_stats(&mut self.stats, &message);
+                ServerNotification::ThreadStatsUpdated(ev!(self.stats.clone()))
+            }
+            LogEvent::StatsSnapshot(stats) => {
+                self.stats = stats;
+                ServerNotification::ThreadStatsUpdated(ev!(self.stats.clone()))
+            }
             LogEvent::TurnStarted { turn_id } => {
                 let at = Some(now_ms());
                 let mut turn = Turn::new(turn_id.clone(), Vec::new());
@@ -204,7 +250,24 @@ impl ThreadLog {
                 }))
             }
             LogEvent::TokenUsage { used, window } => {
+                self.token_usage = Some(TokenUsage { used, window });
                 ServerNotification::ThreadTokenUsageUpdated(ev!(TokenUsage { used, window }))
+            }
+            LogEvent::QueueChanged(queue) => ServerNotification::ThreadQueueChanged(ev!(queue)),
+            LogEvent::SuggestionChanged(text) => {
+                // The runtime's own copy is what a client that connects later reads, so the
+                // event and the snapshot can never disagree about what is standing.
+                self.suggestion = text.clone();
+                ServerNotification::ThreadSuggestionChanged(ev!(fv_protocol::types::Suggestion {
+                    text
+                }))
+            }
+            LogEvent::Rewound { turn_id } => {
+                self.token_usage = None;
+                if let Some(index) = self.turns.iter().position(|t| t.id == turn_id) {
+                    self.turns.truncate(index);
+                }
+                ServerNotification::TurnRewound(ev!(Rewound { turn_id }))
             }
             LogEvent::PlanUpdated {
                 turn_id,
