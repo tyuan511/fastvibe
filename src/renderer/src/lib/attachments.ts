@@ -12,6 +12,19 @@ export function shouldAttachPastedText(text: string): boolean {
   return text.length > PASTED_TEXT_ATTACHMENT_THRESHOLD;
 }
 
+/**
+ * The same line decides what happens on the other side of Send: a prompt longer than
+ * this folds behind 展开 in the transcript, a shorter one is shown in full.
+ *
+ * It used to be "does the text exceed two rendered lines", which folded a hundred
+ * characters of a wrapped sentence and made every prompt a two-step read. A number of
+ * characters is the honest rule, and reusing the composer's keeps the two consistent:
+ * what the input box already gave up on showing is the same text the bubble will fold.
+ */
+export function shouldFoldPastedText(text: string): boolean {
+  return text.length > PASTED_TEXT_ATTACHMENT_THRESHOLD;
+}
+
 /** How many characters of a long paste become its chip name. */
 const PASTED_TEXT_NAME_LENGTH = 32;
 

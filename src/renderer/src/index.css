@@ -819,14 +819,6 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
   }
 }
 
-/* A collapsed prompt clips the block column; line-clamp needs -webkit-box, which
- * does not fold the block children, so the height is capped instead. */
-.chat-markdown-flow.line-clamp-2 {
-  display: block;
-  max-height: 2lh;
-  overflow: hidden;
-}
-
 .chat-markdown p {
   margin: 0.4em 0;
 }

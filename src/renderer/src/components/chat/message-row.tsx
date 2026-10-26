@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDuration } from "@/lib/time";
 import { formatMessageTime } from "@/lib/message-time";
-import { stripAttachmentBlock } from "@/lib/attachments";
+import { shouldFoldPastedText, stripAttachmentBlock } from "@/lib/attachments";
 import { activeLanguage, i18n } from "@/lib/i18n";
 import { localeTag } from "@/lib/language";
 import { groupParts, mergeAssistantRun, resolveParts, type RenderPart } from "@/lib/group-parts";
@@ -275,13 +275,21 @@ function promptAsSent(message: ChatMessage): string {
 }
 
 /**
- * User prompts clamp to two lines so a sticky turn header stays compact. The
- * expand control only appears when the prompt actually overflows that cap.
- * Expanding still caps the bubble: a pasted prompt would otherwise grow to the
- * whole viewport and pin itself over the reply. The rest scrolls inside.
- * The scrollport fills the bubble so its bar sits on the outer edge, with the
- * padding reapplied around the text. Collapse is its own full-width row under
- * that, not a label sitting at the end of the last line.
+ * The prompt is the person's own words, so it is drawn as text and not as a document.
+ *
+ * Running it through Markdown cost more than it bought: GFM's bare-URL autolink runs
+ * until it finds whitespace, and Chinese sentences have none, so
+ * 「https://github.com/x/y的实现，给我一个可行性分析」 came out as one link over the whole
+ * tail of the prompt. A prompt that really wants markup is rare; a prompt that pastes a
+ * URL next to prose is not.
+ *
+ * A long prompt (see `shouldFoldPastedText`) clamps to two lines so a sticky turn header
+ * stays compact; a short one is shown whole. The expand control only appears when the
+ * text is long enough to fold *and* actually overflows the cap. Expanding still caps the
+ * bubble: a pasted prompt would otherwise grow to the whole viewport and pin itself over
+ * the reply. The rest scrolls inside. The scrollport fills the bubble so its bar sits on
+ * the outer edge, with the padding reapplied around the text. Collapse is its own
+ * full-width row under that, not a label sitting at the end of the last line.
  */
 function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   const { t } = useTranslation("chat");
@@ -290,6 +298,7 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   // block never reaches the bubble — the engine's copy keeps it, and stripping it
   // here is what makes the live row and a re-read transcript agree.
   const text = stripAttachmentBlock(raw);
+  const foldable = shouldFoldPastedText(text);
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -299,6 +308,10 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   }, [text]);
 
   useLayoutEffect(() => {
+    if (!foldable) {
+      setOverflows(false);
+      return;
+    }
     const node = bodyRef.current;
     if (!node) return;
 
@@ -316,7 +329,7 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [text, expanded]);
+  }, [text, expanded, foldable]);
 
   const toggle = (
     <button
@@ -334,22 +347,35 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
     </button>
   );
 
+  // `wrap-anywhere` is not decoration: a prompt that is one long URL or path has no
+  // break opportunity, and a fit-content bubble would then widen the whole transcript.
+  const body = (
+    <div
+      ref={bodyRef}
+      data-process-body={expanded ? "" : undefined}
+      className={cn(
+        "whitespace-pre-wrap wrap-anywhere",
+        expanded ? cn(PROCESS_BODY_CAP, "px-3 py-2") : foldable && "line-clamp-2",
+      )}
+    >
+      {text}
+    </div>
+  );
+
   return (
     <Bubble variant="secondary" align="end">
-      <BubbleContent className={cn("chat-markdown text-sm leading-6", expanded && "p-0")}>
+      <BubbleContent className={cn("select-text text-sm leading-6", expanded && "p-0")}>
         {expanded ? (
           // One grid column sized by the text, so the footer stretches to that
           // width instead of shrinking to the word 「收起」.
           <div className="grid">
-            <div data-process-body className={cn(PROCESS_BODY_CAP, "px-3 py-2")}>
-              <MarkdownView ref={bodyRef} text={text} />
-            </div>
+            {body}
             {overflows ? toggle : null}
           </div>
         ) : (
           <>
-            <MarkdownView ref={bodyRef} text={text} className="line-clamp-2" />
-            {overflows ? toggle : null}
+            {body}
+            {foldable && overflows ? toggle : null}
           </>
         )}
       </BubbleContent>

@@ -274,7 +274,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, headingIds }: { text: 
  * The text is cut into independently parsed blocks (`splitMarkdownBlocks`), which is
  * what bounds the cost of a *single* long answer — one pass over 50 KB of prose costs
  * ~100 ms, and it used to be paid again at every flush. The blocks stay siblings
- * inside one column so a collapsed prompt can clip them together; a position still
+ * inside one column so a clamped surface clips them together; a position still
  * keeps its content because blocks only grow at the end.
  */
 export const MarkdownView = memo(forwardRef<HTMLDivElement, { text: string; className?: string; headingIds?: boolean }>(function MarkdownView({ text, className, headingIds }, ref): JSX.Element {

@@ -6,6 +6,7 @@ import {
   pastedTextAttachmentName,
   resolveDroppedPath,
   shouldAttachPastedText,
+  shouldFoldPastedText,
   stripAttachmentBlock,
   stripImageDimensionNote,
 } from "../src/renderer/src/lib/attachments.ts";
@@ -15,6 +16,17 @@ test("only clipboard text above the composer threshold becomes an attachment", (
   assert.equal(shouldAttachPastedText("x".repeat(PASTED_TEXT_ATTACHMENT_THRESHOLD)), false);
   assert.equal(shouldAttachPastedText("x".repeat(PASTED_TEXT_ATTACHMENT_THRESHOLD + 1)), true);
   assert.equal(shouldAttachPastedText("短文本"), false);
+});
+
+test("the transcript folds a prompt only past the same line the composer folds at", () => {
+  // The bug this replaced was a two-rendered-line clamp with no length floor: a
+  // hundred-character prompt became a fold the reader had to open before reading it.
+  const prompt =
+    "探索一下使用rust+gpui重写整个应用的可能性，使用自研agent参考 https://github.com/can1357/oh-my-pi 的实现，ui层使用gpui实现高性能绘制，给我一个可行性分析";
+  assert.ok(prompt.length < PASTED_TEXT_ATTACHMENT_THRESHOLD, "the fixture is a short prompt");
+  assert.equal(shouldFoldPastedText(prompt), false);
+  assert.equal(shouldFoldPastedText("x".repeat(PASTED_TEXT_ATTACHMENT_THRESHOLD)), false);
+  assert.equal(shouldFoldPastedText("x".repeat(PASTED_TEXT_ATTACHMENT_THRESHOLD + 1)), true);
 });
 
 test("a long paste is named from its first 32 graphemes", () => {

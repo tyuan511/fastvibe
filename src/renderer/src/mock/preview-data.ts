@@ -755,6 +755,59 @@ export const PLAIN_ERROR_MESSAGES: ChatMessage[] = [
   },
 ];
 
+/**
+ * The prompt bubble: `mock.html?prompt=1`.
+ *
+ * The first turn is the shape that broke: a GitHub URL followed straight by Chinese, which
+ * markdown autolinked into one link over the rest of the sentence (GFM ends a bare URL at
+ * whitespace, and Chinese has none). The second is a paste past the fold threshold, so the
+ * 展开 / 收起 control and its capped body can be read next to a prompt that must not fold.
+ */
+const URL_PROMPT =
+  "探索一下使用rust+gpui重写整个应用的可能性，使用自研agent参考 https://github.com/can1357/oh-my-pi的实现，ui层使用gpui实现高性能绘制，界面对齐现在electron版本，给我一个可行性分析";
+
+const PASTED_LOG_LINE =
+  "2026-10-22T03:14:07Z ERROR worker pool exhausted, retrying in 250ms; queue depth 128; upstream 429 too many requests (rate_limit)";
+
+const PASTED_PROMPT = `报错日志如下，帮我看看是哪里的问题。\n${`${PASTED_LOG_LINE}\n`.repeat(9)}`;
+
+export const PROMPT_MESSAGES: ChatMessage[] = [
+  {
+    id: "msg-prompt-u1",
+    role: "user",
+    text: URL_PROMPT,
+    tools: [],
+    parts: [{ kind: "text", text: URL_PROMPT }],
+    createdAt: NOW - 6 * MINUTE,
+  },
+  {
+    id: "msg-prompt-a1",
+    role: "assistant",
+    text: "这条提示里的地址只到 oh-my-pi 为止，后面是中文说明。",
+    tools: [],
+    parts: [{ kind: "text", text: "这条提示里的地址只到 oh-my-pi 为止，后面是中文说明。" }],
+    createdAt: NOW - 5 * MINUTE,
+    completedAt: NOW - 5 * MINUTE,
+  },
+  {
+    id: "msg-prompt-u2",
+    role: "user",
+    text: PASTED_PROMPT,
+    tools: [],
+    parts: [{ kind: "text", text: PASTED_PROMPT }],
+    createdAt: NOW - 3 * MINUTE,
+  },
+  {
+    id: "msg-prompt-a2",
+    role: "assistant",
+    text: "这一条超过 500 字，所以收成折叠块。",
+    tools: [],
+    parts: [{ kind: "text", text: "这一条超过 500 字，所以收成折叠块。" }],
+    createdAt: NOW - 2 * MINUTE,
+    completedAt: NOW - 2 * MINUTE,
+  },
+];
+
 export const SESSION: EngineSessionState = {
   // The model the divider's last switch landed on, so the chip and the transcript agree.
   model: { provider: "deepseek", id: "deepseek-v4-pro" },

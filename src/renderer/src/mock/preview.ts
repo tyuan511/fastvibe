@@ -15,6 +15,7 @@ import {
   MESSAGES,
   ERROR_MESSAGES,
   PLAIN_ERROR_MESSAGES,
+  PROMPT_MESSAGES,
   INLINE_MESSAGES,
   INLINE_OFFICE_MESSAGES,
   MATH_MESSAGES,
@@ -84,6 +85,7 @@ function transcriptFixture() {
   if (params.get("dag") === "1") return DAG_MESSAGES;
   if (params.get("error") === "1") return ERROR_MESSAGES;
   if (params.get("error") === "plain") return PLAIN_ERROR_MESSAGES;
+  if (params.get("prompt") === "1") return PROMPT_MESSAGES;
   if (params.get("live") === "1") return liveThought(fixtureMessages);
   if (params.get("thinking") === "blank") return blankThinking(fixtureMessages);
   if (params.get("batch") === "live") return liveBatch(fixtureMessages);
@@ -519,6 +521,7 @@ const openResult = (id: string): ConversationOpenResult => {
   if (!website && isActive && params.get("dag") === "1") messages = DAG_MESSAGES;
   if (!website && isActive && params.get("error") === "1") messages = ERROR_MESSAGES;
   if (!website && isActive && params.get("error") === "plain") messages = PLAIN_ERROR_MESSAGES;
+  if (!website && isActive && params.get("prompt") === "1") messages = PROMPT_MESSAGES;
   if (!website && isActive && params.get("diff") === "1") messages = DIFF_FENCE_MESSAGES;
   const inline = inlineFixture();
   if (isActive && inline) messages = inline;

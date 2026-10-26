@@ -78,7 +78,7 @@ test("a capped body is marked, so a nested one can hand its bound back", () => {
   const marked = [
     [read(CHAT, "run-collapse.tsx"), /<div data-process-body/],
     [read(CHAT, "message-row.tsx"), /<div data-process-body className=\{cn\("flex flex-col gap-2\.5 pt-1"/],
-    [read(CHAT, "message-row.tsx"), /<div data-process-body className=\{cn\(PROCESS_BODY_CAP/],
+    [read(CHAT, "message-row.tsx"), /data-process-body=\{expanded \? "" : undefined\}/],
     [read(CHAT, "tool-row.tsx"), /bodyMark/],
   ] as const;
   for (const [text, pattern] of marked) {

@@ -1123,6 +1123,25 @@ No CSP change is needed.
 - Code is out of scope by construction — a `$HOME` inside a fence or a code span is
   never a math node, so no shell snippet in a tool card can be eaten by this.
 
+### 用户消息不渲染 markdown
+
+转写里的用户气泡（`UserPromptBubble`，`components/chat/message-row.tsx`）画的是纯文本，
+不走 `MarkdownView`。回复仍然走，所以这条只管用户自己写下的那一段。
+
+- **理由不是「用不上了」，是它真的会错。** GFM 的裸 URL 自动链接一直到下一个空白才结束，
+  而中文句子里没有空白：`https://github.com/can1357/oh-my-pi的实现，给我一个可行性分析`
+  于是整句后半段变成一个链接，点下去是一个不存在的地址。带 URL 的提示词很常见，想让气泡
+  画 markdown 的提示词不常见。
+- **换行照原样保留**（`whitespace-pre-wrap`），长 URL/路径仍然断得开（`wrap-anywhere`，
+  见「报错行」那一节为什么 `break-words` 不够）。
+- **折叠看字数，不看渲染出来的行数。** `shouldFoldPastedText`（`lib/attachments.ts`）复用
+  输入框那条 500 字的线：超过它才 `line-clamp-2` 并给出 展开/收起。旧规则是「超过两行就折」，
+  于是 120 字的一句话也要点一下才读完。
+- **手机端同一判断**：`apps/mobile_flutter/lib/screens/transcript.dart` 的用户气泡用 `Text`
+  而不是 `MarkdownView`（`gpt_markdown` 的自动链接犯同样的错）。手机没有折叠，所以只改这一处。
+- 预览：`mock.html?prompt=1`（一条带 URL 的短提示 + 一条 1189 字的粘贴）。验证：
+  `test/user-prompt-plain.test.ts`、`test/attachments.test.ts`。
+
 ## Theming
 
 The app ships light **and** dark themes; never assume light.

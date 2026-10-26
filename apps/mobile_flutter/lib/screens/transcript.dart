@@ -662,7 +662,20 @@ class _UserRow extends StatelessWidget {
                       const SizedBox(height: 4),
                     ],
                     if (text.isNotEmpty)
-                      MarkdownView(text: text, palette: palette, compact: true),
+                      // A prompt is the person's own words, not a document, so it is drawn
+                      // as text. `gpt_markdown` ends a bare autolink at whitespace and
+                      // Chinese has none, so a GitHub URL followed by prose came back as one
+                      // link over the rest of the sentence — the same rule the desktop's
+                      // `UserPromptBubble` follows.
+                      Text(
+                        text,
+                        style: TextStyle(
+                          color: palette.text,
+                          fontSize: 15,
+                          height: 1.65,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
                   ],
                 ),
               ),
