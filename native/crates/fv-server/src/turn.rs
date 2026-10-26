@@ -779,19 +779,31 @@ async fn build_context(
         rt.exec_sessions.register(&mut mcp.tools);
     }
     let tools = Arc::new(mcp.tools);
+    // Re-read per turn, including queued runs and manual compaction. Do not put this in a
+    // transcript: updating or clearing a preference must not leave old instructions behind.
+    let personalization = crate::settings::read(state)
+        .map(|s| s.custom_system_prompt)
+        .unwrap_or_default();
+    let personalization = personalization.trim();
+    let personalization = if personalization.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{personalization}")
+    };
     AgentContext {
         model,
         tools,
-        // Project context precedes the server's explicit additions; those stay last, so the
-        // caller can override a bundled default without losing the project's instructions.
+        // Project context precedes explicit server additions. The user's personalization
+        // is the final suffix, matching the desktop's per-turn custom instructions.
         system: format!(
-            "{}{}\n\n{}{}{}\n\n{}",
+            "{}{}\n\n{}{}{}\n\n{}{}",
             base_instructions(cwd.as_deref()),
             folders,
             permissions_prompt(&permissions),
             discovered,
             mcp.instructions,
-            state.agent.system
+            state.agent.system,
+            personalization
         ),
         cwd,
         loaded: rt.loaded_tools(),

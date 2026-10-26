@@ -31,7 +31,7 @@ fn the_database_is_private_versioned_and_reopens_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fastvibe.db");
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 3);
+    assert_eq!(db.schema_version().unwrap(), 4);
     db.put_thread(&thread("a", 5)).unwrap();
     assert_eq!(mode(&path), 0o600);
     // The write-ahead log files are written by SQLite; they must not be wider than the database.
@@ -43,7 +43,7 @@ fn the_database_is_private_versioned_and_reopens_cleanly() {
     }
     drop(db);
     let again = Db::open(&path).unwrap();
-    assert_eq!(again.schema_version().unwrap(), 3);
+    assert_eq!(again.schema_version().unwrap(), 4);
     assert_eq!(again.get_thread("a").unwrap().unwrap().title, "thread a");
 }
 
@@ -56,7 +56,7 @@ fn a_database_from_a_newer_build_is_refused_untouched() {
     match Db::open(&path) {
         Err(StoreError::TooNew {
             found: 99,
-            known: 3,
+            known: 4,
         }) => {}
         other => panic!("{:?}", other.err()),
     }
@@ -373,7 +373,7 @@ fn a_database_from_before_providers_is_upgraded_in_place() {
     drop(conn);
 
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 3);
+    assert_eq!(db.schema_version().unwrap(), 4);
     let t = db.get_thread("old").unwrap().expect("the old conversation");
     assert_eq!(
         (t.title.as_str(), t.model, t.thinking),

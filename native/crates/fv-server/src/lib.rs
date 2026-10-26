@@ -22,6 +22,7 @@ mod state;
 mod suggestion;
 mod terminal;
 mod turn;
+mod usage;
 mod workspace;
 mod workspace_entries;
 mod worktree;

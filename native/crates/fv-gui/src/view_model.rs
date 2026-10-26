@@ -98,6 +98,7 @@ impl ThreadView {
             | N::McpChanged(_)
             | N::MemoryChanged(_)
             | N::WorkspaceEntryChanged(_)
+            | N::UsageChanged(_)
             | N::SettingsChanged(_) => {
                 return Applied::Ignored;
             }
@@ -196,6 +197,7 @@ impl ThreadView {
             | N::MemoryChanged(_)
             | N::WorkspaceEntryChanged(_)
             | N::SettingsChanged(_) => {}
+            N::UsageChanged(_) => {}
         }
         Applied::Changed
     }

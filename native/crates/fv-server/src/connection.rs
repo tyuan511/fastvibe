@@ -72,6 +72,7 @@ pub async fn serve_connection<R, W>(
                             | "memory/configure"
                             | "memory/run"
                             | "memory/clear"
+                            | "stats/usage"
                     )
                 )
         });
@@ -283,6 +284,9 @@ async fn dispatch(
                     "terminalInteraction".into(),
                     "memory".into(),
                     "autoCompaction".into(),
+                    "personalization".into(),
+                    "shortcuts".into(),
+                    "usageStats".into(),
                 ],
                 data_dir: state.data_dir.display().to_string(),
                 build_fingerprint: crate::build_fingerprint(),
@@ -588,6 +592,9 @@ async fn dispatch(
             to_value(Empty {})
         }
         ClientRequest::SettingsGet { .. } => to_value(crate::settings::read(state)?),
+        ClientRequest::StatsUsage { params, .. } => {
+            to_value(crate::usage::collect(state.clone(), params).await?)
+        }
         ClientRequest::McpList { .. } => to_value(state.mcp.list()),
         ClientRequest::McpAuthBegin { params, .. } => to_value(
             state

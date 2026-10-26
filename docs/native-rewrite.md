@@ -655,7 +655,8 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
 | `mcp.json`、`settings.json`、`memory.json` | 新配置文件（字段名对齐，`remote*` 不导入，需重新设置） |
 | `fastvibe.db`（会话目录、队列、DAG、定时任务、检查点、思考耗时、记忆账本） | 逐表转换 |
 | pi v3 转写 JSONL | 转成新转写格式（沿用 `import/writer.ts` 已验证的配对规则，反向执行） |
-| `memories/`、`tool-images/`、`usage-ledger.jsonl` | 复制 |
+| `memories/`、`tool-images/` | 复制 |
+| `usage-ledger.jsonl` | 导入原生 SQLite 用量账本，保留原请求来源（迁移仍待实现） |
 
 导入逐会话出结果（失败的列出原因），不做全有或全无；旧目录保持原样，可回退到 Electron 版。
 
@@ -836,3 +837,18 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 AGENTS.md 里与框架无关的不变式原样带过来，例如：会话级调用带 `conversationId`；「运行中」以 settle 为界；
 打开转写时补齐悬空工具调用；凭据不进 settings；提交信息一律英文；设置文案只写「做什么」。
 与 pi SDK、Electron、React 绑定的规则（jiti 缓存、asar 补丁、shadcn、Base UI 分组陷阱、CSP）随旧实现作废。
+
+
+### 个性化说明（2026-10-26）
+
+原生个性化页现已接通：公共 `customSystemPrompt` 偏好、跨客户端通知、持久化与每轮系统提示词后缀共用一条通路，支持清空停用；运行中的回合不被改写，下一轮及排队回合读取新值。编辑器保留本地草稿，陈旧保存由 `expectedCustomSystemPrompt` 比较保护。验证范围与仍未完成的设置页见 `native-completion.md` 第十三批。
+
+
+### 快捷键（2026-10-26）
+
+原生快捷键页接通 11 项操作、录入/清除/恢复、冲突处理和回车发送。偏好经公共设置协议持久化并通知各客户端；单项修改在服务端锁内合并。窗口在编辑器键表之前读取当前绑定，旧固定应用绑定已移除，终端控制键和原生文字输入保留自身路径。验证记录及跨平台交付边界见 `native-completion.md` 第十四批。
+
+
+### 应用使用统计（2026-10-26）
+
+原生使用统计页与 `stats/usage` 已接通。SQLite 用量账本独立于可回退/可删除的转写，分叉继承请求来源；统计按客户端时区归日，费用按当前加载的模型目录逐请求估算，缺少价格保持未知。汇总、项目/对话分布、日/周/累计热图、逐模型趋势和占比已实现。完整服务端、存储、协议与 GUI 的代码验证及旧账本迁移、手动定价的未完成边界见 `native-completion.md` 第十五批。

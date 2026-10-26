@@ -1,4 +1,4 @@
-//! The settings every client shares: how the app looks. One JSON document under one key, so a
+//! The preferences every client shares. One JSON document under one key, so a
 //! field added later needs no migration (a missing one reads as its default).
 
 use fv_protocol::jsonrpc::code;
@@ -24,9 +24,34 @@ pub(crate) fn read_db(db: &fv_store::Db) -> Result<AppSettings, fv_store::StoreE
         .unwrap_or_default())
 }
 
-pub fn set(state: &ServerState, patch: AppSettingsPatch) -> Result<AppSettings, ErrorObject> {
+pub fn set(state: &ServerState, mut patch: AppSettingsPatch) -> Result<AppSettings, ErrorObject> {
+    use fv_protocol::shortcuts::{self, Chord, ShortcutEdit};
+    let invalid = |e| ErrorObject::new(code::INVALID_PARAMS, e);
+    if patch.shortcuts.is_some() && patch.shortcut.is_some() {
+        return Err(invalid("Use either shortcuts or shortcut in one patch"));
+    }
+    if let Some(overrides) = &patch.shortcuts {
+        patch.shortcuts = Some(shortcuts::normalize(overrides).map_err(invalid)?);
+    }
+    if let Some(ShortcutEdit::Set { binding, .. }) = &mut patch.shortcut {
+        *binding = Chord::parse(binding).map_err(invalid)?.serialize();
+    }
     let _guard = state.settings_lock.lock().unwrap();
     let mut settings = read(state)?;
+    if let Some(expected) = &patch.expected_custom_system_prompt {
+        if patch.custom_system_prompt.is_none() {
+            return Err(ErrorObject::new(
+                code::INVALID_PARAMS,
+                "expectedCustomSystemPrompt requires customSystemPrompt",
+            ));
+        }
+        if expected != &settings.custom_system_prompt {
+            return Err(ErrorObject::new(
+                code::INVALID_PARAMS,
+                "The Agent instructions changed in another client. Reload them before saving.",
+            ));
+        }
+    }
     settings.apply(patch);
     write(state, settings)
 }

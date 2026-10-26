@@ -4,6 +4,31 @@ use crate::methods::{CLIENT_METHODS, Initialize, ThreadList};
 use crate::*;
 
 #[test]
+fn personalization_defaults_empty_and_roundtrips_verbatim_with_clearable_patches() {
+    use types::{AppSettings, AppSettingsPatch};
+    let mut settings: AppSettings = serde_json::from_value(json!({
+        "themeMode":"system", "lightTheme":"github-light", "darkTheme":"github-dark", "glass":false
+    }))
+    .unwrap();
+    assert_eq!(settings.custom_system_prompt, "");
+    let text = "  请先说明计划。\nKeep API names as written.\n";
+    let patch: AppSettingsPatch = serde_json::from_value(json!({
+        "customSystemPrompt": text, "expectedCustomSystemPrompt":""
+    }))
+    .unwrap();
+    assert_eq!(patch.expected_custom_system_prompt.as_deref(), Some(""));
+    settings.apply(patch);
+    assert_eq!(
+        serde_json::to_value(&settings).unwrap()["customSystemPrompt"],
+        text
+    );
+    settings.apply(serde_json::from_value(json!({"glass": true})).unwrap());
+    assert_eq!(settings.custom_system_prompt, text);
+    settings.apply(serde_json::from_value(json!({"customSystemPrompt":""})).unwrap());
+    assert!(settings.custom_system_prompt.is_empty() && settings.glass);
+}
+
+#[test]
 fn request_roundtrips_with_method_tag() {
     let wire = json!({
         "method": "initialize",

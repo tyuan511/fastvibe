@@ -70,7 +70,7 @@ impl Workspace {
     }
 
     /// 添加文件夹: the system's folder picker, any number of folders at once.
-    fn pick_folders(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn pick_folders(&mut self, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,

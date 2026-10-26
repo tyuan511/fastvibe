@@ -137,7 +137,10 @@ async fn until(
             .await
             .expect("timed out waiting for a notification")
             .expect("connection closed");
-        if matches!(n.method(), "catalog/changed" | "thread/started") {
+        if matches!(
+            n.method(),
+            "catalog/changed" | "thread/started" | "stats/usageChanged"
+        ) {
             continue;
         }
         let stop = done(&n);
@@ -466,10 +469,20 @@ async fn a_client_that_never_joined_hears_nothing_of_the_thread() {
     until(&mut notes_a, idle).await;
     while let Ok(n) = notes_c.try_recv() {
         assert!(
-            matches!(n.method(), "catalog/changed" | "thread/started"),
+            matches!(
+                n.method(),
+                "catalog/changed" | "thread/started" | "stats/usageChanged"
+            ),
             "leaked {}",
             n.method()
         );
+        if matches!(n, ServerNotification::UsageChanged(_)) {
+            assert_eq!(
+                to_json(&n)["params"],
+                json!({}),
+                "a global usage hint must carry no thread data"
+            );
+        }
     }
 }
 

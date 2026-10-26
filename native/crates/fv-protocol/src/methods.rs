@@ -121,6 +121,7 @@ client_requests! {
     TerminalCopy => "terminal/copy": TerminalCopyParams => TerminalCopyResponse,
     TerminalKill => "terminal/kill": TerminalIdParams => Empty,
     SettingsGet => "settings/get": Empty => AppSettings,
+    StatsUsage => "stats/usage": crate::usage::UsageParams => crate::usage::UsageStats,
     SettingsSet => "settings/set": AppSettingsPatch => AppSettings,
     SkillList => "skill/list": SkillListParams => SkillListResponse,
     MemoryRead => "memory/read": Empty => MemoryState,
@@ -156,6 +157,7 @@ notifications!(ServerNotification {
     ProvidersChanged => "providers/changed": Empty,
     // Appearance settings changed (by any client, this one included).
     SettingsChanged => "settings/changed": AppSettings,
+    UsageChanged => "stats/usageChanged": Empty,
     SkillsChanged => "skills/changed": Empty,
     MemoryChanged => "memory/changed": MemoryState,
     McpChanged => "mcp/changed": Empty,

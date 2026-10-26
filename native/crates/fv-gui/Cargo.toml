@@ -38,6 +38,8 @@ serde.workspace = true
 serde_json.workspace = true
 url = "2"
 unicode-width = "0.2"
+iana-time-zone = "0.1.65"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Same crates gpui-kit already uses (it pins them exactly), named again only to switch on
 # their test-support features. Going through `gpui-kit/test-support` instead drags in the

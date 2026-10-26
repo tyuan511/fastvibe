@@ -36,6 +36,7 @@ alacritty_terminal = "0.26"
 libc = "0.2"
 regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10.4"
 similar = "2"
 tempfile = "3"
 trash = { version = "5.2.9", default-features = false, features = ["coinit_multithreaded"] }

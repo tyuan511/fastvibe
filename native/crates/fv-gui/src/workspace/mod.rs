@@ -23,14 +23,17 @@ mod pane;
 mod pane_git;
 mod pane_terminal;
 mod panel_motion;
+mod personalization;
 mod projects;
 mod queue_tray;
 pub mod settings;
+mod shortcuts;
 mod sidebar;
 mod sidebar_actions;
 mod skill_picker;
 mod skills;
 mod transcript;
+mod usage;
 
 use crate::backend::{Backend, BackendEvent};
 use crate::theme::Palette;
@@ -219,6 +222,9 @@ pub struct Workspace {
     rename: Option<(ThreadId, Entity<InputState>)>,
     /// How the app looks, as the server keeps it (shared by every client).
     app_settings: AppSettings,
+    /// A settings read started before a write/notification cannot restore its old snapshot.
+    app_settings_epoch: u64,
+    shortcuts: shortcuts::Runtime,
     /// Whether the app follows `app_settings`; a fixture window keeps the palette it was given.
     live_appearance: bool,
     appearance_dirty: bool,
@@ -344,6 +350,7 @@ impl Workspace {
     fn base(palette: Palette, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
+                .submit_on_enter(true)
                 .auto_grow(1, 8)
                 .placeholder(text::PLACEHOLDER)
         });
@@ -360,7 +367,10 @@ impl Workspace {
                 InputEvent::PressEnter {
                     secondary: false,
                     shift: false,
-                } if !this.accept_skill(window, cx) && !this.accept_mention(window, cx) => {
+                } if this.app_settings.send_on_enter
+                    && !this.accept_skill(window, cx)
+                    && !this.accept_mention(window, cx) =>
+                {
                     this.send(window, cx)
                 }
                 _ => {}
@@ -465,6 +475,8 @@ impl Workspace {
             thread_menu: None,
             rename: None,
             app_settings: AppSettings::default(),
+            app_settings_epoch: 0,
+            shortcuts: shortcuts::Runtime::new(window, cx),
             live_appearance: false,
             appearance_dirty: false,
             system_dark: matches!(
@@ -799,9 +811,14 @@ impl Workspace {
             return;
         };
         let call = b.call::<SettingsGet>(Empty {});
+        let epoch = self.app_settings_epoch;
         cx.spawn(async move |this, cx| {
             if let Ok(s) = call.await {
                 this.update(cx, |this, cx| {
+                    if this.app_settings_epoch != epoch {
+                        return;
+                    }
+                    this.observe_personalization(&s.custom_system_prompt);
                     this.app_settings = s;
                     this.appearance_dirty = true;
                     cx.notify();
@@ -814,6 +831,7 @@ impl Workspace {
 
     /// Change a shared appearance setting: shown at once, then told to the server.
     pub(super) fn patch_settings(&mut self, patch: AppSettingsPatch, cx: &mut Context<Self>) {
+        self.app_settings_epoch = self.app_settings_epoch.wrapping_add(1);
         self.appearance_dirty |= patch.theme_mode.is_some()
             || patch.light_theme.is_some()
             || patch.dark_theme.is_some()
@@ -1179,6 +1197,7 @@ impl Workspace {
                     settings.memory = Default::default();
                 }
                 self.refresh_memory(cx);
+                self.refresh_usage(cx);
                 if version_mismatch {
                     self.sidebar_notice = Some(
                         "应用更新尚未完成。请等待任务结束、关闭仍在运行的终端后重新打开窗口，以启用最新功能。"
@@ -1221,8 +1240,11 @@ impl Workspace {
                         self.refresh_threads(cx);
                         self.refresh_projects(cx);
                         self.refresh_archived(cx);
+                        self.refresh_usage(cx);
                     }
                     ServerNotification::SettingsChanged(s) => {
+                        self.app_settings_epoch = self.app_settings_epoch.wrapping_add(1);
+                        self.observe_personalization(&s.custom_system_prompt);
                         self.appearance_dirty |= self.app_settings.theme_mode != s.theme_mode
                             || self.app_settings.light_theme != s.light_theme
                             || self.app_settings.dark_theme != s.dark_theme
@@ -1230,6 +1252,7 @@ impl Workspace {
                         self.app_settings = s.clone();
                     }
                     ServerNotification::ProvidersChanged(_) => {
+                        self.refresh_usage(cx);
                         self.refresh_models(cx);
                         if self.settings.is_some() {
                             self.refresh_providers(cx);
@@ -1240,6 +1263,7 @@ impl Workspace {
                         self.invalidate_skill_picker(cx);
                     }
                     ServerNotification::McpChanged(_) => self.refresh_mcp(cx),
+                    ServerNotification::UsageChanged(_) => self.refresh_usage(cx),
                     ServerNotification::MemoryChanged(state) => {
                         self.memory_changed(state.clone(), cx)
                     }
@@ -1987,6 +2011,8 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_personalization_editor(window, cx);
+        self.sync_shortcut_input(cx);
         let terminal_visible = !self.side_pane_collapsed
             && self.settings.is_none()
             && self.search_box.is_none()
@@ -2128,6 +2154,9 @@ impl Render for Workspace {
                 }),
             )
             .key_context("Workspace")
+            .capture_key_up(cx.listener(|this, event: &KeyUpEvent, _, _| {
+                this.shortcuts.release(&event.keystroke.key)
+            }))
             .on_action(cx.listener(Self::on_new_chat))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_open_search))
@@ -2479,17 +2508,10 @@ pub(super) fn format_bytes(size: u64) -> String {
     }
 }
 
-/// Bind the app's shortcuts. The Electron app's: ⌘N new chat, ⌘, settings, ⌘K search.
+/// Fixed system/editor actions. Configurable app commands are dispatched per window.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-n", NewChat, None),
-        KeyBinding::new("cmd-,", OpenSettings, None),
-        KeyBinding::new("cmd-k", OpenSearch, None),
-        KeyBinding::new("cmd-b", ToggleSidebar, None),
-        KeyBinding::new("ctrl-alt-b", ToggleSidePane, None),
-        KeyBinding::new("cmd-[", GoBack, None),
-        KeyBinding::new("cmd-]", GoForward, None),
+        KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("escape", Dismiss, None),
         KeyBinding::new("enter", ask::ApproveOnce, Some("ApprovalPanel")),
         // ⌘S saves the file the pane has open. It is a window-level binding, not the editor's:
@@ -2642,6 +2664,7 @@ impl Workspace {
                 s.confirm_delete = None;
             } else {
                 self.settings = None;
+                self.input.update(cx, |input, cx| input.focus(window, cx));
             }
             cx.notify();
         }

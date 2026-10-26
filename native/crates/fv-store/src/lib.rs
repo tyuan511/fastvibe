@@ -14,6 +14,8 @@ mod search;
 mod stats;
 mod transcript;
 mod turn_record;
+mod usage;
+pub use usage::{UsageOrigin, UsageRecord};
 
 pub use checkpoint::{Checkpoint, Restored, capture, clear, restore};
 pub use credentials::CredentialStore;
@@ -29,7 +31,7 @@ use std::path::Path;
 
 /// Both halves, opened on one data directory.
 pub struct Store {
-    pub db: Db,
+    pub db: std::sync::Arc<Db>,
     pub transcripts: TranscriptStore,
     pub images: ImageStore,
     pub credentials: CredentialStore,
@@ -38,9 +40,11 @@ pub struct Store {
 impl Store {
     pub fn open(data_dir: &Path) -> Result<Self, StoreError> {
         std::fs::create_dir_all(data_dir)?;
+        let db = std::sync::Arc::new(Db::open(&data_dir.join("fastvibe.db"))?);
+        let transcripts = TranscriptStore::with_usage(data_dir.join("sessions"), db.clone())?;
         Ok(Self {
-            db: Db::open(&data_dir.join("fastvibe.db"))?,
-            transcripts: TranscriptStore::new(data_dir.join("sessions"))?,
+            db,
+            transcripts,
             images: ImageStore::new(data_dir.join("tool-images"))?,
             credentials: CredentialStore::new(data_dir.join("credentials.json")),
         })

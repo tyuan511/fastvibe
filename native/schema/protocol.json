@@ -74,8 +74,23 @@
               "null"
             ]
           },
+          "customSystemPrompt": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "darkTheme": {
             "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expectedCustomSystemPrompt": {
+            "default": null,
+            "description": "Optional compare-and-set guard for editors. Omit for an unconditional update.",
             "type": [
               "string",
               "null"
@@ -117,6 +132,100 @@
             "default": null,
             "type": [
               "boolean",
+              "null"
+            ]
+          },
+          "sendOnEnter": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "shortcut": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ShortcutEdit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "shortcuts": {
+            "additionalProperties": false,
+            "default": null,
+            "properties": {
+              "commandPalette": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "focusComposer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "newChat": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nextChat": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "openFolder": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "prevChat": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "send": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "settings": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stop": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "toggleSidePane": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "toggleSidebar": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": [
+              "object",
               "null"
             ]
           },
@@ -1079,6 +1188,79 @@
         },
         "type": "object"
       },
+      "ShortcutEdit": {
+        "description": "A single-row edit is merged under the server's settings lock, so two windows editing\ndifferent commands cannot replace one another's entire override map.",
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "const": "set",
+                "type": "string"
+              },
+              "binding": {
+                "type": "string"
+              },
+              "id": {
+                "$ref": "#/$defs/ShortcutId"
+              }
+            },
+            "required": [
+              "action",
+              "id",
+              "binding"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "disable",
+                "type": "string"
+              },
+              "id": {
+                "$ref": "#/$defs/ShortcutId"
+              }
+            },
+            "required": [
+              "action",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "restore",
+                "type": "string"
+              },
+              "id": {
+                "$ref": "#/$defs/ShortcutId"
+              }
+            },
+            "required": [
+              "action",
+              "id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ShortcutId": {
+        "enum": [
+          "commandPalette",
+          "settings",
+          "newChat",
+          "openFolder",
+          "focusComposer",
+          "send",
+          "stop",
+          "prevChat",
+          "nextChat",
+          "toggleSidebar",
+          "toggleSidePane"
+        ],
+        "type": "string"
+      },
       "SidebarSettingsPatch": {
         "properties": {
           "closedProjects": {
@@ -1705,6 +1887,30 @@
           "text"
         ],
         "type": "object"
+      },
+      "UsageParams": {
+        "properties": {
+          "range": {
+            "$ref": "#/$defs/UsageRange",
+            "default": "365d"
+          },
+          "timezone": {
+            "default": "UTC",
+            "description": "IANA zone of the viewing client; historical DST is applied per timestamp.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UsageRange": {
+        "enum": [
+          "7d",
+          "30d",
+          "90d",
+          "365d",
+          "all"
+        ],
+        "type": "string"
       },
       "WriteFileParams": {
         "description": "`workspace/writeFile`: replace a text file the pane has open.",
@@ -2899,6 +3105,26 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "stats/usage",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/UsageParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "settings/set",
             "type": "string"
           },
@@ -3448,6 +3674,11 @@
             "description": "Automatically summarize a conversation near its effective context capacity.",
             "type": "boolean"
           },
+          "customSystemPrompt": {
+            "default": "",
+            "description": "User-authored suffix of each conversation's system instructions. Empty disables it.",
+            "type": "string"
+          },
           "darkTheme": {
             "type": "string"
           },
@@ -3472,6 +3703,83 @@
             "default": false,
             "description": "Whether sandboxed commands may use the network.",
             "type": "boolean"
+          },
+          "sendOnEnter": {
+            "default": true,
+            "type": "boolean"
+          },
+          "shortcuts": {
+            "additionalProperties": false,
+            "default": {},
+            "properties": {
+              "commandPalette": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "focusComposer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "newChat": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nextChat": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "openFolder": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "prevChat": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "send": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "settings": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stop": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "toggleSidePane": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "toggleSidebar": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           },
           "sidebar": {
             "$ref": "#/$defs/SidebarSettings",
@@ -4604,6 +4912,22 @@
           },
           "params": {
             "$ref": "#/$defs/AppSettings"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "stats/usageChanged",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
           }
         },
         "required": [

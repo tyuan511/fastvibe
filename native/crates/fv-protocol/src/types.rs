@@ -1714,6 +1714,13 @@ pub struct AppSettings {
     /// Automatically summarize a conversation near its effective context capacity.
     #[serde(default = "default_true")]
     pub auto_compaction_enabled: bool,
+    /// User-authored suffix of each conversation's system instructions. Empty disables it.
+    #[serde(default)]
+    pub custom_system_prompt: String,
+    #[serde(default = "default_true")]
+    pub send_on_enter: bool,
+    #[serde(default)]
+    pub shortcuts: crate::shortcuts::ShortcutOverrides,
 }
 
 /// How much of the machine a command may touch.
@@ -1802,6 +1809,9 @@ impl Default for AppSettings {
             sidebar: SidebarSettings::default(),
             reply_suggestions: true,
             auto_compaction_enabled: true,
+            custom_system_prompt: String::new(),
+            send_on_enter: true,
+            shortcuts: Default::default(),
         }
     }
 }
@@ -1830,10 +1840,33 @@ pub struct AppSettingsPatch {
     pub reply_suggestions: Option<bool>,
     #[serde(default)]
     pub auto_compaction_enabled: Option<bool>,
+    #[serde(default)]
+    pub custom_system_prompt: Option<String>,
+    /// Optional compare-and-set guard for editors. Omit for an unconditional update.
+    #[serde(default)]
+    pub expected_custom_system_prompt: Option<String>,
+    #[serde(default)]
+    pub send_on_enter: Option<bool>,
+    #[serde(default)]
+    pub shortcuts: Option<crate::shortcuts::ShortcutOverrides>,
+    #[serde(default)]
+    pub shortcut: Option<crate::shortcuts::ShortcutEdit>,
 }
 
 impl AppSettings {
     pub fn apply(&mut self, patch: AppSettingsPatch) {
+        if let Some(v) = patch.send_on_enter {
+            self.send_on_enter = v;
+        }
+        if let Some(v) = patch.shortcuts {
+            self.shortcuts = v;
+        }
+        if let Some(v) = patch.shortcut {
+            crate::shortcuts::apply_edit(&mut self.shortcuts, v);
+        }
+        if let Some(v) = patch.custom_system_prompt {
+            self.custom_system_prompt = v;
+        }
         if let Some(v) = patch.auto_compaction_enabled {
             self.auto_compaction_enabled = v;
         }

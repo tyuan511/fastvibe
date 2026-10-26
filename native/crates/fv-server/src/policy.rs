@@ -71,6 +71,7 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::TerminalCopy { .. }
             | ClientRequest::TerminalKill { .. }
             | ClientRequest::SettingsGet { .. }
+            | ClientRequest::StatsUsage { .. }
             | ClientRequest::SkillList { .. }
             | ClientRequest::MemoryRead { .. }
             | ClientRequest::MemoryConfigure { .. }

@@ -212,6 +212,11 @@ impl ServerState {
         {
             eprintln!("cannot write the transcript of {thread_id}: {e}");
         }
+        if matches!(message, fv_core::Message::Assistant(_)) {
+            self.broadcast(ServerNotification::UsageChanged(
+                fv_protocol::types::Empty {},
+            ));
+        }
     }
 
     /// A turn finished in this thread: it moves to the top of the list, and a thread that has

@@ -88,6 +88,15 @@ const MIGRATIONS: &[&str] = &[
          thread_id TEXT PRIMARY KEY,
          reason    TEXT NOT NULL DEFAULT 'failed'
      );",
+    // 4: no foreign key to conversations: paid requests outlive deleted chats and rewinds.
+    "CREATE TABLE usage_ledger (
+         request_key TEXT PRIMARY KEY,
+         thread_id TEXT NOT NULL,
+         entry_id TEXT NOT NULL,
+         at INTEGER NOT NULL,
+         data TEXT NOT NULL
+     );
+     CREATE INDEX usage_ledger_at ON usage_ledger(at);",
 ];
 
 /// A provider as stored: everything but its key.
@@ -112,7 +121,7 @@ pub struct QueuedPrompt {
 }
 
 pub struct Db {
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
 }
 
 impl Db {

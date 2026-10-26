@@ -1,5 +1,5 @@
-//! Protocol-backed settings: providers, general preferences, archived chats, skills, MCP
-//! and memory are connected. Other sections retain their migration placeholders until
+//! Protocol-backed settings: providers, general preferences, personalization, archived chats,
+//! skills, MCP and memory are connected. Other sections retain their migration placeholders until
 //! their backing services are implemented.
 
 use std::collections::HashSet;
@@ -162,6 +162,9 @@ pub enum ThemeMenu {
 }
 
 pub struct SettingsState {
+    pub usage: super::usage::UsageSettings,
+    pub shortcuts: super::shortcuts::ShortcutSettings,
+    pub personalization: super::personalization::PersonalizationSettings,
     pub memory: super::memory::MemorySettings,
     pub mcp: super::mcp::McpSettings,
     pub skills: super::skills::SkillSettings,
@@ -204,6 +207,13 @@ impl Workspace {
     ) {
         if self.settings.is_none() {
             self.settings = Some(SettingsState {
+                usage: Default::default(),
+                shortcuts: super::shortcuts::ShortcutSettings::new(window, cx),
+                personalization: super::personalization::PersonalizationSettings::new(
+                    &self.app_settings.custom_system_prompt,
+                    window,
+                    cx,
+                ),
                 memory: Default::default(),
                 mcp: super::mcp::McpSettings::new(window, cx),
                 skills: super::skills::SkillSettings::new(window, cx),
@@ -219,6 +229,8 @@ impl Workspace {
                 add_models: None,
                 notice: None,
             });
+            self.subscribe_personalization(window, cx);
+            self.subscribe_shortcuts(window, cx);
             let query = self.settings.as_ref().unwrap().skills.query.clone();
             cx.subscribe_in(
                 &query,
@@ -232,6 +244,9 @@ impl Workspace {
             .detach();
         }
         if let Some(s) = &mut self.settings {
+            if s.section != section {
+                s.shortcuts.cancel();
+            }
             s.section = section;
         }
         self.model_menu = false;
@@ -242,6 +257,7 @@ impl Workspace {
         self.refresh_skills(cx);
         self.refresh_mcp(cx);
         self.refresh_memory(cx);
+        self.refresh_usage(cx);
         cx.notify();
     }
 
@@ -695,6 +711,9 @@ impl Workspace {
                                     self.providers_pane(s, window, cx).into_any_element()
                                 }
                                 Section::General => self.general_pane(s, cx).into_any_element(),
+                                Section::Personalization => self.personalization_pane(cx),
+                                Section::Shortcuts => self.shortcuts_pane(cx),
+                                Section::Usage => self.usage_pane(cx),
                                 Section::Archived => self.archived_pane(s, cx).into_any_element(),
                                 Section::Skills => self.skills_pane(cx),
                                 Section::Mcp => self.mcp_pane(cx),

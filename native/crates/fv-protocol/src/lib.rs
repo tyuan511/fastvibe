@@ -10,7 +10,9 @@
 
 pub mod jsonrpc;
 pub mod methods;
+pub mod shortcuts;
 pub mod types;
+pub mod usage;
 
 pub use jsonrpc::{ErrorObject, Message, RequestId};
 pub use methods::{ClientNotification, ClientRequest, ServerNotification, ServerRequest};
