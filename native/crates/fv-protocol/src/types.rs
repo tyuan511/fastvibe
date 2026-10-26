@@ -1711,6 +1711,9 @@ pub struct AppSettings {
     /// unless turned off, like the Electron app's `replySuggestions`.
     #[serde(default = "default_true")]
     pub reply_suggestions: bool,
+    /// Automatically summarize a conversation near its effective context capacity.
+    #[serde(default = "default_true")]
+    pub auto_compaction_enabled: bool,
 }
 
 /// How much of the machine a command may touch.
@@ -1798,6 +1801,7 @@ impl Default for AppSettings {
             sandbox_network: false,
             sidebar: SidebarSettings::default(),
             reply_suggestions: true,
+            auto_compaction_enabled: true,
         }
     }
 }
@@ -1824,10 +1828,15 @@ pub struct AppSettingsPatch {
     pub sidebar: Option<SidebarSettingsPatch>,
     #[serde(default)]
     pub reply_suggestions: Option<bool>,
+    #[serde(default)]
+    pub auto_compaction_enabled: Option<bool>,
 }
 
 impl AppSettings {
     pub fn apply(&mut self, patch: AppSettingsPatch) {
+        if let Some(v) = patch.auto_compaction_enabled {
+            self.auto_compaction_enabled = v;
+        }
         if let Some(v) = patch.sidebar {
             self.sidebar.apply(v);
         }

@@ -59,6 +59,7 @@ fn agent(model: ScriptedModel, tools: Vec<Slow>) -> (AgentContext, Arc<ScriptedM
             steer: None,
             memory: None,
             budget: Default::default(),
+            compaction: None,
         },
         model,
     )
@@ -396,6 +397,7 @@ async fn results_stay_in_call_order_even_when_they_finish_out_of_order() {
         steer: None,
         memory: None,
         budget: Default::default(),
+        compaction: None,
     };
     let r = run(&ctx, &CancellationToken::new()).await;
     assert_eq!(
@@ -685,6 +687,7 @@ async fn a_steer_mid_run_is_sent_with_the_next_request_in_the_same_turn() {
         steer: Some(steers),
         memory: None,
         budget: Default::default(),
+        compaction: None,
     };
     let r = run(&ctx, &CancellationToken::new()).await;
     assert_eq!(r.outcome, TurnOutcome::Completed);
@@ -724,6 +727,7 @@ async fn a_steer_that_arrives_after_the_answer_keeps_the_turn_going() {
         steer: Some(steers.clone()),
         memory: None,
         budget: Default::default(),
+        compaction: None,
     };
     // Push the words just before the run: a steer present at the top of the loop is drained
     // before the first request, so this covers the ordinary path; the late path is covered by

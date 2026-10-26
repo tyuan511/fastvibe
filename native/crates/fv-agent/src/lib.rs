@@ -34,4 +34,4 @@ pub use permissions::{
 pub use prompt::base_instructions;
 pub use steer::Steers;
 pub use tool::{LoadedTools, Tool, ToolCtx, ToolOutput, ToolRegistry, ToolSpec, UserInput};
-pub use turn::{AgentContext, MemorySource, TurnOutcome, run_turn};
+pub use turn::{AgentContext, CompactionPolicy, MemorySource, TurnOutcome, run_turn};

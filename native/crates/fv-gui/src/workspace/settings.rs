@@ -1,7 +1,6 @@
-//! 设置, after `components/settings/settings-dialog.tsx`: the section list in the sidebar's pane,
-//! the open section on the right. 模型与默认 (`providers-settings.tsx`, `provider-detail.tsx`,
-//! `add-provider-dialog.tsx`) is the one that works so far: it is what a fresh install needs
-//! before it can talk to any model.
+//! Protocol-backed settings: providers, general preferences, archived chats, skills, MCP
+//! and memory are connected. Other sections retain their migration placeholders until
+//! their backing services are implemented.
 
 use std::collections::HashSet;
 
@@ -1191,6 +1190,7 @@ impl Workspace {
         let p = &self.palette;
         let a = &self.app_settings;
         let reply_suggestions = a.reply_suggestions;
+        let auto_compaction_enabled = a.auto_compaction_enabled;
         let hover = p.c(Token::Accent);
         let mode_label = |m: ThemeMode| match m {
             ThemeMode::System => "跟随系统",
@@ -1401,6 +1401,26 @@ impl Workspace {
                             this.patch_settings(
                                 AppSettingsPatch {
                                     reply_suggestions: Some(!reply_suggestions),
+                                    ..Default::default()
+                                },
+                                cx,
+                            )
+                        })),
+                    ))
+                    .child(setting_row(
+                        "自动压缩上下文",
+                        "接近上下文上限时自动整理，保留原始消息；关闭后仍可手动整理",
+                        true,
+                        p,
+                        switch(
+                            SharedString::from("auto-compaction"),
+                            auto_compaction_enabled,
+                            p,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.patch_settings(
+                                AppSettingsPatch {
+                                    auto_compaction_enabled: Some(!auto_compaction_enabled),
                                     ..Default::default()
                                 },
                                 cx,

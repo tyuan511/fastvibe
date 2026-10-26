@@ -24,10 +24,22 @@ async fn connect(
     UnboundedReceiver<ServerNotification>,
     Arc<ServerState>,
 ) {
+    connect_at(dir, "test.sock", model).await
+}
+
+async fn connect_at(
+    dir: &Path,
+    socket_name: &str,
+    model: Arc<dyn Model>,
+) -> (
+    Client,
+    UnboundedReceiver<ServerNotification>,
+    Arc<ServerState>,
+) {
     let state =
         Arc::new(ServerState::new(dir.into(), fv_server::agent_with_builtin_tools(model)).unwrap());
     common::disable_reply_suggestions(&state);
-    let socket = dir.join("test.sock");
+    let socket = dir.join(socket_name);
     tokio::spawn(
         UnixServer::bind(state.clone(), &socket)
             .await
@@ -35,7 +47,7 @@ async fn connect(
             .run(),
     );
     let (client, notes) = Client::connect_unix(&socket).await.unwrap();
-    client
+    let initialized = client
         .call::<Initialize>(InitializeParams {
             client_info: ClientInfo {
                 name: "test".into(),
@@ -46,6 +58,7 @@ async fn connect(
         })
         .await
         .unwrap();
+    assert!(initialized.features.iter().any(|f| f == "autoCompaction"));
     (client, notes, state)
 }
 async fn thread(client: &Client) -> String {
@@ -245,4 +258,126 @@ async fn exhausted_capacity_fails_visibly_and_manual_compaction_unlocks_the_real
     );
     let loaded = state.store.transcripts.read(&id).unwrap();
     assert!(loaded.messages.iter().any(|m| matches!(m, fv_core::Message::Compaction { user_messages, .. } if user_messages == &["work", "continue"])));
+}
+
+#[tokio::test]
+async fn the_auto_compaction_setting_is_shared_live_and_restored_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = || {
+        Reply::new()
+            .tool(
+                "plan",
+                "update_plan",
+                serde_json::json!({"plan":[{"step":"work","status":"in_progress"}]}),
+            )
+            .input_tokens(61_000)
+            .done()
+    };
+    let model = Arc::new(
+        ScriptedModel::new([
+            plan(),
+            Reply::new().text("AUTO CHECKPOINT").done(),
+            Reply::new().text("after enable").done(),
+            Reply::new().text("MANUAL CHECKPOINT").done(),
+        ])
+        .with_window(64_000),
+    );
+    let (client, mut notes, _) = connect(dir.path(), model.clone()).await;
+    assert!(
+        client
+            .call::<SettingsGet>(Empty {})
+            .await
+            .unwrap()
+            .auto_compaction_enabled
+    );
+    let saved = client
+        .call::<SettingsSet>(AppSettingsPatch {
+            auto_compaction_enabled: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(!saved.auto_compaction_enabled);
+    // A separate client sees the same setting; unrelated patches do not reset it.
+    let (other, mut other_notes) = Client::connect_unix(&dir.path().join("test.sock"))
+        .await
+        .unwrap();
+    other
+        .call::<Initialize>(InitializeParams {
+            client_info: ClientInfo {
+                name: "other".into(),
+                version: "0".into(),
+            },
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: Default::default(),
+        })
+        .await
+        .unwrap();
+    client
+        .call::<SettingsSet>(AppSettingsPatch {
+            glass: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let heard = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(ServerNotification::SettingsChanged(s)) = other_notes.recv().await {
+                break s;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!heard.auto_compaction_enabled && heard.glass);
+    let id = thread(&client).await;
+    let events = say(&client, &mut notes, &id, "work").await;
+    assert_eq!(status(&events), TurnStatus::Failed);
+    assert!(events.iter().any(|n| matches!(n, ServerNotification::ItemCompleted(e) if matches!(&e.body.item, Item::Error { message, .. } if message.contains("automatic compaction is disabled")))));
+    assert_eq!(model.requests().len(), 1);
+    assert!(!events.iter().any(|n| matches!(n, ServerNotification::ItemStarted(e) if matches!(e.body.item, Item::ContextCompaction { .. }))));
+    other
+        .call::<SettingsSet>(AppSettingsPatch {
+            auto_compaction_enabled: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        status(&say(&client, &mut notes, &id, "continue").await),
+        TurnStatus::Completed
+    );
+    assert_eq!(model.requests().len(), 3);
+    client
+        .call::<SettingsSet>(AppSettingsPatch {
+            auto_compaction_enabled: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    client
+        .call::<ThreadCompactStart>(ThreadIdParams {
+            thread_id: id.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(status(&idle(&mut notes).await), TurnStatus::Completed);
+    assert_eq!(
+        model.requests().len(),
+        4,
+        "explicit compaction must still run while automatic compaction is off"
+    );
+
+    let restarted_model = Arc::new(
+        ScriptedModel::new([plan(), Reply::new().text("must not summarize").done()])
+            .with_window(64_000),
+    );
+    let (restarted, mut restarted_notes, _) =
+        connect_at(dir.path(), "restarted.sock", restarted_model.clone()).await;
+    let restored = restarted.call::<SettingsGet>(Empty {}).await.unwrap();
+    assert!(!restored.auto_compaction_enabled && restored.glass);
+    let events = say(&restarted, &mut restarted_notes, &id, "after restart").await;
+    assert_eq!(status(&events), TurnStatus::Failed);
+    assert!(events.iter().any(|n| matches!(n, ServerNotification::ItemCompleted(e) if matches!(&e.body.item, Item::Error { message, .. } if message.contains("automatic compaction is disabled")))));
+    assert_eq!(restarted_model.requests().len(), 1);
 }

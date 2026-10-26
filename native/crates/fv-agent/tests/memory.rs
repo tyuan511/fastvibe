@@ -32,6 +32,7 @@ fn context(model: Arc<ScriptedModel>, memory: Arc<Source>) -> AgentContext {
         steer: None,
         memory: Some(memory),
         budget: Default::default(),
+        compaction: None,
     }
 }
 

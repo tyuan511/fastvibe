@@ -64,5 +64,6 @@ pub fn agent_with_builtin_tools(
         steer: None,
         memory: None,
         budget: Default::default(),
+        compaction: None,
     }
 }

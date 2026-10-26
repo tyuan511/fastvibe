@@ -73,6 +73,7 @@ async fn start(workspace: &Path) -> (tempfile::TempDir, std::path::PathBuf) {
         steer: None,
         memory: None,
         budget: Default::default(),
+        compaction: None,
     };
     let state = Arc::new(ServerState::new(data.path().to_path_buf(), agent).unwrap());
     let sock = data.path().join("r.sock");

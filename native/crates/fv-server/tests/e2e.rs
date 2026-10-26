@@ -28,6 +28,7 @@ fn agent_with(model: Arc<dyn Model>) -> AgentContext {
         steer: None,
         memory: None,
         budget: Default::default(),
+        compaction: None,
     }
 }
 

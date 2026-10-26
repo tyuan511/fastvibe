@@ -106,6 +106,25 @@ fn schema_matches_committed_snapshot() {
 }
 
 #[test]
+fn automatic_compaction_defaults_on_for_old_settings_and_accepts_an_explicit_off_patch() {
+    let mut legacy = serde_json::to_value(types::AppSettings::default()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("autoCompactionEnabled");
+    let mut settings: types::AppSettings = serde_json::from_value(legacy).unwrap();
+    assert!(settings.auto_compaction_enabled);
+    settings
+        .apply(serde_json::from_value(serde_json::json!({"autoCompactionEnabled":false})).unwrap());
+    assert!(!settings.auto_compaction_enabled);
+    assert_eq!(settings.light_theme, "github-light");
+    assert_eq!(
+        serde_json::to_value(settings).unwrap()["autoCompactionEnabled"],
+        false
+    );
+}
+
+#[test]
 fn a_question_request_has_its_wire_shape() {
     let req = ServerRequest::UserInput {
         id: RequestId::String("r1".into()),

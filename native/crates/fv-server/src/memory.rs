@@ -634,7 +634,7 @@ impl Memory {
         };
         let mut registry = ToolRegistry::new();
         registry.register(workspace.clone());
-        let ctx = AgentContext { model: model.clone(), tools: Arc::new(registry), system: "Use memory_workspace for all filesystem operations. This is an isolated memory consolidation task. No external tools, extensions, user prompts or network access are available.".into(), cwd: Some(self.root.clone()), ui: None, loaded: Default::default(), permissions: None, steer: None, memory: None, budget: Default::default() };
+        let ctx = AgentContext { model: model.clone(), tools: Arc::new(registry), system: "Use memory_workspace for all filesystem operations. This is an isolated memory consolidation task. No external tools, extensions, user prompts or network access are available.".into(), cwd: Some(self.root.clone()), ui: None, loaded: Default::default(), permissions: None, steer: None, memory: None, budget: Default::default(), compaction: Some(state.auto_compaction.clone()) };
         let prompt = CONSOLIDATION
             .replace("{{ memory_root }}", &self.root.display().to_string())
             .replace("{{ phase2_workspace_diff_file }}", workspace::DIFF);

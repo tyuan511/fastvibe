@@ -63,6 +63,7 @@ async fn start(model: Option<ScriptedModel>) -> Harness {
         steer: None,
         memory: None,
         budget: Default::default(),
+        compaction: None,
     };
     let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
     // The script is what these tests pin, so 回复推荐's side request (which runs on the same model)

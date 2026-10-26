@@ -282,6 +282,7 @@ async fn dispatch(
                     "workspaceEntries".into(),
                     "terminalInteraction".into(),
                     "memory".into(),
+                    "autoCompaction".into(),
                 ],
                 data_dir: state.data_dir.display().to_string(),
                 build_fingerprint: crate::build_fingerprint(),

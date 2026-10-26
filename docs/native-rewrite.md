@@ -805,7 +805,7 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 - **手动**：`thread/compact/start` 是一个独立的回合，可 `turn/interrupt`；线程忙返回 `THREAD_BUSY`，没有历史返回「nothing to summarize」。手动压缩重新探测声明容量，失败或取消恢复此前保护，只有验证通过的压缩点才采用新预算。
 - **上下文环**：请求完成、容量学习和压缩提交后经 `thread/tokenUsage/updated {used, window}` 推送，带单调 `seq`；`thread/resume` 在同一把回合锁中读取最后的有效投影，避免把固定原文预算的旧估算当成新请求用量。
 - **真实验证**（`deepseek-v4.1-flash`，窗口设成 5000）：几轮长回复后自动压缩多次触发，最后问「项目叫什么、最爱的颜色、灯塔管理员是谁」仍答对。
-- 必需指令本身已超出容量时明确失败，不循环压缩。models.dev 的 `contextWindow` 继续作为声明窗口；容量保护实现与本批验收见 `native-completion.md` 第十一批。通用偏好的自动压缩开关仍列在未完成设置范围。
+- 必需指令本身已超出容量时明确失败，不循环压缩。models.dev 的 `contextWindow` 继续作为声明窗口；容量保护实现与本批验收见 `native-completion.md` 第十一批。通用偏好的自动压缩开关、持久化及实时策略已接通，验证见 `native-completion.md` 第十二批。
 
 **存储（`fv-store`）**：`fastvibe.db`（目录，`PRAGMA user_version` 迁移、0600、`auto_vacuum` 先于 WAL、高版本拒绝打开）+
 `sessions/<id>.jsonl`（只追加，首行 header，之后每行一条消息并用 `parentId` 串成链）。写入跟着 agent 的 `Committed` 事件走：

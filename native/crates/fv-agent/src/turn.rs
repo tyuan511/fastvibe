@@ -30,7 +30,28 @@ pub struct AgentContext {
     pub steer: Option<Arc<crate::Steers>>,
     pub memory: Option<Arc<dyn MemorySource>>,
     pub budget: Arc<crate::ContextBudget>,
+    /// Read before each request boundary so changing the setting also affects a live run.
+    /// Absent means automatic compaction is enabled.
+    pub compaction: Option<Arc<dyn CompactionPolicy>>,
 }
+
+pub trait CompactionPolicy: Send + Sync {
+    fn automatic_enabled(&self) -> bool;
+}
+
+impl CompactionPolicy for std::sync::atomic::AtomicBool {
+    fn automatic_enabled(&self) -> bool {
+        self.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+fn auto_compaction(ctx: &AgentContext) -> bool {
+    ctx.compaction
+        .as_ref()
+        .is_none_or(|policy| policy.automatic_enabled())
+}
+
+const AUTO_COMPACTION_DISABLED: &str = "The context needs compaction, but automatic compaction is disabled. Compact this conversation manually or choose a model with a larger context window.";
 
 /// A changing memory map. The agent persists a new snapshot only when needed; the source
 /// can withdraw all snapshots immediately without changing the append-only transcript.
@@ -192,6 +213,9 @@ pub async fn run_turn(
         refresh_memory(ctx, history, events);
         // Make room before the window is full, not after the provider has refused the request.
         if capacity_recovery || crate::compact::needs_compaction(ctx, history) {
+            if !auto_compaction(ctx) {
+                return TurnOutcome::Failed(AUTO_COMPACTION_DISABLED.into());
+            }
             capacity_recovery = false;
             match crate::compact::compact_auto(ctx, history, events, cancel).await {
                 Ok(()) => {}
@@ -222,6 +246,9 @@ pub async fn run_turn(
                 .saturating_sub(used)
                 .saturating_sub(crate::budget::margin(window));
             if room < crate::budget::reply_reserve(ctx.model.as_ref(), window).min(1024) {
+                if !auto_compaction(ctx) {
+                    return TurnOutcome::Failed(AUTO_COMPACTION_DISABLED.into());
+                }
                 capacity_recovery = true;
                 continue;
             }
@@ -318,6 +345,9 @@ pub async fn run_turn(
                 if !learn_capacity(ctx, &capacity_request, events) {
                     ctx.budget.block(ctx.model.as_ref(), history);
                     return TurnOutcome::Failed(CAPACITY_PAUSED.into());
+                }
+                if !auto_compaction(ctx) {
+                    return TurnOutcome::Failed(AUTO_COMPACTION_DISABLED.into());
                 }
                 capacity_recovery = true;
                 continue;

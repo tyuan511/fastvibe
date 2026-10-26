@@ -14,7 +14,11 @@ fn internal(e: impl std::fmt::Display) -> ErrorObject {
 }
 
 pub fn read(state: &ServerState) -> Result<AppSettings, ErrorObject> {
-    let stored = state.store.db.get_setting(KEY).map_err(internal)?;
+    read_db(&state.store.db).map_err(internal)
+}
+
+pub(crate) fn read_db(db: &fv_store::Db) -> Result<AppSettings, fv_store::StoreError> {
+    let stored = db.get_setting(KEY)?;
     Ok(stored
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default())
@@ -57,6 +61,10 @@ fn write(state: &ServerState, settings: AppSettings) -> Result<AppSettings, Erro
         .db
         .set_setting(KEY, Some(&text))
         .map_err(internal)?;
+    state.auto_compaction.store(
+        settings.auto_compaction_enabled,
+        std::sync::atomic::Ordering::Release,
+    );
     state.broadcast(ServerNotification::SettingsChanged(settings.clone()));
     Ok(settings)
 }

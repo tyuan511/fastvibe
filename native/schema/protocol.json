@@ -67,6 +67,13 @@
             ],
             "default": null
           },
+          "autoCompactionEnabled": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "darkTheme": {
             "default": null,
             "type": [
@@ -3435,6 +3442,11 @@
             "$ref": "#/$defs/ApprovalPolicy",
             "default": "onRequest",
             "description": "When the user is asked before something runs (codex's `approval_policy`)."
+          },
+          "autoCompactionEnabled": {
+            "default": true,
+            "description": "Automatically summarize a conversation near its effective context capacity.",
+            "type": "boolean"
           },
           "darkTheme": {
             "type": "string"

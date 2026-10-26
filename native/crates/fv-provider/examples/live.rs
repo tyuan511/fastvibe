@@ -104,6 +104,7 @@ async fn main() {
         steer: None,
         memory: None,
         budget: Default::default(),
+        compaction: None,
     };
 
     let (tx, mut rx) = mpsc::unbounded_channel();

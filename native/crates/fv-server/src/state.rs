@@ -47,6 +47,7 @@ pub struct ServerState {
     pub mcp: Arc<fv_mcp::Manager>,
     pub memory: Arc<crate::memory::Memory>,
     pub(crate) services_started: AtomicBool,
+    pub(crate) auto_compaction: Arc<AtomicBool>,
     pub store: Store,
     /// The side pane's shells. One per terminal, with its own pty and parsed screen.
     pub(crate) terminals: crate::terminal::Terminals,
@@ -96,7 +97,11 @@ impl ServerState {
     pub fn new(data_dir: PathBuf, agent: AgentContext) -> Result<Self, StoreError> {
         let store = Store::open(&data_dir)?;
         let catalog = fv_provider::load_catalog(&data_dir);
+        let auto_compaction = Arc::new(AtomicBool::new(
+            crate::settings::read_db(&store.db)?.auto_compaction_enabled,
+        ));
         Ok(Self {
+            auto_compaction,
             memory: crate::memory::Memory::open(&data_dir, &store.db)?,
             mcp: fv_mcp::Manager::open(&data_dir)?,
             services_started: AtomicBool::new(false),

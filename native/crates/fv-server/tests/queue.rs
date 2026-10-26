@@ -62,6 +62,7 @@ async fn start(model: ScriptedModel) -> Harness {
         steer: None,
         memory: None,
         budget: Default::default(),
+        compaction: None,
     };
     let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
     common::disable_reply_suggestions(&state);
@@ -416,6 +417,7 @@ async fn a_queued_prompt_survives_a_restart_and_a_pause_survives_with_it() {
             steer: None,
             memory: None,
             budget: Default::default(),
+            compaction: None,
         };
         let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
         let sock = dir.path().join("p.sock");
@@ -453,6 +455,7 @@ async fn a_queued_prompt_survives_a_restart_and_a_pause_survives_with_it() {
         steer: None,
         memory: None,
         budget: Default::default(),
+        compaction: None,
     };
     let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
     let sock = dir.path().join("p2.sock");

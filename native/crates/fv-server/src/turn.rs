@@ -806,6 +806,7 @@ async fn build_context(
         steer: Some(rt.steers()),
         memory: Some(state.memory.clone()),
         budget: rt.budget.clone(),
+        compaction: Some(state.auto_compaction.clone()),
     }
 }
 

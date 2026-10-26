@@ -96,6 +96,7 @@ fn agent(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
             steer: None,
             memory: None,
             budget: Default::default(),
+            compaction: None,
         },
         model,
     )

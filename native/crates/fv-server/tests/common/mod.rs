@@ -156,11 +156,15 @@ pub async fn serve(replies: Vec<Reply>) -> Mock {
 /// scripted model would have one of its replies spent on the placeholder. Tests that pin a script
 /// call this; the placeholder itself is tested against its own model.
 pub fn disable_reply_suggestions(state: &fv_server::ServerState) {
-    let settings = serde_json::to_string(&fv_protocol::types::AppSettings {
-        reply_suggestions: false,
-        ..Default::default()
-    })
-    .unwrap();
+    let mut settings = state
+        .store
+        .db
+        .get_setting("app.settings")
+        .unwrap()
+        .map(|text| serde_json::from_str::<fv_protocol::types::AppSettings>(&text).unwrap())
+        .unwrap_or_default();
+    settings.reply_suggestions = false;
+    let settings = serde_json::to_string(&settings).unwrap();
     state
         .store
         .db

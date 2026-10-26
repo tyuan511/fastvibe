@@ -23,6 +23,7 @@ fn context(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
             steer: None,
             memory: None,
             budget: Default::default(),
+            compaction: None,
         },
         model,
     )
@@ -400,4 +401,128 @@ async fn a_large_model_output_limit_does_not_become_a_large_summary_budget() {
         TurnOutcome::Completed
     );
     assert_eq!(model.requests()[0].max_output_tokens, Some(4096));
+}
+
+#[tokio::test]
+async fn disabling_automatic_compaction_preserves_history_and_manual_compaction_still_works() {
+    use std::sync::atomic::AtomicBool;
+    let (mut ctx, model) = context(
+        ScriptedModel::new([
+            Reply::new().text("MANUAL CHECKPOINT").done(),
+            Reply::new().text("continued").done(),
+        ])
+        .with_window(10_000),
+    );
+    ctx.compaction = Some(Arc::new(AtomicBool::new(false)));
+    let mut history = vec![
+        user("original requirement"),
+        assistant("previous work", 9500),
+    ];
+    let before = history.clone();
+    let (outcome, events) = run(&ctx, &mut history, "new requirement").await;
+    assert!(
+        matches!(outcome, TurnOutcome::Failed(m) if m.contains("automatic compaction is disabled"))
+    );
+    assert!(model.requests().is_empty());
+    assert!(history.starts_with(&before));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::CompactionStarted { .. }))
+    );
+    let (tx, _) = mpsc::unbounded_channel();
+    compact(&ctx, &mut history, &tx, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        matches!(history.first(), Some(Message::Compaction { summary, .. }) if summary == "MANUAL CHECKPOINT")
+    );
+    assert_eq!(
+        run(&ctx, &mut history, "continue").await.0,
+        TurnOutcome::Completed
+    );
+    assert_eq!(model.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn disabled_compaction_reports_a_real_overflow_without_starting_recovery() {
+    use std::sync::atomic::AtomicBool;
+    let (mut ctx, model) =
+        context(ScriptedModel::new([Reply::new().then_overflow()]).with_window(1_000_000));
+    ctx.compaction = Some(Arc::new(AtomicBool::new(false)));
+    let mut history = vec![
+        user("requirements"),
+        assistant(&"earlier work ".repeat(300), 800),
+    ];
+    let (outcome, events) = run(&ctx, &mut history, "continue").await;
+    assert!(
+        matches!(outcome, TurnOutcome::Failed(m) if m.contains("automatic compaction is disabled"))
+    );
+    assert_eq!(model.requests().len(), 1);
+    assert!(
+        effective_context_window(&ctx) < 1_000_000,
+        "real capacity evidence should still be retained"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::CompactionStarted { .. }))
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|m| matches!(m, Message::Compaction { .. }))
+    );
+}
+
+#[tokio::test]
+async fn a_live_setting_change_is_read_at_the_next_request_boundary() {
+    use fv_agent::{Tool, ToolCtx, ToolOutput, ToolSpec};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct TurnOff(Arc<AtomicBool>);
+    impl Tool for TurnOff {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "turn_off".into(),
+                description: "test setting update".into(),
+                schema: serde_json::json!({"type":"object"}),
+            }
+        }
+        fn mutates(&self) -> bool {
+            false
+        }
+        fn call(
+            &self,
+            _: ToolCtx,
+            _: serde_json::Value,
+        ) -> futures_util::future::BoxFuture<'static, ToolOutput> {
+            self.0.store(false, Ordering::Release);
+            Box::pin(async { ToolOutput::ok("setting changed") })
+        }
+    }
+    let (mut ctx, model) = context(
+        ScriptedModel::new([
+            Reply::new()
+                .tool("flip", "turn_off", serde_json::json!({}))
+                .input_tokens(9500)
+                .done(),
+            Reply::new().text("must not summarize").done(),
+        ])
+        .with_window(10_000),
+    );
+    let enabled = Arc::new(AtomicBool::new(true));
+    let mut tools = fv_agent::ToolRegistry::new();
+    tools.register(TurnOff(enabled.clone()));
+    ctx.tools = Arc::new(tools);
+    ctx.compaction = Some(enabled);
+    let mut history = Vec::new();
+    assert!(
+        matches!(run(&ctx, &mut history, "work").await.0, TurnOutcome::Failed(m) if m.contains("automatic compaction is disabled"))
+    );
+    assert_eq!(model.requests().len(), 1);
+    assert!(
+        !history
+            .iter()
+            .any(|m| matches!(m, Message::Compaction { .. }))
+    );
 }
