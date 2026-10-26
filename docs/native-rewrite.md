@@ -679,7 +679,7 @@ M1 工期因此增加约 1–2 周；24 套主题与玻璃效果的**机制**在
 | 里程碑 | 范围 | 粗估 |
 | --- | --- | --- |
 | M1 第一条通路 | workspace、`fv-protocol` 骨架与 schema 导出、`fastvibe-server`（unix socket + stdio）、`fv-client`、`fv-daemon`；导入 providers；genai 四协议验证；exec_command / apply_patch；回合循环、取消、重试、转写、会话目录；GPUI 窗口：侧栏、转写、composer、模型选择 | 4–5 周 |
-| M2 对话体验 | Anthropic / Google；models.dev 与价格；上下文环与用量统计；压缩；排队与立即发送；重试 / 编辑 / 分叉；检查点回退；标题；回复推荐；todo / question；各种折叠与报错呈现 | 5–6 周（主要通路与错误持久化已做；压缩窗口自适应待补） |
+| M2 对话体验 | Anthropic / Google；models.dev 与价格；上下文环与用量统计；压缩；排队与立即发送；重试 / 编辑 / 分叉；检查点回退；标题；回复推荐；todo / question；各种折叠与报错呈现 | 5–6 周（主要通路、错误持久化与压缩窗口自适应已做；代码与自动化验收见 native-completion.md） |
 | M3 工作区 | 项目与多文件夹、`@` 搜索、右侧面板（文件树、预览编辑、终端、Git 变更 / 历史 / 提交）、worktree、apply_patch | 5–6 周（文件树操作、多目录 Git、hunk 跳转、PTY 基础与工作区重启恢复已做；终端输入法接口、选择复制和历史回滚等交互的 macOS 定向代码与自动化验收已通过；跨平台仍列入交付） |
 | M4 能力 | 子 agent、记忆、MCP、代码模式、工具搜索、技能、内联产物预览、wry（浏览器 / HTML / Office / KaTeX）、电脑操控、web_search、定时任务 | 6–8 周（长期记忆、MCP、工具搜索、技能加载/管理及输入框选择与徽标已做；其余待补，详见补齐清单） |
 | M5 外围 | 全部设置面板、24 套主题与玻璃、i18n、通知、Dock 角标、保持唤醒、命令面板、自动归档、账号、远程访问 + Flutter 适配、SSH 主机 Agent、从其他 Agent 导入、自动更新、签名打包 | 6–8 周 |
