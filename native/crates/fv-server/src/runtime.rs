@@ -26,6 +26,7 @@ const SLOW_SUBSCRIBER: Duration = Duration::from_secs(5);
 struct Inner {
     log: ThreadLog,
     history: Vec<Message>,
+    price_history: Vec<Message>,
     usage_model: Option<(String, u64)>,
     subscribers: HashSet<ConnId>,
     running: Option<(TurnId, CancellationToken)>,
@@ -52,16 +53,19 @@ pub struct ThreadRuntime {
     pub(crate) budget: Arc<fv_agent::ContextBudget>,
     pub(crate) exec_sessions: Arc<fv_tools::ExecSessions>,
     inner: Mutex<Inner>,
+    delivery: tokio::sync::Mutex<()>,
 }
 
 impl ThreadRuntime {
     pub fn new(thread_id: ThreadId) -> Self {
         Self {
+            delivery: tokio::sync::Mutex::new(()),
             budget: Default::default(),
             exec_sessions: Arc::new(fv_tools::ExecSessions::default()),
             inner: Mutex::new(Inner {
                 log: ThreadLog::new(thread_id),
                 history: Vec::new(),
+                price_history: Vec::new(),
                 usage_model: None,
                 subscribers: HashSet::new(),
                 running: None,
@@ -89,11 +93,13 @@ impl ThreadRuntime {
         let mut log = ThreadLog::with_turns(thread_id, turns);
         log.stats = fv_store::stats_from_history(&history);
         Self {
+            delivery: tokio::sync::Mutex::new(()),
             budget: Default::default(),
             exec_sessions: Arc::new(fv_tools::ExecSessions::default()),
             inner: Mutex::new(Inner {
                 log,
                 history: fv_core::effective_history(&history),
+                price_history: price_history(&history),
                 usage_model: None,
                 subscribers: HashSet::new(),
                 running: None,
@@ -210,7 +216,24 @@ impl ThreadRuntime {
         catalog: &fv_provider::Catalog,
         history: &[Message],
     ) -> Option<SessionStats> {
-        self.inner.lock().unwrap().log.reprice(catalog, history)
+        let mut g = self.inner.lock().unwrap();
+        g.price_history = price_history(history);
+        g.log.reprice(catalog, history)
+    }
+
+    /// Publish the changed bill without racing a turn's numbered events. A partial assistant
+    /// is not billed until its normal finalized-message path commits it.
+    pub async fn refresh_prices(&self, state: &ServerState) {
+        let _delivery = self.delivery.lock().await;
+        let staged = {
+            let mut g = self.inner.lock().unwrap();
+            let history = g.price_history.clone();
+            if g.log.reprice(&state.catalog.snapshot(), &history).is_none() {
+                return;
+            }
+            self.stage(&mut g, state, LogEvent::StatsSnapshot)
+        };
+        deliver(self, staged).await;
     }
 
     pub fn set_history(&self, history: Vec<Message>) {
@@ -316,6 +339,10 @@ impl ThreadRuntime {
 
     /// Claim the thread for a turn. `None` when one is already running.
     pub async fn begin(&self, state: &ServerState, turn_id: &str) -> Option<CancellationToken> {
+        if self.is_running() {
+            return None;
+        }
+        let _delivery = self.delivery.lock().await;
         let token = CancellationToken::new();
         let staged = {
             let mut g = self.inner.lock().unwrap();
@@ -346,6 +373,7 @@ impl ThreadRuntime {
 
     /// The turn has fully settled; the thread is free again.
     pub async fn end(&self, state: &ServerState) {
+        let _delivery = self.delivery.lock().await;
         let staged = {
             let mut g = self.inner.lock().unwrap();
             g.running = None;
@@ -355,6 +383,7 @@ impl ThreadRuntime {
     }
 
     pub async fn publish(&self, state: &ServerState, event: LogEvent) {
+        let _delivery = self.delivery.lock().await;
         let staged = {
             let mut g = self.inner.lock().unwrap();
             self.stage(&mut g, state, event)
@@ -364,6 +393,7 @@ impl ThreadRuntime {
 
     /// Send a message that is not a thread event (no sequence number) to everyone watching.
     pub async fn send_frame(&self, state: &ServerState, frame: fv_protocol::Message) {
+        let _delivery = self.delivery.lock().await;
         let targets = {
             let g = self.inner.lock().unwrap();
             g.subscribers
@@ -407,5 +437,130 @@ async fn deliver(rt: &ThreadRuntime, staged: Staged) {
         if !matches!(sent, Ok(Ok(()))) {
             rt.drop_subscriber(conn);
         }
+    }
+}
+
+/// Repricing needs only the original model and token buckets. Do not retain another copy of
+/// every message, attachment or tool argument for an hourly metadata change.
+fn price_history(history: &[Message]) -> Vec<Message> {
+    history
+        .iter()
+        .filter_map(|m| match m {
+            Message::Assistant(a) => Some(Message::Assistant(fv_core::AssistantMessage {
+                duration_ms: None,
+                content: Vec::new(),
+                stop: a.stop.clone(),
+                usage: a.usage.clone(),
+                model: a.model.clone(),
+            })),
+            Message::Compaction { usage, model, .. } => Some(Message::Compaction {
+                usage: usage.clone(),
+                model: model.clone(),
+                summary: String::new(),
+                user_messages: Vec::new(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+    #[tokio::test]
+    async fn metadata_price_updates_and_turn_events_keep_one_delivery_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot = |price| {
+            serde_json::json!({"v":5,"m":[["m","M",128000,8000,1,null,[price,10,0,0]]],"x":{"m":0}})
+                .to_string()
+        };
+        std::fs::write(dir.path().join("models-dev.json"), snapshot(2)).unwrap();
+        let old = fv_provider::load_catalog(dir.path());
+        std::fs::write(dir.path().join("models-dev.json"), snapshot(4)).unwrap();
+        let state = Arc::new(
+            ServerState::new(
+                dir.path().into(),
+                crate::agent_with_builtin_tools(Arc::new(
+                    fv_agent::testing::ScriptedModel::new([]),
+                )),
+            )
+            .unwrap(),
+        );
+        let thread = state.create_thread(None, None, None, None).unwrap();
+        let rt = state.runtime(&thread.id);
+        let history = vec![Message::Assistant(fv_core::AssistantMessage {
+            duration_ms: None,
+            content: Vec::new(),
+            stop: fv_core::StopReason::Stop,
+            model: Some("m".into()),
+            usage: fv_core::Usage {
+                input_tokens: 1_000_000,
+                ..Default::default()
+            },
+        })];
+        rt.reprice(&old, &history);
+        let (tx, mut rx) = mpsc::channel(1);
+        let conn = state.register(tx.clone());
+        rt.subscribe(conn);
+        tx.send(fv_protocol::Message::Notification {
+            method: "full".into(),
+            params: serde_json::json!({}),
+        })
+        .await
+        .unwrap();
+        let delta = || LogEvent::TextDelta {
+            turn_id: "t".into(),
+            item_id: "a".into(),
+            delta: "x".into(),
+        };
+        let first = {
+            let state = state.clone();
+            let rt = rt.clone();
+            tokio::spawn(async move { rt.publish(&state, delta()).await })
+        };
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while rt.inner.lock().unwrap().log.seq < 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let refresh = {
+            let state = state.clone();
+            let rt = rt.clone();
+            tokio::spawn(async move { rt.refresh_prices(&state).await })
+        };
+        let other = {
+            let state = state.clone();
+            let rt = rt.clone();
+            tokio::spawn(async move { rt.publish(&state, delta()).await })
+        };
+        rx.recv().await.unwrap(); // release the deliberately full subscriber
+        let mut seqs = Vec::new();
+        let mut price = None;
+        for _ in 0..3 {
+            let frame = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if let fv_protocol::Message::Notification { method, params } = frame {
+                seqs.push(params["seq"].as_u64().unwrap());
+                if method == "thread/stats/updated" {
+                    price = params["cost"].as_f64();
+                }
+            } else {
+                panic!("expected a notification");
+            }
+        }
+        first.await.unwrap();
+        refresh.await.unwrap();
+        other.await.unwrap();
+        assert_eq!(
+            seqs,
+            vec![1, 2, 3],
+            "concurrent publishers deliver in stamp order"
+        );
+        assert_eq!(price, Some(4.0));
+        assert_eq!(rt.inner.lock().unwrap().log.stats.cost, Some(4.0));
     }
 }

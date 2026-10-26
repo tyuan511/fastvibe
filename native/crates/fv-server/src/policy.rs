@@ -39,6 +39,11 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::ProviderDelete { .. }
             | ClientRequest::ProviderReorder { .. }
             | ClientRequest::ModelList { .. }
+            | ClientRequest::ProviderModelTest { .. }
+            | ClientRequest::ProviderModelGet { .. }
+            | ClientRequest::ProviderModelUpdate { .. }
+            | ClientRequest::ModelCatalogGet { .. }
+            | ClientRequest::ModelCatalogRefresh { .. }
             | ClientRequest::ModelDefaultsGet { .. }
             | ClientRequest::ModelDefaultsSet { .. }
             | ClientRequest::ProjectList { .. }

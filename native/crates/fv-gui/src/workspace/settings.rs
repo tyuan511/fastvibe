@@ -118,6 +118,7 @@ const LEVELS: [ThinkingLevel; 6] = [
 
 /// The open provider's editable fields.
 pub struct ProviderEdit {
+    pub clear_key_after_save: Option<String>,
     pub id: String,
     pub base_url: Entity<InputState>,
     pub key: Entity<InputState>,
@@ -147,6 +148,7 @@ pub struct AddProvider {
 
 /// 管理模型: the models a saved provider offers, to add more of them.
 pub struct AddModels {
+    pub busy: bool,
     pub provider_id: String,
     pub picker: Picker,
 }
@@ -162,6 +164,10 @@ pub enum ThemeMenu {
 }
 
 pub struct SettingsState {
+    pub model_checks: super::provider_test::ModelChecks,
+    pub model_edit: Option<super::model_detail::ModelEditor>,
+    pub provider_request: u64,
+    pub about: super::about::AboutSettings,
     pub usage: super::usage::UsageSettings,
     pub shortcuts: super::shortcuts::ShortcutSettings,
     pub personalization: super::personalization::PersonalizationSettings,
@@ -197,6 +203,19 @@ fn value(state: &Entity<InputState>, cx: &App) -> String {
 }
 
 impl Workspace {
+    pub(super) fn sync_provider_key_clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = self.settings.as_mut().and_then(|s| s.edit.as_mut()) else {
+            return;
+        };
+        let Some(submitted) = edit.clear_key_after_save.take() else {
+            return;
+        };
+        if edit.key.read(cx).value().as_ref() == submitted {
+            edit.key
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
+    }
+
     // ---- opening and closing
 
     pub(super) fn open_settings(
@@ -207,6 +226,10 @@ impl Workspace {
     ) {
         if self.settings.is_none() {
             self.settings = Some(SettingsState {
+                model_checks: Default::default(),
+                model_edit: None,
+                provider_request: 0,
+                about: Default::default(),
                 usage: Default::default(),
                 shortcuts: super::shortcuts::ShortcutSettings::new(window, cx),
                 personalization: super::personalization::PersonalizationSettings::new(
@@ -246,6 +269,7 @@ impl Workspace {
         if let Some(s) = &mut self.settings {
             if s.section != section {
                 s.shortcuts.cancel();
+                s.model_checks.invalidate();
             }
             s.section = section;
         }
@@ -258,6 +282,7 @@ impl Workspace {
         self.refresh_mcp(cx);
         self.refresh_memory(cx);
         self.refresh_usage(cx);
+        self.refresh_about(cx);
         cx.notify();
     }
 
@@ -294,11 +319,20 @@ impl Workspace {
             }
             return;
         };
+        let Some(s) = &mut self.settings else {
+            return;
+        };
+        s.provider_request = s.provider_request.wrapping_add(1);
+        let (owner, request) = (s.search.entity_id(), s.provider_request);
         let call = b.call::<ProviderList>(Empty {});
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
-                if let Some(s) = &mut this.settings {
+                if let Some(s) = this
+                    .settings
+                    .as_mut()
+                    .filter(|s| s.search.entity_id() == owner && s.provider_request == request)
+                {
                     match result {
                         Ok(r) => s.providers = Some(r.providers),
                         Err(e) => s.notice = Some(format!("读取供应商失败：{e}")),
@@ -331,6 +365,7 @@ impl Workspace {
             return;
         };
         let mut params = ProviderUpsertParams {
+            expected: Some(p.clone()),
             id: Some(p.id.clone()),
             name: p.name.clone(),
             protocol: p.protocol,
@@ -340,14 +375,37 @@ impl Workspace {
             models: p.models.clone(),
         };
         change(&mut params);
+        let owner = self.settings.as_ref().map(|s| s.search.entity_id());
+        let key_draft = params.api_key.as_ref().and_then(|key| {
+            self.settings
+                .as_ref()
+                .and_then(|s| s.edit.as_ref())
+                .filter(|e| e.id == params.id.as_deref().unwrap_or(""))
+                .and_then(|e| {
+                    let raw = e.key.read(cx).value().to_string();
+                    (raw.trim() == key).then_some((e.key.entity_id(), raw))
+                })
+        });
         let call = b.call::<ProviderUpsert>(params);
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
-                if let Err(e) = result
-                    && let Some(s) = &mut this.settings
+                if let Some(s) = this
+                    .settings
+                    .as_mut()
+                    .filter(|s| Some(s.search.entity_id()) == owner)
                 {
-                    s.notice = Some(format!("保存失败：{e}"));
+                    match result {
+                        Ok(_) => {
+                            if let Some((key_owner, raw)) = key_draft
+                                && let Some(edit) =
+                                    s.edit.as_mut().filter(|e| e.key.entity_id() == key_owner)
+                            {
+                                edit.clear_key_after_save = Some(raw);
+                            }
+                        }
+                        Err(e) => s.notice = Some(format!("保存失败：{e}")),
+                    }
                 }
                 this.refresh_providers(cx);
                 this.refresh_models(cx);
@@ -399,6 +457,7 @@ impl Workspace {
     }
 
     fn toggle_provider(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.invalidate_provider_checks();
         let Some(s) = &mut self.settings else { return };
         if s.edit.as_ref().is_some_and(|e| e.id == id) {
             s.edit = None;
@@ -427,6 +486,7 @@ impl Workspace {
         );
         if let Some(s) = &mut self.settings {
             s.edit = Some(ProviderEdit {
+                clear_key_after_save: None,
                 id,
                 base_url,
                 key,
@@ -442,6 +502,14 @@ impl Workspace {
         target: impl Fn(&mut SettingsState) -> Option<&mut Picker> + 'static,
         cx: &mut Context<Self>,
     ) {
+        let Some(owner) = self
+            .settings
+            .as_mut()
+            .and_then(&target)
+            .map(|p| p.search.entity_id())
+        else {
+            return;
+        };
         let Some(b) = self.backend.clone() else {
             if let Some(picker) = self.settings.as_mut().and_then(&target) {
                 picker.models = Some(Vec::new());
@@ -458,8 +526,12 @@ impl Workspace {
             let result = call.await;
             this.update(cx, |this, cx| {
                 if let Some(s) = &mut this.settings {
-                    let is_add = s.add.as_ref().is_some_and(|a| a.picker.is_some());
-                    if let Some(picker) = target(s) {
+                    let is_add = s
+                        .add
+                        .as_ref()
+                        .and_then(|a| a.picker.as_ref())
+                        .is_some_and(|p| p.search.entity_id() == owner);
+                    if let Some(picker) = target(s).filter(|p| p.search.entity_id() == owner) {
                         match result {
                             Ok(r) => picker.models = Some(r.models),
                             Err(e) => {
@@ -467,6 +539,8 @@ impl Workspace {
                                 picker.error = Some(format!("无法拉取模型列表：{e}"));
                             }
                         }
+                    } else {
+                        return;
                     }
                     if is_add && let Some(a) = &mut s.add {
                         a.busy = false;
@@ -494,6 +568,7 @@ impl Workspace {
             .map(|p| p.models.iter().map(|m| m.id.clone()).collect())
             .unwrap_or_default();
         s.add_models = Some(AddModels {
+            busy: false,
             provider_id: provider_id.clone(),
             picker: Picker {
                 models: None,
@@ -583,6 +658,10 @@ impl Workspace {
         let Some(a) = self.settings.as_ref().and_then(|s| s.add.as_ref()) else {
             return;
         };
+        if a.busy {
+            return;
+        }
+        let owner = a.name.entity_id();
         let Some(picker) = &a.picker else { return };
         let models: Vec<ModelInfo> = picker
             .models
@@ -598,6 +677,7 @@ impl Workspace {
         let (name, protocol, base_url) = (value(&a.name, cx), a.protocol, value(&a.base_url, cx));
         let first = models[0].id.clone();
         let call = b.call::<ProviderUpsert>(ProviderUpsertParams {
+            expected: None,
             id: None,
             name,
             protocol,
@@ -607,17 +687,22 @@ impl Workspace {
             models,
         });
         let had_default = self.defaults.model.is_some();
+        if let Some(a) = self.settings.as_mut().and_then(|s| s.add.as_mut()) {
+            a.busy = true;
+        }
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
                 match result {
                     Ok(r) => {
-                        if let Some(s) = &mut this.settings {
+                        if let Some(s) = &mut this.settings
+                            && s.add.as_ref().is_some_and(|a| a.name.entity_id() == owner)
+                        {
                             s.add = None;
                         }
                         // The first provider's first model becomes the default, so the very
                         // next message has somewhere to go.
-                        if !had_default {
+                        if !had_default && this.defaults.model.is_none() {
                             let label = format!("{}/{}", r.provider.id, first);
                             let thinking = this.defaults.thinking;
                             this.set_default(
@@ -630,7 +715,13 @@ impl Workspace {
                         }
                     }
                     Err(e) => {
-                        if let Some(a) = this.settings.as_mut().and_then(|s| s.add.as_mut()) {
+                        if let Some(a) = this
+                            .settings
+                            .as_mut()
+                            .and_then(|s| s.add.as_mut())
+                            .filter(|a| a.name.entity_id() == owner)
+                        {
+                            a.busy = false;
                             a.error = Some(format!("保存失败：{e}"));
                         }
                     }
@@ -645,25 +736,65 @@ impl Workspace {
     }
 
     fn finish_add_models(&mut self, cx: &mut Context<Self>) {
-        let Some(am) = self.settings.as_mut().and_then(|s| s.add_models.take()) else {
+        let Some(b) = self.backend.clone() else {
             return;
         };
+        let Some(s) = self.settings.as_mut() else {
+            return;
+        };
+        let Some(am) = s.add_models.as_mut().filter(|a| !a.busy) else {
+            return;
+        };
+        let Some(provider) = s
+            .providers
+            .as_ref()
+            .and_then(|v| v.iter().find(|p| p.id == am.provider_id))
+        else {
+            return;
+        };
+        let owner = am.picker.search.entity_id();
         let chosen = am.picker.chosen.clone();
-        let fetched: Vec<ModelInfo> = am.picker.models.clone().unwrap_or_default();
-        self.save_provider(
-            &am.provider_id,
-            None,
-            move |p| {
-                // Keep what is still ticked, in its order, then the newly ticked.
-                p.models.retain(|m| chosen.contains(&m.id));
-                for m in fetched {
-                    if chosen.contains(&m.id) && !p.models.iter().any(|x| x.id == m.id) {
-                        p.models.push(m);
+        let fetched = am.picker.models.clone().unwrap_or_default();
+        let call = b.call::<ProviderUpsert>(ProviderUpsertParams {
+            id: Some(provider.id.clone()),
+            name: provider.name.clone(),
+            protocol: provider.protocol,
+            base_url: provider.base_url.clone(),
+            api_key: None,
+            enabled: provider.enabled,
+            models: super::model_detail::merge_models(&provider.models, &fetched, &chosen),
+            expected: Some(provider.clone()),
+        });
+        am.busy = true;
+        am.picker.error = None;
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                if let Some(s) = this.settings.as_mut()
+                    && let Some(am) = s
+                        .add_models
+                        .as_mut()
+                        .filter(|a| a.picker.search.entity_id() == owner)
+                {
+                    am.busy = false;
+                    match result {
+                        Ok(_) => {
+                            if am.picker.chosen == chosen {
+                                s.add_models = None;
+                            }
+                        }
+                        Err(error) => {
+                            am.picker.error = Some(format!("保存失败，选择已保留：{error}"))
+                        }
                     }
                 }
-            },
-            cx,
-        );
+                this.refresh_providers(cx);
+                this.refresh_models(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -713,6 +844,7 @@ impl Workspace {
                                 Section::General => self.general_pane(s, cx).into_any_element(),
                                 Section::Personalization => self.personalization_pane(cx),
                                 Section::Shortcuts => self.shortcuts_pane(cx),
+                                Section::About => self.about_pane(cx),
                                 Section::Usage => self.usage_pane(cx),
                                 Section::Archived => self.archived_pane(s, cx).into_any_element(),
                                 Section::Skills => self.skills_pane(cx),
@@ -859,7 +991,15 @@ impl Workspace {
                 .unwrap_or_else(|| label.clone()),
             None => "未设置".to_string(),
         };
-        let thinking = self.defaults.thinking.map(thinking_label).unwrap_or("默认");
+        let effective_thinking = self
+            .defaults
+            .model
+            .as_ref()
+            .and_then(|l| self.models.iter().find(|m| &m.label == l))
+            .map_or(self.defaults.thinking, |m| {
+                m.model.effective_thinking(self.defaults.thinking)
+            });
+        let thinking = effective_thinking.map(thinking_label).unwrap_or("默认");
         let default_row = div()
             .relative()
             .px(px(16.0))
@@ -1594,8 +1734,43 @@ impl Workspace {
         }
         menu = menu.child(div().my(px(4.0)).h(px(1.0)).bg(p.c(Token::Border)));
         menu = menu.child(menu_label("推理强度", p));
+        menu = menu.child(
+            menu_item(
+                "default-thinking-inherit".into(),
+                self.defaults.thinking.is_none(),
+                hover,
+            )
+            .child("跟随模型默认")
+            .on_click(cx.listener(|this, _, _, cx| {
+                let model = this.defaults.model.clone();
+                this.set_default(
+                    ModelDefaults {
+                        model,
+                        thinking: None,
+                    },
+                    cx,
+                );
+            })),
+        );
+        let allowed = self
+            .defaults
+            .model
+            .as_ref()
+            .and_then(|l| self.models.iter().find(|m| &m.label == l))
+            .map(|m| m.model.allowed_thinking());
+        let effective = self
+            .defaults
+            .model
+            .as_ref()
+            .and_then(|l| self.models.iter().find(|m| &m.label == l))
+            .map_or(self.defaults.thinking, |m| {
+                m.model.effective_thinking(self.defaults.thinking)
+            });
         for level in LEVELS {
-            let active = self.defaults.thinking == Some(level);
+            if allowed.as_ref().is_some_and(|v| !v.contains(&level)) {
+                continue;
+            }
+            let active = effective == Some(level);
             menu = menu.child(
                 menu_item(SharedString::from(format!("dl-{level:?}")), active, hover)
                     .child(thinking_label(level))
@@ -1746,21 +1921,54 @@ impl Workspace {
         let mut models = div().flex().flex_col();
         for m in &provider.models {
             let (pid, mid) = (id.clone(), m.id.clone());
+            let (detail_pid, detail_mid) = (pid.clone(), mid.clone());
             let window_size = m.context_window.map(compact_tokens).unwrap_or_default();
             models = models.child(
                 div()
+                    .id(SharedString::from(format!("model-detail-{id}-{}", m.id)))
                     .h(px(32.0))
                     .flex()
                     .items_center()
                     .gap(px(8.0))
                     .text_size(px(TEXT_SM))
+                    .cursor_pointer()
+                    .hover(move |d| d.bg(hover))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_model_detail(detail_pid.clone(), detail_mid.clone(), window, cx)
+                    }))
                     .child(ui::truncate(m.name.clone().unwrap_or_else(|| m.id.clone())).flex_1())
+                    .when_some(m.protocol, |d, protocol| {
+                        d.child(
+                            div()
+                                .px(px(5.0))
+                                .rounded(px(5.0))
+                                .border_1()
+                                .border_color(p.c(Token::Border))
+                                .text_size(px(TEXT_XS))
+                                .muted(p)
+                                .child(match protocol {
+                                    ApiProtocol::Chat => "Chat",
+                                    ApiProtocol::Responses => "Responses",
+                                    ApiProtocol::Anthropic => "Anthropic",
+                                    ApiProtocol::Google => "Google",
+                                }),
+                        )
+                    })
+                    .when(m.edited, |d| {
+                        d.child(div().text_size(px(TEXT_XS)).muted(p).child("已编辑"))
+                    })
                     .child(
                         div()
                             .text_size(px(TEXT_XS))
                             .muted(p)
                             .child(SharedString::from(window_size)),
                     )
+                    .child(self.provider_check_button(
+                        &id,
+                        &m.id,
+                        !provider.enabled || !provider.has_key,
+                        cx,
+                    ))
                     .child(
                         icon_button_xs(
                             SharedString::from(format!("rm-{id}-{}", m.id)),
@@ -1768,6 +1976,7 @@ impl Workspace {
                             p,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
                             let mid = mid.clone();
                             this.save_provider(
                                 &pid,
@@ -1849,12 +2058,11 @@ impl Workspace {
                         .child(
                             outline_button(SharedString::from(format!("save-key-{id}")), p)
                                 .child("保存")
-                                .on_click(cx.listener(move |this, _, window, cx| {
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     let key = value(&key_state, cx);
                                     if key.is_empty() {
                                         return;
                                     }
-                                    key_state.update(cx, |st, cx| st.set_value("", window, cx));
                                     this.save_provider(&save_key_id, Some(key), |_| {}, cx)
                                 })),
                         ),
@@ -1914,6 +2122,9 @@ impl Workspace {
     /// The dialogs Settings can raise, drawn over the whole window.
     pub(super) fn settings_dialogs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let s = self.settings.as_ref()?;
+        if s.model_edit.is_some() {
+            return self.model_detail_dialog(cx);
+        }
         if let Some(a) = &s.add {
             return Some(modal(
                 self.add_provider_dialog(a, cx),
@@ -1991,9 +2202,9 @@ impl Workspace {
                         }
                         cx.notify();
                     },
-                    "确认",
+                    if am.busy { "正在保存…" } else { "确认" },
                     |this, _, cx| this.finish_add_models(cx),
-                    false,
+                    am.busy,
                 ));
             return Some(modal(body, &self.palette, cx, |this| {
                 if let Some(s) = &mut this.settings {
@@ -2051,7 +2262,7 @@ impl Workspace {
                     },
                     &format!("添加 {n} 个模型"),
                     |this, _, cx| this.finish_add_provider(cx),
-                    n == 0,
+                    n == 0 || a.busy,
                 ));
         }
 

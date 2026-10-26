@@ -12,12 +12,14 @@ use fv_theme::Token;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::*;
 
+mod about;
 mod ask;
 mod composer;
 mod diff;
 mod file_mention;
 mod mcp;
 mod memory;
+mod model_detail;
 mod palette;
 mod pane;
 mod pane_git;
@@ -25,6 +27,7 @@ mod pane_terminal;
 mod panel_motion;
 mod personalization;
 mod projects;
+mod provider_test;
 mod queue_tray;
 pub mod settings;
 mod shortcuts;
@@ -111,6 +114,7 @@ pub struct Workspace {
     pending_questions: Vec<(RequestId, UserInputRequest)>,
     pending_approvals: Vec<(RequestId, ApprovalRequestParams)>,
     models: Vec<ModelEntry>,
+    model_request: u64,
     defaults: ModelDefaults,
     /// The model picked on the empty page, before a conversation exists.
     pending_model: Option<String>,
@@ -400,6 +404,7 @@ impl Workspace {
             pending_questions: Vec::new(),
             pending_approvals: Vec::new(),
             models: Vec::new(),
+            model_request: 0,
             defaults: ModelDefaults::default(),
             pending_model: None,
             pending_thinking: None,
@@ -1088,12 +1093,17 @@ impl Workspace {
         let Some(b) = self.backend.clone() else {
             return;
         };
+        self.model_request = self.model_request.wrapping_add(1);
+        let request = self.model_request;
         let models = b.call::<ModelList>(Empty {});
         let defaults = b.call::<ModelDefaultsGet>(Empty {});
         cx.spawn(async move |this, cx| {
             let models = models.await.ok();
             let defaults = defaults.await.ok();
             this.update(cx, |this, cx| {
+                if this.model_request != request {
+                    return;
+                }
                 if let Some(m) = models {
                     this.models = m.models;
                 }
@@ -1190,6 +1200,7 @@ impl Workspace {
     fn on_event(&mut self, event: BackendEvent, cx: &mut Context<Self>) {
         match event {
             BackendEvent::Connected { version_mismatch } => {
+                self.invalidate_provider_checks();
                 self.refresh_mcp(cx);
                 self.refresh_skills(cx);
                 self.invalidate_skill_picker(cx);
@@ -1198,6 +1209,7 @@ impl Workspace {
                 }
                 self.refresh_memory(cx);
                 self.refresh_usage(cx);
+                self.refresh_about(cx);
                 if version_mismatch {
                     self.sidebar_notice = Some(
                         "应用更新尚未完成。请等待任务结束、关闭仍在运行的终端后重新打开窗口，以启用最新功能。"
@@ -1207,6 +1219,7 @@ impl Workspace {
                 }
             }
             BackendEvent::Failed(message) => {
+                self.invalidate_provider_checks();
                 self.status = Status::Failed(message);
                 cx.notify();
             }
@@ -1252,6 +1265,8 @@ impl Workspace {
                         self.app_settings = s.clone();
                     }
                     ServerNotification::ProvidersChanged(_) => {
+                        self.invalidate_provider_checks();
+                        self.refresh_model_detail(cx);
                         self.refresh_usage(cx);
                         self.refresh_models(cx);
                         if self.settings.is_some() {
@@ -1263,6 +1278,11 @@ impl Workspace {
                         self.invalidate_skill_picker(cx);
                     }
                     ServerNotification::McpChanged(_) => self.refresh_mcp(cx),
+                    ServerNotification::ModelCatalogChanged(_) => {
+                        self.invalidate_provider_checks();
+                        self.refresh_about(cx);
+                        self.refresh_model_detail(cx);
+                    }
                     ServerNotification::UsageChanged(_) => self.refresh_usage(cx),
                     ServerNotification::MemoryChanged(state) => {
                         self.memory_changed(state.clone(), cx)
@@ -1867,7 +1887,10 @@ impl Workspace {
     }
 
     fn current_thinking(&self) -> Option<ThinkingLevel> {
-        self.explicit_thinking().or(self.defaults.thinking)
+        let requested = self.explicit_thinking().or(self.defaults.thinking);
+        self.current_model_label()
+            .and_then(|l| self.models.iter().find(|m| m.label == l))
+            .map_or(requested, |m| m.model.effective_thinking(requested))
     }
 
     fn pick_model(&mut self, label: String, cx: &mut Context<Self>) {
@@ -2012,6 +2035,8 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_personalization_editor(window, cx);
+        self.sync_model_editor(window, cx);
+        self.sync_provider_key_clear(window, cx);
         self.sync_shortcut_input(cx);
         let terminal_visible = !self.side_pane_collapsed
             && self.settings.is_none()
@@ -2218,6 +2243,7 @@ impl Render for Workspace {
             .children(self.palette_view(cx))
             .children(self.project_row_menu_view(window, cx))
             .children(self.settings_dialogs(cx))
+            .children(self.provider_check_notice(cx))
             .children(catcher)
     }
 }
@@ -2656,7 +2682,10 @@ impl Workspace {
         } else if self.search_box.is_some() {
             self.close_palette(window, cx);
         } else if let Some(s) = &mut self.settings {
-            if s.add.is_some() {
+            if s.model_edit.as_mut().is_some_and(|e| e.dismiss_menu()) {
+            } else if s.model_edit.is_some() {
+                s.model_edit = None;
+            } else if s.add.is_some() {
                 s.add = None;
             } else if s.add_models.is_some() {
                 s.add_models = None;

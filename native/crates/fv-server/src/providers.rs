@@ -16,27 +16,9 @@ use fv_store::StoredProvider;
 
 use crate::state::ServerState;
 
-/// A model's parameters come from models.dev, which is the single source of truth for them: the
-/// window, the output ceiling and what it can look at (the Electron app's rule, and the reason a
-/// corrected catalog reaches an install that already saved a model). A model the catalog does not
-/// describe keeps what was stored for it, and the conservative defaults when it stored nothing.
-///
-/// `ModelInfo` has no "the user tuned this" bit — native has no per-model editor yet — so the
-/// catalog always wins where it has an answer.
+/// Catalog metadata is live until the user explicitly tunes this model.
 pub fn with_catalog_meta(catalog: &fv_provider::Catalog, model: &ModelInfo) -> ModelInfo {
-    let Some(meta) = catalog.describe(&model.id) else {
-        return model.clone();
-    };
-    ModelInfo {
-        name: model
-            .name
-            .clone()
-            .or_else(|| catalog.entry(&model.id).map(|e| e.name.clone())),
-        supports_images: meta.input.contains(&fv_provider::InputModality::Image),
-        context_window: Some(meta.context_window),
-        max_output_tokens: Some(meta.max_tokens),
-        ..model.clone()
-    }
+    crate::model_detail::hydrate(catalog, model)
 }
 
 fn invalid(message: impl Into<String>) -> ErrorObject {
@@ -92,7 +74,11 @@ fn level_from(name: &str) -> Option<ThinkingLevel> {
 }
 
 /// What a clients sees of a stored provider.
-fn info(state: &ServerState, p: StoredProvider) -> Result<ProviderInfo, ErrorObject> {
+fn info(
+    state: &ServerState,
+    catalog: &fv_provider::Catalog,
+    p: StoredProvider,
+) -> Result<ProviderInfo, ErrorObject> {
     let has_key = state.store.credentials.has(&p.id).map_err(internal)?;
     Ok(ProviderInfo {
         id: p.id,
@@ -101,16 +87,21 @@ fn info(state: &ServerState, p: StoredProvider) -> Result<ProviderInfo, ErrorObj
         base_url: p.base_url,
         has_key,
         enabled: p.enabled,
-        models: p.models,
+        models: p
+            .models
+            .iter()
+            .map(|m| with_catalog_meta(catalog, m))
+            .collect(),
     })
 }
 
 pub fn list(state: &ServerState) -> Result<ProviderListResponse, ErrorObject> {
+    let catalog = state.catalog.snapshot();
     let providers = state.store.db.list_providers().map_err(internal)?;
     Ok(ProviderListResponse {
         providers: providers
             .into_iter()
-            .map(|p| info(state, p))
+            .map(|p| info(state, &catalog, p))
             .collect::<Result<_, _>>()?,
     })
 }
@@ -154,13 +145,20 @@ fn validate_url(url: &str) -> Result<String, ErrorObject> {
 
 pub fn upsert(
     state: &ServerState,
-    params: ProviderUpsertParams,
+    mut params: ProviderUpsertParams,
 ) -> Result<ProviderUpsertResponse, ErrorObject> {
+    let _lock = state.providers_lock.lock().unwrap();
     let name = params.name.trim().to_string();
     if name.is_empty() {
         return Err(invalid("the provider needs a name"));
     }
     let base_url = validate_url(&params.base_url)?;
+    params.models = params
+        .models
+        .into_iter()
+        .map(crate::model_detail::normalize)
+        .collect::<Result<_, _>>()?;
+    let catalog = state.catalog.snapshot();
     let mut seen = std::collections::HashSet::new();
     for m in &params.models {
         if m.id.trim().is_empty() {
@@ -172,18 +170,25 @@ pub fn upsert(
     }
     let id = match params.id {
         Some(id) => {
-            if state
+            let old = state
                 .store
                 .db
                 .get_provider(&id)
                 .map_err(internal)?
-                .is_none()
+                .ok_or_else(|| invalid(format!("there is no provider `{id}`")))?;
+            if let Some(expected) = &params.expected
+                && info(state, &catalog, old)? != *expected
             {
-                return Err(invalid(format!("there is no provider `{id}`")));
+                return Err(invalid("provider changed elsewhere; reload before saving"));
             }
             id
         }
-        None => new_id(state, &name)?,
+        None => {
+            if params.expected.is_some() {
+                return Err(invalid("a new provider cannot have a previous value"));
+            }
+            new_id(state, &name)?
+        }
     };
     // The key is write-only: absent keeps what is stored, empty clears it.
     match params.api_key.as_deref().map(str::trim) {
@@ -200,12 +205,13 @@ pub fn upsert(
         models: params.models,
     };
     state.store.db.put_provider(&stored).map_err(internal)?;
-    let provider = info(state, stored)?;
+    let provider = info(state, &state.catalog.snapshot(), stored)?;
     state.broadcast(ServerNotification::ProvidersChanged(Empty {}));
     Ok(ProviderUpsertResponse { provider })
 }
 
 pub fn delete(state: &ServerState, id: &str) -> Result<(), ErrorObject> {
+    let _lock = state.providers_lock.lock().unwrap();
     if !state.store.db.delete_provider(id).map_err(internal)? {
         return Err(invalid(format!("there is no provider `{id}`")));
     }
@@ -226,6 +232,7 @@ pub fn delete(state: &ServerState, id: &str) -> Result<(), ErrorObject> {
 }
 
 pub fn reorder(state: &ServerState, ids: &[String]) -> Result<ProviderListResponse, ErrorObject> {
+    let _lock = state.providers_lock.lock().unwrap();
     state.store.db.reorder_providers(ids).map_err(internal)?;
     state.broadcast(ServerNotification::ProvidersChanged(Empty {}));
     list(state)
@@ -269,28 +276,22 @@ pub async fn fetch_models(
     let fetched = fv_provider::fetch_models(to_protocol(protocol), &base_url, &key)
         .await
         .map_err(invalid)?;
+    let catalog = state.catalog.snapshot();
     let models = fetched
         .into_iter()
         .map(|m| {
-            // A model the catalog knows arrives with the limits the model actually has, so the
-            // window guard and the bill are right from its first turn rather than after an edit.
-            with_catalog_meta(
-                &state.catalog,
-                &ModelInfo {
-                    id: m.id,
-                    name: m.name,
-                    protocol: None,
-                    supports_images: true,
-                    context_window: None,
-                    max_output_tokens: None,
-                },
-            )
+            let mut model = crate::model_detail::fresh(&catalog, &m.id, protocol);
+            if m.name.is_some() {
+                model.name = m.name;
+            }
+            model
         })
         .collect();
     Ok(FetchModelsResponse { models })
 }
 
 pub fn model_list(state: &ServerState) -> Result<ModelListResponse, ErrorObject> {
+    let catalog = state.catalog.snapshot();
     let mut models = Vec::new();
     for p in state.store.db.list_providers().map_err(internal)? {
         if !p.enabled || !state.store.credentials.has(&p.id).map_err(internal)? {
@@ -301,7 +302,7 @@ pub fn model_list(state: &ServerState) -> Result<ModelListResponse, ErrorObject>
                 provider_id: p.id.clone(),
                 provider_name: p.name.clone(),
                 label: format!("{}/{}", p.id, m.id),
-                model: with_catalog_meta(&state.catalog, m),
+                model: with_catalog_meta(&catalog, m),
             });
         }
     }
@@ -401,19 +402,48 @@ pub fn resolve(
                 provider.name
             )
         })?;
-    let protocol = match model.protocol {
-        Some(p) => to_protocol(p),
-        None => fv_provider::infer_protocol(&model.id, to_protocol(provider.protocol)),
-    };
-    let model = with_catalog_meta(&state.catalog, model);
-    let mut config = ModelConfig::new(label, &model.id, protocol, &provider.base_url, &key);
-    config.thinking = thinking.map(thinking_level);
-    config.max_output_tokens = model.max_output_tokens;
-    config.images = model.supports_images;
-    config.context_window = model.context_window;
+    let config = model_config(
+        &state.catalog.snapshot(),
+        label,
+        &provider,
+        model,
+        &key,
+        thinking,
+    );
     GenaiModel::new(config)
         .map(|m| Arc::new(m) as Arc<dyn Model>)
         .map_err(|e| e.message)
+}
+
+/// One configuration path for ordinary turns and isolated diagnostics. The caller owns an
+/// immutable provider, key and catalog view; no network I/O or state mutation occurs here.
+pub(crate) fn model_config(
+    catalog: &fv_provider::Catalog,
+    label: &str,
+    provider: &StoredProvider,
+    model: &ModelInfo,
+    key: &str,
+    thinking: Option<ThinkingLevel>,
+) -> ModelConfig {
+    let protocol = match model.protocol {
+        Some(p) => to_protocol(p),
+        None => to_protocol(provider.protocol),
+    };
+    let model = with_catalog_meta(catalog, model);
+    let mut config = ModelConfig::new(label, &model.id, protocol, &provider.base_url, key);
+    config.thinking = model.effective_thinking(thinking).map(thinking_level);
+    config.max_output_tokens = model.max_output_tokens;
+    config.images = model.supports_images;
+    config.context_window = model.context_window;
+    // A Google model pinned under a non-Google gateway needs the gateway's bearer too;
+    // Google's own provider uses only x-goog-api-key. This follows the provider-level auth
+    // rule of the existing client while keeping per-model protocol choices independent.
+    if protocol == Protocol::Google && provider.protocol != ApiProtocol::Google {
+        config
+            .headers
+            .push(("Authorization".into(), format!("Bearer {key}")));
+    }
+    config
 }
 
 /// The model and thinking level a conversation's next turn uses, or the reason it has none.

@@ -1268,7 +1268,9 @@ pub enum ApiProtocol {
 }
 
 /// How hard the model is asked to think. There is deliberately no "off".
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum ThinkingLevel {
     Minimal,
@@ -1295,6 +1297,15 @@ pub struct ModelInfo {
     pub context_window: Option<u32>,
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+    /// Tuned metadata takes precedence over the changing catalog; prices remain catalog-owned.
+    #[serde(default)]
+    pub edited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Vec<crate::models::ModelInput>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_levels: Option<Vec<ThinkingLevel>>,
 }
 
 fn default_true() -> bool {
@@ -1336,6 +1347,9 @@ pub struct ProviderUpsertParams {
     pub enabled: bool,
     #[serde(default)]
     pub models: Vec<ModelInfo>,
+    /// When provided, reject a stale replacement before changing settings or credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<ProviderInfo>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

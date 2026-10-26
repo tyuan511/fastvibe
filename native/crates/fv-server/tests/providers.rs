@@ -64,6 +64,7 @@ fn model(id: &str) -> ModelInfo {
         supports_images: true,
         context_window: None,
         max_output_tokens: None,
+        ..Default::default()
     }
 }
 
@@ -74,6 +75,7 @@ fn upsert(
     models: Vec<ModelInfo>,
 ) -> ProviderUpsertParams {
     ProviderUpsertParams {
+        expected: None,
         id: None,
         name: name.into(),
         protocol: ApiProtocol::Chat,
@@ -644,7 +646,13 @@ async fn the_models_a_provider_has_can_be_fetched_with_its_stored_key_or_a_typed
             .collect::<Vec<_>>(),
         ["gpt-a", "gpt-b"]
     );
-    assert!(stored.models.iter().all(|m| m.supports_images));
+    assert!(
+        stored.models.iter().all(|m| !m.supports_images
+            && m.context_window == Some(128_000)
+            && m.max_output_tokens == Some(8_192)
+            && m.reasoning == Some(false)),
+        "unknown fetched ids get conservative metadata"
+    );
     assert_eq!(
         mock.captured.lock().unwrap()[0].header("authorization"),
         Some(format!("Bearer {KEY}").as_str())

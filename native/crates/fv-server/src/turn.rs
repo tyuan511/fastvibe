@@ -150,8 +150,8 @@ async fn drive(
     rt.set_history(history.clone());
     // The bill is part of the stats a client draws, and the catalog prices by the label each
     // reply recorded: recompute it once the turn's messages are all in.
-    if let Some(stats) = rt.reprice(&state.catalog, &history) {
-        rt.publish(&state, LogEvent::StatsSnapshot(stats)).await;
+    if rt.reprice(&state.catalog.snapshot(), &history).is_some() {
+        rt.publish(&state, LogEvent::StatsSnapshot).await;
     }
 
     let (status, error) = match outcome {
@@ -900,8 +900,8 @@ async fn drive_compaction(
     rt.set_history(history.clone());
     // The bill is part of the stats a client draws, and the catalog prices by the label each
     // reply recorded: recompute it once the turn's messages are all in.
-    if let Some(stats) = rt.reprice(&state.catalog, &history) {
-        rt.publish(&state, LogEvent::StatsSnapshot(stats)).await;
+    if rt.reprice(&state.catalog.snapshot(), &history).is_some() {
+        rt.publish(&state, LogEvent::StatsSnapshot).await;
     }
     let (status, error) = match result {
         Ok(()) => (TurnStatus::Completed, None),

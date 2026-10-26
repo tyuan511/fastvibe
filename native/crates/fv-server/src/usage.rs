@@ -26,7 +26,7 @@ pub async fn collect(
         Ok::<_, fv_store::StoreError>(aggregate(
             &records,
             &threads,
-            &state.catalog,
+            &state.catalog.snapshot(),
             &providers,
             params.range,
             zone,

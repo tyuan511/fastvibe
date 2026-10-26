@@ -879,9 +879,23 @@
               "null"
             ]
           },
+          "edited": {
+            "default": false,
+            "description": "Tuned metadata takes precedence over the changing catalog; prices remain catalog-owned.",
+            "type": "boolean"
+          },
           "id": {
             "description": "What the provider calls it.",
             "type": "string"
+          },
+          "input": {
+            "items": {
+              "$ref": "#/$defs/ModelInput"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "maxOutputTokens": {
             "default": null,
@@ -910,16 +924,40 @@
             "default": null,
             "description": "This model's own protocol, when it differs from its provider's."
           },
+          "reasoning": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "supportsImages": {
             "default": true,
             "description": "Whether it can look at images.",
             "type": "boolean"
+          },
+          "thinkingLevels": {
+            "items": {
+              "$ref": "#/$defs/ThinkingLevel"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
           "id"
         ],
         "type": "object"
+      },
+      "ModelInput": {
+        "enum": [
+          "text",
+          "image",
+          "video",
+          "file"
+        ],
+        "type": "string"
       },
       "PreviewParams": {
         "description": "`workspace/preview`: what the pane draws for one file.",
@@ -1010,6 +1048,90 @@
         ],
         "type": "object"
       },
+      "ProviderInfo": {
+        "description": "A provider as clients see it. The API key is never part of it: `has_key` says one is set.",
+        "properties": {
+          "baseUrl": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "hasKey": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/$defs/ModelInfo"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protocol": {
+            "$ref": "#/$defs/ApiProtocol"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "protocol",
+          "baseUrl",
+          "hasKey",
+          "enabled",
+          "models"
+        ],
+        "type": "object"
+      },
+      "ProviderModelParams": {
+        "properties": {
+          "modelId": {
+            "type": "string"
+          },
+          "providerId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "ProviderModelUpdateParams": {
+        "properties": {
+          "expected": {
+            "$ref": "#/$defs/ModelInfo"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ModelInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None restores catalog defaults; Some saves a complete tuned model without changing id."
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "providerId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId",
+          "expected"
+        ],
+        "type": "object"
+      },
       "ProviderReorderParams": {
         "description": "The providers in the order they should be listed; one left out goes to the end.",
         "properties": {
@@ -1022,6 +1144,22 @@
         },
         "required": [
           "ids"
+        ],
+        "type": "object"
+      },
+      "ProviderTestParams": {
+        "additionalProperties": false,
+        "properties": {
+          "modelId": {
+            "type": "string"
+          },
+          "providerId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerId",
+          "modelId"
         ],
         "type": "object"
       },
@@ -1041,6 +1179,17 @@
           "enabled": {
             "default": true,
             "type": "boolean"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProviderInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When provided, reject a stale replacement before changing settings or credentials."
           },
           "id": {
             "default": null,
@@ -2505,6 +2654,106 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "model/catalog/get",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "model/catalog/refresh",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "provider/model/test",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ProviderTestParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "provider/model/get",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ProviderModelParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "provider/model/update",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ProviderModelUpdateParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "model/list",
             "type": "string"
           },
@@ -3658,6 +3907,325 @@
     ],
     "description": "One frame on the wire, before its method is looked at.",
     "title": "Message"
+  },
+  "modelDetail": {
+    "$defs": {
+      "ApiProtocol": {
+        "description": "The wire format a provider speaks.",
+        "oneOf": [
+          {
+            "const": "chat",
+            "description": "OpenAI Chat Completions, and everything that imitates it.",
+            "type": "string"
+          },
+          {
+            "const": "responses",
+            "description": "OpenAI Responses.",
+            "type": "string"
+          },
+          {
+            "const": "anthropic",
+            "description": "Anthropic Messages.",
+            "type": "string"
+          },
+          {
+            "const": "google",
+            "description": "Google Gemini.",
+            "type": "string"
+          }
+        ]
+      },
+      "ModelInfo": {
+        "properties": {
+          "contextWindow": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "edited": {
+            "default": false,
+            "description": "Tuned metadata takes precedence over the changing catalog; prices remain catalog-owned.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "What the provider calls it.",
+            "type": "string"
+          },
+          "input": {
+            "items": {
+              "$ref": "#/$defs/ModelInput"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "maxOutputTokens": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApiProtocol"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "This model's own protocol, when it differs from its provider's."
+          },
+          "reasoning": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "supportsImages": {
+            "default": true,
+            "description": "Whether it can look at images.",
+            "type": "boolean"
+          },
+          "thinkingLevels": {
+            "items": {
+              "$ref": "#/$defs/ThinkingLevel"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "ModelInput": {
+        "enum": [
+          "text",
+          "image",
+          "video",
+          "file"
+        ],
+        "type": "string"
+      },
+      "ModelPrice": {
+        "properties": {
+          "cacheRead": {
+            "format": "double",
+            "type": "number"
+          },
+          "cacheWrite": {
+            "format": "double",
+            "type": "number"
+          },
+          "input": {
+            "format": "double",
+            "type": "number"
+          },
+          "output": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "input",
+          "output",
+          "cacheRead",
+          "cacheWrite"
+        ],
+        "type": "object"
+      },
+      "ModelPriceTier": {
+        "properties": {
+          "over": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "price": {
+            "$ref": "#/$defs/ModelPrice"
+          }
+        },
+        "required": [
+          "over",
+          "price"
+        ],
+        "type": "object"
+      },
+      "ThinkingLevel": {
+        "description": "How hard the model is asked to think. There is deliberately no \"off\".",
+        "enum": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "model": {
+        "$ref": "#/$defs/ModelInfo"
+      },
+      "price": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ModelPrice"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "priceTiers": {
+        "items": {
+          "$ref": "#/$defs/ModelPriceTier"
+        },
+        "type": "array"
+      },
+      "providerProtocol": {
+        "$ref": "#/$defs/ApiProtocol"
+      }
+    },
+    "required": [
+      "model",
+      "providerProtocol",
+      "priceTiers"
+    ],
+    "title": "ModelDetail",
+    "type": "object"
+  },
+  "providerTestResult": {
+    "$defs": {
+      "ApiProtocol": {
+        "description": "The wire format a provider speaks.",
+        "oneOf": [
+          {
+            "const": "chat",
+            "description": "OpenAI Chat Completions, and everything that imitates it.",
+            "type": "string"
+          },
+          {
+            "const": "responses",
+            "description": "OpenAI Responses.",
+            "type": "string"
+          },
+          {
+            "const": "anthropic",
+            "description": "Anthropic Messages.",
+            "type": "string"
+          },
+          {
+            "const": "google",
+            "description": "Google Gemini.",
+            "type": "string"
+          }
+        ]
+      },
+      "ProviderTestError": {
+        "enum": [
+          "auth",
+          "protocol",
+          "rate-limit",
+          "network",
+          "timeout",
+          "model",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "ProviderTestStatus": {
+        "enum": [
+          "passed",
+          "partial",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "ProviderTestTools": {
+        "enum": [
+          "passed",
+          "unconfirmed",
+          "failed",
+          "not-tested"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "api": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ApiProtocol"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "elapsedMs": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "errorCode": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ProviderTestError"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "firstTokenMs": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "model": {
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/ProviderTestStatus"
+      },
+      "tools": {
+        "$ref": "#/$defs/ProviderTestTools"
+      }
+    },
+    "required": [
+      "model",
+      "status",
+      "tools",
+      "elapsedMs"
+    ],
+    "title": "ProviderTestResult",
+    "type": "object"
   },
   "serverNotification": {
     "$defs": {
@@ -4912,6 +5480,22 @@
           },
           "params": {
             "$ref": "#/$defs/AppSettings"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "model/catalog/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
           }
         },
         "required": [

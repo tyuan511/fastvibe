@@ -2,6 +2,7 @@
 //! over the same protocol (`fv-protocol`); nothing here knows which one is on the other end
 //! beyond the [`ClientOrigin`] its connection was accepted with.
 
+mod catalog;
 mod connection;
 pub mod context;
 mod git;
@@ -9,10 +10,12 @@ mod listener;
 mod log;
 mod mapping;
 pub mod memory;
+mod model_detail;
 mod policy;
 mod project_files;
 mod projects;
 mod prompt;
+mod provider_test;
 mod providers;
 mod queue;
 mod runtime;

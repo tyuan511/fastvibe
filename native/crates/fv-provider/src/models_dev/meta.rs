@@ -263,7 +263,11 @@ pub fn read_snapshot(text: &str, path: String, bundled: bool) -> Option<Catalog>
 }
 
 pub fn read_value(value: Value, path: String, bundled: bool) -> Option<Catalog> {
-    let version = value.get("v").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let version = value
+        .get("v")
+        .and_then(natural)
+        .and_then(|n| u32::try_from(n).ok())
+        .unwrap_or(0);
     let tuples = value.get("m")?.as_array()?;
     if tuples.is_empty() {
         return None;
@@ -277,9 +281,8 @@ pub fn read_value(value: Value, path: String, bundled: bool) -> Option<Catalog> 
         for (alias, index) in map {
             // An alias pointing past the end is a truncated write: drop that one name rather
             // than the catalog, and let the rest of the file still answer.
-            if let Some(index) = index
-                .as_u64()
-                .map(|i| i as usize)
+            if let Some(index) = natural(index)
+                .and_then(|i| usize::try_from(i).ok())
                 .filter(|i| *i < entries.len())
             {
                 aliases.insert(alias.clone(), index);
@@ -289,7 +292,7 @@ pub fn read_value(value: Value, path: String, bundled: bool) -> Option<Catalog> 
     let stats = CatalogStats {
         models: entries.len(),
         aliases: aliases.len(),
-        generated_at: value.get("t").and_then(Value::as_u64).unwrap_or(0),
+        generated_at: value.get("t").and_then(natural).unwrap_or(0),
         source: value
             .get("s")
             .and_then(Value::as_str)
@@ -314,7 +317,33 @@ pub fn snapshot_signature_of(value: &Value) -> String {
         value.get("m").cloned().unwrap_or(Value::Null),
         value.get("x").cloned().unwrap_or(Value::Null),
     ]);
-    serde_json::to_string(&picked).unwrap_or_default()
+    serde_json::to_string(&canonical(&picked)).unwrap_or_default()
+}
+
+// Alias object order and integral JSON number spellings have no semantic meaning. Both encoders
+// use this identity, so a JavaScript-written index and a Rust-written one need not rebind models.
+fn canonical(value: &Value) -> Value {
+    match value {
+        Value::Array(a) => Value::Array(a.iter().map(canonical).collect()),
+        Value::Object(m) => {
+            let ordered = m.iter().collect::<std::collections::BTreeMap<_, _>>();
+            Value::Object(
+                ordered
+                    .into_iter()
+                    .map(|(k, v)| (k.clone(), canonical(v)))
+                    .collect(),
+            )
+        }
+        Value::Number(n) if n.is_f64() => {
+            let f = n.as_f64().unwrap();
+            if (0.0..=9_007_199_254_740_991.0).contains(&f) && f.fract() == 0.0 {
+                Value::from(f as u64)
+            } else {
+                value.clone()
+            }
+        }
+        _ => value.clone(),
+    }
 }
 
 fn field(tuple: &Value, index: usize) -> Option<&Value> {
@@ -498,6 +527,15 @@ fn strip_date(key: &str) -> String {
     }
 }
 
+fn natural(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value
+            .as_f64()
+            .filter(|n| (0.0..=9_007_199_254_740_991.0).contains(n) && n.fract() == 0.0)
+            .map(|n| n as u64)
+    })
+}
+
 fn positive(value: Option<&Value>) -> u64 {
     match value.and_then(Value::as_f64) {
         Some(n) if n.is_finite() && n > 0.0 => n.floor() as u64,
@@ -519,6 +557,29 @@ pub(crate) fn effort_name(level: ThinkingLevel) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_ignores_update_age_alias_order_and_integral_number_spellings() {
+        let a: Value = serde_json::from_str(
+            r#"{"v":5,"t":1,"m":[["m","M",128000,8000,1,null,[2,10,0,0]]],"x":{"m":0,"alias":0}}"#,
+        )
+        .unwrap();
+        let b: Value = serde_json::from_str(r#"{"v":5.0,"t":9999.0,"m":[["m","M",128000,8000,1,null,[2.0,10.0,0.0,0.0]]],"x":{"alias":0.0,"m":0.0}}"#).unwrap();
+        assert_eq!(snapshot_signature_of(&a), snapshot_signature_of(&b));
+        let decoded_a = read_value(a.clone(), "a".into(), false).unwrap();
+        let decoded_b = read_value(b.clone(), "b".into(), false).unwrap();
+        assert_eq!(decoded_a.price("alias"), decoded_b.price("alias"));
+        assert!(
+            decoded_b.price("alias").is_some(),
+            "equivalent numbers also decode identically"
+        );
+        let mut changed = b.clone();
+        changed["m"][0][6][0] = Value::from(2.1);
+        assert_ne!(snapshot_signature_of(&a), snapshot_signature_of(&changed));
+        changed = b;
+        changed["x"]["alias"] = Value::from(1);
+        assert_ne!(snapshot_signature_of(&a), snapshot_signature_of(&changed));
+    }
 
     #[test]
     fn normalize_folds_separators_and_case() {

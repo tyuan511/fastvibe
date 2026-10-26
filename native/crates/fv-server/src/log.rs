@@ -51,7 +51,7 @@ pub enum LogEvent {
     Running(bool),
     StatsMessage(fv_core::Message),
     /// The stats as they now stand, after a recomputation the client should see (the bill).
-    StatsSnapshot(SessionStats),
+    StatsSnapshot,
     /// How full the context window is after a request.
     TokenUsage {
         used: u64,
@@ -164,8 +164,7 @@ impl ThreadLog {
                 fv_store::record_stats(&mut self.stats, &message);
                 ServerNotification::ThreadStatsUpdated(ev!(self.stats.clone()))
             }
-            LogEvent::StatsSnapshot(stats) => {
-                self.stats = stats;
+            LogEvent::StatsSnapshot => {
                 ServerNotification::ThreadStatsUpdated(ev!(self.stats.clone()))
             }
             LogEvent::TurnStarted { turn_id } => {

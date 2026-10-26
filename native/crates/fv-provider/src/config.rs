@@ -24,7 +24,7 @@ pub enum ThinkingLevel {
 }
 
 /// Everything needed to call one model.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelConfig {
     /// `provider/model`, recorded on every reply so signatures are only replayed to their author.
     pub label: String,

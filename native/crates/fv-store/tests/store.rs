@@ -298,6 +298,7 @@ fn provider(id: &str, name: &str) -> fv_store::StoredProvider {
             supports_images: true,
             context_window: Some(128_000),
             max_output_tokens: None,
+            ..Default::default()
         }],
     }
 }

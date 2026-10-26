@@ -52,12 +52,15 @@ pub struct ServerState {
     /// The side pane's shells. One per terminal, with its own pty and parsed screen.
     pub(crate) terminals: crate::terminal::Terminals,
     /// models.dev, as this install knows it: a model's window, output ceiling, modalities and
-    /// prices. Read once at startup — refreshing it needs a restart, as in the Electron app.
-    pub catalog: fv_provider::Catalog,
+    /// prices. Readers retain an immutable snapshot while refresh atomically replaces it.
+    pub catalog: Arc<fv_provider::CatalogService>,
+    pub(crate) catalog_applied: tokio::sync::Mutex<(u64, Option<String>)>,
     connections: Mutex<HashMap<ConnId, mpsc::Sender<Message>>>,
     runtimes: Mutex<HashMap<ThreadId, Arc<ThreadRuntime>>>,
     prompts: Mutex<HashMap<fv_protocol::RequestId, PendingPrompt>>,
     pub(crate) settings_lock: Mutex<()>,
+    pub(crate) providers_lock: Mutex<()>,
+    pub(crate) model_checks: std::sync::Arc<tokio::sync::Semaphore>,
     pub(crate) workspace_entries_lock: Mutex<()>,
     /// Each conversation's workspace as it was before its current turn ran (see `turn::rewind`).
     pub(crate) checkpoints: Mutex<HashMap<ThreadId, fv_store::Checkpoint>>,
@@ -83,6 +86,7 @@ impl ServerState {
         let mut changes = self.mcp.subscribe();
         self.mcp.start();
         self.memory.start_timer(self);
+        crate::catalog::start(self);
         let weak = Arc::downgrade(self);
         tokio::spawn(async move {
             while changes.changed().await.is_ok() {
@@ -96,7 +100,9 @@ impl ServerState {
 
     pub fn new(data_dir: PathBuf, agent: AgentContext) -> Result<Self, StoreError> {
         let store = Store::open(&data_dir)?;
-        let catalog = fv_provider::load_catalog(&data_dir);
+        crate::model_detail::migrate_protocols(&store)?;
+        let catalog = fv_provider::CatalogService::new(data_dir.clone());
+        let catalog_signature = catalog.snapshot().signature().map(str::to_owned);
         let auto_compaction = Arc::new(AtomicBool::new(
             crate::settings::read_db(&store.db)?.auto_compaction_enabled,
         ));
@@ -110,11 +116,16 @@ impl ServerState {
             agent,
             store,
             catalog,
+            catalog_applied: tokio::sync::Mutex::new((0, catalog_signature)),
             terminals: crate::terminal::Terminals::default(),
             connections: Mutex::default(),
             runtimes: Mutex::default(),
             prompts: Mutex::default(),
             settings_lock: Mutex::new(()),
+            providers_lock: Mutex::new(()),
+            model_checks: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                crate::provider_test::CHECK_LIMIT,
+            )),
             workspace_entries_lock: Mutex::new(()),
             checkpoints: Mutex::default(),
             suggestion_model: Mutex::default(),
@@ -187,7 +198,7 @@ impl ServerState {
         ));
         // The bill is re-derived from that transcript at today's prices, so an edited provider
         // or a corrected catalog applies to history a client has not looked at yet.
-        rt.reprice(&self.catalog, &history);
+        rt.reprice(&self.catalog.snapshot(), &history);
         // Prompts queued when the last process stopped come back with the thread.
         crate::queue::restore(self, &rt, thread_id);
         runtimes.insert(thread_id.to_string(), rt.clone());
@@ -334,7 +345,8 @@ impl ServerState {
     /// A restart may replace the server only when no conversation has work in flight,
     /// including commands that yielded and outlived their launching turn, and pane PTYs.
     pub fn has_running_turns(&self) -> bool {
-        self.terminals.has_running()
+        self.model_checks.available_permits() < crate::provider_test::CHECK_LIMIT
+            || self.terminals.has_running()
             || self
                 .runtimes
                 .lock()
@@ -435,6 +447,10 @@ impl ServerState {
 
     pub fn subscriber_count(&self, thread: &str) -> usize {
         self.runtime(thread).subscriber_count()
+    }
+
+    pub(crate) fn loaded_runtimes(&self) -> Vec<Arc<ThreadRuntime>> {
+        self.runtimes.lock().unwrap().values().cloned().collect()
     }
 
     /// Catalog-level notices go to every connection.

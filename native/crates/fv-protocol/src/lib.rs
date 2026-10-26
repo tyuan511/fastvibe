@@ -8,8 +8,11 @@
 //! method is one line and the server's `match` over [`ClientRequest`] stops compiling until it
 //! handles it. The JSON Schema in `native/schema/` is generated from these types.
 
+pub mod catalog;
 pub mod jsonrpc;
 pub mod methods;
+pub mod models;
+pub mod provider_test;
 pub mod shortcuts;
 pub mod types;
 pub mod usage;

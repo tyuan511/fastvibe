@@ -42,6 +42,10 @@ fn effort(level: ThinkingLevel) -> ReasoningEffort {
 }
 
 impl GenaiModel {
+    pub async fn probe(&self, budget: crate::ProbeBudget) -> crate::ProbeReport {
+        crate::probe::run(&self.client, &self.config, self.options(), budget).await
+    }
+
     pub fn new(config: ModelConfig) -> Result<Self, ModelError> {
         // The endpoint, key and protocol are ours, not genai's: it would otherwise guess an
         // adapter from the model name and read the key from an environment variable.

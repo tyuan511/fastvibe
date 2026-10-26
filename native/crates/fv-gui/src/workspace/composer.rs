@@ -543,7 +543,15 @@ impl Workspace {
     fn thinking_menu(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = &self.palette;
         let hover = p.c(Token::Accent);
-        let cur = self.explicit_thinking();
+        let cur = if self.explicit_thinking().is_none() {
+            None
+        } else {
+            self.current_thinking()
+        };
+        let allowed = self
+            .current_model_label()
+            .and_then(|l| self.models.iter().find(|m| m.label == l))
+            .map(|m| m.model.allowed_thinking());
 
         let options: [(Option<ThinkingLevel>, &'static str); 7] = [
             (None, "跟随默认"),
@@ -573,6 +581,9 @@ impl Workspace {
             .text_size(px(TEXT_SM));
 
         for (level, label) in options {
+            if level.is_some_and(|l| allowed.as_ref().is_some_and(|v| !v.contains(&l))) {
+                continue;
+            }
             let is_selected = cur == level;
             list = list.child(
                 div()

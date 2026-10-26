@@ -7,13 +7,13 @@
 //! version of this file let iteration order decide ties, so a model's window and **billing**
 //! drifted whenever models.dev re-sorted its provider list. The rules below are the ones
 //! `scripts/models-dev-encode.mjs` implements, kept byte-for-byte equivalent in behaviour; the
-//! tests in `tests/models_dev.rs` cross-check the two against one another.
+//! unit tests run the owning JavaScript encoder against the same fixture.
 
 use std::cmp::Ordering;
 
 use serde_json::{Map, Value};
 
-use super::meta::{decode_input, default_context_window, effort_name, normalize_model_key};
+use super::meta::{effort_name, normalize_model_key};
 use crate::ThinkingLevel;
 
 pub const SOURCE_URL: &str = "https://models.dev/api.json";
@@ -58,13 +58,13 @@ struct Entry {
 
 impl Entry {
     /// The comparison keys, in the order the fold consults them. Larger wins.
-    fn key(&self, index: usize) -> i64 {
+    fn key(&self, index: usize) -> u64 {
         match index {
-            0 => self.vendor_rank as i64,
-            1 => self.capability as i64,
-            2 => i64::from(self.complete_pricing),
-            3 => i64::from(self.price_ladder),
-            _ => self.context as i64,
+            0 => self.vendor_rank as u64,
+            1 => self.capability as u64,
+            2 => u64::from(self.complete_pricing),
+            3 => u64::from(self.price_ladder),
+            _ => self.context,
         }
     }
 }
@@ -75,16 +75,12 @@ fn compare_entries(a: &Entry, b: &Entry) -> Ordering {
     for index in 0..5 {
         let diff = b.key(index).cmp(&a.key(index));
         if diff != Ordering::Equal {
-            // The field is "bigger is better", and a larger field is `Greater` — which has to
-            // come back as `Less` for `a`, because `a` is the one that wins.
-            return match diff {
-                Ordering::Greater => Ordering::Less,
-                Ordering::Less => Ordering::Greater,
-                Ordering::Equal => unreachable!(),
-            };
+            return diff;
         }
     }
-    a.provider_id.cmp(&b.provider_id).then_with(|| a.id.cmp(&b.id))
+    a.provider_id
+        .cmp(&b.provider_id)
+        .then_with(|| a.id.cmp(&b.id))
 }
 
 /// The winning entry for one model id, or the only one when nothing claims it twice.
@@ -123,12 +119,19 @@ pub fn build_snapshot(catalog: &Value, generated_at: u64, source: &str) -> Value
 
 /// Fold the catalog into one tuple per model id plus an alias map onto their positions.
 pub fn build_index(catalog: &Value) -> (Vec<Value>, Map<String, Value>) {
-    let mut groups: Vec<(String, Vec<Entry>)> = Vec::new();
-    let Some(providers) = catalog.as_object() else { return (Vec::new(), Map::new()) };
+    let mut groups = std::collections::BTreeMap::<String, Vec<Entry>>::new();
+    let Some(providers) = catalog.as_object() else {
+        return (Vec::new(), Map::new());
+    };
     for (provider_id, provider) in providers {
-        let Some(models) = provider.get("models").and_then(Value::as_object) else { continue };
+        let Some(models) = provider.get("models").and_then(Value::as_object) else {
+            continue;
+        };
         for model in models.values() {
-            let Some(id) = model.get("id").and_then(Value::as_str).or_else(|| model.get("name").and_then(Value::as_str))
+            let Some(id) = model
+                .get("id")
+                .and_then(Value::as_str)
+                .or_else(|| model.get("name").and_then(Value::as_str))
             else {
                 continue;
             };
@@ -137,10 +140,7 @@ pub fn build_index(catalog: &Value) -> (Vec<Value>, Map<String, Value>) {
                 continue;
             }
             let entry = to_entry(provider_id, id, model);
-            match groups.iter_mut().find(|(known, _)| *known == key) {
-                Some((_, list)) => list.push(entry),
-                None => groups.push((key, vec![entry])),
-            }
+            groups.entry(key).or_default().push(entry);
         }
     }
 
@@ -153,37 +153,29 @@ pub fn build_index(catalog: &Value) -> (Vec<Value>, Map<String, Value>) {
 
     let mut aliases: Map<String, Value> = Map::new();
     // `alias -> (position, claim)`; a claim wins on its tier first, then on the entry behind it.
-    let mut claims: Vec<(String, usize, u8, usize)> = Vec::new(); // alias, position, tier, entry index
+    let mut claims = std::collections::BTreeMap::<String, (usize, u8)>::new();
     for (position, (key, entry)) in winners.iter().enumerate() {
         for (alias, tier) in alias_claims(key, entry) {
-            match claims.iter_mut().find(|(known, ..)| *known == alias) {
-                Some((_, best_position, best_tier, best_entry)) => {
-                    let challenger = compare_claims(*tier, position, *best_tier, *best_entry);
-                    if challenger == Ordering::Less {
-                        *best_position = position;
-                        *best_tier = tier;
-                        *best_entry = position;
-                    }
-                    let _ = best_position;
-                }
-                None => claims.push((alias, position, tier, position)),
+            let replace = claims.get(&alias).is_none_or(|(old, old_tier)| {
+                tier.cmp(old_tier)
+                    .then_with(|| compare_entries(entry, &winners[*old].1))
+                    == Ordering::Less
+            });
+            if replace {
+                claims.insert(alias, (position, tier));
             }
         }
     }
-    for (alias, position, ..) in claims {
+    for (alias, (position, _)) in claims {
         aliases.insert(alias, Value::from(position));
     }
-    (winners.iter().map(|(_, entry)| entry.tuple.clone()).collect(), aliases)
-}
-
-/// Lower tier is a better claim to a name; inside a tier the fold's own order decides.
-fn compare_claims(a_tier: u8, a_entry: usize, b_tier: u8, b_entry: usize) -> Ordering {
-    // The entries are borrowed from `winners`, which the caller owns; comparing the two through
-    // the indices keeps the borrow checker out of the way.
-    if a_tier != b_tier {
-        return a_tier.cmp(&b_tier);
-    }
-    a_entry.cmp(&b_entry)
+    (
+        winners
+            .iter()
+            .map(|(_, entry)| entry.tuple.clone())
+            .collect(),
+        aliases,
+    )
 }
 
 fn alias_claims(key: &str, entry: &Entry) -> Vec<(String, u8)> {
@@ -211,9 +203,23 @@ fn alias_claims(key: &str, entry: &Entry) -> Vec<(String, u8)> {
     claims
 }
 
+// JSON.stringify writes integral prices as integers; use the same representation so a build
+// snapshot and a native refresh compare alike.
+fn number(n: f64) -> Value {
+    if (0.0..=9_007_199_254_740_991.0).contains(&n) && n.fract() == 0.0 {
+        Value::from(n as u64)
+    } else {
+        Value::from(n)
+    }
+}
+
 fn to_entry(provider_id: &str, id: &str, model: &Value) -> Entry {
     let mut mask = 0u64;
-    if let Some(items) = model.get("modalities").and_then(|m| m.get("input")).and_then(Value::as_array) {
+    if let Some(items) = model
+        .get("modalities")
+        .and_then(|m| m.get("input"))
+        .and_then(Value::as_array)
+    {
         for item in items.iter().filter_map(Value::as_str) {
             if let Some(kind) = super::meta::InputModality::from_name(item) {
                 mask |= match kind {
@@ -241,7 +247,10 @@ fn to_entry(provider_id: &str, id: &str, model: &Value) -> Entry {
         Value::from(mask),
         match &levels {
             Some(levels) if !levels.is_empty() => Value::Array(
-                levels.iter().map(|level| Value::from(effort_name(*level))).collect::<Vec<_>>(),
+                levels
+                    .iter()
+                    .map(|level| Value::from(effort_name(*level)))
+                    .collect::<Vec<_>>(),
             ),
             _ => Value::Null,
         },
@@ -249,20 +258,15 @@ fn to_entry(provider_id: &str, id: &str, model: &Value) -> Entry {
             Some(cost) => Value::Array(
                 cost.base
                     .iter()
-                    .map(|value| Value::from(*value))
-                    .chain(
-                        (!cost.tiers.is_empty()).then(|| {
-                            Value::Array(
-                                cost.tiers
-                                    .iter()
-                                    .map(|row| {
-                                        Value::Array(row.iter().map(|v| Value::from(*v)).collect())
-                                    })
-                                    .collect(),
-                            )
-                        })
-                        .flatten(),
-                    )
+                    .map(|value| number(*value))
+                    .chain((!cost.tiers.is_empty()).then(|| {
+                        Value::Array(
+                            cost.tiers
+                                .iter()
+                                .map(|row| Value::Array(row.iter().map(|v| number(*v)).collect()))
+                                .collect(),
+                        )
+                    }))
                     .collect(),
             ),
             None => Value::Null,
@@ -277,7 +281,9 @@ fn to_entry(provider_id: &str, id: &str, model: &Value) -> Entry {
         capability: capability(model, levels.as_deref(), context, mask),
         context,
         priced,
-        complete_pricing: cost.as_ref().is_some_and(|cost| cost.base.iter().all(|value| *value > 0.0)),
+        complete_pricing: cost
+            .as_ref()
+            .is_some_and(|cost| cost.base.iter().all(|value| *value > 0.0)),
         price_ladder: cost.as_ref().is_some_and(|cost| !cost.tiers.is_empty()),
         tuple,
     }
@@ -293,7 +299,13 @@ fn to_entry(provider_id: &str, id: &str, model: &Value) -> Entry {
 /// list price.
 fn vendor_rank(provider_id: &str, model: &Value) -> u8 {
     let canonical = normalize_model_key(
-        model.get("canonical_model_id").and_then(Value::as_str).unwrap_or("").split('/').next().unwrap_or(""),
+        model
+            .get("canonical_model_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .split('/')
+            .next()
+            .unwrap_or(""),
     );
     if canonical.is_empty() {
         return 0;
@@ -311,15 +323,14 @@ fn vendor_rank(provider_id: &str, model: &Value) -> u8 {
 fn is_subscription_plan(provider_id: &str) -> bool {
     // The suffix is the whole signal; the catalog has no field for it, and these three shapes
     // accounted for every plan-shaped provider in it.
-    provider_id.contains("-plan-")
+    provider_id == "plan"
+        || provider_id.starts_with("plan-")
+        || provider_id.contains("-plan-")
         || provider_id.ends_with("-plan")
         || provider_id.contains("coding-plan")
         || provider_id.contains("token-plan")
         || provider_id.contains("tokenhub")
 }
-
-/// `/(?:^|-)plan(?:-|$)|coding-plan|token-plan|tokenhub/` over the normalized provider id.
-fn _unused_plan_note() {}
 
 /// What the model can do, independent of who sells it. Used only to rank entries that claim the
 /// same id — never to decide what a model *is*.
@@ -345,7 +356,9 @@ fn effort_levels(model: &Value) -> Option<Vec<ThinkingLevel>> {
         .get("reasoning_options")
         .and_then(Value::as_array)
         .and_then(|options| {
-            options.iter().find(|option| option.get("type").and_then(Value::as_str) == Some("effort"))
+            options
+                .iter()
+                .find(|option| option.get("type").and_then(Value::as_str) == Some("effort"))
         })
         .and_then(|option| option.get("values"))
         .and_then(Value::as_array);
@@ -359,8 +372,13 @@ fn effort_levels(model: &Value) -> Option<Vec<ThinkingLevel>> {
                 .collect(),
         );
     }
-    (model.get("reasoning").and_then(Value::as_bool) == Some(true))
-        .then(|| vec![ThinkingLevel::Low, ThinkingLevel::Medium, ThinkingLevel::High])
+    (model.get("reasoning").and_then(Value::as_bool) == Some(true)).then(|| {
+        vec![
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+        ]
+    })
 }
 
 /// Per-million prices, or `None` when the catalog has no pricing — or only zeros, which carries
@@ -376,7 +394,10 @@ fn to_cost(cost: Option<&Value>) -> Option<Cost> {
     if !base.iter().any(|value| *value > 0.0) {
         return None;
     }
-    Some(Cost { base, tiers: to_tiers(cost, base) })
+    Some(Cost {
+        base,
+        tiers: to_tiers(cost, base),
+    })
 }
 
 /// The context ladder, normalised to full four-field rows. A tier that omits a field (the
@@ -387,26 +408,30 @@ fn to_tiers(cost: &Map<String, Value>, base: [f64; 4]) -> Vec<[f64; 5]> {
     let mut rows: Vec<[f64; 5]> = Vec::new();
     if let Some(tiers) = cost.get("tiers").and_then(Value::as_array) {
         for tier in tiers {
-            let over = tier.get("size").and_then(|s| s.get("tier")).and_then(Value::as_f64);
-            let Some(over) = else { continue };
-            if over > 0.0 {
-                rows.push(tier_row(tier, base, over));
+            let over = tier
+                .get("tier")
+                .and_then(|s| s.get("size"))
+                .map(|v| positive(Some(v)));
+            let Some(over) = over else { continue };
+            if over > 0 {
+                rows.push(tier_row(tier, base, over as f64));
             }
         }
     } else if let Some(over_200k) = cost.get("context_over_200k").and_then(Value::as_object) {
-        rows.push(tier_row(
-            &Value::Object(over_200k.clone()),
-            base,
-            200_000.0,
-        ));
+        rows.push(tier_row(&Value::Object(over_200k.clone()), base, 200_000.0));
     }
     rows.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(Ordering::Equal));
     rows
 }
 
 fn tier_row(price: &Value, base: [f64; 4], over: f64) -> [f64; 5] {
-    let field = |name: &str| price_or_null(price.get(name), base);
-    [over, field("input"), field("output"), field("cache_read"), field("cache_write")]
+    [
+        over,
+        price_or_null(price.get("input"), base[0]),
+        price_or_null(price.get("output"), base[1]),
+        price_or_null(price.get("cache_read"), base[2]),
+        price_or_null(price.get("cache_write"), base[3]),
+    ]
 }
 
 fn price_or_null(value: Option<&Value>, fallback: f64) -> f64 {
@@ -431,7 +456,9 @@ fn non_negative(value: Option<&Value>) -> f64 {
 }
 
 fn strip_date(key: &str) -> String {
-    let Some((head, tail)) = key.rsplit_once('-') else { return String::new() };
+    let Some((head, tail)) = key.rsplit_once('-') else {
+        return String::new();
+    };
     if tail.bytes().all(|b| b.is_ascii_digit()) && (4..=8).contains(&tail.len()) {
         head.to_owned()
     } else {
@@ -439,13 +466,112 @@ fn strip_date(key: &str) -> String {
     }
 }
 
-/// The window a fold's winner implies, for callers that want the same clamp the decoder applies.
-pub fn context_window(model: &Value) -> u32 {
-    default_context_window(
-        positive(model.get("limit").and_then(|l| l.get("context")) as u32),
-        &super::meta::Vec_of_tiers(model),
-    )
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    fn fixture() -> Value {
+        json!({
+            "reseller": {"models": {
+                "m": {"id":"m", "canonical_model_id":"vendor/m", "name":"Shared", "reasoning":true,
+                    "limit":{"context":999999,"output":12000}, "cost":{"input":99,"output":99}},
+                "alias": {"id":"a/alias", "name":"Other", "cost":{"input":2,"output":5}},
+                "latest": {"id":"m-20261231", "name":"Date", "cost":{"input":2,"output":5}}
+            }},
+            "vendor": {"models": {
+                "m": {"id":"m", "canonical_model_id":"vendor/m", "name":"Shared", "reasoning":true,
+                    "reasoning_options":[{"type":"effort","values":["off","max","low"]}],
+                    "modalities":{"input":["image","audio","video"]},
+                    "limit":{"context":1000000,"output":16000},
+                    "cost":{"input":2,"output":10,"cache_read":0.5,"cache_write":3,
+                        "tiers":[{"tier":{"size":400000},"input":4,"output":20},
+                                 {"tier":{"size":200000},"input":3,"cache_read":0}]}},
+                "alias": {"id":"alias", "name":"Own", "cost":{"input":3,"output":6}},
+                "winner": {"id":"z/winner", "name":"Other", "reasoning":true,
+                    "cost":{"input":4,"context_over_200k":{"output":20}}}
+            }},
+            "vendor-plan": {"models": {"m": {"id":"m", "canonical_model_id":"vendor/m",
+                "name":"Plan", "reasoning":true,"limit":{"context":2000000},"cost":{"input":0.01}}}},
+            "free-vendor": {"models": {"x": {"id":"x", "cost":{"input":0,"output":0}}}},
+            "z-reseller": {"models": {"x": {"id":"x", "cost":{"input":0.7}}}},
+            "a-reseller": {"models": {"x": {"id":"x", "cost":{"input":1.1}}}}
+        })
+    }
+    #[test]
+    fn native_fold_matches_electrons_encoder_including_alias_ties_and_price_ladders() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let mut child = Command::new("node").current_dir(root)
+            .args(["--input-type=module", "-e", "import {buildSnapshot} from './scripts/models-dev-encode.mjs'; let text=''; for await (const c of process.stdin) text+=c; console.log(JSON.stringify(buildSnapshot(JSON.parse(text),{generatedAt:7,source:'fixture'}))); "])
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("Node.js runs the owning encoder");
+        let input = fixture();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let expected: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let actual = build_snapshot(&input, 7, "fixture");
+        assert_eq!(actual, expected);
+        let decoded = super::super::meta::read_value(actual, "fixture".into(), false).unwrap();
+        assert_eq!(
+            decoded.price("m").unwrap().0.input,
+            2.0,
+            "vendor wins over reseller and plan"
+        );
+        assert_eq!(
+            decoded.price("x").unwrap().0.input,
+            1.1,
+            "stable provider tie"
+        );
+        assert_eq!(
+            decoded.entry("Other").unwrap().id,
+            "z/winner",
+            "equal alias tiers compare capabilities"
+        );
+        assert_eq!(decoded.entry("alias").unwrap().id, "alias", "exact id wins");
+        let (price, tiers) = decoded.price("m").unwrap();
+        assert_eq!(tiers[0].over, 200_000);
+        assert_eq!(tiers[0].price.cache_read, 0.0, "explicit zero is retained");
+        assert_eq!(
+            tiers[0].price.cache_write, price.cache_write,
+            "missing field inherits base"
+        );
+        assert_eq!(decoded.describe("m").unwrap().context_window, 200_000);
+    }
+    #[test]
+    fn shuffled_catalog_is_identical_and_empty_input_is_rejected() {
+        let original = fixture();
+        let mut shuffled = Map::new();
+        for (provider, raw) in original.as_object().unwrap().iter().rev() {
+            let mut raw = raw.clone();
+            let models = raw["models"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .rev()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<Map<_, _>>();
+            raw["models"] = Value::Object(models);
+            shuffled.insert(provider.clone(), raw);
+        }
+        assert_eq!(
+            build_snapshot(&original, 7, "fixture"),
+            build_snapshot(&Value::Object(shuffled), 7, "fixture")
+        );
+        for invalid in [Value::Null, json!({}), json!({"p":{"models":{"m":{}}}})] {
+            assert!(
+                super::super::meta::read_value(
+                    build_snapshot(&invalid, 7, "fixture"),
+                    "".into(),
+                    false
+                )
+                .is_none()
+            );
+        }
+    }
 }
-
-#[allow(unused_imports)]
-use decode_input as _input_rule_documented_elsewhere;

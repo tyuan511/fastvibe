@@ -73,6 +73,8 @@ pub async fn serve_connection<R, W>(
                             | "memory/run"
                             | "memory/clear"
                             | "stats/usage"
+                            | "model/catalog/refresh"
+                            | "provider/model/test"
                     )
                 )
         });
@@ -287,6 +289,9 @@ async fn dispatch(
                     "personalization".into(),
                     "shortcuts".into(),
                     "usageStats".into(),
+                    "modelCatalogRefresh".into(),
+                    "modelDetails".into(),
+                    "providerModelTest".into(),
                 ],
                 data_dir: state.data_dir.display().to_string(),
                 build_fingerprint: crate::build_fingerprint(),
@@ -427,6 +432,19 @@ async fn dispatch(
         }
         ClientRequest::ProviderFetchModels { params, .. } => {
             to_value(crate::providers::fetch_models(state, params).await?)
+        }
+        ClientRequest::ModelCatalogGet { .. } => to_value(crate::catalog::info(state)),
+        ClientRequest::ModelCatalogRefresh { .. } => {
+            to_value(crate::catalog::refresh(state).await?)
+        }
+        ClientRequest::ProviderModelTest { params, .. } => {
+            to_value(crate::provider_test::run(state, params).await?)
+        }
+        ClientRequest::ProviderModelGet { params, .. } => {
+            to_value(crate::model_detail::get(state, params)?)
+        }
+        ClientRequest::ProviderModelUpdate { params, .. } => {
+            to_value(crate::model_detail::update(state, params)?)
         }
         ClientRequest::ModelList { .. } => to_value(crate::providers::model_list(state)?),
         ClientRequest::ModelDefaultsGet { .. } => to_value(crate::providers::read_defaults(state)?),

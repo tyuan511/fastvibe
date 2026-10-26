@@ -113,6 +113,8 @@ fn schema_matches_committed_snapshot() {
         "serverRequest": schemars::schema_for!(ServerRequest),
         "userInputResponse": schemars::schema_for!(types::UserInputResponse),
         "message": schemars::schema_for!(Message),
+        "providerTestResult": schemars::schema_for!(crate::provider_test::ProviderTestResult),
+        "modelDetail": schemars::schema_for!(crate::models::ModelDetail),
     });
     let text = serde_json::to_string_pretty(&schema).unwrap() + "\n";
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../schema/protocol.json");

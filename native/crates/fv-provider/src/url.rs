@@ -4,9 +4,8 @@ use crate::Protocol;
 /// speaking it: `claude-*` is Anthropic Messages, `gemini-*` is Google. It is a guess, which is
 /// why a model's protocol stays editable. Namespaced ids (`anthropic/claude-…`) do not match.
 pub fn infer_protocol(model_id: &str, provider_protocol: Protocol) -> Protocol {
-    let id = model_id.to_ascii_lowercase();
+    let id = model_id.trim().to_ascii_lowercase();
     match provider_protocol {
-        Protocol::Anthropic | Protocol::Google => provider_protocol,
         _ if id.starts_with("claude-") => Protocol::Anthropic,
         _ if id.starts_with("gemini-") => Protocol::Google,
         _ => provider_protocol,
@@ -88,7 +87,7 @@ mod tests {
         );
         assert_eq!(
             infer_protocol("claude-x", Protocol::Google),
-            Protocol::Google
+            Protocol::Anthropic
         );
         assert_eq!(
             infer_protocol("anthropic/claude-x", Protocol::OpenAiChat),
