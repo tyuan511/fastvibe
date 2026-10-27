@@ -97,7 +97,14 @@ impl Workspace {
         }
         let Some(b) = self.backend.clone() else {
             self.search_results.loading = false;
-            self.search_results.error = Some("连接服务器后可搜索正文".into());
+            self.search_results.error = Some(
+                if self.app_settings.language == UiLanguage::English {
+                    "Connect to the server to search transcript text"
+                } else {
+                    "连接服务器后可搜索正文"
+                }
+                .into(),
+            );
             return;
         };
         let delay = cx
@@ -118,7 +125,14 @@ impl Workspace {
                 this.search_results.loading = false;
                 match result {
                     Ok(r) => this.search_results.hits = r.hits,
-                    Err(e) => this.search_results.error = Some(format!("搜索失败：{e}")),
+                    Err(e) => {
+                        this.search_results.error =
+                            Some(if this.app_settings.language == UiLanguage::English {
+                                format!("Search failed: {e}")
+                            } else {
+                                format!("搜索失败：{e}")
+                            })
+                    }
                 }
                 cx.notify();
             })

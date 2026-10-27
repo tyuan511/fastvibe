@@ -378,7 +378,13 @@ impl Workspace {
                 let display = binding
                     .and_then(|s| Chord::parse(s).ok())
                     .map(|c| c.label(cfg!(target_os = "macos")))
-                    .unwrap_or_else(|| "未设置".into());
+                    .unwrap_or_else(|| {
+                        if english {
+                            "Unassigned".into()
+                        } else {
+                            "未设置".into()
+                        }
+                    });
                 let mut buttons = div().flex().gap(px(8.0));
                 if binding != Some(fallback) {
                     buttons = buttons.child(
@@ -405,7 +411,11 @@ impl Workspace {
                 buttons = buttons.child(
                     outline_button(SharedString::from(format!("record-{id:?}")), p)
                         .child(SharedString::from(if recording {
-                            "请按组合键…".into()
+                            if english {
+                                "Press a key combination…".into()
+                            } else {
+                                "请按组合键…".into()
+                            }
                         } else {
                             display
                         }))
