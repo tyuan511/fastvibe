@@ -487,6 +487,7 @@ impl Workspace {
             None => self.pane_launcher(cx).into_any_element(),
         };
         let lead = self.side_pane_maximized && self.app_settings.sidebar.collapsed;
+        let english = self.app_settings.language == UiLanguage::English;
         let header = div()
             .h(px(44.0))
             .flex_none()
@@ -501,14 +502,18 @@ impl Workspace {
             .when(lead, |d| {
                 d.child(
                     icon_button("pane-expand-sidebar", "panel-left-open", &p)
-                        .aria_label("展开侧边栏")
+                        .aria_label(if english {
+                            "Expand sidebar"
+                        } else {
+                            "展开侧边栏"
+                        })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.on_toggle_sidebar(&super::ToggleSidebar, window, cx)
                         })),
                 )
                 .child(
                     icon_button("pane-new-chat", "message-square-plus", &p)
-                        .aria_label("新对话")
+                        .aria_label(if english { "New chat" } else { "新对话" })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.on_new_chat(&super::NewChat, window, cx)
                         })),
@@ -526,8 +531,11 @@ impl Workspace {
                             icon_button_xs("pane-add-tab", "add01", &p)
                                 .border_1()
                                 .border_color(p.c(Token::Border))
-                                .aria_label("新增标签")
-                                .tooltip(|window, cx| Tooltip::new("新增标签").build(window, cx))
+                                .aria_label(if english { "Add panel" } else { "新增标签" })
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(if english { "Add panel" } else { "新增标签" })
+                                        .build(window, cx)
+                                })
                                 .on_click(cx.listener(|this, e: &ClickEvent, _, cx| {
                                     let at = e.position();
                                     this.close_menus(cx);
@@ -548,9 +556,17 @@ impl Workspace {
                     &p,
                 )
                 .aria_label(if self.side_pane_maximized {
-                    "还原侧边面板"
+                    if english {
+                        "Restore side panel"
+                    } else {
+                        "还原侧边面板"
+                    }
                 } else {
-                    "最大化侧边面板"
+                    if english {
+                        "Maximize side panel"
+                    } else {
+                        "最大化侧边面板"
+                    }
                 })
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.side_pane_maximized = !this.side_pane_maximized;
@@ -559,8 +575,19 @@ impl Workspace {
             )
             .child(
                 icon_button("pane-collapse", "panel-right-close", &p)
-                    .aria_label("收起侧边面板")
-                    .tooltip(|window, cx| Tooltip::new("收起侧边面板  ⌃⌥B").build(window, cx))
+                    .aria_label(if english {
+                        "Collapse side panel"
+                    } else {
+                        "收起侧边面板"
+                    })
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(if english {
+                            "Collapse side panel  ⌃⌥B"
+                        } else {
+                            "收起侧边面板  ⌃⌥B"
+                        })
+                        .build(window, cx)
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_side_pane(cx))),
             );
         let frame = div()
@@ -1026,7 +1053,11 @@ impl Workspace {
             .px(px(32.0))
             .text_size(px(TEXT_XS))
             .text_color(self.palette.c(Token::MutedForeground))
-            .child("选择一个文件")
+            .child(if self.app_settings.language == UiLanguage::English {
+                "Select a file"
+            } else {
+                "选择一个文件"
+            })
     }
 
     fn pane_placeholder(&self, what: &str) -> impl IntoElement {
@@ -1428,7 +1459,11 @@ impl Workspace {
                         .text_size(px(TEXT_XS))
                         .font_weight(FontWeight::NORMAL)
                         .muted(&p)
-                        .child("主"),
+                        .child(if self.app_settings.language == UiLanguage::English {
+                            "Main"
+                        } else {
+                            "主"
+                        }),
                 )
                 .on_mouse_down(
                     MouseButton::Right,
@@ -1987,10 +2022,14 @@ impl Workspace {
                 .flex_col()
                 .child(self.preview_head(&name, back, cx))
                 .child(div().p(px(12.0)).muted(&p).text_size(px(TEXT_SM)).child(
-                    SharedString::from(format!(
-                        "这是二进制文件，无法预览（{}）",
-                        super::format_bytes(size)
-                    )),
+                    SharedString::from(if self.app_settings.language == UiLanguage::English {
+                        format!(
+                            "Binary file cannot be previewed ({})",
+                            super::format_bytes(size)
+                        )
+                    } else {
+                        format!("这是二进制文件，无法预览（{}）", super::format_bytes(size))
+                    }),
                 ))
                 .into_any_element(),
             FilePreview::Unsupported {
@@ -1999,20 +2038,24 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .child(self.preview_head(&name, back, cx))
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .muted(&p)
-                        .text_size(px(TEXT_SM))
-                        .child(SharedString::from(format!("{format} 无法预览"))),
-                )
+                .child(div().p(px(12.0)).muted(&p).text_size(px(TEXT_SM)).child(
+                    SharedString::from(if self.app_settings.language == UiLanguage::English {
+                        format!("{format} cannot be previewed")
+                    } else {
+                        format!("{format} 无法预览")
+                    }),
+                ))
                 .children(url::Url::from_file_path(&path).ok().map(|url| {
                     div()
                         .id("unsupported-open-external")
                         .px(px(12.))
                         .text_size(px(TEXT_SM))
                         .cursor_pointer()
-                        .child("用系统应用打开")
+                        .child(if self.app_settings.language == UiLanguage::English {
+                            "Open with system app"
+                        } else {
+                            "用系统应用打开"
+                        })
                         .on_click(move |_, _, cx| cx.open_url(url.as_str()))
                 }))
                 .into_any_element(),
