@@ -45,7 +45,11 @@
     "flutter:ios": "cd apps/mobile_flutter && PATH=\"$HOME/development/flutter/bin:$PATH\" flutter build ios --release --no-codesign",
     "flutter:apk": "cd apps/mobile_flutter && PATH=\"$HOME/development/flutter/bin:$PATH\" tool/build_release.sh",
     "flutter:i18n": "node apps/mobile_flutter/tool/gen_i18n.mjs",
-    "fetch:cua-driver": "node scripts/fetch-cua-driver.mjs"
+    "fetch:cua-driver": "node scripts/fetch-cua-driver.mjs",
+    "native:fmt": "cargo fmt --manifest-path native/Cargo.toml --all -- --check",
+    "native:check": "cargo check --manifest-path native/Cargo.toml --workspace",
+    "native:test": "cargo test --manifest-path native/Cargo.toml --workspace",
+    "native:build": "cargo build --manifest-path native/Cargo.toml -p fv-server -p fv-gui --release"
   },
   "packageManager": "pnpm@11.22.0",
   "dependencies": {

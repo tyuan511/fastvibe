@@ -94,6 +94,8 @@ pnpm dev
 | `pnpm dist:mac` / `pnpm dist:win` / `pnpm dist:linux` | Package desktop installers |
 | `pnpm sync:models` | Refresh the models.dev snapshot |
 | `pnpm flutter:analyze` / `pnpm flutter:test` | Check the Flutter companion app |
+| `pnpm native:fmt` / `pnpm native:check` | Format-check and compile the native Rust workspace |
+| `pnpm native:test` / `pnpm native:build` | Run native Rust tests or build the server and GUI in release mode |
 
 To preview the renderer in a browser:
 
