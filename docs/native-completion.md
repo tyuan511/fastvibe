@@ -605,6 +605,15 @@ API 对照 [Wry 0.57.1 文档](https://docs.rs/wry/0.57.1/wry/)及其本地固�
 
 少量后台异步错误摘要、部分低频无障碍标签和编辑器占位仍保留中文回退；电脑操控跨平台安装验收、i18n 全量收口、签名安装包、远程与手机适配以及旧 Electron 完整导入仍按清单顺序保留。
 
+## 第四十六批：原生本体回归与 bundle 烟测
+
+本批继续应用本体优先，没有开始远程连接、Flutter 适配或旧 Electron 导入。
+
+- 原生服务端增加 `fastvibe-server --help` / `--version` 的无副作用入口，bundle CI 在 macOS、Linux 和 Windows staged 产物上先做哈希/资源校验，再启动 server help 烟测，避免只验证文件存在而漏掉不可启动的产物。
+- GUI 语言迁移后的工作区、设置、浏览器、Git、定时任务、模型详情、技能、供应商自检和转写路径保持同一协议与状态模型，没有引入第二份数据存储或订阅登录流程。
+
+验证：`NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 pnpm native:test` 全 workspace 通过；`fv-gui` 90 项通过；workspace all-targets 严格 Clippy、`fastvibe-server --help` 和 `actionlint .github/workflows/native-bundles.yml` 通过。OfficeCLI 真实资源烟测仍按既有清单要求在对应交付环境执行，全部验证只使用代码、进程和自动化检查，没有 computer use。
+
 ## 第三十四批：自动归档旧对话
 
 偏好设置增加“自动归档旧对话”开关。开启后服务端每小时检查一次，将 30 天未活动、未置顶且没有运行任务的对话归档；关闭后不再执行。手动归档、恢复和删除仍沿用原协议，自动归档只修改归档标记，不删除转写、文件或用量记录。新字段对旧设置默认为关闭。
