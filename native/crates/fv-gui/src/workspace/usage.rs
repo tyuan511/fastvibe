@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 use chrono::{Datelike, Days, NaiveDate};
 use fv_protocol::methods::StatsUsage;
+use fv_protocol::types::UiLanguage;
 use fv_protocol::usage::*;
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -131,13 +132,17 @@ impl Workspace {
         };
         let s = &s.usage;
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let mut ranges = div().flex().flex_wrap().gap(px(6.0));
         for (range, label) in [
-            (UsageRange::Week, "7 天"),
-            (UsageRange::Month, "30 天"),
-            (UsageRange::Quarter, "90 天"),
-            (UsageRange::Year, "一年"),
-            (UsageRange::All, "全部"),
+            (UsageRange::Week, if english { "7 days" } else { "7 天" }),
+            (UsageRange::Month, if english { "30 days" } else { "30 天" }),
+            (
+                UsageRange::Quarter,
+                if english { "90 days" } else { "90 天" },
+            ),
+            (UsageRange::Year, if english { "1 year" } else { "一年" }),
+            (UsageRange::All, if english { "All" } else { "全部" }),
         ] {
             ranges = ranges.child(
                 outline_button(SharedString::from(format!("usage-range-{label}")), p)
@@ -149,9 +154,13 @@ impl Workspace {
         ranges = ranges.child(
             outline_button("refresh-usage", p)
                 .child(if s.loading {
-                    "正在读取…"
+                    if english {
+                        "Loading…"
+                    } else {
+                        "正在读取…"
+                    }
                 } else {
-                    "刷新"
+                    if english { "Refresh" } else { "刷新" }
                 })
                 .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx))),
         );
@@ -167,9 +176,17 @@ impl Workspace {
         let Some(stats) = &s.stats else {
             return pane
                 .child(if s.loading {
-                    "正在读取使用统计…"
+                    if english {
+                        "Loading usage statistics…"
+                    } else {
+                        "正在读取使用统计…"
+                    }
                 } else {
-                    "暂无使用统计"
+                    if english {
+                        "No usage statistics yet"
+                    } else {
+                        "暂无使用统计"
+                    }
                 })
                 .into_any_element();
         };
@@ -278,11 +295,18 @@ impl Workspace {
                     ))),
             );
         pane = pane.child(self.usage_breakdown(stats, s.by_conversation, cx));
-        let mut modes = div().flex().gap(px(6.0)).child("Token 活跃度");
+        let mut modes = div().flex().gap(px(6.0)).child(if english {
+            "Token activity"
+        } else {
+            "Token 活跃度"
+        });
         for (mode, label) in [
-            (Activity::Daily, "每日"),
-            (Activity::Weekly, "每周"),
-            (Activity::Cumulative, "累计"),
+            (Activity::Daily, if english { "Daily" } else { "每日" }),
+            (Activity::Weekly, if english { "Weekly" } else { "每周" }),
+            (
+                Activity::Cumulative,
+                if english { "Cumulative" } else { "累计" },
+            ),
         ] {
             modes = modes.child(
                 outline_button(SharedString::from(format!("activity-{label}")), p)
@@ -307,26 +331,28 @@ impl Workspace {
                         calendar.from, calendar.to
                     )));
             if calendar.earlier {
-                navigation =
-                    navigation.child(outline_button("usage-earlier", p).child("更早").on_click(
-                        cx.listener(|this, _, _, cx| {
+                navigation = navigation.child(
+                    outline_button("usage-earlier", p)
+                        .child(if english { "Earlier" } else { "更早" })
+                        .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(s) = this.settings.as_mut() {
                                 s.usage.heat_days_back += 365;
                             }
                             cx.notify();
-                        }),
-                    ));
+                        })),
+                );
             }
             if s.heat_days_back > 0 {
-                navigation =
-                    navigation.child(outline_button("usage-later", p).child("更近").on_click(
-                        cx.listener(|this, _, _, cx| {
+                navigation = navigation.child(
+                    outline_button("usage-later", p)
+                        .child(if english { "Later" } else { "更近" })
+                        .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(s) = this.settings.as_mut() {
                                 s.usage.heat_days_back = s.usage.heat_days_back.saturating_sub(365);
                             }
                             cx.notify();
-                        }),
-                    ));
+                        })),
+                );
             }
             pane = pane.child(
                 card(p)
@@ -337,11 +363,11 @@ impl Workspace {
                     .child(heatmap(calendar, p)),
             );
         }
-        let mut trend_head = div()
-            .flex()
-            .gap(px(8.0))
-            .items_center()
-            .child("每日 Token 趋势");
+        let mut trend_head = div().flex().gap(px(8.0)).items_center().child(if english {
+            "Daily Token trend"
+        } else {
+            "每日 Token 趋势"
+        });
         for span in [7, 30] {
             trend_head = trend_head.child(
                 outline_button(SharedString::from(format!("usage-trend-{span}")), p)
@@ -373,8 +399,16 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = &self.palette;
-        let mut header = div().flex().gap(px(8.0)).items_center().child("费用分布");
-        for (conversation, label) in [(false, "按项目"), (true, "按对话")] {
+        let english = self.app_settings.language == UiLanguage::English;
+        let mut header = div().flex().gap(px(8.0)).items_center().child(if english {
+            "Cost breakdown"
+        } else {
+            "费用分布"
+        });
+        for (conversation, label) in [
+            (false, if english { "By project" } else { "按项目" }),
+            (true, if english { "By chat" } else { "按对话" }),
+        ] {
             header = header.child(
                 outline_button(SharedString::from(format!("usage-group-{label}")), p)
                     .child(label)
