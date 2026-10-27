@@ -450,6 +450,44 @@ impl Workspace {
         cx.notify();
     }
 
+    fn commit_import(&mut self, candidate: ImportCandidate, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        settings.import.busy = true;
+        settings.import.notice = None;
+        let call = backend.call::<ImportCommit>(ImportCommitParams {
+            source: candidate.source,
+            source_id: candidate.source_id,
+        });
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(response) => {
+                        let thread_id = response.thread.id.clone();
+                        this.settings = None;
+                        this.refresh_threads(cx);
+                        this.select(thread_id, cx);
+                    }
+                    Err(error) => {
+                        if let Some(settings) = &mut this.settings {
+                            settings.import.busy = false;
+                            settings.import.notice = Some(format!("导入失败：{error}"));
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub(super) fn refresh_providers(&mut self, cx: &mut Context<Self>) {
         let Some(b) = self.backend.clone() else {
             if let Some(s) = &mut self.settings
@@ -1203,18 +1241,30 @@ impl Workspace {
             _ => {}
         }
         if let Some(preview) = &s.import.preview {
+            let commit_candidate = preview.candidate.clone();
             claude = claude.child(
                 div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(10.))
                     .mt(px(4.))
                     .pt(px(10.))
                     .border_t_1()
                     .border_color(p.c(Token::Border))
                     .text_size(px(TEXT_XS))
-                    .child(format!(
-                        "预览：{} 条引擎消息，跳过 {} 条源记录。确认导入与写入会话仍待接通。",
+                    .child(div().flex_1().child(format!(
+                        "预览：{} 条引擎消息，跳过 {} 条源记录。",
                         preview.messages.len(),
                         preview.skipped.len()
-                    )),
+                    )))
+                    .child(
+                        outline_button("commit-import", p)
+                            .child("导入为新对话")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.commit_import(commit_candidate.clone(), cx)
+                            })),
+                    ),
             );
         }
         card(p)

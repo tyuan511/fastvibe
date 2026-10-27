@@ -563,6 +563,26 @@ impl TranscriptStore {
         self.append_with_origins(conversation_id, messages, timestamps, None)
     }
 
+    /// Append a transcript imported from another agent. Assistant usage entries use a stable
+    /// source-derived origin so importing the same source twice cannot double-count its usage.
+    pub fn append_imported(
+        &self,
+        conversation_id: &str,
+        messages: &[Message],
+        timestamps: &[i64],
+        source_id: &str,
+    ) -> Result<(), StoreError> {
+        let origins = messages
+            .iter()
+            .enumerate()
+            .map(|(index, _)| UsageOrigin {
+                thread_id: conversation_id.into(),
+                entry_id: format!("turn:import:{source_id}:{index}"),
+            })
+            .collect::<Vec<_>>();
+        self.append_with_origins(conversation_id, messages, timestamps, Some(&origins))
+    }
+
     fn append_with_origins(
         &self,
         conversation_id: &str,

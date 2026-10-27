@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use fv_protocol::ErrorObject;
 use fv_protocol::jsonrpc::code;
 use fv_protocol::types::{
-    ImportCandidate, ImportReadParams, ImportReadResponse, ImportScanParams, ImportScanResponse,
+    ImportCandidate, ImportCommitParams, ImportReadParams, ImportReadResponse, ImportScanParams,
+    ImportScanResponse, ThreadStartResponse,
 };
 
 use crate::state::ServerState;
@@ -94,5 +95,43 @@ pub fn read(
         candidate: candidate(imported.candidate),
         messages,
         skipped: imported.skipped,
+    })
+}
+
+pub fn commit(
+    state: &ServerState,
+    params: ImportCommitParams,
+) -> Result<ThreadStartResponse, ErrorObject> {
+    let path = source_path(&params.source, &params.source_id)?;
+    let imported = fv_import::read_claude(&path)
+        .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
+    if imported.messages.is_empty() || imported.messages.len() != imported.timestamps.len() {
+        return Err(invalid("import candidate has no complete conversation"));
+    }
+    let thread = state.create_thread(imported.candidate.cwd.clone(), None, None, None)?;
+    if let Err(error) = state.store.transcripts.append_imported(
+        &thread.id,
+        &imported.messages,
+        &imported.timestamps,
+        &imported.candidate.source_id,
+    ) {
+        let _ = state.delete_thread(&thread.id);
+        return Err(ErrorObject::new(code::INTERNAL_ERROR, error.to_string()));
+    }
+    let mut imported_thread = thread.clone();
+    imported_thread.title = imported.candidate.title;
+    imported_thread.updated_at = imported_thread
+        .created_at
+        .max(imported.candidate.updated_at);
+    state
+        .store
+        .db
+        .put_thread(&imported_thread)
+        .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
+    state.broadcast(fv_protocol::ServerNotification::CatalogChanged(
+        fv_protocol::types::CatalogChanged {},
+    ));
+    Ok(ThreadStartResponse {
+        thread: imported_thread,
     })
 }

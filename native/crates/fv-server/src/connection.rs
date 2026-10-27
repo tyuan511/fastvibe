@@ -80,6 +80,7 @@ pub async fn serve_connection<R, W>(
                             | "provider/model/test"
                             | "import/scan"
                             | "import/read"
+                            | "import/commit"
                     )
                 )
         });
@@ -729,6 +730,13 @@ async fn dispatch(
         ClientRequest::ImportRead { params, .. } => {
             let state = state.clone();
             let result = tokio::task::spawn_blocking(move || crate::import::read(&state, params))
+                .await
+                .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??;
+            to_value(result)
+        }
+        ClientRequest::ImportCommit { params, .. } => {
+            let state = state.clone();
+            let result = tokio::task::spawn_blocking(move || crate::import::commit(&state, params))
                 .await
                 .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??;
             to_value(result)

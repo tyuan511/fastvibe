@@ -137,6 +137,7 @@ client_requests! {
     AppUpdateCheck => "app/update/check": Empty => AppUpdateInfo,
     ImportScan => "import/scan": ImportScanParams => ImportScanResponse,
     ImportRead => "import/read": ImportReadParams => ImportReadResponse,
+    ImportCommit => "import/commit": ImportCommitParams => ThreadStartResponse,
     StatsUsage => "stats/usage": crate::usage::UsageParams => crate::usage::UsageStats,
     SettingsSet => "settings/set": AppSettingsPatch => AppSettings,
     SkillList => "skill/list": SkillListParams => SkillListResponse,

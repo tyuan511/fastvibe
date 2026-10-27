@@ -627,6 +627,21 @@
         ],
         "type": "string"
       },
+      "ImportCommitParams": {
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "sourceId"
+        ],
+        "type": "object"
+      },
       "ImportReadParams": {
         "properties": {
           "source": {
@@ -4002,6 +4017,26 @@
           },
           "params": {
             "$ref": "#/$defs/ImportReadParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "import/commit",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ImportCommitParams"
           }
         },
         "required": [

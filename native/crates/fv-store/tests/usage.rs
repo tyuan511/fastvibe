@@ -192,3 +192,35 @@ fn completed_usage_is_kept_even_if_the_transcript_file_cannot_be_written() {
     );
     assert_eq!(store.db.usage_records().unwrap().len(), 1);
 }
+
+#[test]
+fn imported_usage_is_deduplicated_by_source_entry_across_target_threads() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let messages = vec![
+        Message::User {
+            text: "imported request".into(),
+        },
+        reply("imported reply", 12),
+    ];
+    store
+        .transcripts
+        .append_imported(
+            "thread-a",
+            &messages,
+            &[1000, 2000],
+            "/source/session.jsonl",
+        )
+        .unwrap();
+    store
+        .transcripts
+        .append_imported(
+            "thread-b",
+            &messages,
+            &[1000, 2000],
+            "/source/session.jsonl",
+        )
+        .unwrap();
+    assert_eq!(store.db.usage_records().unwrap().len(), 1);
+    assert_eq!(store.db.usage_records().unwrap()[0].usage.input_tokens, 12);
+}

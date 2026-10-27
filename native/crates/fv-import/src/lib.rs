@@ -28,6 +28,7 @@ pub struct Candidate {
 pub struct ImportedSession {
     pub candidate: Candidate,
     pub messages: Vec<Message>,
+    pub timestamps: Vec<i64>,
     pub skipped: Vec<String>,
 }
 
@@ -155,6 +156,7 @@ pub fn read_claude(path: &Path) -> Result<ImportedSession, ImportError> {
     let candidate = summarize_claude(path)?
         .ok_or_else(|| ImportError::InvalidPath("no conversation entries".into()))?;
     let mut messages = Vec::new();
+    let mut timestamps = Vec::new();
     let mut skipped = Vec::new();
     let mut assistant_by_id: HashMap<String, usize> = HashMap::new();
     for value in lines(path)? {
@@ -195,8 +197,12 @@ pub fn read_claude(path: &Path) -> Result<ImportedSession, ImportError> {
                 text = strip_synthetic(&text);
                 if !text.trim().is_empty() {
                     messages.push(Message::User { text });
+                    timestamps.push(timestamp(value.get("timestamp")));
                 }
-                messages.extend(results);
+                for result in results {
+                    messages.push(result);
+                    timestamps.push(timestamp(value.get("timestamp")));
+                }
             }
             "assistant" => {
                 let Some(message) = message else { continue };
@@ -221,6 +227,7 @@ pub fn read_claude(path: &Path) -> Result<ImportedSession, ImportError> {
                             .and_then(Value::as_str)
                             .map(str::to_string),
                     }));
+                    timestamps.push(timestamp(value.get("timestamp")));
                     if !id.is_empty() {
                         assistant_by_id.insert(id, index);
                     }
@@ -278,6 +285,7 @@ pub fn read_claude(path: &Path) -> Result<ImportedSession, ImportError> {
     Ok(ImportedSession {
         candidate,
         messages,
+        timestamps,
         skipped,
     })
 }

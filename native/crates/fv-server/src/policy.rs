@@ -129,6 +129,7 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             ClientRequest::ProviderFetchModels { .. }
             | ClientRequest::ImportScan { .. }
             | ClientRequest::ImportRead { .. }
+            | ClientRequest::ImportCommit { .. }
             | ClientRequest::OfficeWatchStart { .. }
             | ClientRequest::OfficeWatchStop { .. }
             | ClientRequest::OfficeWatchStateGet { .. }

@@ -39,7 +39,7 @@
 - [ ] 远程：按当前原生架构重新设计账号、LAN/WebRTC、SSH 主机管理，并同步适配 Flutter；不兼容旧协议。
 - [x] 数据：错误项持久化、失败回合恢复及压缩后的重试定位；代码与定向自动化验收通过。
 - [x] 数据：压缩窗口自适应；代码与自动化验收通过。
-- [ ] 数据：其他 Agent 导入；Claude Code 的只读扫描/预览转换已接入 `fv-import` 与 `import/scan|read`，仍需导入确认后的持久化、历史请求来源与用量去重，以及 Codex/OpenCode/ZCode/Pi 适配器。
+- [ ] 数据：其他 Agent 导入；Claude Code 的扫描、预览和“导入为新对话”已接入 `fv-import` 与 `import/scan|read|commit`，并用源记录稳定键做用量去重；仍需历史请求来源展示，以及 Codex/OpenCode/ZCode/Pi 适配器。
 - [ ] 外围：i18n；Dock 角标、保持唤醒、自动归档和后台回合通知已接通，见第三十四至三十七批。
 - [ ] 交付：自动更新、签名打包、Windows/Linux、切换前的全范围代码验证；OfficeCLI 与原生 office 技能须随包发布，二进制重签后的运行时校验须适配并验收。
 - [ ] 对齐：标题栏状态、工具详情和菜单样式；更新过时的进度文档。
@@ -180,9 +180,10 @@ OAuth 使用真实本地 AS/MCP 服务验证 PKCE、回调归属、错误 issuer
 - 新增 `fv-import` crate，按流读取 Claude Code 的 `projects/*/*.jsonl`，不把源文件全部载入内存，也不修改源目录。
 - 扫描结果包含标题、首条用户内容、cwd、创建/更新时间、消息数量和文件大小；支持自定义标题与 RFC3339 时间戳。
 - 读取转换会合并同一 assistant message id 的分块，保留文本、thinking、tool call、tool result、模型和 token 用量；meta 与 sidechain 条目被过滤，并记录跳过原因。
-- 原生协议新增 `import/scan` 和 `import/read`。服务端只允许读取 Claude Code 项目目录中的真实 `.jsonl` 文件，并在阻塞线程执行扫描/转换；本批还没有把预览结果写入 FastVibe 会话存储。
+- 原生协议新增 `import/scan`、`import/read` 和 `import/commit`。服务端只允许读取 Claude Code 项目目录中的真实 `.jsonl` 文件，并在阻塞线程执行扫描/转换；确认导入会创建新对话，保留 cwd、标题和源消息时间戳。
+- 导入写入使用源路径和消息序号生成稳定的 usage origin，重复导入同一源到不同对话不会重复计入用量；设置页提供刷新、预览和确认导入按钮。
 
-验证：`fv-import` 两个单测、`fv-protocol` 23 个协议/schema 用例、`fv-server` 105 个库测试和对应严格 clippy 通过。按要求只做代码与自动化验证，不使用 computer use。
+验证：`fv-import` 两个单测、`fv-store` 导入用量去重用例、`fv-protocol` schema 用例、`fv-server` 105 个库测试和 GUI/server/protocol/store/import 严格 clippy 通过。按要求只做代码与自动化验证，不使用 computer use。
 
 ## 第六批：工作区重启恢复
 
