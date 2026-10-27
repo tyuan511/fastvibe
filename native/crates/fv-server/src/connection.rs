@@ -701,6 +701,20 @@ async fn dispatch(
         }
         ClientRequest::SettingsGet { .. } => to_value(crate::settings::read(state)?),
         ClientRequest::SettingsReset { .. } => to_value(crate::settings::reset(state)?),
+        ClientRequest::DiagnosticsGet { .. } => {
+            let providers = crate::providers::list(state)?.providers;
+            let models = crate::providers::model_list(state)?.models;
+            to_value(fv_protocol::types::Diagnostics {
+                app_version: env!("CARGO_PKG_VERSION").into(),
+                protocol_version: fv_protocol::PROTOCOL_VERSION,
+                platform: std::env::consts::OS.into(),
+                providers: providers.len(),
+                models: models.len(),
+                threads: state.threads(true)?.len(),
+                mcp_servers: state.mcp.list().servers.len(),
+                memory_enabled: state.memory.state().config.enabled,
+            })
+        }
         ClientRequest::StatsUsage { params, .. } => {
             to_value(crate::usage::collect(state.clone(), params).await?)
         }

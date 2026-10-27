@@ -1917,6 +1917,19 @@ pub struct AppSettingsPatch {
     pub browser_download_dir: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Diagnostics {
+    pub app_version: String,
+    pub protocol_version: u32,
+    pub platform: String,
+    pub providers: usize,
+    pub models: usize,
+    pub threads: usize,
+    pub mcp_servers: usize,
+    pub memory_enabled: bool,
+}
+
 impl AppSettings {
     pub fn apply(&mut self, patch: AppSettingsPatch) {
         if let Some(v) = patch.send_on_enter {

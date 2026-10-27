@@ -99,6 +99,7 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::SubagentConfigSet { .. }
             | ClientRequest::SettingsGet { .. }
             | ClientRequest::SettingsReset { .. }
+            | ClientRequest::DiagnosticsGet { .. }
             | ClientRequest::StatsUsage { .. }
             | ClientRequest::SkillList { .. }
             | ClientRequest::MemoryRead { .. }

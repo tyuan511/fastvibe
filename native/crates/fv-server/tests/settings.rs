@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use fv_agent::testing::ScriptedModel;
 use fv_client::Client;
-use fv_protocol::methods::{Initialize, SettingsGet, SettingsReset, SettingsSet};
+use fv_protocol::methods::{DiagnosticsGet, Initialize, SettingsGet, SettingsReset, SettingsSet};
 use fv_protocol::types::*;
 use fv_protocol::{PROTOCOL_VERSION, ServerNotification};
 use fv_server::{ServerState, UnixServer};
@@ -127,6 +127,22 @@ async fn reset_preferences_restores_defaults() {
     let reset = client.call::<SettingsReset>(Empty {}).await.unwrap();
     assert_eq!(reset, AppSettings::default());
     assert_eq!(client.call::<SettingsGet>(Empty {}).await.unwrap(), reset);
+}
+
+#[tokio::test]
+async fn diagnostics_are_bounded_and_do_not_include_credentials_or_paths() {
+    let data = tempfile::tempdir().unwrap();
+    let agent = fv_server::agent_with_builtin_tools(Arc::new(ScriptedModel::new([])));
+    let state = Arc::new(ServerState::new(data.path().to_path_buf(), agent).unwrap());
+    let sock = data.path().join("s.sock");
+    tokio::spawn(UnixServer::bind(state, &sock).await.unwrap().run());
+    let (client, _) = connect(&sock).await;
+    let diagnostics = client.call::<DiagnosticsGet>(Empty {}).await.unwrap();
+    assert_eq!(diagnostics.app_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(diagnostics.platform, std::env::consts::OS);
+    let json = serde_json::to_string(&diagnostics).unwrap();
+    assert!(!json.contains(data.path().to_str().unwrap()));
+    assert!(!json.contains("api_key"));
 }
 
 #[tokio::test]

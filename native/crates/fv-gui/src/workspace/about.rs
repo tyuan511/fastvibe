@@ -3,7 +3,7 @@ use super::Workspace;
 use super::settings::{Section, card, outline_button};
 use crate::ui::{Muted as _, TEXT_SM, TEXT_XS};
 use fv_protocol::catalog::ModelCatalogInfo;
-use fv_protocol::methods::{ModelCatalogGet, ModelCatalogRefresh, SettingsReset};
+use fv_protocol::methods::{DiagnosticsGet, ModelCatalogGet, ModelCatalogRefresh, SettingsReset};
 use fv_protocol::types::Empty;
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -22,6 +22,8 @@ pub struct AboutSettings {
     notice: Option<String>,
     error: Option<String>,
     dirty: bool,
+    diagnostics: Option<fv_protocol::types::Diagnostics>,
+    diagnostics_loading: bool,
 }
 impl Default for AboutSettings {
     fn default() -> Self {
@@ -34,10 +36,60 @@ impl Default for AboutSettings {
             notice: None,
             error: None,
             dirty: false,
+            diagnostics: None,
+            diagnostics_loading: false,
         }
     }
 }
 impl Workspace {
+    fn load_diagnostics(&mut self, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        if settings.about.diagnostics_loading {
+            return;
+        }
+        settings.about.diagnostics_loading = true;
+        let session = settings.about.session;
+        let call = backend.call::<DiagnosticsGet>(Empty {});
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                if let Some(settings) = this
+                    .settings
+                    .as_mut()
+                    .filter(|settings| settings.about.session == session)
+                {
+                    settings.about.diagnostics_loading = false;
+                    if let Ok(diagnostics) = result {
+                        cx.write_to_clipboard(ClipboardItem::new_string(diagnostics_text(
+                            &diagnostics,
+                        )));
+                        settings.about.diagnostics = Some(diagnostics);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn copy_diagnostics(&mut self, cx: &mut Context<Self>) {
+        if let Some(diagnostics) = self
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.about.diagnostics.as_ref())
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(diagnostics_text(diagnostics)));
+        } else {
+            self.load_diagnostics(cx);
+        }
+    }
+
     fn reset_preferences(&mut self, cx: &mut Context<Self>) {
         let Some(backend) = self.backend.clone() else {
             return;
@@ -205,6 +257,8 @@ impl Workspace {
             });
         }
         let refreshing = s.refreshing;
+        let diagnostics = s.diagnostics.clone();
+        let diagnostics_loading = s.diagnostics_loading;
         div().flex().flex_col().gap(px(20.0))
             .child(div().flex().items_center().gap(px(12.0))
                 .child(div().text_size(px(24.0)).font_weight(FontWeight::BOLD).child("FastVibe"))
@@ -215,6 +269,15 @@ impl Workspace {
                 .child(div().text_size(px(TEXT_SM)).child("tyuan511/fastvibe"))
                 .child(outline_button("about-repository", p).child("开源仓库")
                     .on_click(cx.listener(|_, _, _, cx| cx.open_url("https://github.com/tyuan511/fastvibe")))))
+            .child(card(p).p(px(16.0)).flex().flex_col().gap(px(10.0))
+                .child(div().flex().items_center().justify_between()
+                    .child(div().text_size(px(TEXT_SM)).font_weight(FontWeight::MEDIUM).child("诊断信息"))
+                    .child(outline_button("load-diagnostics", p)
+                        .child(if diagnostics_loading { "读取中…" } else if diagnostics.is_some() { "复制诊断" } else { "读取并复制" })
+                        .when(!diagnostics_loading, |button| button.on_click(cx.listener(|this, _, _, cx| this.copy_diagnostics(cx))))))
+                .when_some(diagnostics, |d, diagnostics| {
+                    d.child(div().text_size(px(TEXT_XS)).muted(p).child(diagnostics_text(&diagnostics)))
+                }))
             .child(card(p).p(px(16.0)).flex().items_center().justify_between()
                 .child(div().flex().flex_col().gap(px(4.0))
                     .child(div().text_size(px(TEXT_SM)).child("偏好设置"))
@@ -238,6 +301,23 @@ impl Workspace {
                 .text_color(p.c(Token::Destructive)).child(SharedString::from(error))))
             .into_any_element()
     }
+}
+fn diagnostics_text(diagnostics: &fv_protocol::types::Diagnostics) -> String {
+    format!(
+        "FastVibe v{} · protocol {} · {} · {} providers · {} models · {} threads · {} MCP · memory {}",
+        diagnostics.app_version,
+        diagnostics.protocol_version,
+        diagnostics.platform,
+        diagnostics.providers,
+        diagnostics.models,
+        diagnostics.threads,
+        diagnostics.mcp_servers,
+        if diagnostics.memory_enabled {
+            "on"
+        } else {
+            "off"
+        },
+    )
 }
 fn timestamp(ms: u64) -> String {
     i64::try_from(ms)
