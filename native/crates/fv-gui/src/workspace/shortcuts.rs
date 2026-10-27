@@ -352,11 +352,12 @@ impl Workspace {
         };
         let state = &settings.shortcuts;
         let p = &self.palette;
+        let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         let query = state.query.read(cx).value().trim().to_lowercase();
         let mut pane = div().track_focus(&state.focus).flex().flex_col().gap(px(16.0))
             .child(Input::new(&state.query))
             .child(card(p).p(px(16.0)).flex_row().items_center().justify_between()
-                .child(div().flex().flex_col().gap(px(4.0)).child("回车发送").child(div().text_size(px(TEXT_XS)).muted(p).child("开启后 Enter 发送、Shift+Enter 换行；关闭后 Enter 换行，使用发送快捷键。")))
+                .child(div().flex().flex_col().gap(px(4.0)).child(if english { "Send on Enter" } else { "回车发送" }).child(div().text_size(px(TEXT_XS)).muted(p).child(if english { "Enter sends and Shift+Enter inserts a newline; when off, Enter inserts a newline and the send shortcut is used." } else { "开启后 Enter 发送、Shift+Enter 换行；关闭后 Enter 换行，使用发送快捷键。" })))
                 .child(switch("send-on-enter".into(), self.app_settings.send_on_enter, p).on_click(cx.listener(|this, _, _, cx| {
                     this.patch_settings(AppSettingsPatch { send_on_enter: Some(!this.app_settings.send_on_enter), ..Default::default() }, cx);
                 }))));
@@ -382,7 +383,11 @@ impl Workspace {
                 if binding != Some(fallback) {
                     buttons = buttons.child(
                         outline_button(SharedString::from(format!("restore-{id:?}")), p)
-                            .child("恢复默认")
+                            .child(if english {
+                                "Restore default"
+                            } else {
+                                "恢复默认"
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(s) = this.settings.as_mut() {
                                     s.shortcuts.cancel();
@@ -436,7 +441,11 @@ impl Workspace {
             }
         }
         if count == 0 {
-            pane = pane.child("未找到快捷键");
+            pane = pane.child(if english {
+                "No shortcuts found"
+            } else {
+                "未找到快捷键"
+            });
         }
         if let Some(error) = &state.error {
             pane = pane.child(
@@ -448,12 +457,16 @@ impl Workspace {
         if state.recording.is_some() {
             pane =
                 pane.child(div().text_size(px(TEXT_XS)).muted(p).child(
-                    "Esc 取消；Backspace 或 Delete 清除。设置重复组合键会取消原操作的绑定。",
+                    if english { "Esc cancels; Backspace or Delete clears. Assigning a duplicate chord unbinds the previous action." } else { "Esc 取消；Backspace 或 Delete 清除。设置重复组合键会取消原操作的绑定。" },
                 ));
         }
         pane.child(
             outline_button("reset-all-shortcuts", p)
-                .child("恢复全部默认快捷键")
+                .child(if english {
+                    "Restore all default shortcuts"
+                } else {
+                    "恢复全部默认快捷键"
+                })
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Some(s) = this.settings.as_mut() {
                         s.shortcuts.cancel();
