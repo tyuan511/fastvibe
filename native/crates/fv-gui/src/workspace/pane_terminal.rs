@@ -319,7 +319,7 @@ impl Workspace {
             state.tabs.push(PaneTab {
                 id: tab_id.clone(),
                 kind: PaneTabKind::Terminal,
-                title: text::PANE_TERMINAL.to_string(),
+                title: text::pane_terminal(self.app_settings.language).to_string(),
             });
             state.active = Some(tab_id.clone());
         }
@@ -368,7 +368,7 @@ impl Workspace {
             state.tabs.push(PaneTab {
                 id: id.clone(),
                 kind: PaneTabKind::Terminal,
-                title: text::PANE_TERMINAL.to_string(),
+                title: text::pane_terminal(self.app_settings.language).to_string(),
             });
             state.activate(id.clone());
         }
@@ -663,7 +663,11 @@ impl Workspace {
                     div()
                         .id("terminal-reopen")
                         .cursor_pointer()
-                        .child("重开终端")
+                        .child(if self.app_settings.language == UiLanguage::English {
+                            "Reopen terminal"
+                        } else {
+                            "重开终端"
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.start_terminal_tab(retry.clone(), cx);
                             cx.notify();
@@ -676,7 +680,11 @@ impl Workspace {
                 .p(px(12.0))
                 .text_size(px(TEXT_XS))
                 .muted(&p)
-                .child("正在启动终端…")
+                .child(if self.app_settings.language == UiLanguage::English {
+                    "Starting terminal…"
+                } else {
+                    "正在启动终端…"
+                })
                 .into_any_element();
         };
 
@@ -831,10 +839,13 @@ impl Workspace {
                             .bg(p.c(Token::Muted))
                             .text_size(px(TEXT_XS))
                             .cursor_pointer()
-                            .child(SharedString::from(format!(
-                                "回到最新（{} 行）",
-                                frame.offset
-                            )))
+                            .child(SharedString::from(
+                                if self.app_settings.language == UiLanguage::English {
+                                    format!("Back to latest ({} lines)", frame.offset)
+                                } else {
+                                    format!("回到最新（{} 行）", frame.offset)
+                                },
+                            ))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.terminal_live(&live_tab, cx);
                             }))
@@ -852,12 +863,20 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(12.0))
-                    .child("已结束")
+                    .child(if self.app_settings.language == UiLanguage::English {
+                        "Exited"
+                    } else {
+                        "已结束"
+                    })
                     .child(
                         div()
                             .id("terminal-reopen-exited")
                             .cursor_pointer()
-                            .child("重开终端")
+                            .child(if self.app_settings.language == UiLanguage::English {
+                                "Reopen terminal"
+                            } else {
+                                "重开终端"
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.start_terminal_tab(reopen_tab.clone(), cx);
                                 cx.notify();

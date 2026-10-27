@@ -40,6 +40,7 @@ impl Workspace {
 
     fn header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
+        let language = self.app_settings.language;
         let thread = self
             .selected
             .as_ref()
@@ -60,7 +61,7 @@ impl Workspace {
                     .child(div().flex_none().muted(p).child("/"));
             }
             let title = if t.title.trim().is_empty() {
-                text::UNTITLED.to_string()
+                text::untitled(language).to_string()
             } else {
                 t.title.clone()
             };
@@ -144,13 +145,24 @@ impl Workspace {
 
     /// A new conversation: the greeting above the composer, the composer a little above centre.
     fn hero(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = self.app_settings.language;
         let hour = local_hour();
-        let greeting = match hour {
-            5..=10 => "早上好呀，新的一天开始啦",
-            11..=12 => "中午好呀，记得好好吃饭",
-            13..=17 => "下午好呀，继续加油",
-            18..=22 => "晚上好呀，今天辛苦啦",
-            _ => "夜深啦，早点休息呀",
+        let greeting = if language == UiLanguage::English {
+            match hour {
+                5..=10 => "Good morning",
+                11..=12 => "Good afternoon",
+                13..=17 => "Good afternoon",
+                18..=22 => "Good evening",
+                _ => "Good night",
+            }
+        } else {
+            match hour {
+                5..=10 => "早上好呀，新的一天开始啦",
+                11..=12 => "中午好呀，记得好好吃饭",
+                13..=17 => "下午好呀，继续加油",
+                18..=22 => "晚上好呀，今天辛苦啦",
+                _ => "夜深啦，早点休息呀",
+            }
         };
         div()
             .flex_1()
@@ -197,6 +209,7 @@ impl Workspace {
     /// `NewSessionFooter`: the way back into recent work, then the composer's shortcuts.
     fn new_session_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
+        let language = self.app_settings.language;
         let project = self.draft_project.clone();
         let mut recent: Vec<&Thread> = self
             .threads
@@ -207,7 +220,11 @@ impl Workspace {
         recent.truncate(4);
         let now = now_ms();
         let heading = match &project {
+            Some(path) if language == UiLanguage::English => {
+                format!("Recent chats in {}", self.project_label(path))
+            }
             Some(path) => format!("{} 中的最近对话", self.project_label(path)),
+            None if language == UiLanguage::English => "Recent chats".to_string(),
             None => "最近对话".to_string(),
         };
         let hover = p.c(Token::Muted);
@@ -304,14 +321,38 @@ impl Workspace {
                     .gap_y(px(8.0))
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(hint("/", "技能与命令"))
-                    .when(project.is_some(), |d| d.child(hint("@", "引用文件")))
-                    .child(hint("⌘K", "搜索对话")),
+                    .child(hint(
+                        "/",
+                        if language == UiLanguage::English {
+                            "Skills and commands"
+                        } else {
+                            "技能与命令"
+                        },
+                    ))
+                    .when(project.is_some(), |d| {
+                        d.child(hint(
+                            "@",
+                            if language == UiLanguage::English {
+                                "Reference files"
+                            } else {
+                                "引用文件"
+                            },
+                        ))
+                    })
+                    .child(hint(
+                        "⌘K",
+                        if language == UiLanguage::English {
+                            "Search chats"
+                        } else {
+                            "搜索对话"
+                        },
+                    )),
             )
     }
 
     fn transcript(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
+        let language = self.app_settings.language;
         let view = self.selected.as_ref().and_then(|id| self.views.get(id));
         let mut body = div()
             .w_full()
@@ -343,7 +384,7 @@ impl Workspace {
                             14.0,
                             p.c(Token::MutedForeground),
                         ))
-                        .child(text::CONNECTING),
+                        .child(text::connecting(language)),
                 )
             }
             (Status::Ready, None) => {}
@@ -480,18 +521,19 @@ impl Workspace {
 
     fn compaction(&self, item: &Item, live: bool) -> AnyElement {
         let p = &self.palette;
+        let language = self.app_settings.language;
         let Item::ContextCompaction { .. } = item else {
             return div().into_any_element();
         };
         let label: AnyElement = if live {
-            shimmer("compaction-live", text::COMPACTING)
+            shimmer("compaction-live", text::compacting(language))
                 .text_color(p.c(Token::Foreground))
                 .into_any_element()
         } else {
             div()
                 .flex_none()
                 .text_color(p.c(Token::MutedForeground).opacity(0.6))
-                .child(text::COMPACTED)
+                .child(text::compacted(language))
                 .into_any_element()
         };
         div()
@@ -515,6 +557,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = &self.palette;
+        let language = self.app_settings.language;
         let turn_id = turn.id.as_str();
         let group = SharedString::from(format!("row-reply-{turn_id}"));
         let mut col = div()
@@ -550,7 +593,7 @@ impl Workspace {
                 (Some(a), Some(b)) if b >= a => {
                     format!("用时 {}", presentation::format_duration((b - a) as u64))
                 }
-                _ => text::PROCESSED.to_string(),
+                _ => text::processed(language).to_string(),
             };
             let mut fold = div().w_full().max_w(px(REPLY_MAX)).flex().flex_col().child(
                 div()
@@ -614,7 +657,7 @@ impl Workspace {
                     .child(
                         shimmer(
                             SharedString::from(format!("working-text-{}", turn.id)),
-                            text::WORKING,
+                            text::working(language),
                         )
                         .text_color(p.c(Token::Foreground)),
                     ),
@@ -645,7 +688,11 @@ impl Workspace {
             let copy = action_button(
                 SharedString::from(format!("copy-reply-{turn_id}")),
                 "copy01",
-                "复制",
+                if language == UiLanguage::English {
+                    "Copy"
+                } else {
+                    "复制"
+                },
                 p,
             )
             .on_click(cx.listener(move |this, _, _, cx| this.copy_text(answer.clone(), cx)));
@@ -653,7 +700,11 @@ impl Workspace {
             let fork = action_button(
                 SharedString::from(format!("fork-{turn_id}")),
                 "git-fork",
-                "创建分支",
+                if language == UiLanguage::English {
+                    "Fork"
+                } else {
+                    "创建分支"
+                },
                 p,
             )
             .on_click(cx.listener(move |this, _, _, cx| this.fork_thread(fork_id.clone(), cx)));
@@ -663,7 +714,11 @@ impl Workspace {
             let retry = action_button(
                 SharedString::from(format!("retry-{turn_id}")),
                 "rotate-ccw",
-                "重试",
+                if language == UiLanguage::English {
+                    "Retry"
+                } else {
+                    "重试"
+                },
                 p,
             )
             .on_click(
@@ -730,12 +785,20 @@ impl Workspace {
     /// A thought or a tool call: one quiet line, opened by a click to what it said or did.
     fn process_item_live(&self, item: &Item, live: bool, cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
+        let language = self.app_settings.language;
         let (id, header, body): (String, Div, Option<Div>) = match item {
             Item::Reasoning { id, text: body } => {
                 let header = if live {
                     div().flex_none().child(
-                        shimmer(SharedString::from(format!("think-live-{id}")), "正在思考")
-                            .text_color(p.c(Token::MutedForeground)),
+                        shimmer(
+                            SharedString::from(format!("think-live-{id}")),
+                            if language == UiLanguage::English {
+                                "Thinking"
+                            } else {
+                                "正在思考"
+                            },
+                        )
+                        .text_color(p.c(Token::MutedForeground)),
                     )
                 } else {
                     let elapsed = self.reasoning_duration(id);
@@ -750,7 +813,7 @@ impl Workspace {
                                     .text_size(px(TEXT_SM))
                                     .line_height(px(20.0))
                                     .muted(p)
-                                    .child(text::THINKING),
+                                    .child(text::thinking(language)),
                             )
                             .child(
                                 div()
@@ -772,7 +835,7 @@ impl Workspace {
                             .text_size(px(TEXT_SM))
                             .line_height(px(20.0))
                             .muted(p)
-                            .child(text::THINKING)
+                            .child(text::thinking(language))
                     }
                 };
                 let preview_line = if live {
@@ -1280,6 +1343,7 @@ impl Workspace {
     /// `TurnFileChips`: 已修改 N 个文件, the totals, 查看变更, then one row per file.
     fn changes_card(&self, files: &[FileChange]) -> Div {
         let p = &self.palette;
+        let language = self.app_settings.language;
         let added: u32 = files.iter().map(|f| f.added).sum();
         let removed: u32 = files.iter().map(|f| f.removed).sum();
         let counts = |a: u32, r: u32| {
@@ -1349,9 +1413,11 @@ impl Workspace {
                     .child(
                         div()
                             .font_weight(FontWeight::MEDIUM)
-                            .child(SharedString::from(
-                                text::CHANGED_FILES.replace("{n}", &files.len().to_string()),
-                            )),
+                            .child(SharedString::from(if language == UiLanguage::English {
+                                format!("{} files changed", files.len())
+                            } else {
+                                text::CHANGED_FILES.replace("{n}", &files.len().to_string())
+                            })),
                     )
                     .child(counts(added, removed).font_weight(FontWeight::MEDIUM))
                     .child(icon("arrow-down01", 14.0, p.c(Token::MutedForeground)))
@@ -1368,7 +1434,7 @@ impl Workspace {
                             .bg(p.c(Token::Background))
                             .text_size(px(TEXT_XS))
                             .font_weight(FontWeight::MEDIUM)
-                            .child(text::VIEW_CHANGES),
+                            .child(text::view_changes(language)),
                     ),
             )
             .child(rows)

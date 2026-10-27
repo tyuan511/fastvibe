@@ -1410,6 +1410,7 @@ impl Workspace {
 
     fn browser_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         card(p)
             .p(px(16.0))
             .flex()
@@ -1425,43 +1426,72 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(div().text_size(px(TEXT_SM)).child("浏览器控制"))
+                            .child(div().text_size(px(TEXT_SM)).child(if english {
+                                "Browser control"
+                            } else {
+                                "浏览器控制"
+                            }))
                             .child(
                                 div()
                                     .text_size(px(TEXT_XS))
                                     .muted(p)
-                                    .child("设置新标签页、地址栏搜索和下载位置。网页仍在隔离的原生 WebView 中运行。"),
+                                    .child(if english {
+                                        "Configure new tabs, address-bar search, and downloads. Pages run in an isolated native WebView."
+                                    } else {
+                                        "设置新标签页、地址栏搜索和下载位置。网页仍在隔离的原生 WebView 中运行。"
+                                    }),
                             ),
                     )
                     .child(
                         outline_button("save-browser-settings", p)
-                            .child("保存")
+                            .child(if english { "Save" } else { "保存" })
                             .on_click(cx.listener(|this, _, _, cx| this.save_browser(cx))),
                     ),
             )
-            .child(div().text_size(px(TEXT_XS)).muted(p).child("主页"))
+            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
+                "Home page"
+            } else {
+                "主页"
+            }))
             .child(Input::new(&s.browser.homepage).small())
-            .child(div().text_size(px(TEXT_XS)).muted(p).child("搜索地址模板"))
+            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
+                "Search URL template"
+            } else {
+                "搜索地址模板"
+            }))
             .child(Input::new(&s.browser.search_engine).small())
             .child(
                 div()
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child("模板必须包含 {query}，例如 https://www.google.com/search?q={query}。"),
+                    .child(if english {
+                        "The template must contain {query}, for example https://www.google.com/search?q={query}."
+                    } else {
+                        "模板必须包含 {query}，例如 https://www.google.com/search?q={query}。"
+                    }),
             )
-            .child(div().text_size(px(TEXT_XS)).muted(p).child("下载目录"))
+            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
+                "Download directory"
+            } else {
+                "下载目录"
+            }))
             .child(Input::new(&s.browser.download_dir).small())
             .child(
                 div()
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child("留空使用当前用户的 Downloads 目录；填写时必须是绝对路径。"),
+                    .child(if english {
+                        "Leave empty to use the current user's Downloads directory; a value must be an absolute path."
+                    } else {
+                        "留空使用当前用户的 Downloads 目录；填写时必须是绝对路径。"
+                    }),
             )
             .into_any_element()
     }
 
     fn computer_pane(&self, _cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let supported =
             cfg!(target_os = "macos") || cfg!(target_os = "linux") || cfg!(target_os = "windows");
         card(p)
@@ -1469,7 +1499,11 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(div().text_size(px(TEXT_SM)).child("电脑操控"))
+            .child(div().text_size(px(TEXT_SM)).child(if english {
+                "Computer control"
+            } else {
+                "电脑操控"
+            }))
             .child(
                 div()
                     .text_size(px(TEXT_XS))
@@ -1516,6 +1550,7 @@ impl Workspace {
 
     fn proxy_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         card(p)
             .p(px(16.0))
             .flex()
@@ -1526,10 +1561,14 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_size(px(TEXT_SM)).child("网络代理"))
+                    .child(div().text_size(px(TEXT_SM)).child(if english {
+                        "Network proxy"
+                    } else {
+                        "网络代理"
+                    }))
                     .child(
                         outline_button("save-proxy", p)
-                            .child("保存")
+                            .child(if english { "Save" } else { "保存" })
                             .on_click(cx.listener(|this, _, _, cx| this.save_proxy(cx))),
                     ),
             )
@@ -1537,7 +1576,11 @@ impl Workspace {
                 div()
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child("用于模型请求、模型目录刷新和模型列表读取。支持 HTTP(S) 与 SOCKS 代理；留空使用系统默认。"),
+                    .child(if english {
+                        "Used for model requests, catalog refreshes, and model lists. Supports HTTP(S) and SOCKS proxies; leave empty for the system default."
+                    } else {
+                        "用于模型请求、模型目录刷新和模型列表读取。支持 HTTP(S) 与 SOCKS 代理；留空使用系统默认。"
+                    }),
             )
             .child(Input::new(&s.proxy.url).small())
             .into_any_element()

@@ -42,8 +42,12 @@ impl Workspace {
             generation: self.search_results.generation + 1,
             ..Default::default()
         };
-        let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索对话正文、标题或命令"));
+        let placeholder = if self.app_settings.language == UiLanguage::English {
+            "Search chats, titles, or commands"
+        } else {
+            "搜索对话正文、标题或命令"
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         input.update(cx, |st, cx| st.focus(window, cx));
         cx.subscribe_in(
             &input,
@@ -125,8 +129,16 @@ impl Workspace {
     fn palette_hits(&self, query: &str) -> Vec<Row> {
         let mut rows = Vec::new();
         for (hit, label, glyph) in [
-            (Hit::NewChat, text::NEW_CHAT, "message-square-plus"),
-            (Hit::Settings, text::SETTINGS, "settings01"),
+            (
+                Hit::NewChat,
+                text::new_chat(self.app_settings.language),
+                "message-square-plus",
+            ),
+            (
+                Hit::Settings,
+                text::settings(self.app_settings.language),
+                "settings01",
+            ),
         ] {
             if query.is_empty() || label.to_lowercase().contains(query) {
                 rows.push(Row {
@@ -171,14 +183,18 @@ impl Workspace {
             let body_query = snippet.as_ref().map(|_| query.to_string());
             let detail = snippet.or(t.project);
             let detail = if t.archived {
-                Some(format!("已归档 · {}", detail.unwrap_or_default()))
+                Some(if self.app_settings.language == UiLanguage::English {
+                    format!("Archived · {}", detail.unwrap_or_default())
+                } else {
+                    format!("已归档 · {}", detail.unwrap_or_default())
+                })
             } else {
                 detail
             };
             rows.push(Row {
                 hit: Hit::Thread(t.id, body_query),
                 label: if t.title.trim().is_empty() {
-                    text::UNTITLED.into()
+                    text::untitled(self.app_settings.language).into()
                 } else {
                     t.title
                 },
@@ -222,9 +238,17 @@ impl Workspace {
             .flex_col();
         let status = self.search_results.error.clone().or_else(|| {
             if self.search_results.loading {
-                Some("正在搜索正文…".into())
+                Some(if self.app_settings.language == UiLanguage::English {
+                    "Searching chats…".into()
+                } else {
+                    "正在搜索正文…".into()
+                })
             } else if hits.is_empty() {
-                Some("没有匹配的结果".into())
+                Some(if self.app_settings.language == UiLanguage::English {
+                    "No matching results".into()
+                } else {
+                    "没有匹配的结果".into()
+                })
             } else {
                 None
             }
@@ -292,16 +316,28 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(12.0))
-                    .child("Enter 打开第一项 · Esc 关闭")
+                    .child(if self.app_settings.language == UiLanguage::English {
+                        "Enter opens the first result · Esc closes"
+                    } else {
+                        "Enter 打开第一项 · Esc 关闭"
+                    })
                     .child(div().flex_1())
                     .child(
                         div()
                             .id("search-archived")
                             .cursor_pointer()
                             .child(if include {
-                                "☑ 包括已归档对话"
+                                if self.app_settings.language == UiLanguage::English {
+                                    "☑ Include archived chats"
+                                } else {
+                                    "☑ 包括已归档对话"
+                                }
                             } else {
-                                "☐ 包括已归档对话"
+                                if self.app_settings.language == UiLanguage::English {
+                                    "☐ Include archived chats"
+                                } else {
+                                    "☐ 包括已归档对话"
+                                }
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.search_results.include_archived =

@@ -1,7 +1,7 @@
 //! The composer, after `components/chat/composer.tsx`: a 22px-round card holding the text area,
 //! and under it the attach button, the model and thinking chip, and send / stop.
 
-use fv_protocol::types::ThinkingLevel;
+use fv_protocol::types::{ThinkingLevel, UiLanguage};
 use fv_theme::Token;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::Textarea;
@@ -57,13 +57,15 @@ impl Workspace {
     ) -> impl IntoElement {
         self.refresh_skill_picker(cx);
         let p = &self.palette;
+        let language = self.app_settings.language;
+        let english = language == UiLanguage::English;
         // 回复推荐 rides in the placeholder: an empty composer shows what the user is likely to
         // say next, and Tab takes it. Written only when it changed — the text area is a child
         // entity, so setting it every frame would make every frame a change.
         let wanted_placeholder = self
             .compose_suggestion
             .clone()
-            .unwrap_or_else(|| text::PLACEHOLDER.to_string());
+            .unwrap_or_else(|| text::placeholder(language).to_string());
         if wanted_placeholder != self.placeholder_shown {
             self.placeholder_shown = wanted_placeholder.clone();
             self.input.update(cx, |state, cx| {
@@ -85,12 +87,16 @@ impl Workspace {
         let model_text = match (entry, label.as_deref()) {
             (Some(m), _) => format!("{}/{}", m.provider_name, m.model.id),
             (None, Some(l)) => l.to_string(),
-            (None, None) => text::NO_MODEL.to_string(),
+            (None, None) => text::no_model(language).to_string(),
         };
         let thinking_text = self
             .current_thinking()
             .map(thinking_label)
-            .unwrap_or("跟随默认");
+            .unwrap_or(if english {
+                "Follow default"
+            } else {
+                "跟随默认"
+            });
 
         // How full the model's window is: a ring that warms up as it nears the limit.
         let usage = self
@@ -151,11 +157,11 @@ impl Workspace {
             .cursor_pointer()
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(if stops {
-                    "停止"
+                    if english { "Stop" } else { "停止" }
                 } else if running {
-                    "加入队列"
+                    if english { "Queue" } else { "加入队列" }
                 } else {
-                    "发送"
+                    if english { "Send" } else { "发送" }
                 })
                 .build(window, cx)
             })
@@ -239,7 +245,7 @@ impl Workspace {
                 .text_size(px(TEXT_XS))
                 .muted(p)
                 .child(icon("pencil-edit02", 12.0, p.c(Token::MutedForeground)))
-                .child(text::EDIT_HINT)
+                .child(text::edit_hint(language))
                 .child(div().flex_1())
                 .child(
                     div()
@@ -248,7 +254,7 @@ impl Workspace {
                         .rounded(px(4.0))
                         .cursor_pointer()
                         .hover(move |d| d.bg(hover))
-                        .child(text::EDIT_CANCEL)
+                        .child(text::edit_cancel(language))
                         .on_click(cx.listener(|this, _, _, cx| this.cancel_edit_public(cx))),
                 )
         });
@@ -435,7 +441,7 @@ impl Workspace {
                     .px(px(8.0))
                     .py(px(6.0))
                     .muted(p)
-                    .child(text::NO_MODEL_HINT),
+                    .child(text::no_model_hint(self.app_settings.language)),
             );
         }
         for m in &self.models {
@@ -484,7 +490,11 @@ impl Workspace {
                 .cursor_pointer()
                 .when(thinking_active, move |d| d.bg(hover))
                 .hover(move |d| d.bg(hover))
-                .child("思考强度")
+                .child(if self.app_settings.language == UiLanguage::English {
+                    "Thinking effort"
+                } else {
+                    "思考强度"
+                })
                 .child(
                     div()
                         .flex()
@@ -525,7 +535,11 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(move |d| d.bg(hover))
                 .child(icon("settings02", 14.0, p.c(Token::MutedForeground)))
-                .child("管理模型")
+                .child(if self.app_settings.language == UiLanguage::English {
+                    "Manage models"
+                } else {
+                    "管理模型"
+                })
                 .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                     if *hovered && this.thinking_menu {
                         this.thinking_menu = false;

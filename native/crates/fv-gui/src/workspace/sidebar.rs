@@ -535,7 +535,7 @@ impl Workspace {
         let id = t.id.clone();
         let active = self.selected.as_ref() == Some(&t.id);
         let title = if t.title.trim().is_empty() {
-            text::UNTITLED.to_string()
+            text::untitled(self.app_settings.language).to_string()
         } else {
             t.title.clone()
         };

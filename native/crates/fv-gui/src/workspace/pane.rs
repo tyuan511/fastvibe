@@ -715,14 +715,22 @@ impl Workspace {
                                     .text_size(px(20.0))
                                     .line_height(px(28.0))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("打开标签页"),
+                                    .child(if self.app_settings.language == UiLanguage::English {
+                                        "Open a panel"
+                                    } else {
+                                        "打开标签页"
+                                    }),
                             )
                             .child(
                                 div()
                                     .text_size(px(TEXT_SM))
                                     .line_height(px(20.0))
                                     .text_color(p.c(Token::MutedForeground))
-                                    .child("选择要在侧边面板中打开的标签。"),
+                                    .child(if self.app_settings.language == UiLanguage::English {
+                                        "Choose a panel to open in the sidebar."
+                                    } else {
+                                        "选择要在侧边面板中打开的标签。"
+                                    }),
                             ),
                     )
                     .child(cards)
@@ -735,21 +743,47 @@ impl Workspace {
             )
     }
 
-    fn pane_catalog(&self) -> Vec<(&'static str, &'static str, &'static str)> {
+    fn pane_catalog(&self) -> Vec<(&'static str, &'static str, String)> {
+        let english = self.app_settings.language == UiLanguage::English;
         let mut items = Vec::new();
         if self.selected.is_some() {
-            items.push(("chat", "message-square", "辅助对话"));
+            items.push((
+                "chat",
+                "message-square",
+                if english {
+                    "Auxiliary chat"
+                } else {
+                    "辅助对话"
+                }
+                .into(),
+            ));
         }
-        items.push(("files", "folder01", "文件"));
+        items.push((
+            "files",
+            "folder01",
+            if english { "Files" } else { "文件" }.into(),
+        ));
         if !self
             .panes
             .get(self.selected.as_deref().unwrap_or("__draft__"))
             .is_some_and(|s| s.tabs.iter().any(|t| t.kind == PaneTabKind::Git))
         {
-            items.push(("git", "git-compare", "变更"));
+            items.push((
+                "git",
+                "git-compare",
+                if english { "Changes" } else { "变更" }.into(),
+            ));
         }
-        items.push(("terminal", "terminal", "终端"));
-        items.push(("browser", "chrome", "浏览器"));
+        items.push((
+            "terminal",
+            "terminal",
+            if english { "Terminal" } else { "终端" }.into(),
+        ));
+        items.push((
+            "browser",
+            "chrome",
+            if english { "Browser" } else { "浏览器" }.into(),
+        ));
         items
     }
 

@@ -31,12 +31,12 @@ macOS 打开 DMG 后，将 FastVibe 拖入「应用程序」；Windows 运行安
 
 ## 开始使用
 
-1. 打开 **设置 → 供应商**，添加供应商，填入 API Key 或使用受支持的供应商登录方式，再选择需要的模型。也可以接入自己的兼容接口。
+1. 打开 **设置 → 供应商**，添加自定义端点并填入 API Key，再选择需要的模型。兼容 OpenAI、Anthropic 或 Google 格式的自建/代理接口都可以接入。
 2. 选择文件夹创建项目，或直接新建对话，使用独立的临时工作区。本地项目可以包含多个文件夹和仓库。
 3. 选择模型，描述任务。在对话中查看工具调用和文件变更，按需在旁边打开文件、终端或 Git 审查。
 
 > [!NOTE]
-> 执行任务需要先配置模型供应商。FastVibe 账号登录与供应商配置相互独立，账号用于官方远程连接；模型用量由你选择的供应商计费。
+> 执行任务需要先配置自定义模型端点和 API Key。FastVibe 不提供模型订阅登录；模型用量由你配置的端点计费。
 
 ## 功能
 
@@ -92,6 +92,9 @@ pnpm dev
 | `pnpm test` | 运行 Node.js 测试 |
 | `pnpm build` | 将桌面端构建到 `out/` |
 | `pnpm dist:mac` / `pnpm dist:win` / `pnpm dist:linux` | 打包桌面端安装程序 |
+| `pnpm native:fmt` / `pnpm native:check` / `pnpm native:test` | 检查原生 Rust 工作区 |
+| `pnpm native:build` / `pnpm native:bundle` | 构建并生成带技能、OfficeCLI 资源清单的原生 bundle |
+| `pnpm native:verify -- --bundle DIR` | 校验原生 bundle 的资源和签名后二进制 |
 | `pnpm sync:models` | 更新 models.dev 快照 |
 | `pnpm flutter:analyze` / `pnpm flutter:test` | 检查 Flutter 手机客户端 |
 

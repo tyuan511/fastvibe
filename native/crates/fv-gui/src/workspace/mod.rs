@@ -49,6 +49,8 @@ use crate::view_model::{Applied, ThreadView};
 
 /// The Electron app's Chinese copy (`locales/zh`), word for word.
 mod text {
+    use super::UiLanguage;
+
     pub const NEW_CHAT: &str = "新对话";
     pub const TASKS: &str = "定时任务";
     pub const PROJECTS: &str = "项目";
@@ -78,6 +80,132 @@ mod text {
     pub const PANE_GIT: &str = "变更";
     pub const GIT_COMMIT: &str = "提交";
     pub const EDIT_CANCEL: &str = "取消";
+
+    pub fn new_chat(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => NEW_CHAT,
+            UiLanguage::English => "New chat",
+        }
+    }
+
+    pub fn settings(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => SETTINGS,
+            UiLanguage::English => "Settings",
+        }
+    }
+
+    pub fn placeholder(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => PLACEHOLDER,
+            UiLanguage::English => "Ask anything",
+        }
+    }
+
+    pub fn no_model(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => NO_MODEL,
+            UiLanguage::English => "Add a model",
+        }
+    }
+
+    pub fn no_model_hint(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => NO_MODEL_HINT,
+            UiLanguage::English => "No models configured",
+        }
+    }
+
+    pub fn connecting(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => CONNECTING,
+            UiLanguage::English => "Connecting…",
+        }
+    }
+
+    pub fn pane_terminal(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => PANE_TERMINAL,
+            UiLanguage::English => "Terminal",
+        }
+    }
+
+    pub fn pane_git(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => PANE_GIT,
+            UiLanguage::English => "Changes",
+        }
+    }
+
+    pub fn git_commit(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => GIT_COMMIT,
+            UiLanguage::English => "Commit",
+        }
+    }
+
+    pub fn edit_hint(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => EDIT_HINT,
+            UiLanguage::English => "Editing this prompt; sending will rewrite this turn",
+        }
+    }
+
+    pub fn edit_cancel(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => EDIT_CANCEL,
+            UiLanguage::English => "Cancel",
+        }
+    }
+
+    pub fn untitled(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => UNTITLED,
+            UiLanguage::English => "New chat",
+        }
+    }
+
+    pub fn thinking(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => THINKING,
+            UiLanguage::English => "Thinking",
+        }
+    }
+
+    pub fn compacted(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => COMPACTED,
+            UiLanguage::English => "Context compacted",
+        }
+    }
+
+    pub fn compacting(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => COMPACTING,
+            UiLanguage::English => "Compacting context",
+        }
+    }
+
+    pub fn working(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => WORKING,
+            UiLanguage::English => "Working",
+        }
+    }
+
+    pub fn processed(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => PROCESSED,
+            UiLanguage::English => "Processed",
+        }
+    }
+
+    pub fn view_changes(language: UiLanguage) -> &'static str {
+        match language {
+            UiLanguage::Chinese => VIEW_CHANGES,
+            UiLanguage::English => "View changes",
+        }
+    }
 }
 
 enum Status {
@@ -2081,6 +2209,23 @@ impl Workspace {
         thread
             .or_else(|| self.pending_model.clone())
             .or_else(|| self.defaults.model.clone())
+    }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::text;
+    use fv_protocol::types::UiLanguage;
+
+    #[test]
+    fn translated_core_labels_have_stable_chinese_and_english_values() {
+        assert_eq!(text::new_chat(UiLanguage::Chinese), "新对话");
+        assert_eq!(text::new_chat(UiLanguage::English), "New chat");
+        assert_eq!(text::placeholder(UiLanguage::Chinese), "随心输入");
+        assert_eq!(text::placeholder(UiLanguage::English), "Ask anything");
+        assert_eq!(text::pane_git(UiLanguage::Chinese), "变更");
+        assert_eq!(text::pane_git(UiLanguage::English), "Changes");
+        assert_eq!(text::working(UiLanguage::English), "Working");
     }
 }
 

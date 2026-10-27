@@ -404,13 +404,17 @@ impl Workspace {
         state.tabs.push(PaneTab {
             id: id.clone(),
             kind: PaneTabKind::Git,
-            title: text::PANE_GIT.to_string(),
+            title: text::pane_git(self.app_settings.language).to_string(),
         });
         state.activate(id);
         let editor = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .auto_grow(1, 8)
-                .placeholder("提交信息")
+            TextareaState::new(window, cx).auto_grow(1, 8).placeholder(
+                if self.app_settings.language == UiLanguage::English {
+                    "Commit message"
+                } else {
+                    "提交信息"
+                },
+            )
         });
         let container = self.git_views.entry(conversation).or_default();
         container.select(&cwd);
@@ -465,7 +469,7 @@ impl Workspace {
             pane.tabs.push(PaneTab {
                 id: id.clone(),
                 kind: PaneTabKind::Git,
-                title: text::PANE_GIT.to_string(),
+                title: text::pane_git(self.app_settings.language).to_string(),
             });
             pane.activate(id);
         }
@@ -1963,7 +1967,7 @@ impl Workspace {
             .when(!can_commit, |d| d.opacity(0.5))
             .gap(px(6.0))
             .child(icon("tick02", 14.0, p.c(Token::PrimaryForeground)))
-            .child(text::GIT_COMMIT)
+            .child(text::git_commit(self.app_settings.language))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if can_commit && let Some(target) = &target {
                     this.git_commit(target, cx);

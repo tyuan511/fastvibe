@@ -31,12 +31,12 @@ The [Android releases](https://github.com/tyuan511/fastvibe/releases?q=app-v&exp
 
 ## Get started
 
-1. Open **Settings → Providers**, add a provider, and connect it with your API key or a supported provider login. Select the models you want to use; custom compatible endpoints are supported too.
+1. Open **Settings → Providers**, add a custom endpoint, and enter its API key. OpenAI-, Anthropic-, and Google-compatible self-hosted or proxy endpoints are supported.
 2. Create a project by choosing a folder, or start a conversation without a project to use a separate scratch workspace. Local projects can include several folders and repositories.
 3. Choose a model and describe the task. Follow tool calls and file changes in the conversation, then open files, the terminal, or Git review alongside it.
 
 > [!NOTE]
-> Bring a model provider to run tasks. FastVibe account sign-in is separate from provider setup and is used for account-based remote connections. Model usage is billed by your provider.
+> Configure a custom model endpoint and API key before running tasks. FastVibe does not provide model subscription login; usage is billed by the endpoint you configure.
 
 ## Features
 
@@ -97,6 +97,8 @@ pnpm dev
 | `pnpm native:fmt` / `pnpm native:check` | Format-check and compile the native Rust workspace |
 | `pnpm native:test` / `pnpm native:build` | Run native Rust tests or build the server and GUI in release mode |
 | `pnpm native:stage` | Copy native GUI/server binaries into a platform/architecture staging directory with SHA-256 manifest |
+| `pnpm native:bundle` | Stage a runnable native bundle with built-in skills and the pinned OfficeCLI resources |
+| `pnpm native:verify -- --bundle DIR` | Verify native bundle resources and binaries after staging or signing |
 
 To preview the renderer in a browser:
 
