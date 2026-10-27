@@ -521,7 +521,7 @@ impl Workspace {
             let editor = cx.new(|cx| {
                 TextareaState::new(window, cx)
                     .auto_grow(1, 8)
-                    .placeholder("提交信息")
+                    .placeholder("提交信息 / Commit message")
             });
             editor.update(cx, |state, cx| state.set_value(text, window, cx));
             let owner = target.clone();
@@ -853,12 +853,19 @@ impl Workspace {
     }
 
     pub(super) fn git_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let english = self.app_settings.language == UiLanguage::English;
         let Some(conversation) = self.selected.clone() else {
             return div().into_any_element();
         };
         let roots = self.project_roots_for(&conversation);
         let Some(root) = self.git_cwd() else {
-            return div().child("这个对话没有工作目录").into_any_element();
+            return div()
+                .child(if english {
+                    "This chat has no working directory"
+                } else {
+                    "这个对话没有工作目录"
+                })
+                .into_any_element();
         };
         let changed = self
             .git_views
@@ -949,6 +956,7 @@ impl Workspace {
     /// The 变更 tab's body.
     fn git_repository_body(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette.clone();
+        let english = self.app_settings.language == UiLanguage::English;
         let Some(conversation) = self.selected.clone() else {
             return div().into_any_element();
         };
@@ -992,11 +1000,11 @@ impl Workspace {
                 .gap(px(8.0))
                 .p(px(24.0))
                 .child(icon("git-compare", 24.0, p.c(Token::MutedForeground)))
-                .child(
-                    div()
-                        .text_size(px(TEXT_SM))
-                        .child("这个目录不在 Git 仓库里"),
-                )
+                .child(div().text_size(px(TEXT_SM)).child(if english {
+                    "This directory is not a Git repository"
+                } else {
+                    "这个目录不在 Git 仓库里"
+                }))
                 .into_any_element();
         }
         let patch = view.patch.clone();
@@ -1126,7 +1134,11 @@ impl Workspace {
                     .py(px(32.0))
                     .text_size(px(TEXT_XS))
                     .muted(&p)
-                    .child("没有未提交的改动"),
+                    .child(if english {
+                        "No uncommitted changes"
+                    } else {
+                        "没有未提交的改动"
+                    }),
             );
         }
         let commit = self.git_commit_box(
@@ -1154,7 +1166,11 @@ impl Workspace {
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
                     .child(ui::chevron(history_open, 12.0, p.c(Token::MutedForeground)))
-                    .child("提交历史")
+                    .child(if english {
+                        "Commit history"
+                    } else {
+                        "提交历史"
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(view) = this
                             .selected
@@ -1979,6 +1995,7 @@ impl Workspace {
     /// The graph, one commit per row, with its parents' lines kept.
     fn git_history_panel(&self, history: Option<GitHistory>, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let scroll = self
             .selected
             .as_ref()
@@ -2071,7 +2088,7 @@ impl Workspace {
                 .text_size(px(TEXT_XS))
                 .muted(p)
                 .cursor_pointer()
-                .child("加载更多")
+                .child(if english { "Load more" } else { "加载更多" })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.git_target_is_current(&target) {
                         this.load_git_history(skip, Some(tips.clone()), cx);
