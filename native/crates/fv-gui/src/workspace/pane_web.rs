@@ -9,7 +9,7 @@ use crate::{
     web_content::Document,
     webview::{Surface, WebEvent},
 };
-use fv_protocol::types::{FilePreview, FilePreviewKind};
+use fv_protocol::types::{FilePreview, FilePreviewKind, UiLanguage};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::{
     component::{
@@ -180,6 +180,7 @@ impl Workspace {
             Ok(url) => url,
             Err(_) => return,
         };
+        let english = self.app_settings.language == UiLanguage::English;
         let state = self.panes.entry(owner.into()).or_default();
         if state
             .tabs
@@ -188,14 +189,21 @@ impl Workspace {
             .count()
             >= 32
         {
-            state.notice = Some("一个对话最多打开 32 个浏览器标签".into());
+            state.notice = Some(
+                if english {
+                    "A chat can have at most 32 browser tabs"
+                } else {
+                    "一个对话最多打开 32 个浏览器标签"
+                }
+                .into(),
+            );
             cx.notify();
             return;
         }
         let id = new_tab_id();
         state.tabs.push(PaneTab {
             id: id.clone(),
-            title: "浏览器".into(),
+            title: if english { "Browser" } else { "浏览器" }.into(),
             kind: PaneTabKind::Browser { url },
         });
         state.activate(id);
@@ -232,6 +240,7 @@ impl Workspace {
         .detach();
     }
     fn web_event(&mut self, key: &str, event: WebEvent, cx: &mut Context<Self>) {
+        let english = self.app_settings.language == UiLanguage::English;
         let history_url = match &event {
             WebEvent::Location(url) if self.web_views.get(key).is_some_and(|view| view.browser) => {
                 Some(url.clone())
@@ -283,13 +292,27 @@ impl Workspace {
             WebEvent::Crashed => {
                 view.loading = false;
                 view.surface.hide();
-                view.surface.error = Some("网页进程已退出，请重试".into());
+                view.surface.error = Some(
+                    if english {
+                        "The web process exited; retry"
+                    } else {
+                        "网页进程已退出，请重试"
+                    }
+                    .into(),
+                );
                 if let Some(tab) = key.strip_prefix("office-live:")
                     && let Some(office) = self.office_views.get_mut(tab)
                 {
                     office.live_ready = false;
                     office.url = None;
-                    office.watch_error = Some("网页进程已退出，请刷新文档预览".into());
+                    office.watch_error = Some(
+                        if english {
+                            "The web process exited; refresh the document preview"
+                        } else {
+                            "网页进程已退出，请刷新文档预览"
+                        }
+                        .into(),
+                    );
                 }
             }
             WebEvent::Popup(url) => {
@@ -395,6 +418,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let english = self.app_settings.language == UiLanguage::English;
         if !self.web_views.contains_key(id) {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             self.web_views.insert(
@@ -418,7 +442,11 @@ impl Workspace {
         }
         if self.web_views[id].address.is_none() {
             let address = cx.new(|cx| {
-                InputState::new(window, cx).placeholder("输入网址或搜索 / Enter a URL or search")
+                InputState::new(window, cx).placeholder(if english {
+                    "Enter a URL or search"
+                } else {
+                    "输入网址或搜索"
+                })
             });
             let key = id.to_string();
             cx.subscribe(&address, move |this, input, event: &InputEvent, cx| {
@@ -467,15 +495,27 @@ impl Workspace {
             .border_b_1()
             .border_color(p.c(fv_theme::Token::Border));
         for (command, glyph, label) in [
-            ("back", "arrow-left01", "后退"),
-            ("forward", "arrow-right01", "前进"),
+            (
+                "back",
+                "arrow-left01",
+                if english { "Back" } else { "后退" },
+            ),
+            (
+                "forward",
+                "arrow-right01",
+                if english { "Forward" } else { "前进" },
+            ),
             (
                 if loading { "stop" } else { "reload" },
                 if loading { "cancel01" } else { "refresh" },
                 if loading {
-                    "停止加载"
+                    if english {
+                        "Stop loading"
+                    } else {
+                        "停止加载"
+                    }
                 } else {
-                    "重新加载"
+                    if english { "Reload" } else { "重新加载" }
                 },
             ),
         ] {
@@ -494,7 +534,11 @@ impl Workspace {
         let external_url = current.clone();
         toolbar = toolbar.child(
             icon_button_xs("browser-external", "link-square02", &p)
-                .aria_label("在系统浏览器中打开")
+                .aria_label(if english {
+                    "Open in system browser"
+                } else {
+                    "在系统浏览器中打开"
+                })
                 .on_click(move |_, _, cx| {
                     if let Some(url) = fv_core::safe_web_url(&external_url) {
                         cx.open_url(&url);
@@ -510,9 +554,17 @@ impl Workspace {
                 &p,
             )
             .aria_label(if bookmarked {
-                "取消收藏"
+                if english {
+                    "Remove bookmark"
+                } else {
+                    "取消收藏"
+                }
             } else {
-                "收藏此页"
+                if english {
+                    "Bookmark this page"
+                } else {
+                    "收藏此页"
+                }
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_browser_bookmark(&bookmark_url, &bookmark_title, cx);
