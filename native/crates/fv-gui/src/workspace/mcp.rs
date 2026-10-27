@@ -76,10 +76,17 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.app_settings.language == UiLanguage::English;
                 if let Some(s) = this.settings.as_mut().filter(|s| s.mcp.request == request) {
                     match result {
                         Ok(r) => s.mcp.servers = Some(r.servers),
-                        Err(e) => s.mcp.notice = Some(format!("无法读取 MCP：{e}")),
+                        Err(e) => {
+                            s.mcp.notice = Some(if english {
+                                format!("Could not read MCP: {e}")
+                            } else {
+                                format!("无法读取 MCP：{e}")
+                            })
+                        }
                     }
                     cx.notify();
                 }
@@ -95,12 +102,20 @@ impl Workspace {
         result: Result<McpListResponse, String>,
         cx: &mut Context<Self>,
     ) {
+        let english = self.app_settings.language == UiLanguage::English;
         if let Some(s) = self.settings.as_mut().filter(|s| s.mcp.session == session) {
             s.mcp.busy = false;
             match result {
                 Ok(r) => {
                     s.mcp.servers = Some(r.servers);
-                    s.mcp.notice = Some("配置已更新".into());
+                    s.mcp.notice = Some(
+                        if english {
+                            "Configuration updated"
+                        } else {
+                            "配置已更新"
+                        }
+                        .into(),
+                    );
                 }
                 Err(e) => s.mcp.notice = Some(e),
             }

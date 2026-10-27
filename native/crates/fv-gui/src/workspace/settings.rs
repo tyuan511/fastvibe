@@ -2699,7 +2699,7 @@ impl Workspace {
                     .px(px(8.0))
                     .py(px(6.0))
                     .muted(p)
-                    .child(text::NO_MODEL_HINT),
+                    .child(text::no_model_hint(self.app_settings.language)),
             );
         }
         for m in &self.models {
