@@ -1,0 +1,77 @@
+_version: 2
+
+app_menu.about:
+  zh: "关于 FastVibe"
+  en: "About FastVibe"
+app_menu.settings:
+  zh: "设置…"
+  en: "Settings…"
+app_menu.services:
+  zh: "服务"
+  en: "Services"
+app_menu.hide:
+  zh: "隐藏 FastVibe"
+  en: "Hide FastVibe"
+app_menu.hide_others:
+  zh: "隐藏其他"
+  en: "Hide Others"
+app_menu.show_all:
+  zh: "全部显示"
+  en: "Show All"
+app_menu.quit:
+  zh: "退出 FastVibe"
+  en: "Quit FastVibe"
+app_menu.file:
+  zh: "文件"
+  en: "File"
+app_menu.new_chat:
+  zh: "新对话"
+  en: "New Chat"
+app_menu.search:
+  zh: "搜索…"
+  en: "Search…"
+app_menu.edit:
+  zh: "编辑"
+  en: "Edit"
+app_menu.undo:
+  zh: "撤销"
+  en: "Undo"
+app_menu.redo:
+  zh: "重做"
+  en: "Redo"
+app_menu.cut:
+  zh: "剪切"
+  en: "Cut"
+app_menu.copy:
+  zh: "复制"
+  en: "Copy"
+app_menu.paste:
+  zh: "粘贴"
+  en: "Paste"
+app_menu.select_all:
+  zh: "全选"
+  en: "Select All"
+app_menu.view:
+  zh: "视图"
+  en: "View"
+app_menu.address_bar:
+  zh: "地址栏"
+  en: "Address Bar"
+app_menu.reload:
+  zh: "重新加载"
+  en: "Reload"
+app_menu.window:
+  zh: "窗口"
+  en: "Window"
+app_menu.minimize:
+  zh: "最小化"
+  en: "Minimize"
+app_menu.zoom:
+  zh: "缩放"
+  en: "Zoom"
+app_menu.help:
+  zh: "帮助"
+  en: "Help"
+app_menu.website:
+  zh: "官网"
+  en: "Website"

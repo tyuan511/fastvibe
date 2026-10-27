@@ -30,6 +30,7 @@ macro_rules! trs {
 }
 
 mod about;
+mod app_menu;
 mod ask;
 mod composer;
 mod diff;
@@ -298,6 +299,8 @@ pub struct Workspace {
     /// Whether the app follows `app_settings`; a fixture window keeps the palette it was given.
     live_appearance: bool,
     appearance_dirty: bool,
+    /// The language the menu bar was last built in.
+    menu_english: bool,
     system_dark: bool,
 }
 
@@ -559,6 +562,7 @@ impl Workspace {
             shortcuts: shortcuts::Runtime::new(window, cx),
             live_appearance: false,
             appearance_dirty: false,
+            menu_english: false,
             system_dark: matches!(
                 window.appearance(),
                 WindowAppearance::Dark | WindowAppearance::VibrantDark
@@ -2177,6 +2181,11 @@ impl Render for Workspace {
             self.input.update(cx, |input, cx| input.focus(window, cx));
         }
         self.sync_terminal_focus(window, cx);
+        let english = self.app_settings.language == UiLanguage::English;
+        if english != self.menu_english {
+            self.menu_english = english;
+            app_menu::install(cx, english);
+        }
         if self.appearance_dirty {
             self.appearance_dirty = false;
             if self.live_appearance {
@@ -2310,6 +2319,13 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_new_chat))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_open_search))
+            .on_action(cx.listener(|this, _: &app_menu::OpenAbout, window, cx| {
+                this.open_settings(settings::Section::About, window, cx)
+            }))
+            .on_action(
+                cx.listener(|_, _: &app_menu::MinimizeWindow, window, _| window.minimize_window()),
+            )
+            .on_action(cx.listener(|_, _: &app_menu::ZoomWindow, window, _| window.zoom_window()))
             .on_action(cx.listener(Self::on_dismiss))
             .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(|this, _: &ToggleSidePane, _, cx| this.toggle_side_pane(cx)))
@@ -2695,44 +2711,8 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys(pane_terminal::passthrough_bindings());
     cx.on_action(|_: &Quit, cx| cx.quit());
 
-    cx.set_menus(vec![
-        Menu {
-            name: "FastVibe".into(),
-            items: vec![
-                MenuItem::action("新对话", NewChat),
-                MenuItem::action("搜索…", OpenSearch),
-                MenuItem::action("设置…", OpenSettings),
-                MenuItem::separator(),
-                MenuItem::action("退出 FastVibe", Quit),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "浏览器".into(),
-            items: vec![
-                MenuItem::action("地址栏", BrowserAddress),
-                MenuItem::action("重新加载", BrowserReload),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "编辑".into(),
-            items: vec![
-                MenuItem::os_action("撤销", gpui_kit::component::input::Undo, OsAction::Undo),
-                MenuItem::os_action("重做", gpui_kit::component::input::Redo, OsAction::Redo),
-                MenuItem::separator(),
-                MenuItem::os_action("剪切", gpui_kit::component::input::Cut, OsAction::Cut),
-                MenuItem::os_action("复制", gpui_kit::component::input::Copy, OsAction::Copy),
-                MenuItem::os_action("粘贴", gpui_kit::component::input::Paste, OsAction::Paste),
-                MenuItem::os_action(
-                    "全选",
-                    gpui_kit::component::input::SelectAll,
-                    OsAction::SelectAll,
-                ),
-            ],
-            disabled: false,
-        },
-    ]);
+    app_menu::bind(cx);
+    app_menu::install(cx, false);
 }
 
 impl Workspace {
@@ -2985,6 +2965,16 @@ mod locale_file_tests {
                             );
                             used += 1;
                         }
+                    }
+                    // The menu bar passes its keys through a local `t("…")` closure.
+                    for part in src.split("t(\"app_menu.").skip(1) {
+                        let key = format!("app_menu.{}", part.split('"').next().unwrap());
+                        assert!(
+                            doc.contains_key(&key),
+                            "{}: unknown key {key}",
+                            path.display()
+                        );
+                        used += 1;
                     }
                 }
             }
