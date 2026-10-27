@@ -1,6 +1,26 @@
 import { randomUUID } from "../../../shared/random.ts";
 import type { ChatAttachment, PromptImage } from "@shared/types";
 
+/**
+ * Reading a persisted prompt lives in `@shared`, because every reader — the transcript, the
+ * sidebar's chat name, the title an agent writes, and the extractor that rebuilds the chips
+ * when a prompt is edited or retried — has to look past the same tail: the model-facing
+ * blocks we append, and the image note the engine appends after them. A renderer-only module
+ * could not share that, so the rules live here and the renderer composes them under the names
+ * its display path already uses.
+ */
+import {
+  ATTACHMENT_TAG,
+  imagePromptText,
+  PASTED_TEXT_TAG,
+  stripPromptMetadata,
+} from "../../../shared/attachment-metadata.ts";
+
+export {
+  imagePromptText as stripImageDimensionNote,
+  stripPromptMetadata as stripAttachmentBlock,
+};
+
 type NativeFile = File & { path?: string };
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/svg+xml"]);
@@ -149,51 +169,6 @@ export function attachmentPromptSuffix(items: ChatAttachment[]): string {
     blocks.push(`<${PASTED_TEXT_TAG}>\n${JSON.stringify(pasted)}\n</${PASTED_TEXT_TAG}>`);
   }
   return blocks.length > 0 ? `\n\n${blocks.join("\n\n")}` : "";
-}
-
-const ATTACHMENT_TAG = "fastvibe-attachments";
-const PASTED_TEXT_TAG = "fastvibe-pasted-text";
-/**
- * Generated attachment blocks, anchored to the end so a prompt that merely quotes
- * either tag mid-text is left alone.
- */
-const ATTACHMENT_BLOCK = new RegExp(
-  `(?:\\n{2,}<${ATTACHMENT_TAG}>\\n[\\s\\S]*?</${ATTACHMENT_TAG}>|` +
-  `\\n{2,}<${PASTED_TEXT_TAG}>\\n[\\s\\S]*?</${PASTED_TEXT_TAG}>)+\\s*$`,
-);
-
-/**
- * The note pi appends after it resizes a prompt image (`formatDimensionNote`).
- * It tells the model how to map coordinates back to the original photo; the
- * reader already sees the photo itself, so the bubble must not grow the sentence.
- * Anchored to the end, one line per image, so a prompt that quotes it mid-text
- * is left alone.
- */
-const IMAGE_DIMENSION_NOTE =
-  /(?:\n{2}\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by [\d.]+ to map to original image\.\])+\s*$/;
-
-/** Drop the engine's image-resize note. A prompt that merely quotes it is unchanged. */
-export function stripImageDimensionNote(text: string): string {
-  if (!text.includes("[Image: original ")) return text;
-  const stripped = text.replace(IMAGE_DIMENSION_NOTE, "");
-  return stripped === text ? text : stripped.trimEnd();
-}
-
-/**
- * Strip the model-facing attachment block for display.
- *
- * The engine's own copy of a user message keeps the block (a retry replays it, and a
- * file attachment cannot be recovered from the transcript any other way), so every
- * reader that shows a prompt has to go through here — otherwise the bubble grows the
- * path list the moment the transcript is re-read.
- */
-export function stripAttachmentBlock(text: string): string {
-  const withoutNote = stripImageDimensionNote(text);
-  if (!withoutNote.includes(`<${ATTACHMENT_TAG}>`) && !withoutNote.includes(`<${PASTED_TEXT_TAG}>`)) {
-    return withoutNote;
-  }
-  const stripped = withoutNote.replace(ATTACHMENT_BLOCK, "");
-  return stripped === withoutNote ? withoutNote : stripped.trimEnd();
 }
 
 function guessMime(name: string): string {

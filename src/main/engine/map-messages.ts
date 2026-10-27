@@ -1,6 +1,6 @@
 import type { ChatAttachment, ChatMessage, DagSettledInfo, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
 import { assistantStopVerdict, isRepetitionStop } from "../../shared/abort.ts";
-import { extractPromptAttachments } from "../../shared/attachment-metadata.ts";
+import { extractPromptAttachments, imagePromptText } from "../../shared/attachment-metadata.ts";
 import { stripMemoryCitation } from "../../shared/memory-citation.ts";
 import { parseSkillInvocation } from "../../shared/skill-invocation.ts";
 import { toolImagesOf, toolResultStatus } from "../../shared/tool-result.ts";
@@ -157,8 +157,12 @@ export function mapEngineMessages(
     // command into — the model's instruction sheet, not what the person wrote. The row
     // keeps their own words and a badge naming the skill, so the same reading works for
     // a live send, a reloaded transcript and a phone that never learns the markup.
-    const skill = role === "user" ? parseSkillInvocation(content.text) : null;
-    const text = skill ? skill.args : content.text;
+    // The engine appends its image-resize note after the text we built, which is past the
+    // attachment block — so look past it before matching anything, or a prompt carrying a
+    // picture loses its file chips here (and with them the edit-and-resend of that turn).
+    const promptText = role === "user" ? imagePromptText(content.text) : content.text;
+    const skill = role === "user" ? parseSkillInvocation(promptText) : null;
+    const text = skill ? skill.args : promptText;
     const parts = skill ? replaceSkillParts(content.parts, skill.args) : content.parts;
     const { thinking, tools, attachments } = content;
     if (role === "user") attachments.push(...extractPromptAttachments(text));

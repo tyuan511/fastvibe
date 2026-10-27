@@ -19,7 +19,7 @@ import { isProcessKind, thinkingTakesRow } from "@/lib/thinking-row";
 import { PROCESS_BODY_CAP } from "@/lib/process-body";
 import { blankTakesRow, isBlankOutput } from "@/lib/blank-output";
 import { cn } from "@/lib/utils";
-import type { ChatAttachment, ChatMessage, MessagePart } from "@shared/types";
+import type { ChatAttachment, ChatMessage, MessagePart, PromptDraft } from "@shared/types";
 import { collectInlinePreviews, type InlinePreview } from "@shared/inline-media";
 import { skillCommandOf } from "@shared/skill-invocation";
 import { prettyProviderDetail } from "@shared/assistant-error";
@@ -42,13 +42,20 @@ import { RunCollapse, RunProgress } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
 import { isRemoteRef } from "@/lib/remote-project";
 
-function AttachmentStrip({ items }: { items: ChatAttachment[] }): JSX.Element {
+function AttachmentStrip({
+  items,
+  onRemove,
+}: {
+  items: ChatAttachment[];
+  onRemove?: (item: ChatAttachment) => void;
+}): JSX.Element {
   return (
     <div className="mb-1.5 flex max-w-full flex-wrap items-start justify-end gap-2">
       {items.map((item) => (
         <AttachmentChip
           key={item.id}
           item={item}
+          onRemove={onRemove ? () => onRemove(item) : undefined}
           onOpen={
             item.kind !== "image" && item.path
               ? () => {
@@ -148,7 +155,7 @@ function MessageActions({
           {copied ? <HugeiconsIcon strokeWidth={2} icon={Tick02Icon} className="size-3.5" /> : <HugeiconsIcon strokeWidth={2} icon={Copy01Icon} className="size-3.5" />}
         </ActionButton>
       ) : null}
-      {message.role === "user" && onEdit ? (
+      {message.role === "user" && onEdit && amendable(message) ? (
         <ActionButton label={t("message.edit")} onClick={() => onEdit(message)}>
           <HugeiconsIcon strokeWidth={2} icon={PencilEdit02Icon} className="size-3.5" />
         </ActionButton>
@@ -275,6 +282,17 @@ function promptAsSent(message: ChatMessage): string {
 }
 
 /**
+ * Whether editing this prompt has anything to hold: words, a skill, or an attachment.
+ *
+ * A screenshot with no caption is a turn the person took, and the editor used to refuse it:
+ * Send needed words, so the only way back was to re-attach the picture by hand and retype
+ * the request — the opposite of editing.
+ */
+function amendable(message: ChatMessage): boolean {
+  return Boolean(message.text.trim() || message.skill || message.attachments?.length);
+}
+
+/**
  * The prompt is the person's own words, so it is drawn as text and not as a document.
  *
  * Running it through Markdown cost more than it bought: GFM's bare-URL autolink runs
@@ -383,19 +401,28 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   );
 }
 
-/** Edit a prompt in its turn. The transcript is left untouched until Send is pressed. */
+/**
+ * Edit a prompt in its turn. The transcript is left untouched until Send is pressed.
+ *
+ * The draft is the whole turn, not only its words: the attachments the prompt carried sit
+ * in this card and are removable, and a prompt that is nothing but a picture can still be
+ * sent. Both halves go back together — the caller re-appends the attachment metadata from
+ * what survived here, so dropping a chip genuinely takes it off the re-sent prompt.
+ */
 function InlinePromptEditor({
-  value,
+  message,
   onCancel,
   onSubmit,
 }: {
-  value: string;
+  message: ChatMessage;
   onCancel: () => void;
-  onSubmit: (value: string) => void;
+  onSubmit: (draft: PromptDraft) => void;
 }): JSX.Element {
   const { t } = useTranslation("chat");
-  const [text, setText] = useState(value);
+  const [text, setText] = useState(() => promptAsSent(message));
+  const [attachments, setAttachments] = useState<ChatAttachment[]>(() => message.attachments ?? []);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const canSend = Boolean(text.trim()) || attachments.length > 0 || Boolean(message.skill);
 
   // Entering the editor means "the user is being put into this draft", so the caret
   // belongs at the end of what is already there. A plain `autoFocus` focuses the
@@ -410,12 +437,23 @@ function InlinePromptEditor({
   }, []);
 
   function submit(): void {
-    const next = text.trim();
-    if (next) onSubmit(next);
+    if (!canSend) return;
+    onSubmit({ text: text.trim(), attachments });
   }
 
   return (
     <div className="w-full max-w-2xl rounded-xl border border-border bg-secondary/50 p-2">
+      {attachments.length > 0 || message.skill ? (
+        <div className="flex flex-wrap items-start justify-end gap-2 pb-1.5">
+          {message.skill ? <SkillBadgeRow skill={message.skill} /> : null}
+          {attachments.length > 0 ? (
+            <AttachmentStrip
+              items={attachments}
+              onRemove={(item) => setAttachments((current) => current.filter((entry) => entry.id !== item.id))}
+            />
+          ) : null}
+        </div>
+      ) : null}
       <Textarea
         ref={textareaRef}
         rows={2}
@@ -438,7 +476,7 @@ function InlinePromptEditor({
         <Button size="sm" variant="ghost" onClick={onCancel}>
           {t("message.editCancel")}
         </Button>
-        <Button size="sm" disabled={!text.trim()} onClick={submit}>
+        <Button size="sm" disabled={!canSend} onClick={submit}>
           {t("message.editSend")}
         </Button>
       </div>
@@ -496,7 +534,7 @@ function ChatMessageRowImpl({
   messages: ChatMessage[];
   streaming: boolean;
   onRetry?: (message: ChatMessage) => void;
-  onEdit?: (message: ChatMessage, text: string) => void;
+  onEdit?: (message: ChatMessage, draft: PromptDraft) => void;
   onFork?: (entryId: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
@@ -520,9 +558,9 @@ function ChatMessageRowImpl({
   }, [message.role, messages]);
   const beginEdit = useCallback(() => setEditing(true), []);
   const submitEdit = useCallback(
-    (text: string) => {
+    (draft: PromptDraft) => {
       setEditing(false);
-      onEdit?.(message, text);
+      onEdit?.(message, draft);
     },
     [message, onEdit],
   );
@@ -735,10 +773,8 @@ function ChatMessageRowImpl({
     return (
       <Message align="end" className="group/row">
         <MessageContent className="items-end">
-          {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
-          {message.skill ? <SkillBadgeRow skill={message.skill} /> : null}
           <InlinePromptEditor
-            value={promptAsSent(message)}
+            message={message}
             onCancel={() => setEditing(false)}
             onSubmit={submitEdit}
           />

@@ -383,7 +383,7 @@ export const MESSAGES: ChatMessage[] = [
     text: "顺便加个 ⌘J 快捷键，快速在亮色和暗色之间切换。",
     tools: [],
     parts: [{ kind: "text", text: "顺便加个 ⌘J 快捷键，快速在亮色和暗色之间切换。" }],
-    createdAt: NOW - 3 * MINUTE,
+    createdAt: NOW - 4 * MINUTE,
   },
   {
     id: "msg-a4",
@@ -395,7 +395,7 @@ export const MESSAGES: ChatMessage[] = [
       { kind: "tool", toolId: "tool-edit-shortcut" },
       { kind: "tool", toolId: "tool-bash-fail" },
     ],
-    createdAt: NOW - 3 * MINUTE,
+    createdAt: NOW - 4 * MINUTE,
     completedAt: NOW - 2.7 * MINUTE,
   },
   // One engine message per model round-trip: the second one carries the answer, so the fold's
@@ -771,6 +771,14 @@ const PASTED_LOG_LINE =
 
 const PASTED_PROMPT = `报错日志如下，帮我看看是哪里的问题。\n${`${PASTED_LOG_LINE}\n`.repeat(9)}`;
 
+/**
+ * The prompt shape that used to lose things when edited: a skill, a screenshot and a
+ * dropped file all ride on one turn, and none of them are in the words themselves. The
+ * chips here are what a transcript read rebuilds (`extractPromptAttachments` plus the
+ * image parts), and ✎ has to carry all three into the editor.
+ */
+const MIXED_PROMPT = "帮我把这份报告的图整理成周报";
+
 export const PROMPT_MESSAGES: ChatMessage[] = [
   {
     id: "msg-prompt-u1",
@@ -795,7 +803,7 @@ export const PROMPT_MESSAGES: ChatMessage[] = [
     text: PASTED_PROMPT,
     tools: [],
     parts: [{ kind: "text", text: PASTED_PROMPT }],
-    createdAt: NOW - 3 * MINUTE,
+    createdAt: NOW - 4 * MINUTE,
   },
   {
     id: "msg-prompt-a2",
@@ -803,8 +811,30 @@ export const PROMPT_MESSAGES: ChatMessage[] = [
     text: "这一条超过 500 字，所以收成折叠块。",
     tools: [],
     parts: [{ kind: "text", text: "这一条超过 500 字，所以收成折叠块。" }],
-    createdAt: NOW - 2 * MINUTE,
-    completedAt: NOW - 2 * MINUTE,
+    createdAt: NOW - 3 * MINUTE,
+    completedAt: NOW - 3 * MINUTE,
+  },
+  {
+    id: "msg-prompt-u3",
+    role: "user",
+    text: MIXED_PROMPT,
+    skill: { name: "office", location: "/skills/office/SKILL.md" },
+    attachments: [
+      { id: "image:0", kind: "image", name: "截图.png", mimeType: "image/svg+xml", dataUrl: INLINE_SVG },
+      { id: "file:/Users/me/report.pdf", kind: "file", name: "report.pdf", path: "/Users/me/report.pdf" },
+    ],
+    tools: [],
+    parts: [{ kind: "text", text: MIXED_PROMPT }],
+    createdAt: NOW - 1 * MINUTE,
+  },
+  {
+    id: "msg-prompt-a3",
+    role: "assistant",
+    text: "这一轮的提示带技能、截图和文件；点 ✎ 编辑时三者都要留在输入框里。",
+    tools: [],
+    parts: [{ kind: "text", text: "这一轮的提示带技能、截图和文件；点 ✎ 编辑时三者都要留在输入框里。" }],
+    createdAt: NOW - 1 * MINUTE + 40_000,
+    completedAt: NOW - 1 * MINUTE + 40_000,
   },
 ];
 

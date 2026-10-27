@@ -3613,6 +3613,18 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 - **侧边搜索仍读原始转写**，命中可能落在技能正文里。
 - 预览：`mock.html?skill=1`（一轮带话的技能调用、一轮只有 badge、队列里再来一条草稿形态）。
 
+## 编辑最后一轮要带齐附件（`shared/attachment-metadata.ts`）
+
+转写里那一轮用户消息的 `text` 不是读者看到的那句话，它是**引擎持有的整条提示词**：人的话 + 我们追加的模型可见元数据 + 引擎自己追加的图片尺寸说明。编辑和重试都从这里重建附件，所以读它的顺序错了，界面就少带东西。
+
+- **磁盘上的顺序是固定的**：话 → `<fastvibe-attachments>`（文件路径列表）→ `<fastvibe-pasted-text>`（长粘贴的正文）→ `[Image: original WxH, displayed at …]`。最后一条是 pi 写的（`core/agent-session.js` 用 `${prompt}\n\n${hints}` 拼，所以**没有话的提示也以空行开头**），它排在**我们自己那两个块之后**。因此任何按块尾锚定 `\s*$` 的正则，只要那条说明还在，就一个块都读不到——曾经就是这样把带截图的提示里的文件整份丢掉。`extractPromptAttachments` 第一步必须是 `imagePromptText`。
+- **一条规则只住一处**：`imagePromptText`（去掉尺寸说明）、`stripPromptMetadata`（再去掉两个块）、`extractPromptAttachments`（把块读回成 chip）都在 `@shared`，渲染层用 `stripImageDimensionNote` / `stripAttachmentBlock` 这两个别名组合它们。Main 的投影（`engine/map-messages.ts`）、实时事件行（`lib/apply-engine-event.ts`）、侧栏那一行（`engine/prompt-preview.ts`）与输入框预填（`promptAsSent`）都走这条路，所以重载、切会话、手机和编辑看到的是同一份文字。
+- **chip 必须带着能重发的东西**。粘贴的 chip 光有名字画得出来、发不出去：`attachmentPromptSuffix` 只认 `item.text`，于是编辑一次就等于悄悄把模型正在回答的那段长文本删掉。所以 `extractPromptAttachments` 把 `content` 还原成 `text`。
+- **没有话的一轮也要能编辑**。只贴一张截图是一个真实的回合，而编辑器曾经要求 `text.trim()` 非空（`InlinePromptEditor` 的 submit 与 `App.tsx` `handleEdit` 各一处），于是那一轮根本没有出路。`amendable()` 与 `canSend` 因此是「有话 **或** 有技能 **或** 有附件」。
+- **编辑提交的是整份草稿**（`PromptDraft = { text, attachments }`）：附件在编辑卡里可逐个移除，`handleEdit` 用**留下来的**那些重新拼 `attachmentPromptSuffix` 与 `attachmentsToImages` —— 删掉一个 chip 是真的把它从这一轮拿掉。预填的文字来自 `promptAsSent`，它已经剥掉尾部，所以重发不会拼出第二个块。
+- **`session-title.ts` 是散文件，不能 import `@shared`**，所以它抄了一份 `MODEL_FACING_TAIL`；`test/attachments.test.ts` 逐个字面量比对两处，漂移就失败。替换要发生在 `trim()` **之前**（块锚在引入它的空行上，没有话的提示正是以那个空行开头）。
+- 验证：`test/attachments.test.ts`（说明在后面时仍读得到文件块；粘贴带着正文；中途引用了说明的句子不动；与扩展那份副本一致）、`test/prompt-preview.test.ts`（尺寸说明不参与命名；只有截图的会话叫「图片」；只有文件的会话用文件名）。
+
 ## 重试与文件回退（checkpoint）
 
 「重试这一轮」回退的是**对话**（`navigateTree`），工作区文件原本留在原地，于是重试是在

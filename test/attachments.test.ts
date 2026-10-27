@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   attachmentPromptSuffix,
   PASTED_TEXT_ATTACHMENT_THRESHOLD,
@@ -10,7 +11,10 @@ import {
   stripAttachmentBlock,
   stripImageDimensionNote,
 } from "../src/renderer/src/lib/attachments.ts";
-import { extractPromptAttachments } from "../src/shared/attachment-metadata.ts";
+import {
+  extractPromptAttachments,
+  stripPromptMetadata,
+} from "../src/shared/attachment-metadata.ts";
 
 test("only clipboard text above the composer threshold becomes an attachment", () => {
   assert.equal(shouldAttachPastedText("x".repeat(PASTED_TEXT_ATTACHMENT_THRESHOLD)), false);
@@ -53,7 +57,40 @@ test("a long paste stays model-visible but is hidden behind a file-style chip", 
     kind: "file",
     name: "粘贴的文本.txt",
     mimeType: "text/plain",
+    // The content rides with the chip. Without it a chip can be drawn but never
+    // re-sent, so editing or retrying this turn would silently drop the paste.
+    text: content,
   }]);
+});
+
+test("an attachment block is still read when the engine's image note follows it", () => {
+  // We append the metadata last; pi appends its resize note after the whole text.
+  const note = "\n\n[Image: original 2560x1600, displayed at 2000x1250. Multiply coordinates by 1.28 to map to original image.]";
+  const prompt = `看下这个图\n\n<fastvibe-attachments>\n- /Users/me/a.md\n</fastvibe-attachments>${note}`;
+  assert.deepEqual(extractPromptAttachments(prompt), [
+    { id: "file:/Users/me/a.md", kind: "file", name: "a.md", path: "/Users/me/a.md" },
+  ]);
+  assert.equal(stripAttachmentBlock(prompt), "看下这个图");
+});
+
+test("a paste keeps its content when a picture was sent with it", () => {
+  const note = "\n\n[Image: original 100x100, displayed at 90x90. Multiply coordinates by 1.11 to map to original image.]";
+  const prompt =
+    "对比一下\n\n<fastvibe-attachments>\n- /Users/me/a.md\n</fastvibe-attachments>" +
+    "\n\n<fastvibe-pasted-text>\n" +
+    JSON.stringify([{ name: "粘贴的文本.txt", content: "正文" }]) +
+    `\n</fastvibe-pasted-text>${note}`;
+  const items = extractPromptAttachments(prompt);
+  assert.deepEqual(items.map((item) => item.name), ["a.md", "粘贴的文本.txt"]);
+  assert.equal(items[1].text, "正文");
+  // What an edit re-sends is what was sent the first time.
+  assert.equal(attachmentPromptSuffix(items), prompt.slice(prompt.indexOf("\n\n<fastvibe-attachments>"), prompt.indexOf(note)));
+});
+
+test("a prompt that only quotes the note is left alone", () => {
+  const quoted = "文档里写着 [Image: original 10x10, displayed at 5x5. Multiply coordinates by 2.00 to map to original image.] 这是什么意思";
+  assert.equal(stripAttachmentBlock(quoted), quoted);
+  assert.deepEqual(extractPromptAttachments(quoted), []);
 });
 
 test("a dropped file keeps the preload path, not the empty File.path Electron left behind", () => {
@@ -111,4 +148,27 @@ test("the image resize note the engine appends is hidden, and a quoted one is no
   const quoted = `引擎会写这么一句：${note}，然后继续`;
   assert.equal(stripImageDimensionNote(quoted), quoted);
   assert.equal(stripAttachmentBlock("请看这张"), "请看这张");
+});
+
+/**
+ * `session-title` runs inside the engine and ships as a loose file, so it cannot import
+ * this module — it carries its own copy of the same rules, exactly like it carries its own
+ * `SKILL_BLOCK`. A copy that drifts is invisible until a chat is named wrong, so the two
+ * are compared by what they leave behind, on the shapes that actually reach a title.
+ */
+test("the title extension strips the same tail this module strips", () => {
+  const source = readFileSync("resources/extensions/session-title.ts", "utf8");
+  const written = /const MODEL_FACING_TAIL =\s*\n?\s*\/([\s\S]*?)\/;/.exec(source)?.[1];
+  assert.ok(written, "session-title.ts no longer holds a MODEL_FACING_TAIL literal");
+  const extensionRule = new RegExp(written, "m");
+  const note = "\n\n[Image: original 2160x1684, displayed at 2000x1559. Multiply coordinates by 1.08 to map to original image.]";
+  const files = "\n\n<fastvibe-attachments>\n- /Users/me/a.md\n</fastvibe-attachments>";
+  const pasted = "\n\n<fastvibe-pasted-text>\n[{\"name\":\"p.txt\",\"content\":\"x\"}]\n</fastvibe-pasted-text>";
+  for (const prompt of [`看下这个图${note}`, `词${files}${note}`, `词${files}${pasted}${note}`, files, "没有元数据"]) {
+    assert.equal(
+      prompt.replace(extensionRule, "").trim(),
+      stripPromptMetadata(prompt).trim(),
+      prompt,
+    );
+  }
 });

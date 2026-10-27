@@ -5,7 +5,7 @@ import { getModels } from "@/lib/engine-client";
 import { useDraftPersistence } from "@/lib/draft-persistence";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
-import type { ChatAttachment, ChatMessage, FastVibeModel } from "@shared/types";
+import type { ChatAttachment, ChatMessage, FastVibeModel, PromptDraft } from "@shared/types";
 
 /**
  * The models this install can actually chat with.
@@ -44,7 +44,7 @@ export const MessageThread = memo(function MessageThread({
   /** Show the loader in place of whatever transcript is already on screen. */
   loadingReplaces?: boolean;
   onRetry: (message: ChatMessage) => void;
-  onEdit: (message: ChatMessage, text: string) => void;
+  onEdit: (message: ChatMessage, draft: PromptDraft) => void;
   onFork: (entryId: string) => void;
 }): JSX.Element {
   const messages = useSessionStore((state) => state.messages);

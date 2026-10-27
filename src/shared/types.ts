@@ -1654,3 +1654,13 @@ export type PiConfigSyncReport = {
   mcpSkipped: string[];
   unchanged: boolean;
 };
+
+/**
+ * What the inline prompt editor holds when Send is pressed: the words, and the attachments
+ * that survived. Both travel together because the draft can change either — a chip can be
+ * dropped, and a prompt that is only a picture has no words at all.
+ */
+export type PromptDraft = {
+  text: string;
+  attachments: ChatAttachment[];
+};

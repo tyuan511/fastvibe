@@ -10,7 +10,7 @@ import type {
   ToolImage,
 } from "@shared/types";
 import { assistantStopVerdict, isRepetitionStop } from "@shared/abort";
-import { extractPromptAttachments } from "@shared/attachment-metadata";
+import { extractPromptAttachments, imagePromptText } from "@shared/attachment-metadata";
 import { skillDisplayOf, skillPromptText } from "@shared/skill-invocation";
 import { toolImagesOf, toolResultStatus } from "@shared/tool-result";
 import { randomUUID } from "../../../shared/random.ts";
@@ -68,7 +68,10 @@ export function userMessageText(event: EngineEvent): string | undefined {
   if (event.type !== "message_start") return undefined;
   const message = isRecord(event.message) ? event.message : undefined;
   if (!message || message.role !== "user") return undefined;
-  return skillPromptText(contentText(message.content));
+  // Stripped first: the engine's image note is appended after the text the person
+  // actually sent, and `sentText` does not carry it — matching without this would
+  // fall through to "whichever row happens to be sending".
+  return skillPromptText(imagePromptText(contentText(message.content)));
 }
 
 function contentText(content: unknown): string {
@@ -87,7 +90,7 @@ function contentText(content: unknown): string {
 function userRowFromEngine(message: Record<string, unknown>): ChatMessage {
   // A steer the engine injected between turns carries the expanded skill, so it is folded
   // exactly like the composer's own row and Main's transcript mapping fold it.
-  const prompt = skillDisplayOf(contentText(message.content));
+  const prompt = skillDisplayOf(imagePromptText(contentText(message.content)));
   const text = prompt.text;
   const attachments: ChatAttachment[] = extractPromptAttachments(contentText(message.content));
   if (Array.isArray(message.content)) {

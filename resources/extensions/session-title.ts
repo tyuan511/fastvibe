@@ -175,8 +175,21 @@ function foldSkill(text: string): string {
   return match[4] ? `/skill:${match[1]} ${match[4]}` : `/skill:${match[1]}`;
 }
 
+/**
+ * The note pi appends after resizing a prompt image (`formatDimensionNote` in
+ * utils/image-resize), and the file list FastVibe appends before sending — both sit at the
+ * very end of the stored text, and neither is what the person wrote. Mirrors
+ * `imagePromptText` / `stripPromptMetadata` in `src/shared/attachment-metadata.ts`, which
+ * an extension cannot import; `test/attachments.test.ts` keeps the two stripping the same
+ * tail, because a copy that drifts only shows up as a chat named after a file list.
+ */
+const MODEL_FACING_TAIL =
+  /(?:\n{2,}<fastvibe-attachments>\n[\s\S]*?<\/fastvibe-attachments>|\n{2,}<fastvibe-pasted-text>\n[\s\S]*?<\/fastvibe-pasted-text>|\n{2}\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by [\d.]+ to map to original image\.\])+\s*$/;
+
 function promptText(raw: string): string {
-  const text = foldSkill(raw.trim());
+  // Replaced before trimming: both blocks are anchored to the blank line that introduces
+  // them, and a prompt with no words at all *starts* with that blank line.
+  const text = foldSkill(raw.replace(MODEL_FACING_TAIL, "").trim());
   if (!text) return "";
   // A skill forced with nothing typed after it says nothing about what the chat is for.
   if (/^\/\S+$/.test(text)) return "";

@@ -77,6 +77,7 @@ import type {
   ChatMessage,
   ConversationDeleteResult,
   ConversationOpenResult,
+  PromptDraft,
   QueuedPromptPreview,
   SkillInfo,
   SlashCommand,
@@ -1236,15 +1237,19 @@ export function App(): JSX.Element {
     if (owner) void handleFork(owner, entryId);
   }, [handleFork]);
 
-  const handleEdit = useCallback(async (message: ChatMessage, editedText: string): Promise<void> => {
+  const handleEdit = useCallback(async (message: ChatMessage, draft: PromptDraft): Promise<void> => {
     const owner = useSessionStore.getState().activeId;
-    const text = editedText.trim();
-    if (!owner || !text || !canChat) return;
+    const text = draft.text.trim();
+    // A turn can be nothing but a screenshot, and that is still worth editing: what has to
+    // exist is *something to send*, not words. The editor already holds the attachments the
+    // prompt carried and lets the user drop one; a skill travels as its command in the text.
+    if (!owner || !canChat) return;
+    if (!text && draft.attachments.length === 0 && !message.skill) return;
 
     // Entering edit mode is purely local: the original turn remains visible while the
     // user changes the prompt. Only this submit path branches the transcript and starts
     // the replacement turn, so cancelling an inline edit cannot lose the last round.
-    const attachments = message.attachments ?? [];
+    const attachments = draft.attachments;
     const promptText = `${text}${attachmentPromptSuffix(attachments)}`;
     const current = useSessionStore.getState();
     if (current.activeId !== owner) return;

@@ -23,7 +23,7 @@ import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import { transcriptDisplay } from "@/lib/transcript-display";
 import { useTranscriptNavigation } from "@/stores/transcript-navigation";
 import { useSettingsStore } from "@/stores/settings";
-import type { ChatMessage } from "@shared/types";
+import type { ChatMessage, PromptDraft } from "@shared/types";
 import { SelectionActionBar } from "./selection-action-bar";
 import { NewSessionHero } from "./new-session";
 import { TurnRail, type TurnMarker } from "./turn-rail";
@@ -372,7 +372,7 @@ function ThreadRow({
   streaming: boolean;
   amendable: boolean;
   onRetry?: (message: ChatMessage) => void;
-  onEdit?: (message: ChatMessage, text: string) => void;
+  onEdit?: (message: ChatMessage, draft: PromptDraft) => void;
   onFork?: (entryId: string) => void;
   showThinking: boolean;
   showTimestamp: boolean;
@@ -476,7 +476,7 @@ export function MessageList({
   /** Replace the current transcript with the loader, instead of only covering an empty one. */
   loadingReplaces?: boolean;
   onRetry?: (message: ChatMessage) => void;
-  onEdit?: (message: ChatMessage, text: string) => void;
+  onEdit?: (message: ChatMessage, draft: PromptDraft) => void;
   /** Omit in read-only/secondary panes so their transcripts cannot fork the main catalog. */
   onFork?: (entryId: string) => void;
   emptyState?: JSX.Element | null;

@@ -47,3 +47,22 @@ test("a name the chat already has is never re-cut", () => {
   assert.equal(promptPreview({ title: "登录校验" }, "x".repeat(200)).title, "登录校验");
   assert.equal(promptPreview({ title: "新会话", titleManual: true }, "x".repeat(200)).title, "新会话");
 });
+
+test("the engine's image note does not become the chat's name", () => {
+  const note = "\n\n[Image: original 2160x1684, displayed at 2000x1559. Multiply coordinates by 1.08 to map to original image.]";
+  const prompt = `看下这个图的报错${note}`;
+  const { title, preview } = promptPreview({}, prompt);
+  assert.equal(title, "看下这个图的报错");
+  assert.equal(preview, "看下这个图的报错");
+});
+
+test("a prompt that is only a picture is still named, so the row is not blank", () => {
+  const note = "\n\n[Image: original 2160x1684, displayed at 2000x1559. Multiply coordinates by 1.08 to map to original image.]";
+  assert.equal(promptPreview({}, note).preview, "图片");
+});
+
+test("a prompt that is only a file is named by that file", () => {
+  const { title, preview } = promptPreview({}, "x".repeat(0) + "\n\n<fastvibe-attachments>\n- /Users/me/paper.pdf\n</fastvibe-attachments>");
+  assert.equal(preview, "paper.pdf");
+  assert.equal(title, "paper.pdf");
+});
