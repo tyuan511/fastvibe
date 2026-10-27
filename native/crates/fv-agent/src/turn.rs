@@ -19,6 +19,11 @@ pub struct AgentContext {
     pub model: Arc<dyn Model>,
     pub tools: Arc<ToolRegistry>,
     pub system: String,
+    /// Project and environment context that changes between turns (instructions found on disk,
+    /// skills, MCP notes). It leads the request as a user message instead of living in `system`,
+    /// so a change to it does not invalidate the cached prefix and it is not given the trust of
+    /// the system prompt. Never persisted in the transcript.
+    pub context: String,
     pub cwd: Option<PathBuf>,
     /// Where a tool's questions go; absent when no client can answer.
     pub ui: Option<Arc<dyn crate::UserInput>>,
@@ -92,7 +97,7 @@ pub(crate) fn request_messages(ctx: &AgentContext, history: &[Message]) -> Vec<M
                     .map(|m| m.instructions())
                     .unwrap_or_default();
                 let overhead = crate::budget::prefix_tokens(
-                    &format!("{instructions}{}", ctx.system),
+                    &format!("{instructions}{}{}", ctx.system, ctx.context),
                     &ctx.tools.specs_for(&ctx.loaded),
                 );
                 let room = window
@@ -126,7 +131,18 @@ pub(crate) fn model_request(ctx: &AgentContext, history: &[Message]) -> ModelReq
         .unwrap_or_default();
     ModelRequest {
         system: format!("{memory_instructions}{}", ctx.system),
-        messages: request_messages(ctx, history),
+        messages: {
+            let mut messages = request_messages(ctx, history);
+            if !ctx.context.trim().is_empty() {
+                messages.insert(
+                    0,
+                    Message::User {
+                        text: ctx.context.clone(),
+                    },
+                );
+            }
+            messages
+        },
         tools: ctx
             .tools
             .specs_for(&ctx.loaded)

@@ -85,7 +85,7 @@ fn agent(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
     let mut tools = ToolRegistry::new();
     tools.register(Hidden).register(Finder).register(Camera);
     (
-        AgentContext {
+        AgentContext { context: Default::default(),
             model: model.clone(),
             tools: Arc::new(tools),
             system: String::new(),

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod memory;
+pub mod image;
 mod web_search;
 pub use memory::{memory_citation_ids, strip_memory_citation};
 pub use web_search::*;

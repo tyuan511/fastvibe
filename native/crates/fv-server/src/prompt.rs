@@ -145,6 +145,33 @@ pub async fn resolve(state: &ServerState, id: RequestId, frame: &serde_json::Val
     announce_resolved(state, &pending.thread_id, id).await;
 }
 
+fn approvals_key(thread_id: &str) -> String {
+    format!("approvals:{thread_id}")
+}
+
+/// What the user approved "for the rest of this conversation", kept across restarts.
+fn stored_approvals(state: &ServerState, thread_id: &str) -> Vec<String> {
+    state
+        .store
+        .db
+        .get_setting(&approvals_key(thread_id))
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn remember_approval(state: &ServerState, thread_id: &str, key: &str) {
+    let mut keys = stored_approvals(state, thread_id);
+    if keys.iter().any(|k| k == key) {
+        return;
+    }
+    keys.push(key.to_string());
+    if let Ok(text) = serde_json::to_string(&keys) {
+        let _ = state.store.db.set_setting(&approvals_key(thread_id), Some(&text));
+    }
+}
+
 /// `Approver` for one turn of one thread: asks the clients, remembers a "for the session".
 pub struct ThreadApprover {
     pub state: Arc<ServerState>,
@@ -165,6 +192,11 @@ impl fv_agent::Approver for ThreadApprover {
         Box::pin(async move {
             let key = request.key();
             if rt.is_approved(&key) {
+                return fv_agent::Decision::Approved;
+            }
+            // Approved in an earlier run of the server: the answer outlives a restart.
+            if stored_approvals(&state, &thread_id).contains(&key) {
+                rt.approve_for_session(key);
                 return fv_agent::Decision::Approved;
             }
             let id = RequestId::String(uuid::Uuid::new_v4().to_string());
@@ -200,6 +232,7 @@ impl fv_agent::Approver for ThreadApprover {
             match decision {
                 Some(types::ApprovalDecision::Approved) => fv_agent::Decision::Approved,
                 Some(types::ApprovalDecision::ApprovedForSession) => {
+                    remember_approval(&state, &thread_id, &key);
                     rt.approve_for_session(key);
                     fv_agent::Decision::ApprovedForSession
                 }

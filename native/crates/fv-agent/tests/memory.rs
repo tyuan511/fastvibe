@@ -21,7 +21,7 @@ impl MemorySource for Source {
 }
 
 fn context(model: Arc<ScriptedModel>, memory: Arc<Source>) -> AgentContext {
-    AgentContext {
+    AgentContext { context: Default::default(),
         model,
         tools: Arc::new(ToolRegistry::new()),
         system: "base".into(),

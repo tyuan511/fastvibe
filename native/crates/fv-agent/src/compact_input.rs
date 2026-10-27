@@ -46,7 +46,7 @@ fn output_budget(ctx: &AgentContext) -> u64 {
         .unwrap_or(0);
     let room = crate::compact::input_limit(ctx)
         .saturating_sub(crate::budget::prefix_tokens(
-            &ordinary.system,
+            &format!("{}{}", ordinary.system, ctx.context),
             &ordinary.tools,
         ))
         .saturating_sub(memory)

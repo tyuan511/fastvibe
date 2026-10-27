@@ -51,10 +51,16 @@ impl ImageStore {
         let folder = self.folder(conversation_id);
         std::fs::create_dir_all(&folder)?;
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700))?;
+        let prepared = fv_core::image::prepare(&bytes).ok_or_else(|| {
+            StoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unsupported or invalid image data",
+            ))
+        })?;
         let path = folder.join(format!(
             "{}.{}",
             uuid::Uuid::new_v4(),
-            extension(&image.mime)
+            extension(prepared.mime)
         ));
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new()
@@ -62,9 +68,9 @@ impl ImageStore {
             .create_new(true)
             .mode(0o600)
             .open(&path)?;
-        file.write_all(&bytes)?;
+        file.write_all(&prepared.bytes)?;
         Ok(ImagePart {
-            mime: image.mime.clone(),
+            mime: prepared.mime.to_string(),
             source: ImageSource::File {
                 path: path.display().to_string(),
             },

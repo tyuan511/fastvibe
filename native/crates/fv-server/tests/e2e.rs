@@ -17,7 +17,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 type Notes = UnboundedReceiver<ServerNotification>;
 
 fn agent_with(model: Arc<dyn Model>) -> AgentContext {
-    AgentContext {
+    AgentContext { context: Default::default(),
         model,
         tools: Arc::new(ToolRegistry::new()),
         system: String::new(),

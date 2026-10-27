@@ -28,7 +28,8 @@ pub fn to_chat_request(request: &ModelRequest, model_label: &str, images_ok: boo
     // a provider wants every tool message right after the call, so the pictures go in one
     // user turn after all of them.
     let mut pictures: Vec<ContentPart> = Vec::new();
-    for message in &request.messages {
+    let mut dropped = old_pictures_over_budget(&request.messages);
+    for (index, message) in request.messages.iter().enumerate() {
         if !matches!(message, Message::ToolImages { .. }) && !pictures.is_empty() {
             chat = chat.append_message(ChatMessage::user(MessageContent::from_parts(
                 std::mem::take(&mut pictures),
@@ -37,7 +38,8 @@ pub fn to_chat_request(request: &ModelRequest, model_label: &str, images_ok: boo
         match message {
             Message::ToolAudio { .. } => {}
             Message::ToolImages { name, images, .. } => {
-                pictures.extend(picture_parts(name, images, images_ok));
+                let skip = dropped.remove(&index).unwrap_or_default();
+                pictures.extend(picture_parts(name, images, images_ok, &skip));
             }
             Message::User { text } => chat = chat.append_message(ChatMessage::user(text.clone())),
             Message::MemoryContext { summary } => {
@@ -81,7 +83,12 @@ pub fn to_chat_request(request: &ModelRequest, model_label: &str, images_ok: boo
 /// What a tool's pictures become in the request. A file that has gone away, or a model that
 /// cannot see, leaves a sentence saying so rather than nothing: the model should know
 /// something was there.
-fn picture_parts(tool: &str, images: &[ImagePart], images_ok: bool) -> Vec<ContentPart> {
+fn picture_parts(
+    tool: &str,
+    images: &[ImagePart],
+    images_ok: bool,
+    skip: &HashSet<usize>,
+) -> Vec<ContentPart> {
     use base64::Engine;
     if !images_ok {
         return vec![ContentPart::Text(format!(
@@ -91,7 +98,18 @@ fn picture_parts(tool: &str, images: &[ImagePart], images_ok: bool) -> Vec<Conte
     let mut parts = vec![ContentPart::Text(format!(
         "Image returned by the `{tool}` tool:"
     ))];
-    for image in images {
+    for (position, image) in images.iter().enumerate() {
+        if skip.contains(&position) {
+            parts.push(ContentPart::Text(match &image.source {
+                ImageSource::File { path } => format!(
+                    "[An earlier image was left out to keep the request small. It is saved at {path}; read it again if you need it.]"
+                ),
+                ImageSource::Base64 { .. } => {
+                    "[An earlier image was left out to keep the request small.]".into()
+                }
+            }));
+            continue;
+        }
         let data = match &image.source {
             ImageSource::Base64 { data } => Some(data.clone()),
             ImageSource::File { path } => std::fs::read(path)
@@ -104,6 +122,43 @@ fn picture_parts(tool: &str, images: &[ImagePart], images_ok: bool) -> Vec<Conte
         });
     }
     parts
+}
+
+/// Size of an image as it will be sent: base64 characters.
+fn sent_size(image: &ImagePart) -> usize {
+    match &image.source {
+        ImageSource::Base64 { data } => data.len(),
+        ImageSource::File { path } => std::fs::metadata(path)
+            .map(|m| (m.len() as usize).div_ceil(3) * 4)
+            .unwrap_or(0),
+    }
+}
+
+/// Every request carries every picture in the history again, so the total is capped: walking
+/// from the newest, pictures are kept until the budget is spent (the newest is always kept) and
+/// the older ones are named in `message index -> image positions` to be left out.
+fn old_pictures_over_budget(
+    messages: &[Message],
+) -> std::collections::HashMap<usize, HashSet<usize>> {
+    let mut left = fv_core::image::IMAGE_REQUEST_BUDGET;
+    let mut first = true;
+    let mut dropped: std::collections::HashMap<usize, HashSet<usize>> = Default::default();
+    for (index, message) in messages.iter().enumerate().rev() {
+        let Message::ToolImages { images, .. } = message else {
+            continue;
+        };
+        for (position, image) in images.iter().enumerate().rev() {
+            let size = sent_size(image);
+            if first || size <= left {
+                left = left.saturating_sub(size);
+                first = false;
+            } else {
+                left = 0;
+                dropped.entry(index).or_default().insert(position);
+            }
+        }
+    }
+    dropped
 }
 
 fn to_tool(spec: &ToolSpec) -> Tool {
@@ -292,5 +347,38 @@ pub fn usage(u: &GenaiUsage) -> Usage {
         output_tokens: n(u.completion_tokens),
         cache_read_tokens: cache_read,
         cache_write_tokens: cache_write,
+    }
+}
+
+#[cfg(test)]
+mod picture_budget_tests {
+    use super::*;
+
+    fn shot(len: usize) -> Message {
+        Message::ToolImages {
+            call_id: "c".into(),
+            name: "shot".into(),
+            images: vec![ImagePart {
+                mime: "image/png".into(),
+                source: ImageSource::Base64 {
+                    data: "A".repeat(len),
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn oldest_pictures_are_left_out_first_and_newest_is_kept() {
+        let big = fv_core::image::IMAGE_REQUEST_BUDGET / 2 + 1;
+        let dropped = old_pictures_over_budget(&[shot(big), shot(big), shot(big)]);
+        assert!(dropped.contains_key(&0) && dropped.contains_key(&1));
+        assert!(!dropped.contains_key(&2));
+    }
+
+    #[test]
+    fn a_lone_oversized_picture_is_still_sent() {
+        let dropped =
+            old_pictures_over_budget(&[shot(fv_core::image::IMAGE_REQUEST_BUDGET * 2)]);
+        assert!(dropped.is_empty());
     }
 }

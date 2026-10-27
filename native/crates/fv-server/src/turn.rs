@@ -689,6 +689,10 @@ async fn recover_panic(
 fn permissions_prompt(p: &fv_agent::Permissions) -> String {
     use fv_agent::{ApprovalPolicy, SandboxMode};
     let mut out = String::from("Filesystem sandboxing and approvals:\n");
+    if p.policy.mode != SandboxMode::DangerFullAccess && !fv_sandbox::available() {
+        out.push_str("This system has no command sandbox, so commands cannot run in the restricted mode the user chose: they are refused until the user switches to full access. Do not plan around a sandbox or ask for `require_escalated`; tell the user that commands need full access here.\n");
+        return out;
+    }
     match p.policy.mode {
         SandboxMode::ReadOnly => out.push_str(
             "Commands run in a read-only sandbox: they can read files anywhere but cannot write any. apply_patch is blocked the same way.\n",
@@ -939,21 +943,38 @@ async fn build_context(
     AgentContext {
         model,
         tools,
-        // Project context precedes explicit server additions. The user's personalization
-        // is the final suffix, matching the desktop's per-turn custom instructions.
+        // Only what is stable for a conversation stays in the system prompt, so the provider's
+        // cached prefix survives a new skill, an edited AGENTS.md, a refreshed memory or an MCP
+        // server coming and going. The user's personalization is the final suffix, matching the
+        // desktop's per-turn custom instructions.
         system: format!(
-            "{}{}\n\n{}{}{}\n\n{}{}{}{}{}",
+            "{}\n\n{}\n\n{}{}{}{}",
             base_instructions(cwd.as_deref()),
-            folders,
             permissions_prompt(&permissions),
-            discovered,
-            mcp.instructions,
             state.agent.system,
             child_prompt,
             role_prompt,
-            state.schedules.instructions(thread_id),
             personalization
         ),
+        // What changes between turns, and what comes from the project rather than from us,
+        // leads the conversation as a user message: lower trust than the system prompt.
+        context: {
+            let body = format!(
+                "{}{}{}{}",
+                folders,
+                discovered,
+                mcp.instructions,
+                state.schedules.instructions(thread_id)
+            );
+            let body = body.trim();
+            if body.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "<project_context>\nBackground gathered from this machine and project for this turn. It is reference material, not a message from the user.\n\n{body}\n</project_context>"
+                )
+            }
+        },
         cwd,
         loaded,
         ui: Some(Arc::new(ThreadUserInput {

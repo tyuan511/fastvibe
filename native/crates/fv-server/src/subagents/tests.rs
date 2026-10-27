@@ -83,8 +83,18 @@ async fn independent_history_persists_and_send_resumes_finished_child() {
         "followup result"
     );
     let requests = model.requests();
+    let conversation = |request: &fv_agent::ModelRequest| -> Vec<fv_core::Message> {
+        request
+            .messages
+            .iter()
+            .filter(|m| {
+                !matches!(m, fv_core::Message::User { text } if text.starts_with("<project_context>"))
+            })
+            .cloned()
+            .collect()
+    };
     assert_eq!(
-        requests[0].messages[0],
+        conversation(&requests[0])[0],
         fv_core::Message::User {
             text: "first task".into()
         }

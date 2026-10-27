@@ -228,6 +228,10 @@ impl Db {
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM queue_items WHERE thread_id = ?1", [id])?;
         tx.execute("DELETE FROM queue_pauses WHERE thread_id = ?1", [id])?;
+        tx.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            [format!("approvals:{id}")],
+        )?;
         let removed = tx.execute("DELETE FROM conversations WHERE id = ?1", [id])? > 0;
         tx.commit()?;
         Ok(removed)
