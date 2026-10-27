@@ -93,6 +93,17 @@ impl ServerState {
         crate::catalog::start(self);
         crate::schedules::Schedules::start(self);
         let weak = Arc::downgrade(self);
+        let archive_weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                let Some(state) = archive_weak.upgrade() else {
+                    break;
+                };
+                state.archive_stale_threads();
+            }
+        });
         tokio::spawn(async move {
             while changes.changed().await.is_ok() {
                 let Some(state) = weak.upgrade() else {
@@ -418,6 +429,36 @@ impl ServerState {
             .db
             .list_threads(include_archived)
             .map_err(internal)
+    }
+
+    pub fn archive_stale_threads(&self) {
+        let Ok(settings) = crate::settings::read(self) else {
+            return;
+        };
+        let Some(days) = settings.auto_archive_after_days else {
+            return;
+        };
+        let cutoff = now_ms().saturating_sub(i64::from(days) * 86_400_000);
+        let Ok(threads) = self.threads(false) else {
+            return;
+        };
+        for thread in threads {
+            if thread.pinned || thread.updated_at > cutoff {
+                continue;
+            }
+            if self
+                .loaded_runtime(&thread.id)
+                .is_some_and(|runtime| runtime.is_running())
+            {
+                continue;
+            }
+            let _ = self.update_thread(fv_protocol::types::ThreadUpdateParams {
+                thread_id: thread.id,
+                title: None,
+                archived: Some(true),
+                pinned: None,
+            });
+        }
     }
 
     pub fn thread(&self, id: &str) -> Result<Option<Thread>, ErrorObject> {

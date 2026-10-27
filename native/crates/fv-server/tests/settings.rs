@@ -146,6 +146,50 @@ async fn diagnostics_are_bounded_and_do_not_include_credentials_or_paths() {
 }
 
 #[tokio::test]
+async fn auto_archive_moves_only_old_unpinned_idle_threads() {
+    use fv_protocol::methods::{ThreadList, ThreadStart};
+    let data = tempfile::tempdir().unwrap();
+    let agent = fv_server::agent_with_builtin_tools(Arc::new(ScriptedModel::new([])));
+    let state = Arc::new(ServerState::new(data.path().to_path_buf(), agent).unwrap());
+    let sock = data.path().join("s.sock");
+    tokio::spawn(UnixServer::bind(state.clone(), &sock).await.unwrap().run());
+    let (client, _) = connect(&sock).await;
+    client
+        .call::<SettingsSet>(AppSettingsPatch {
+            auto_archive_after_days: Some(Some(30)),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let old = client
+        .call::<ThreadStart>(ThreadStartParams::default())
+        .await
+        .unwrap()
+        .thread;
+    let pinned = client
+        .call::<ThreadStart>(ThreadStartParams::default())
+        .await
+        .unwrap()
+        .thread;
+    let mut old_record = state.thread(&old.id).unwrap().unwrap();
+    old_record.updated_at = chrono::Utc::now().timestamp_millis() - 31 * 86_400_000;
+    state.store.db.put_thread(&old_record).unwrap();
+    let mut pinned_record = state.thread(&pinned.id).unwrap().unwrap();
+    pinned_record.updated_at = old_record.updated_at;
+    pinned_record.pinned = true;
+    state.store.db.put_thread(&pinned_record).unwrap();
+    state.archive_stale_threads();
+    let visible = client
+        .call::<ThreadList>(ThreadListParams {
+            include_archived: false,
+        })
+        .await
+        .unwrap();
+    assert!(visible.threads.iter().all(|thread| thread.id != old.id));
+    assert!(visible.threads.iter().any(|thread| thread.id == pinned.id));
+}
+
+#[tokio::test]
 async fn a_thread_can_be_renamed_archived_pinned_and_deleted_for_good() {
     use fv_agent::testing::Reply;
     use fv_protocol::methods::{ThreadDelete, ThreadList, ThreadStart, ThreadUpdate, TurnStart};

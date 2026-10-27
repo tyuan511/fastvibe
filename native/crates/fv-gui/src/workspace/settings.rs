@@ -1523,6 +1523,7 @@ impl Workspace {
         let reply_suggestions = a.reply_suggestions;
         let auto_compaction_enabled = a.auto_compaction_enabled;
         let code_mode_enabled = a.code_mode_enabled;
+        let auto_archive = a.auto_archive_after_days.is_some();
         let hover = p.c(Token::Accent);
         let mode_label = |m: ThemeMode| match m {
             ThemeMode::System => "跟随系统",
@@ -1775,6 +1776,27 @@ impl Workspace {
                                 cx,
                             )
                         })),
+                    ))
+                    .child(setting_row(
+                        "自动归档旧对话",
+                        "每小时检查一次，将 30 天未活动、未置顶且没有运行任务的对话移入归档",
+                        true,
+                        p,
+                        switch(SharedString::from("auto-archive"), auto_archive, p).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.patch_settings(
+                                    AppSettingsPatch {
+                                        auto_archive_after_days: Some(if auto_archive {
+                                            None
+                                        } else {
+                                            Some(30)
+                                        }),
+                                        ..Default::default()
+                                    },
+                                    cx,
+                                )
+                            }),
+                        ),
                     )),
             )
     }

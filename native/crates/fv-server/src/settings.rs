@@ -62,6 +62,12 @@ pub fn set(state: &ServerState, mut patch: AppSettingsPatch) -> Result<AppSettin
             ));
         }
     }
+    if let Some(days) = patch.auto_archive_after_days
+        && let Some(days) = days
+        && !(1..=3_650).contains(&days)
+    {
+        return Err(invalid("autoArchiveAfterDays must be between 1 and 3650"));
+    }
     let _guard = state.settings_lock.lock().unwrap();
     let mut settings = read(state)?;
     if let Some(expected) = &patch.expected_custom_system_prompt {

@@ -1765,6 +1765,9 @@ pub struct AppSettings {
     /// Local browser download directory. Empty uses the platform Downloads folder.
     #[serde(default)]
     pub browser_download_dir: String,
+    /// Automatically archive inactive, unpinned conversations after this many days.
+    #[serde(default)]
+    pub auto_archive_after_days: Option<u32>,
 }
 
 fn default_browser_homepage() -> String {
@@ -1868,6 +1871,7 @@ impl Default for AppSettings {
             browser_homepage: default_browser_homepage(),
             browser_search_engine: default_browser_search_engine(),
             browser_download_dir: String::new(),
+            auto_archive_after_days: None,
         }
     }
 }
@@ -1915,6 +1919,8 @@ pub struct AppSettingsPatch {
     pub browser_search_engine: Option<String>,
     #[serde(default)]
     pub browser_download_dir: Option<String>,
+    #[serde(default)]
+    pub auto_archive_after_days: Option<Option<u32>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1949,6 +1955,9 @@ impl AppSettings {
         }
         if let Some(v) = patch.browser_download_dir {
             self.browser_download_dir = v;
+        }
+        if let Some(v) = patch.auto_archive_after_days {
+            self.auto_archive_after_days = v;
         }
         if let Some(v) = patch.custom_system_prompt {
             self.custom_system_prompt = v;

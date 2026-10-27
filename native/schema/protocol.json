@@ -67,6 +67,15 @@
             ],
             "default": null
           },
+          "autoArchiveAfterDays": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "autoCompactionEnabled": {
             "default": null,
             "type": [
@@ -5625,6 +5634,16 @@
             "$ref": "#/$defs/ApprovalPolicy",
             "default": "onRequest",
             "description": "When the user is asked before something runs (codex's `approval_policy`)."
+          },
+          "autoArchiveAfterDays": {
+            "default": null,
+            "description": "Automatically archive inactive, unpinned conversations after this many days.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "autoCompactionEnabled": {
             "default": true,
