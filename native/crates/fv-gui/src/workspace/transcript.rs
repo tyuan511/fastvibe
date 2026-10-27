@@ -907,8 +907,12 @@ impl Workspace {
                 }
                 let open = self.open_items.contains(id);
                 let detail = open.then(|| {
+                    // The fold already insets this body by `ml-2 border-l pl-3.5`, so only the
+                    // tool body's own 12px is added here: a thought then starts on the same
+                    // column as the output of a tool call above or below it. The old 24 stacked
+                    // on top of that rule and put the text 46px in from the reply's edge.
                     div()
-                        .pl(px(24.0))
+                        .pl(px(12.0))
                         .text_size(px(TEXT_SM))
                         .line_height(px(22.0))
                         .muted(p)
