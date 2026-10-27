@@ -1,6 +1,6 @@
 //! Long-term memory settings use the same protocol as every other client.
 use fv_protocol::methods::{MemoryClear, MemoryConfigure, MemoryRead, MemoryRun};
-use fv_protocol::types::{Empty, MemoryConfig, MemoryPhase, MemoryState};
+use fv_protocol::types::{Empty, MemoryConfig, MemoryPhase, MemoryState, UiLanguage};
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -146,6 +146,7 @@ impl Workspace {
 
     pub(super) fn memory_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let Some(s) = self.settings.as_ref() else {
             return div().into_any_element();
         };
@@ -154,12 +155,13 @@ impl Workspace {
             return div()
                 .text_size(px(TEXT_SM))
                 .muted(p)
-                .child(
-                    memory
-                        .error
-                        .clone()
-                        .unwrap_or_else(|| "正在读取记忆状态…".into()),
-                )
+                .child(memory.error.clone().unwrap_or_else(|| {
+                    if english {
+                        "Loading memory status…".into()
+                    } else {
+                        "正在读取记忆状态…".into()
+                    }
+                }))
                 .into_any_element();
         };
         let busy = memory.busy.is_some();
@@ -176,16 +178,29 @@ impl Workspace {
                     .map(|m| format!("{}/{}", m.provider_name, m.model.id))
                     .unwrap_or_else(|| label.clone())
             })
-            .unwrap_or_else(|| "跟随默认模型".into());
+            .unwrap_or_else(|| {
+                if english {
+                    "Follow default model".into()
+                } else {
+                    "跟随默认模型".into()
+                }
+            });
         let mut model_choices = div().flex().flex_col().gap(px(4.0));
-        for (index, (label, name)) in std::iter::once((None, "跟随默认模型".to_string()))
-            .chain(self.models.iter().map(|m| {
-                (
-                    Some(m.label.clone()),
-                    format!("{}/{}", m.provider_name, m.model.id),
-                )
-            }))
-            .enumerate()
+        for (index, (label, name)) in std::iter::once((
+            None,
+            if english {
+                "Follow default model".to_string()
+            } else {
+                "跟随默认模型".to_string()
+            },
+        ))
+        .chain(self.models.iter().map(|m| {
+            (
+                Some(m.label.clone()),
+                format!("{}/{}", m.provider_name, m.model.id),
+            )
+        }))
+        .enumerate()
         {
             let mut chosen = config.clone();
             chosen.model = label;
@@ -198,15 +213,46 @@ impl Workspace {
             );
         }
         let status = match state.phase {
-            MemoryPhase::Extracting => "正在提取会话记忆…",
-            MemoryPhase::Consolidating => "正在整理记忆…",
-            MemoryPhase::Idle if state.ready => "记忆已就绪",
-            MemoryPhase::Idle => "尚未生成记忆",
+            MemoryPhase::Extracting => {
+                if english {
+                    "Extracting memories…"
+                } else {
+                    "正在提取会话记忆…"
+                }
+            }
+            MemoryPhase::Consolidating => {
+                if english {
+                    "Consolidating memories…"
+                } else {
+                    "正在整理记忆…"
+                }
+            }
+            MemoryPhase::Idle if state.ready => {
+                if english {
+                    "Memory is ready"
+                } else {
+                    "记忆已就绪"
+                }
+            }
+            MemoryPhase::Idle => {
+                if english {
+                    "No memories generated yet"
+                } else {
+                    "尚未生成记忆"
+                }
+            }
         };
-        let status_text = format!(
-            "{status} · 已整理 {} 个对话 · 待处理 {} 个",
-            state.conversations, state.pending
-        );
+        let status_text = if english {
+            format!(
+                "{status} · {} conversations consolidated · {} pending",
+                state.conversations, state.pending
+            )
+        } else {
+            format!(
+                "{status} · 已整理 {} 个对话 · 待处理 {} 个",
+                state.conversations, state.pending
+            )
+        };
         let root = state.folder.clone();
         let can_open = state.ready;
         let error = memory.error.clone().or_else(|| state.error.clone());
@@ -227,9 +273,9 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(4.0))
-                    .child(div().text_size(px(TEXT_SM)).child("长期记忆"))
+                    .child(div().text_size(px(TEXT_SM)).child(if english { "Long-term memory" } else { "长期记忆" }))
                     .child(div().text_size(px(TEXT_XS)).muted(p).child(
-                        "从近 10 天内、已闲置 6 小时的对话中整理经验，在后续对话中按需参考。",
+                        if english { "Extract experience from chats idle for six hours within the last ten days, then reference it when useful." } else { "从近 10 天内、已闲置 6 小时的对话中整理经验，在后续对话中按需参考。" },
                     )),
             )
             .child(toggle);
@@ -238,7 +284,11 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(10.0))
-            .child(div().text_size(px(TEXT_SM)).child("整理模型"))
+            .child(div().text_size(px(TEXT_SM)).child(if english {
+                "Consolidation model"
+            } else {
+                "整理模型"
+            }))
             .child(
                 outline_button("memory-model-picker", p)
                     .child(crate::ui::truncate(model_label))
@@ -268,7 +318,7 @@ impl Workspace {
                     .when(busy || !on || state.phase != MemoryPhase::Idle, |d| {
                         d.opacity(0.5)
                     })
-                    .child("立即整理")
+                    .child(if english { "Run now" } else { "立即整理" })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if on {
                             this.memory_action(None, false, cx);
@@ -278,7 +328,11 @@ impl Workspace {
             .child(
                 outline_button("memory-folder", p)
                     .when(!can_open, |d| d.opacity(0.5))
-                    .child("打开文件夹")
+                    .child(if english {
+                        "Open folder"
+                    } else {
+                        "打开文件夹"
+                    })
                     .on_click(move |_, _, cx| {
                         if can_open {
                             cx.reveal_path(std::path::Path::new(&root));
@@ -288,9 +342,17 @@ impl Workspace {
             .child(
                 outline_button("memory-clear", p)
                     .child(if memory.confirm_clear {
-                        "确认清除全部记忆"
+                        if english {
+                            "Confirm clear all memories"
+                        } else {
+                            "确认清除全部记忆"
+                        }
                     } else {
-                        "清除记忆"
+                        if english {
+                            "Clear memories"
+                        } else {
+                            "清除记忆"
+                        }
                     })
                     .text_color(p.c(Token::Destructive))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -313,10 +375,11 @@ impl Workspace {
             .gap(px(12.0))
             .child(div().text_size(px(TEXT_SM)).child(status_text))
             .children(state.last_run_at.map(|at| {
-                div().text_size(px(TEXT_XS)).muted(p).child(format!(
-                    "上次整理：{} 分钟前",
-                    ((now_ms() - at) / 60_000).max(0)
-                ))
+                div().text_size(px(TEXT_XS)).muted(p).child(if english {
+                    format!("Last run: {} minutes ago", ((now_ms() - at) / 60_000).max(0))
+                } else {
+                    format!("上次整理：{} 分钟前", ((now_ms() - at) / 60_000).max(0))
+                })
             }))
             .children(error.map(|error| {
                 div()
@@ -329,7 +392,7 @@ impl Workspace {
                 div()
                     .text_size(px(TEXT_XS))
                     .text_color(p.c(Token::Destructive))
-                    .child("清除后会删除已有记忆和整理记录，后续将重新学习。")
+                    .child(if english { "Clearing deletes existing memories and consolidation records; the system will learn again later." } else { "清除后会删除已有记忆和整理记录，后续将重新学习。" })
             }));
         div()
             .flex()
