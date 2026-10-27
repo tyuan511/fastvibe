@@ -3865,6 +3865,26 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "settings/reset",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "stats/usage",
             "type": "string"
           },

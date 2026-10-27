@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use fv_agent::testing::ScriptedModel;
 use fv_client::Client;
-use fv_protocol::methods::{Initialize, SettingsGet, SettingsSet};
+use fv_protocol::methods::{Initialize, SettingsGet, SettingsReset, SettingsSet};
 use fv_protocol::types::*;
 use fv_protocol::{PROTOCOL_VERSION, ServerNotification};
 use fv_server::{ServerState, UnixServer};
@@ -106,6 +106,27 @@ async fn browser_settings_validate_templates_and_persist() {
     );
     assert_eq!(saved.browser_download_dir, "/tmp/fastvibe-downloads");
     assert_eq!(client.call::<SettingsGet>(Empty {}).await.unwrap(), saved);
+}
+
+#[tokio::test]
+async fn reset_preferences_restores_defaults() {
+    let data = tempfile::tempdir().unwrap();
+    let agent = fv_server::agent_with_builtin_tools(Arc::new(ScriptedModel::new([])));
+    let state = Arc::new(ServerState::new(data.path().to_path_buf(), agent).unwrap());
+    let sock = data.path().join("s.sock");
+    tokio::spawn(UnixServer::bind(state, &sock).await.unwrap().run());
+    let (client, _) = connect(&sock).await;
+    client
+        .call::<SettingsSet>(AppSettingsPatch {
+            browser_homepage: Some("https://example.com".into()),
+            custom_system_prompt: Some("keep this until reset".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let reset = client.call::<SettingsReset>(Empty {}).await.unwrap();
+    assert_eq!(reset, AppSettings::default());
+    assert_eq!(client.call::<SettingsGet>(Empty {}).await.unwrap(), reset);
 }
 
 #[tokio::test]

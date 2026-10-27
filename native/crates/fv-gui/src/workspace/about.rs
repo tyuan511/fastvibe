@@ -3,7 +3,7 @@ use super::Workspace;
 use super::settings::{Section, card, outline_button};
 use crate::ui::{Muted as _, TEXT_SM, TEXT_XS};
 use fv_protocol::catalog::ModelCatalogInfo;
-use fv_protocol::methods::{ModelCatalogGet, ModelCatalogRefresh};
+use fv_protocol::methods::{ModelCatalogGet, ModelCatalogRefresh, SettingsReset};
 use fv_protocol::types::Empty;
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -38,6 +38,31 @@ impl Default for AboutSettings {
     }
 }
 impl Workspace {
+    fn reset_preferences(&mut self, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let call = backend.call::<SettingsReset>(Empty {});
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(settings) => {
+                        this.observe_personalization(&settings.custom_system_prompt);
+                        this.app_settings = settings;
+                        this.appearance_dirty = true;
+                        this.sidebar_notice = Some("偏好设置已恢复默认".into());
+                    }
+                    Err(error) => this.sidebar_notice = Some(format!("恢复默认失败：{error}")),
+                }
+                this.refresh_app_settings(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(super) fn refresh_about(&mut self, cx: &mut Context<Self>) {
         let Some(backend) = self.backend.clone() else {
             return;
@@ -190,6 +215,13 @@ impl Workspace {
                 .child(div().text_size(px(TEXT_SM)).child("tyuan511/fastvibe"))
                 .child(outline_button("about-repository", p).child("开源仓库")
                     .on_click(cx.listener(|_, _, _, cx| cx.open_url("https://github.com/tyuan511/fastvibe")))))
+            .child(card(p).p(px(16.0)).flex().items_center().justify_between()
+                .child(div().flex().flex_col().gap(px(4.0))
+                    .child(div().text_size(px(TEXT_SM)).child("偏好设置"))
+                    .child(div().text_size(px(TEXT_XS)).muted(p)
+                        .child("恢复主题、沙箱、快捷键、浏览器和 Agent 说明的默认值；供应商与对话不会删除。")))
+                .child(outline_button("reset-preferences", p).child("恢复默认")
+                    .on_click(cx.listener(|this, _, _, cx| this.reset_preferences(cx)))))
             .child(card(p).p(px(16.0)).flex().flex_col().gap(px(12.0))
                 .child(div().flex().items_center().justify_between()
                     .child(div().text_size(px(TEXT_SM)).font_weight(FontWeight::MEDIUM).child("模型目录"))

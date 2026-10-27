@@ -82,6 +82,11 @@ pub fn set(state: &ServerState, mut patch: AppSettingsPatch) -> Result<AppSettin
     write(state, settings)
 }
 
+pub fn reset(state: &ServerState) -> Result<AppSettings, ErrorObject> {
+    let _guard = state.settings_lock.lock().unwrap();
+    write(state, AppSettings::default())
+}
+
 /// The primary folder identifies a sidebar group; carry its preferences with its chats.
 pub fn relocate_project(state: &ServerState, old: &str, new: &str) -> Result<(), ErrorObject> {
     let _guard = state.settings_lock.lock().unwrap();

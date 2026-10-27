@@ -700,6 +700,7 @@ async fn dispatch(
             to_value(Empty {})
         }
         ClientRequest::SettingsGet { .. } => to_value(crate::settings::read(state)?),
+        ClientRequest::SettingsReset { .. } => to_value(crate::settings::reset(state)?),
         ClientRequest::StatsUsage { params, .. } => {
             to_value(crate::usage::collect(state.clone(), params).await?)
         }

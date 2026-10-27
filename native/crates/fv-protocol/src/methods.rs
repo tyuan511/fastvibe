@@ -132,6 +132,7 @@ client_requests! {
     TerminalCopy => "terminal/copy": TerminalCopyParams => TerminalCopyResponse,
     TerminalKill => "terminal/kill": TerminalIdParams => Empty,
     SettingsGet => "settings/get": Empty => AppSettings,
+    SettingsReset => "settings/reset": Empty => AppSettings,
     StatsUsage => "stats/usage": crate::usage::UsageParams => crate::usage::UsageStats,
     SettingsSet => "settings/set": AppSettingsPatch => AppSettings,
     SkillList => "skill/list": SkillListParams => SkillListResponse,
