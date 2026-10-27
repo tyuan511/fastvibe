@@ -158,7 +158,7 @@ impl Workspace {
     fn brand_and_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
-        let nav = |id: &'static str, glyph: &'static str, label: &'static str| {
+        let nav = |id: &'static str, glyph: &'static str, label: SharedString| {
             nav_row(id, glyph, label, p)
         };
         div()
@@ -212,7 +212,7 @@ impl Workspace {
                         nav(
                             "new-chat",
                             "message-square-plus",
-                            if english { "New chat" } else { text::NEW_CHAT },
+                            text::new_chat(self.app_settings.language).into(),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.new_chat(None, cx);
@@ -222,7 +222,7 @@ impl Workspace {
                         nav(
                             "tasks",
                             "clock01",
-                            if english { "Schedules" } else { text::TASKS },
+                            SharedString::from(if english { "Schedules" } else { text::TASKS }),
                         )
                         .on_click(
                             cx.listener(|this, _, window, cx| this.open_schedules(window, cx)),
@@ -729,7 +729,7 @@ impl Workspace {
                 nav_row(
                     "settings",
                     "settings01",
-                    if english { "Settings" } else { text::SETTINGS },
+                    text::settings(self.app_settings.language).into(),
                     p,
                 )
                 .flex_1()
@@ -777,14 +777,14 @@ impl Workspace {
 fn nav_row(
     id: &'static str,
     glyph: &'static str,
-    label: &'static str,
+    label: SharedString,
     p: &crate::theme::Palette,
 ) -> Stateful<Div> {
     let hover = ui::half(p.c(Token::SidebarAccent));
     div()
         .id(id)
         .role(Role::Button)
-        .aria_label(label)
+        .aria_label(label.clone())
         .focusable()
         .h(px(32.0))
         .px(px(8.0))

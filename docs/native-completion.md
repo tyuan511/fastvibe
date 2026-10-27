@@ -705,3 +705,14 @@ macOS GUI 为未选中对话的后台回合完成/停止/失败状态维护未�
 验证：`fv-gui` 90 项单测、all-targets 严格 Clippy 通过；仅代码与自动化验证，没有 computer use。
 
 仍保留中文回退的：部分低频无障碍标签、编辑器占位及其它后台错误摘要，i18n 全量收口未完成。
+
+## 第四十八批：i18n 基础设施（rust-i18n）
+
+GPUI 不带 i18n，此前文案靠手写 `if english { … } else { … }`，漏翻译编译器发现不了。本批引入 `rust-i18n`（只有中英两种语言、以带变量的短句为主，用不到 Fluent 的复数/语法性别规则；`t!(key, locale = …)` 可按调用传语言，不依赖全局状态）。
+
+- 文案放在 `crates/fv-gui/locales/app.yml`，`_version: 2`，每个键下 `zh` / `en` 并排；v1 格式把文件名当语言，不能用。`lib.rs` 里 `rust_i18n::i18n!("locales", fallback = "zh")`。
+- `workspace/mod.rs` 的 `text` 模块的 18 个函数改由 `texts!` 宏生成，键为 `text.<函数名>`；返回类型由 `&'static str` 改为 `String`。语言到 locale 的映射是 `text::locale`。
+- 测试 `locale_file_tests` 直接读 yml，检查每个键 zh/en 都非空（缺英文时 `fallback = "zh"` 会静默回退成中文），并钉住几条中英文渲染结果。
+- 其余 `if english { … }` 尚未迁移；后续按模块逐批搬进 `app.yml`，每批保持中文逐字不变。
+
+验证：`fv-gui` 92 项单测、all-targets 严格 Clippy 通过；仅代码与自动化验证，没有 computer use。

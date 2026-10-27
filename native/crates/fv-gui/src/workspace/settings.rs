@@ -2639,7 +2639,7 @@ impl Workspace {
                                     .min_w_0()
                                     .child(
                                         ui::truncate(if t.title.is_empty() {
-                                            text::UNTITLED.to_string()
+                                            text::untitled(self.app_settings.language)
                                         } else {
                                             t.title.clone()
                                         })

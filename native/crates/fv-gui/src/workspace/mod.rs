@@ -51,161 +51,56 @@ use crate::view_model::{Applied, ThreadView};
 mod text {
     use super::UiLanguage;
 
-    pub const NEW_CHAT: &str = "新对话";
     pub const TASKS: &str = "定时任务";
     pub const PROJECTS: &str = "项目";
     pub const NO_PROJECTS: &str = "暂无项目";
     pub const CHATS: &str = "聊天";
     pub const EMPTY_CHATS: &str = "暂无对话";
-    pub const SETTINGS: &str = "设置";
-    pub const CONNECTING: &str = "正在连接…";
-    pub const PLACEHOLDER: &str = "随心输入";
-    pub const NO_MODEL: &str = "添加模型";
-    pub const NO_MODEL_HINT: &str = "暂无模型";
-    pub const THINKING: &str = "思考";
-    pub const COMPACTED: &str = "已压缩上下文";
-    pub const COMPACTING: &str = "正在压缩上下文";
-    pub const WORKING: &str = "正在工作";
     pub const CHANGED_FILES: &str = "已修改 {n} 个文件";
-    pub const VIEW_CHANGES: &str = "查看变更";
-    pub const PROCESSED: &str = "已处理";
-    pub const UNTITLED: &str = "新对话";
     pub const QUEUE_SEND_NOW: &str = "立即";
     pub const QUEUE_RESUME: &str = "继续";
     pub const QUEUE_UNIT: &str = "条排队中";
     pub const QUEUE_PAUSED: &str = "上次回复出错，队列已暂停";
     pub const QUEUE_PAUSED_STOPPED: &str = "已停止，队列已暂停";
-    pub const EDIT_HINT: &str = "正在编辑这条提示词，发送会重写这一轮";
-    pub const PANE_TERMINAL: &str = "终端";
-    pub const PANE_GIT: &str = "变更";
-    pub const GIT_COMMIT: &str = "提交";
-    pub const EDIT_CANCEL: &str = "取消";
 
-    pub fn new_chat(language: UiLanguage) -> &'static str {
+    /// The locale file key is `text.<name>`; see `locales/app.yml`.
+    macro_rules! texts {
+        ($($name:ident),* $(,)?) => {
+            $(
+                pub fn $name(language: UiLanguage) -> String {
+                    rust_i18n::t!(concat!("text.", stringify!($name)), locale = locale(language)).into_owned()
+                }
+            )*
+        };
+    }
+
+    pub fn locale(language: UiLanguage) -> &'static str {
         match language {
-            UiLanguage::Chinese => NEW_CHAT,
-            UiLanguage::English => "New chat",
+            UiLanguage::Chinese => "zh",
+            UiLanguage::English => "en",
         }
     }
 
-    pub fn settings(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => SETTINGS,
-            UiLanguage::English => "Settings",
-        }
-    }
-
-    pub fn placeholder(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => PLACEHOLDER,
-            UiLanguage::English => "Ask anything",
-        }
-    }
-
-    pub fn no_model(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => NO_MODEL,
-            UiLanguage::English => "Add a model",
-        }
-    }
-
-    pub fn no_model_hint(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => NO_MODEL_HINT,
-            UiLanguage::English => "No models configured",
-        }
-    }
-
-    pub fn connecting(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => CONNECTING,
-            UiLanguage::English => "Connecting…",
-        }
-    }
-
-    pub fn pane_terminal(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => PANE_TERMINAL,
-            UiLanguage::English => "Terminal",
-        }
-    }
-
-    pub fn pane_git(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => PANE_GIT,
-            UiLanguage::English => "Changes",
-        }
-    }
-
-    pub fn git_commit(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => GIT_COMMIT,
-            UiLanguage::English => "Commit",
-        }
-    }
-
-    pub fn edit_hint(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => EDIT_HINT,
-            UiLanguage::English => "Editing this prompt; sending will rewrite this turn",
-        }
-    }
-
-    pub fn edit_cancel(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => EDIT_CANCEL,
-            UiLanguage::English => "Cancel",
-        }
-    }
-
-    pub fn untitled(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => UNTITLED,
-            UiLanguage::English => "New chat",
-        }
-    }
-
-    pub fn thinking(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => THINKING,
-            UiLanguage::English => "Thinking",
-        }
-    }
-
-    pub fn compacted(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => COMPACTED,
-            UiLanguage::English => "Context compacted",
-        }
-    }
-
-    pub fn compacting(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => COMPACTING,
-            UiLanguage::English => "Compacting context",
-        }
-    }
-
-    pub fn working(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => WORKING,
-            UiLanguage::English => "Working",
-        }
-    }
-
-    pub fn processed(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => PROCESSED,
-            UiLanguage::English => "Processed",
-        }
-    }
-
-    pub fn view_changes(language: UiLanguage) -> &'static str {
-        match language {
-            UiLanguage::Chinese => VIEW_CHANGES,
-            UiLanguage::English => "View changes",
-        }
-    }
+    texts!(
+        new_chat,
+        settings,
+        placeholder,
+        no_model,
+        no_model_hint,
+        connecting,
+        pane_terminal,
+        pane_git,
+        git_commit,
+        edit_hint,
+        edit_cancel,
+        untitled,
+        thinking,
+        compacted,
+        compacting,
+        working,
+        processed,
+        view_changes
+    );
 }
 
 enum Status {
@@ -498,7 +393,7 @@ impl Workspace {
             TextareaState::new(window, cx)
                 .submit_on_enter(true)
                 .auto_grow(1, 8)
-                .placeholder(text::PLACEHOLDER)
+                .placeholder(text::placeholder(UiLanguage::Chinese))
         });
         // The composer has the keyboard from the start, as in the Electron app.
         input.update(cx, |state, cx| state.focus(window, cx));
@@ -617,7 +512,7 @@ impl Workspace {
             pane_tree_resize: None,
             pending_open: None,
             compose_suggestion: None,
-            placeholder_shown: text::PLACEHOLDER.to_string(),
+            placeholder_shown: text::placeholder(UiLanguage::Chinese),
             search_results: Default::default(),
             search_task: None,
             search_target: None,
@@ -2948,5 +2843,61 @@ impl Workspace {
             }
             cx.notify();
         }
+    }
+}
+
+#[cfg(test)]
+mod locale_file_tests {
+    //! The locale file is the only place copy lives, so a key with a missing language would
+    //! silently fall back to Chinese in the English UI. Read the file itself, not the macro.
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn every_key_has_both_languages() {
+        let raw = include_str!("../../locales/app.yml");
+        let doc: BTreeMap<String, serde_json::Value> = serde_yaml_ng_free(raw);
+        assert!(!doc.is_empty());
+        for (key, value) in doc.iter().filter(|(k, _)| !k.starts_with('_')) {
+            for lang in ["zh", "en"] {
+                let text = value.get(lang).and_then(|v| v.as_str()).unwrap_or("");
+                assert!(!text.trim().is_empty(), "{key} has no {lang} text");
+            }
+        }
+    }
+
+    /// The file is flat (`key:` then `  zh:` / `  en:`), so no YAML parser is needed.
+    fn serde_yaml_ng_free(raw: &str) -> BTreeMap<String, serde_json::Value> {
+        let mut out: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        let mut key = String::new();
+        for line in raw.lines().filter(|l| !l.trim().is_empty()) {
+            if let Some(rest) = line.strip_prefix("  ") {
+                let (lang, text) = rest.split_once(':').expect("lang line");
+                let text = text.trim().trim_matches('"');
+                out.get_mut(&key).unwrap()[lang.trim()] = text.into();
+            } else {
+                key = line
+                    .trim_end_matches(':')
+                    .split(':')
+                    .next()
+                    .unwrap()
+                    .to_string();
+                out.insert(key.clone(), serde_json::json!({}));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn rendered_text_matches_the_previous_copy() {
+        use super::text;
+        use fv_protocol::types::UiLanguage::{Chinese, English};
+        assert_eq!(text::new_chat(Chinese), "新对话");
+        assert_eq!(text::new_chat(English), "New chat");
+        assert_eq!(
+            text::edit_hint(Chinese),
+            "正在编辑这条提示词，发送会重写这一轮"
+        );
+        assert_eq!(text::connecting(English), "Connecting…");
+        assert_eq!(text::view_changes(English), "View changes");
     }
 }

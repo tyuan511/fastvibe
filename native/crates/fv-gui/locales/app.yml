@@ -1,0 +1,56 @@
+_version: 2
+
+text.new_chat:
+  zh: "新对话"
+  en: "New chat"
+text.settings:
+  zh: "设置"
+  en: "Settings"
+text.placeholder:
+  zh: "随心输入"
+  en: "Ask anything"
+text.no_model:
+  zh: "添加模型"
+  en: "Add a model"
+text.no_model_hint:
+  zh: "暂无模型"
+  en: "No models configured"
+text.connecting:
+  zh: "正在连接…"
+  en: "Connecting…"
+text.pane_terminal:
+  zh: "终端"
+  en: "Terminal"
+text.pane_git:
+  zh: "变更"
+  en: "Changes"
+text.git_commit:
+  zh: "提交"
+  en: "Commit"
+text.edit_hint:
+  zh: "正在编辑这条提示词，发送会重写这一轮"
+  en: "Editing this prompt; sending will rewrite this turn"
+text.edit_cancel:
+  zh: "取消"
+  en: "Cancel"
+text.untitled:
+  zh: "新对话"
+  en: "New chat"
+text.thinking:
+  zh: "思考"
+  en: "Thinking"
+text.compacted:
+  zh: "已压缩上下文"
+  en: "Context compacted"
+text.compacting:
+  zh: "正在压缩上下文"
+  en: "Compacting context"
+text.working:
+  zh: "正在工作"
+  en: "Working"
+text.processed:
+  zh: "已处理"
+  en: "Processed"
+text.view_changes:
+  zh: "查看变更"
+  en: "View changes"

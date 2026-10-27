@@ -157,7 +157,7 @@ impl Workspace {
             if query.is_empty() || label.to_lowercase().contains(query) {
                 rows.push(Row {
                     hit,
-                    label: label.into(),
+                    label,
                     glyph,
                     detail: None,
                 });
@@ -208,7 +208,7 @@ impl Workspace {
             rows.push(Row {
                 hit: Hit::Thread(t.id, body_query),
                 label: if t.title.trim().is_empty() {
-                    text::untitled(self.app_settings.language).into()
+                    text::untitled(self.app_settings.language)
                 } else {
                     t.title
                 },

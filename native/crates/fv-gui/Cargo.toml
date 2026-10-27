@@ -37,6 +37,7 @@ libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 url = "2"
+rust-i18n = "3"
 uuid = { version = "1", features = ["v4"] }
 unicode-width = "0.2"
 iana-time-zone = "0.1.65"

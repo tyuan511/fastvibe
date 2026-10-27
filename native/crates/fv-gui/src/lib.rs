@@ -3,6 +3,8 @@
 //! laid out in [`presentation`], both free of window code so that they can be tested without
 //! one.
 
+rust_i18n::i18n!("locales", fallback = "zh");
+
 pub mod assets;
 pub mod backend;
 pub mod context_stats;
