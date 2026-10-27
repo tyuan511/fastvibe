@@ -39,7 +39,7 @@
 - [ ] 远程：按当前原生架构重新设计账号、LAN/WebRTC、SSH 主机管理，并同步适配 Flutter；不兼容旧协议。
 - [x] 数据：错误项持久化、失败回合恢复及压缩后的重试定位；代码与定向自动化验收通过。
 - [x] 数据：压缩窗口自适应；代码与自动化验收通过。
-- [ ] 数据：其他 Agent 导入；Claude Code、pi、Codex、OpenCode 与 zcode 的扫描、预览和“导入为新对话”已接入 `fv-import` 与 `import/scan|read|commit`，并用源记录稳定键做用量去重；历史导入来源已持久化到 `Thread.source` 并显示在侧边栏，仍需导入回归样本覆盖。
+- [x] 数据：其他 Agent 导入；Claude Code、pi、Codex、OpenCode 与 zcode 的扫描、预览和“导入为新对话”已接入 `fv-import` 与 `import/scan|read|commit`，并用源记录稳定键做用量去重；历史导入来源已持久化到 `Thread.source` 并显示在侧边栏，六个格式/缺失源回归用例通过。
 - [ ] 外围：i18n；Dock 角标、保持唤醒、自动归档和后台回合通知已接通，见第三十四至三十七批。
 - [ ] 交付：自动更新、签名打包、Windows/Linux、切换前的全范围代码验证；OfficeCLI 与原生 office 技能须随包发布，二进制重签后的运行时校验须适配并验收。
 - [ ] 对齐：标题栏状态、工具详情和菜单样式；更新过时的进度文档。
