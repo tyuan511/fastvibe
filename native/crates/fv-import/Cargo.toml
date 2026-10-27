@@ -9,6 +9,7 @@ publish.workspace = true
 fv-core = { path = "../fv-core" }
 serde_json.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -30,6 +30,7 @@ fn source_root(source: &str) -> Result<PathBuf, ErrorObject> {
         "claude-code" => Ok(home.join(".claude").join("projects")),
         "pi" => Ok(home.join(".pi").join("agent").join("sessions")),
         "codex" => Ok(home.join(".codex")),
+        "opencode" => Ok(home.join(".local").join("share").join("opencode")),
         _ => Err(invalid(format!("unsupported import source: {source}"))),
     }
 }
@@ -72,13 +73,14 @@ pub fn scan(
         .source
         .as_deref()
         .map(|source| vec![source])
-        .unwrap_or_else(|| vec!["claude-code", "pi", "codex"]);
+        .unwrap_or_else(|| vec!["claude-code", "pi", "codex", "opencode"]);
     let mut candidates = Vec::new();
     for source in sources {
         let scanned = match source {
             "claude-code" => fv_import::scan_claude(&source_root(source)?),
             "pi" => fv_import::scan_pi(&source_root(source)?),
             "codex" => fv_import::scan_codex(&source_root(source)?),
+            "opencode" => fv_import::scan_opencode(&source_root(source)?.join("opencode.db")),
             _ => return Err(invalid(format!("unsupported import source: {source}"))),
         }
         .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
@@ -92,11 +94,20 @@ pub fn read(
     _state: &ServerState,
     params: ImportReadParams,
 ) -> Result<ImportReadResponse, ErrorObject> {
-    let path = source_path(&params.source, &params.source_id)?;
     let imported = match params.source.as_str() {
-        "claude-code" => fv_import::read_claude(&path),
-        "pi" => fv_import::read_pi(&path),
-        "codex" => fv_import::read_codex(&path),
+        "claude-code" | "pi" | "codex" => {
+            let path = source_path(&params.source, &params.source_id)?;
+            match params.source.as_str() {
+                "claude-code" => fv_import::read_claude(&path),
+                "pi" => fv_import::read_pi(&path),
+                "codex" => fv_import::read_codex(&path),
+                _ => unreachable!(),
+            }
+        }
+        "opencode" => fv_import::read_opencode(
+            &source_root("opencode")?.join("opencode.db"),
+            &params.source_id,
+        ),
         _ => {
             return Err(invalid(format!(
                 "unsupported import source: {}",
@@ -124,11 +135,20 @@ pub fn commit(
     state: &ServerState,
     params: ImportCommitParams,
 ) -> Result<ThreadStartResponse, ErrorObject> {
-    let path = source_path(&params.source, &params.source_id)?;
     let imported = match params.source.as_str() {
-        "claude-code" => fv_import::read_claude(&path),
-        "pi" => fv_import::read_pi(&path),
-        "codex" => fv_import::read_codex(&path),
+        "claude-code" | "pi" | "codex" => {
+            let path = source_path(&params.source, &params.source_id)?;
+            match params.source.as_str() {
+                "claude-code" => fv_import::read_claude(&path),
+                "pi" => fv_import::read_pi(&path),
+                "codex" => fv_import::read_codex(&path),
+                _ => unreachable!(),
+            }
+        }
+        "opencode" => fv_import::read_opencode(
+            &source_root("opencode")?.join("opencode.db"),
+            &params.source_id,
+        ),
         _ => {
             return Err(invalid(format!(
                 "unsupported import source: {}",

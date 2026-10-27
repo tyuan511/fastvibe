@@ -35,12 +35,14 @@ pub struct ImportedSession {
 #[derive(Debug)]
 pub enum ImportError {
     Io(std::io::Error),
+    Sqlite(rusqlite::Error),
     InvalidPath(String),
 }
 impl std::fmt::Display for ImportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "{e}"),
+            Self::Sqlite(e) => write!(f, "{e}"),
             Self::InvalidPath(e) => f.write_str(e),
         }
     }
@@ -49,6 +51,11 @@ impl std::error::Error for ImportError {}
 impl From<std::io::Error> for ImportError {
     fn from(e: std::io::Error) -> Self {
         Self::Io(e)
+    }
+}
+impl From<rusqlite::Error> for ImportError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Sqlite(error)
     }
 }
 
@@ -670,6 +677,244 @@ pub fn read_codex(path: &Path) -> Result<ImportedSession, ImportError> {
     })
 }
 
+/// Scan the current OpenCode SQLite store. The database is opened read-only while OpenCode may
+/// still be running; a locked or missing store simply produces no candidates.
+pub fn scan_opencode(db_path: &Path) -> Result<Vec<Candidate>, ImportError> {
+    let connection = open_import_db(db_path)?;
+    let mut query = connection.prepare(
+        "SELECT id, title, directory, time_created, time_updated FROM session ORDER BY time_updated DESC",
+    )?;
+    let mut candidates = Vec::new();
+    for row in query.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let title: Option<String> = row.get(1)?;
+        let cwd: Option<String> = row.get(2)?;
+        let created: i64 = row.get(3)?;
+        let updated: i64 = row.get(4)?;
+        Ok((id, title, cwd, created, updated))
+    })? {
+        let (id, title, cwd, created, updated) = row?;
+        let message_count: usize = connection.query_row(
+            "SELECT COUNT(*) FROM message WHERE session_id = ?1 AND role IN ('user','assistant')",
+            [&id],
+            |row| row.get::<_, i64>(0),
+        )? as usize;
+        if message_count == 0 {
+            continue;
+        }
+        candidates.push(Candidate {
+            source: "opencode".into(),
+            source_id: id.clone(),
+            title: title.filter(|title| !title.trim().is_empty()).unwrap_or(id),
+            cwd,
+            created_at: sql_time(created),
+            updated_at: sql_time(updated),
+            message_count,
+            bytes: 0,
+        });
+    }
+    Ok(candidates)
+}
+
+pub fn read_opencode(db_path: &Path, session_id: &str) -> Result<ImportedSession, ImportError> {
+    let connection = open_import_db(db_path)?;
+    let (title, cwd, created, updated): (String, Option<String>, i64, i64) = connection
+        .query_row(
+            "SELECT COALESCE(title,''), directory, time_created, time_updated FROM session WHERE id = ?1",
+            [session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+    let mut messages = Vec::new();
+    let mut timestamps = Vec::new();
+    let mut skipped = Vec::new();
+    let mut message_query = connection.prepare(
+        "SELECT id, time_created, role, data FROM message WHERE session_id = ?1 ORDER BY time_created, id",
+    )?;
+    for row in message_query.query_map([session_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })? {
+        let (message_id, at, role, data) = row?;
+        let data =
+            serde_json::from_str::<Value>(&data).unwrap_or(Value::Object(Default::default()));
+        let mut parts = connection
+            .prepare("SELECT data FROM part WHERE message_id = ?1 ORDER BY time_created, rowid")?;
+        let parts = parts
+            .query_map([&message_id], |row| row.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .filter_map(|part| serde_json::from_str::<Value>(&part).ok())
+            .collect::<Vec<_>>();
+        let at = sql_time(at);
+        match role.as_str() {
+            "user" => {
+                let text = parts
+                    .iter()
+                    .filter(|part| {
+                        part.get("type").and_then(Value::as_str) == Some("text")
+                            && part.get("synthetic").and_then(Value::as_bool) != Some(true)
+                    })
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                if !text.trim().is_empty() {
+                    messages.push(Message::User { text });
+                    timestamps.push(at);
+                }
+            }
+            "assistant" => {
+                let mut content = Vec::new();
+                for part in &parts {
+                    match part.get("type").and_then(Value::as_str) {
+                        Some("text")
+                            if part.get("synthetic").and_then(Value::as_bool) != Some(true) =>
+                        {
+                            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                content.push(ContentBlock::Text { text: text.into() });
+                            }
+                        }
+                        Some("reasoning") => {
+                            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                content.push(ContentBlock::Thinking {
+                                    text: text.into(),
+                                    signature: None,
+                                });
+                            }
+                        }
+                        Some("tool") => {
+                            let state = part.get("state").and_then(Value::as_object);
+                            let id = part
+                                .get("callID")
+                                .and_then(Value::as_str)
+                                .unwrap_or("imported-call");
+                            let name = part
+                                .get("tool")
+                                .and_then(Value::as_str)
+                                .unwrap_or("imported_tool");
+                            let arguments = state
+                                .and_then(|state| state.get("input"))
+                                .cloned()
+                                .unwrap_or(Value::Object(Default::default()));
+                            content.push(ContentBlock::ToolCall {
+                                id: id.into(),
+                                name: name.into(),
+                                arguments,
+                            });
+                            if let Some(state) = state {
+                                let status = state.get("status").and_then(Value::as_str);
+                                if matches!(status, Some("completed") | Some("error")) {
+                                    messages.push(Message::Assistant(AssistantMessage {
+                                        duration_ms: None,
+                                        content: content.clone(),
+                                        stop: StopReason::ToolUse,
+                                        usage: opencode_usage(data.get("tokens")),
+                                        model: data
+                                            .get("modelID")
+                                            .and_then(Value::as_str)
+                                            .map(str::to_string),
+                                    }));
+                                    timestamps.push(at);
+                                    messages.push(Message::ToolResult {
+                                        call_id: id.into(),
+                                        name: name.into(),
+                                        content: state
+                                            .get("output")
+                                            .map(value_text)
+                                            .unwrap_or_default(),
+                                        is_error: status == Some("error"),
+                                    });
+                                    timestamps.push(at);
+                                    content.clear();
+                                }
+                            }
+                        }
+                        Some("compaction") | Some("patch") | Some("file") | Some("subtask")
+                        | Some("agent") => skipped.push("structural OpenCode part".into()),
+                        _ => {}
+                    }
+                }
+                if !content.is_empty() {
+                    messages.push(Message::Assistant(AssistantMessage {
+                        duration_ms: None,
+                        content,
+                        stop: StopReason::Stop,
+                        usage: opencode_usage(data.get("tokens")),
+                        model: data
+                            .get("modelID")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    }));
+                    timestamps.push(at);
+                }
+            }
+            _ => skipped.push("system OpenCode message".into()),
+        }
+    }
+    let candidate = Candidate {
+        source: "opencode".into(),
+        source_id: session_id.into(),
+        title,
+        cwd,
+        created_at: sql_time(created),
+        updated_at: sql_time(updated),
+        message_count: messages.len(),
+        bytes: std::fs::metadata(db_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0),
+    };
+    Ok(ImportedSession {
+        candidate,
+        messages,
+        timestamps,
+        skipped,
+    })
+}
+
+fn open_import_db(path: &Path) -> Result<rusqlite::Connection, ImportError> {
+    Ok(rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?)
+}
+
+fn sql_time(value: i64) -> i64 {
+    if value > 0 && value < 1_000_000_000_000 {
+        value.saturating_mul(1000)
+    } else {
+        value
+    }
+}
+
+fn opencode_usage(value: Option<&Value>) -> Usage {
+    let Some(value) = value.and_then(Value::as_object) else {
+        return Usage::default();
+    };
+    Usage {
+        input_tokens: value.get("input").and_then(Value::as_u64).unwrap_or(0),
+        output_tokens: value.get("output").and_then(Value::as_u64).unwrap_or(0),
+        cache_read_tokens: value
+            .get("cache")
+            .and_then(|cache| cache.get("read"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cache_write_tokens: value
+            .get("cache")
+            .and_then(|cache| cache.get("write"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    }
+}
+
+fn value_text(value: &Value) -> String {
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
+}
+
 fn collect_jsonl(root: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<(), ImportError> {
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
@@ -1019,5 +1264,45 @@ mod tests {
             matches!(&imported.messages[1], Message::Assistant(message) if message.content.len() == 2 && message.usage.input_tokens == 5)
         );
         assert_eq!(imported.timestamps.len(), imported.messages.len());
+    }
+
+    #[test]
+    fn opencode_reads_parts_from_a_read_only_sqlite_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        let connection = rusqlite::Connection::open(&db_path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER);
+                 CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, role TEXT, data TEXT);
+                 CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, time_created INTEGER, data TEXT);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO session VALUES ('s1','OpenCode demo','/tmp/app',1000,2000)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO message VALUES ('m1','s1',1000,'user','{}'),('m2','s1',2000,'assistant','{\"modelID\":\"model\",\"tokens\":{\"input\":2}}')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO part VALUES ('p1','m1',1000,'{\"type\":\"text\",\"text\":\"hello\"}'),('p2','m2',2000,'{\"type\":\"reasoning\",\"text\":\"think\"}'),('p3','m2',2001,'{\"type\":\"text\",\"text\":\"answer\"}')",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        let candidates = scan_opencode(&db_path).unwrap();
+        assert_eq!(candidates.len(), 1);
+        let imported = read_opencode(&db_path, "s1").unwrap();
+        assert_eq!(imported.messages.len(), 2);
+        assert!(
+            matches!(&imported.messages[1], Message::Assistant(message) if message.content.len() == 2 && message.usage.input_tokens == 2)
+        );
     }
 }
