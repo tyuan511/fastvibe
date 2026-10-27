@@ -129,7 +129,8 @@ impl ExecSessions {
     pub fn register(self: &Arc<Self>, registry: &mut ToolRegistry) {
         registry
             .register(crate::ExecCommandTool::new(self.clone()))
-            .register(crate::WriteStdinTool::new(self.clone()));
+            .register(crate::WriteStdinTool::new(self.clone()))
+            .register(crate::ManageSessionsTool::new(self.clone()));
     }
 
     /// Stop this conversation's commands without retiring the pool; a resumed child may
@@ -137,6 +138,34 @@ impl ExecSessions {
     pub fn terminate_all(&self) {
         for session in self.sessions.lock().unwrap().values() {
             session.abort();
+        }
+    }
+
+    /// This conversation's sessions: id, process id, working directory, and whether still running.
+    pub fn list(&self) -> Vec<(u64, u32, Option<PathBuf>, bool)> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .values()
+            .map(|s| {
+                (
+                    s.id,
+                    s.pid,
+                    s.cwd.clone(),
+                    s.state.lock().unwrap().end.is_none(),
+                )
+            })
+            .collect()
+    }
+
+    /// Stop one session. `false` when there is no such session.
+    pub fn kill(&self, id: u64) -> bool {
+        match self.sessions.lock().unwrap().get(&id) {
+            Some(session) => {
+                session.abort();
+                true
+            }
+            None => false,
         }
     }
 

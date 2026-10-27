@@ -232,7 +232,10 @@ impl Db {
             "DELETE FROM settings WHERE key = ?1",
             [format!("approvals:{id}")],
         )?;
-        tx.execute("DELETE FROM settings WHERE key = ?1", [format!("goal:{id}")])?;
+        tx.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            [format!("goal:{id}")],
+        )?;
         let removed = tx.execute("DELETE FROM conversations WHERE id = ?1", [id])? > 0;
         tx.commit()?;
         Ok(removed)

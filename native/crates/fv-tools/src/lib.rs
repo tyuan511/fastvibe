@@ -9,13 +9,16 @@ mod code_mode;
 mod computer;
 pub use code_mode::CodeMode;
 pub use computer::ComputerTool;
+mod clock;
+mod context_tools;
 mod exec_command;
 mod exec_sessions;
+mod goal_complete;
 mod paths;
 mod request_user_input;
+mod sessions_tool;
 mod tool_search;
 mod truncate;
-mod goal_complete;
 mod update_plan;
 mod view_image;
 mod web_search;
@@ -24,12 +27,15 @@ mod write_stdin;
 use fv_agent::ToolRegistry;
 
 pub use apply_patch::ApplyPatchTool;
+pub use clock::{CurrentTimeTool, SleepTool, now_text, today_text};
+pub use context_tools::{GetContextRemainingTool, NewContextWindowTool};
 pub use exec_command::ExecCommandTool;
 pub use exec_sessions::ExecSessions;
+pub use goal_complete::{GoalCompleteTool, NAME as GOAL_COMPLETE_TOOL};
 pub use request_user_input::RequestUserInputTool;
+pub use sessions_tool::ManageSessionsTool;
 pub use tool_search::ToolSearchTool;
 pub use truncate::truncate_middle;
-pub use goal_complete::{GoalCompleteTool, NAME as GOAL_COMPLETE_TOOL};
 pub use update_plan::UpdatePlanTool;
 pub use view_image::ViewImageTool;
 pub use write_stdin::WriteStdinTool;
@@ -40,6 +46,10 @@ pub fn register_builtin(registry: &mut ToolRegistry) {
         .register(ApplyPatchTool)
         .register(UpdatePlanTool)
         .register(GoalCompleteTool)
+        .register(CurrentTimeTool)
+        .register(GetContextRemainingTool)
+        .register(NewContextWindowTool)
+        .register(SleepTool)
         .register(RequestUserInputTool)
         .register(ViewImageTool)
         .register(ComputerTool)

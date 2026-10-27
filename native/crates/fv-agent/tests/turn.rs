@@ -48,7 +48,8 @@ fn agent(model: ScriptedModel, tools: Vec<Slow>) -> (AgentContext, Arc<ScriptedM
         registry.register(t);
     }
     (
-        AgentContext { context: Default::default(),
+        AgentContext {
+            context: Default::default(),
             model: model.clone(),
             tools: Arc::new(registry),
             system: "sys".into(),
@@ -389,7 +390,8 @@ async fn results_stay_in_call_order_even_when_they_finish_out_of_order() {
     ]));
     let mut registry = ToolRegistry::new();
     registry.register(Varying);
-    let ctx = AgentContext { context: Default::default(),
+    let ctx = AgentContext {
+        context: Default::default(),
         model,
         tools: Arc::new(registry),
         system: String::new(),
@@ -680,7 +682,8 @@ async fn a_steer_mid_run_is_sent_with_the_next_request_in_the_same_turn() {
     registry.register(SteerDuring {
         steers: steers.clone(),
     });
-    let ctx = AgentContext { context: Default::default(),
+    let ctx = AgentContext {
+        context: Default::default(),
         model: model.clone(),
         tools: Arc::new(registry),
         system: String::new(),
@@ -720,7 +723,8 @@ async fn a_steer_that_arrives_after_the_answer_keeps_the_turn_going() {
         Reply::new().text("first answer").done(),
         Reply::new().text("second answer").done(),
     ]));
-    let ctx = AgentContext { context: Default::default(),
+    let ctx = AgentContext {
+        context: Default::default(),
         model: model.clone(),
         tools: Arc::new(ToolRegistry::new()),
         system: String::new(),

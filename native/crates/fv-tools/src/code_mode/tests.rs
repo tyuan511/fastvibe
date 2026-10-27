@@ -336,7 +336,8 @@ async fn nested_reads_share_the_direct_tool_gate_and_writes_still_run_exclusivel
             write: true,
         });
     let model=Arc::new(ScriptedModel::new([Reply::new().tool("script","code_mode",json!({"code":"await Promise.all([tools.guard_read({}),tools.guard_read({})]);text(await tools.guard_write({}));"})).tool("direct","guard_write",json!({})).done(),Reply::new().text("done").done()]));
-    let context = AgentContext { context: Default::default(),
+    let context = AgentContext {
+        context: Default::default(),
         model,
         tools: Arc::new(tools),
         system: String::new(),

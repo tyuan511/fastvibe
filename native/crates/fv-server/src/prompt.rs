@@ -168,7 +168,10 @@ fn remember_approval(state: &ServerState, thread_id: &str, key: &str) {
     }
     keys.push(key.to_string());
     if let Ok(text) = serde_json::to_string(&keys) {
-        let _ = state.store.db.set_setting(&approvals_key(thread_id), Some(&text));
+        let _ = state
+            .store
+            .db
+            .set_setting(&approvals_key(thread_id), Some(&text));
     }
 }
 

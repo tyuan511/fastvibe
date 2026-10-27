@@ -72,8 +72,12 @@ pub fn prepare(bytes: &[u8]) -> Option<PreparedImage> {
             break;
         }
         let (w, h) = current.dimensions();
-        let next_w = ((w as f32 * 0.8).round() as u32).max(1).min(w.saturating_sub(1).max(1));
-        let next_h = ((h as f32 * 0.8).round() as u32).max(1).min(h.saturating_sub(1).max(1));
+        let next_w = ((w as f32 * 0.8).round() as u32)
+            .max(1)
+            .min(w.saturating_sub(1).max(1));
+        let next_h = ((h as f32 * 0.8).round() as u32)
+            .max(1)
+            .min(h.saturating_sub(1).max(1));
         current = current.resize(next_w, next_h, image::imageops::FilterType::Triangle);
         encoded = encode(&current)?;
     }

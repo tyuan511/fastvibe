@@ -2593,6 +2593,7 @@ name = "fv-tools"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "futures-util",
  "fv-agent",
  "fv-core",

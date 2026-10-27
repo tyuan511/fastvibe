@@ -84,6 +84,8 @@ pub struct ToolCtx {
     pub registry: Arc<ToolRegistry>,
     /// The deferred tools this conversation has loaded; `tool_search` adds to it.
     pub loaded: LoadedTools,
+    /// `(used, window)` in tokens as of this call's request, when known.
+    pub context: Option<(u64, u64)>,
 }
 
 impl ToolCtx {
@@ -101,6 +103,7 @@ impl ToolCtx {
             vision: true,
             registry: Arc::new(ToolRegistry::new()),
             loaded: LoadedTools::default(),
+            context: None,
         }
     }
 }

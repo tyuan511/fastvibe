@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use fv_agent::testing::{NoModel, Reply, ScriptedModel};
+use fv_agent::testing::{Reply, ScriptedModel};
 use fv_agent::{AgentContext, ToolRegistry};
 use fv_client::Client;
 use fv_protocol::methods::*;
@@ -78,10 +78,6 @@ async fn new_thread(c: &Client) -> String {
     .unwrap()
     .thread
     .id
-}
-
-fn idle(n: &ServerNotification) -> bool {
-    matches!(n, ServerNotification::ThreadStatusChanged(e) if !e.body.running)
 }
 
 async fn until(

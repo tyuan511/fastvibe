@@ -264,9 +264,7 @@ impl ThreadLog {
             }
             LogEvent::QueueChanged(queue) => ServerNotification::ThreadQueueChanged(ev!(queue)),
             LogEvent::GoalChanged(goal) => {
-                ServerNotification::ThreadGoalChanged(ev!(fv_protocol::types::GoalChanged {
-                    goal
-                }))
+                ServerNotification::ThreadGoalChanged(ev!(fv_protocol::types::GoalChanged { goal }))
             }
             LogEvent::SuggestionChanged(text) => {
                 // The runtime's own copy is what a client that connects later reads, so the

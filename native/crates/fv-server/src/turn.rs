@@ -343,7 +343,15 @@ pub(crate) async fn start_text(
         }
         return;
     };
-    spawn_turn_inner(state, rt, thread_id.to_string(), turn_id, text, cancel, true);
+    spawn_turn_inner(
+        state,
+        rt,
+        thread_id.to_string(),
+        turn_id,
+        text,
+        cancel,
+        true,
+    );
 }
 
 /// Run one queued prompt as the thread's next turn, exactly as `turn/start` would.
@@ -932,7 +940,8 @@ async fn build_context(
     let goal = crate::goal::read(state, thread_id)
         .filter(|g| g.status == fv_protocol::types::GoalStatus::Running);
     if goal.is_none() {
-        mcp.tools.retain(|name| name != fv_tools::GOAL_COMPLETE_TOOL);
+        mcp.tools
+            .retain(|name| name != fv_tools::GOAL_COMPLETE_TOOL);
     }
     let loaded = rt.loaded_tools();
     // Explicit role/ancestor grants must work without granting tool_search as well.
@@ -995,7 +1004,8 @@ async fn build_context(
         // leads the conversation as a user message: lower trust than the system prompt.
         context: {
             let body = format!(
-                "{}{}{}{}",
+                "Today is {} (call `current_time` for the exact time).\n\n{}{}{}{}",
+                fv_tools::today_text(),
                 folders,
                 discovered,
                 mcp.instructions,

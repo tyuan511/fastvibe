@@ -347,7 +347,26 @@ async fn run_turn_inner(
                     }
                     return TurnOutcome::Completed;
                 }
-                let results = execute_calls(ctx, calls, history.len(), &lock, events, cancel).await;
+                // Where the window stands when these calls run, for a tool that reports it.
+                let context = (
+                    crate::budget::request_tokens(&model_request(ctx, history)),
+                    ctx.budget.window(ctx.model.as_ref()),
+                );
+                let new_window: Option<(String, String)> = calls
+                    .iter()
+                    .find(|(_, name, _)| name == NEW_CONTEXT_WINDOW_TOOL)
+                    .map(|(id, _, args)| {
+                        (
+                            id.clone(),
+                            args.get("summary")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .trim()
+                                .to_string(),
+                        )
+                    });
+                let results =
+                    execute_calls(ctx, calls, history.len(), context, &lock, events, cancel).await;
                 // Results first, in call order; then any pictures they returned, as providers
                 // want them (a tool message must not be separated from its call).
                 let mut pictures = Vec::new();
@@ -378,6 +397,12 @@ async fn run_turn_inner(
                 }
                 for message in audio {
                     commit(history, events, message);
+                }
+                if let Some((call_id, summary)) = new_window
+                    && !summary.is_empty()
+                    && history.iter().any(|m| matches!(m, Message::ToolResult { call_id: id, is_error: false, .. } if *id == call_id))
+                {
+                    install_new_window(ctx, history, events, summary);
                 }
             }
             Sampled::Aborted(partial) => {
@@ -776,10 +801,54 @@ impl<'a> Blocks<'a> {
     }
 }
 
+/// The tool the model uses to start over with a summary it wrote itself.
+pub const NEW_CONTEXT_WINDOW_TOOL: &str = "new_context_window";
+
+/// Replace the history with a checkpoint built from the model's own summary: no summarization
+/// request, but the same record a compaction leaves (the user's messages carry over).
+fn install_new_window(
+    ctx: &AgentContext,
+    history: &mut Vec<Message>,
+    events: &Events,
+    summary: String,
+) {
+    let mut user_messages = Vec::new();
+    for m in history.iter() {
+        match m {
+            Message::Compaction {
+                user_messages: earlier,
+                ..
+            } => user_messages.extend(earlier.iter().cloned()),
+            Message::User { text } => user_messages.push(text.clone()),
+            _ => {}
+        }
+    }
+    let message = Message::Compaction {
+        usage: Default::default(),
+        model: ctx.model.label().map(str::to_owned),
+        user_messages,
+        summary: summary.clone(),
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    emit(events, AgentEvent::CompactionStarted { id: id.clone() });
+    emit(events, AgentEvent::Committed(message.clone()));
+    history.clear();
+    history.push(message);
+    emit(events, AgentEvent::CompactionDone { id, summary });
+    emit(
+        events,
+        AgentEvent::ContextBudgetChanged {
+            used: crate::budget::request_tokens(&model_request(ctx, history)),
+            window: crate::effective_context_window(ctx),
+        },
+    );
+}
+
 async fn execute_calls(
     ctx: &AgentContext,
     calls: Vec<(String, String, Value)>,
     history_len: usize,
+    context: (u64, u64),
     lock: &Arc<RwLock<()>>,
     events: &Events,
     cancel: &CancellationToken,
@@ -814,6 +883,7 @@ async fn execute_calls(
                         vision,
                         registry,
                         loaded,
+                        context: Some(context),
                     };
                     let args = arguments.clone();
                     let run = async {

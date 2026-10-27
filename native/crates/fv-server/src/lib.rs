@@ -86,7 +86,8 @@ pub fn agent_with_builtin_tools(
 ) -> fv_agent::AgentContext {
     let mut tools = fv_agent::ToolRegistry::new();
     fv_tools::register_builtin(&mut tools);
-    fv_agent::AgentContext { context: Default::default(),
+    fv_agent::AgentContext {
+        context: Default::default(),
         model,
         tools: std::sync::Arc::new(tools),
         system: String::new(),

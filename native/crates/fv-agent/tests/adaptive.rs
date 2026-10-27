@@ -12,7 +12,8 @@ use tokio_util::sync::CancellationToken;
 fn context(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
     let model = Arc::new(model);
     (
-        AgentContext { context: Default::default(),
+        AgentContext {
+            context: Default::default(),
             model: model.clone(),
             tools: Default::default(),
             system: "sys".into(),

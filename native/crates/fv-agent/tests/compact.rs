@@ -38,7 +38,8 @@ fn agent(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
     let mut tools = ToolRegistry::new();
     tools.register(Echo);
     (
-        AgentContext { context: Default::default(),
+        AgentContext {
+            context: Default::default(),
             model: model.clone(),
             tools: Arc::new(tools),
             system: "sys".into(),

@@ -36,4 +36,6 @@ pub use steer::Steers;
 pub use tool::{
     LoadedTools, NestedTools, Tool, ToolCtx, ToolOutput, ToolRegistry, ToolSpec, UserInput,
 };
-pub use turn::{AgentContext, CompactionPolicy, MemorySource, TurnOutcome, run_turn};
+pub use turn::{
+    AgentContext, CompactionPolicy, MemorySource, NEW_CONTEXT_WINDOW_TOOL, TurnOutcome, run_turn,
+};

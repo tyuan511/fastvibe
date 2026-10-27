@@ -377,8 +377,7 @@ mod picture_budget_tests {
 
     #[test]
     fn a_lone_oversized_picture_is_still_sent() {
-        let dropped =
-            old_pictures_over_budget(&[shot(fv_core::image::IMAGE_REQUEST_BUDGET * 2)]);
+        let dropped = old_pictures_over_budget(&[shot(fv_core::image::IMAGE_REQUEST_BUDGET * 2)]);
         assert!(dropped.is_empty());
     }
 }
