@@ -6,7 +6,9 @@
 mod apply_patch;
 mod bm25;
 mod code_mode;
+mod computer;
 pub use code_mode::CodeMode;
+pub use computer::ComputerTool;
 mod exec_command;
 mod exec_sessions;
 mod paths;
@@ -37,6 +39,7 @@ pub fn register_builtin(registry: &mut ToolRegistry) {
         .register(UpdatePlanTool)
         .register(RequestUserInputTool)
         .register(ViewImageTool)
+        .register(ComputerTool)
         .register(ToolSearchTool)
         .register(web_search::HostedWebSearch);
     std::sync::Arc::new(ExecSessions::default()).register(registry);
