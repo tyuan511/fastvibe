@@ -680,6 +680,9 @@ pub fn read_codex(path: &Path) -> Result<ImportedSession, ImportError> {
 /// Scan the current OpenCode SQLite store. The database is opened read-only while OpenCode may
 /// still be running; a locked or missing store simply produces no candidates.
 pub fn scan_opencode(db_path: &Path) -> Result<Vec<Candidate>, ImportError> {
+    if !db_path.is_file() {
+        return Ok(Vec::new());
+    }
     let connection = open_import_db(db_path)?;
     let mut query = connection.prepare(
         "SELECT id, title, directory, time_created, time_updated FROM session ORDER BY time_updated DESC",
@@ -1323,6 +1326,21 @@ mod tests {
         assert_eq!(
             read_zcode(&db_path, "s1").unwrap().candidate.source,
             "zcode"
+        );
+    }
+
+    #[test]
+    fn optional_sqlite_sources_are_empty_when_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            scan_opencode(&dir.path().join("missing.db"))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            scan_zcode(&dir.path().join("missing.db"))
+                .unwrap()
+                .is_empty()
         );
     }
 }
