@@ -626,6 +626,7 @@ impl Workspace {
 
     fn context_menu_view(&self, cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let view = self.selected.as_ref().and_then(|id| self.views.get(id));
         let usage = view.and_then(|v| v.token_usage).filter(|u| u.window > 0);
         let percent = usage
@@ -664,14 +665,26 @@ impl Workspace {
             })
             .tooltip(move |window, cx| {
                 Tooltip::new(if busy {
-                    "会话进行中，无法压缩"
+                    if english {
+                        "Cannot compact while the chat is running"
+                    } else {
+                        "会话进行中，无法压缩"
+                    }
                 } else {
-                    "压缩上下文"
+                    if english {
+                        "Compact context"
+                    } else {
+                        "压缩上下文"
+                    }
                 })
                 .build(window, cx)
             })
             .child(icon("scissor", 14.0, p.c(Token::Foreground)))
-            .child("压缩上下文")
+            .child(if english {
+                "Compact context"
+            } else {
+                "压缩上下文"
+            })
             .on_click(cx.listener(move |this, _, _, cx| {
                 if can_compact {
                     this.compact(cx);
@@ -699,7 +712,11 @@ impl Workspace {
                             .items_center()
                             .justify_between()
                             .text_size(px(TEXT_SM))
-                            .child(div().font_weight(FontWeight::MEDIUM).child("上下文窗口"))
+                            .child(div().font_weight(FontWeight::MEDIUM).child(if english {
+                                "Context window"
+                            } else {
+                                "上下文窗口"
+                            }))
                             .child(
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
@@ -818,10 +835,17 @@ impl Workspace {
     /// 选择项目: the folder chip above a new conversation's composer, and its list.
     fn project_chip(&self, cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let hover = p.c(Token::Muted);
         let label = match &self.draft_project {
             Some(path) => self.project_label(path),
-            None => "选择项目".to_string(),
+            None => {
+                if english {
+                    "Choose project".to_string()
+                } else {
+                    "选择项目".to_string()
+                }
+            }
         };
         let projects: Vec<String> = self.projects.iter().map(|p| p.path.clone()).collect();
         let menu = self.project_menu.then(|| {
@@ -841,13 +865,11 @@ impl Workspace {
                 .flex_col()
                 .text_size(px(TEXT_SM));
             if projects.is_empty() {
-                list = list.child(
-                    div()
-                        .px(px(8.0))
-                        .py(px(6.0))
-                        .muted(p)
-                        .child("没有匹配的项目"),
-                );
+                list = list.child(div().px(px(8.0)).py(px(6.0)).muted(p).child(if english {
+                    "No matching projects"
+                } else {
+                    "没有匹配的项目"
+                }));
             }
             for project in &projects {
                 let chosen = Some(project.clone());
