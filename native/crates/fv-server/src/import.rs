@@ -17,22 +17,26 @@ fn invalid(message: impl Into<String>) -> ErrorObject {
     ErrorObject::new(code::INVALID_PARAMS, message)
 }
 
-fn claude_root() -> PathBuf {
+fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude")
-        .join("projects")
+}
+
+fn source_root(source: &str) -> Result<PathBuf, ErrorObject> {
+    let home = home_dir();
+    match source {
+        "claude-code" => Ok(home.join(".claude").join("projects")),
+        "pi" => Ok(home.join(".pi").join("agent").join("sessions")),
+        _ => Err(invalid(format!("unsupported import source: {source}"))),
+    }
 }
 
 fn source_path(source: &str, source_id: &str) -> Result<PathBuf, ErrorObject> {
-    if source != "claude-code" {
-        return Err(invalid(format!("unsupported import source: {source}")));
-    }
-    let root = claude_root()
+    let root = source_root(source)?
         .canonicalize()
-        .map_err(|_| invalid("Claude Code project directory is unavailable"))?;
+        .map_err(|_| invalid("import source directory is unavailable"))?;
     let path = Path::new(source_id)
         .canonicalize()
         .map_err(|_| invalid("import candidate does not exist"))?;
@@ -40,7 +44,7 @@ fn source_path(source: &str, source_id: &str) -> Result<PathBuf, ErrorObject> {
         || path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
     {
         return Err(invalid(
-            "import candidate is outside the Claude Code transcript directory",
+            "import candidate is outside the source transcript directory",
         ));
     }
     Ok(path)
@@ -63,16 +67,22 @@ pub fn scan(
     _state: &ServerState,
     params: ImportScanParams,
 ) -> Result<ImportScanResponse, ErrorObject> {
-    if let Some(source) = params.source.as_deref()
-        && source != "claude-code"
-    {
-        return Err(invalid(format!("unsupported import source: {source}")));
+    let sources = params
+        .source
+        .as_deref()
+        .map(|source| vec![source])
+        .unwrap_or_else(|| vec!["claude-code", "pi"]);
+    let mut candidates = Vec::new();
+    for source in sources {
+        let scanned = match source {
+            "claude-code" => fv_import::scan_claude(&source_root(source)?),
+            "pi" => fv_import::scan_pi(&source_root(source)?),
+            _ => return Err(invalid(format!("unsupported import source: {source}"))),
+        }
+        .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
+        candidates.extend(scanned.into_iter().map(candidate));
     }
-    let candidates = fv_import::scan_claude(&claude_root())
-        .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?
-        .into_iter()
-        .map(candidate)
-        .collect();
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.updated_at));
     Ok(ImportScanResponse { candidates })
 }
 
@@ -81,8 +91,17 @@ pub fn read(
     params: ImportReadParams,
 ) -> Result<ImportReadResponse, ErrorObject> {
     let path = source_path(&params.source, &params.source_id)?;
-    let imported = fv_import::read_claude(&path)
-        .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
+    let imported = match params.source.as_str() {
+        "claude-code" => fv_import::read_claude(&path),
+        "pi" => fv_import::read_pi(&path),
+        _ => {
+            return Err(invalid(format!(
+                "unsupported import source: {}",
+                params.source
+            )));
+        }
+    }
+    .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
     let messages = imported
         .messages
         .into_iter()
@@ -103,8 +122,17 @@ pub fn commit(
     params: ImportCommitParams,
 ) -> Result<ThreadStartResponse, ErrorObject> {
     let path = source_path(&params.source, &params.source_id)?;
-    let imported = fv_import::read_claude(&path)
-        .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
+    let imported = match params.source.as_str() {
+        "claude-code" => fv_import::read_claude(&path),
+        "pi" => fv_import::read_pi(&path),
+        _ => {
+            return Err(invalid(format!(
+                "unsupported import source: {}",
+                params.source
+            )));
+        }
+    }
+    .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
     if imported.messages.is_empty() || imported.messages.len() != imported.timestamps.len() {
         return Err(invalid("import candidate has no complete conversation"));
     }

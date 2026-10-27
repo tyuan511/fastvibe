@@ -290,6 +290,257 @@ pub fn read_claude(path: &Path) -> Result<ImportedSession, ImportError> {
     })
 }
 
+/// Scan pi coding agent's `<encoded-cwd>/*.jsonl` session files.
+pub fn scan_pi(root: &Path) -> Result<Vec<Candidate>, ImportError> {
+    let mut out = Vec::new();
+    let dirs = match std::fs::read_dir(root) {
+        Ok(dirs) => dirs,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(error) => return Err(error.into()),
+    };
+    for dir in dirs
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+    {
+        for file in std::fs::read_dir(dir.path())?.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if let Some(candidate) = summarize_pi(&path)? {
+                out.push(candidate);
+            }
+        }
+    }
+    out.sort_by_key(|candidate| std::cmp::Reverse(candidate.updated_at));
+    Ok(out)
+}
+
+/// Read a pi transcript and convert visible messages into the engine model.
+pub fn read_pi(path: &Path) -> Result<ImportedSession, ImportError> {
+    let candidate = summarize_pi(path)?
+        .ok_or_else(|| ImportError::InvalidPath("no pi conversation entries".into()))?;
+    let mut messages = Vec::new();
+    let mut timestamps = Vec::new();
+    let mut skipped = Vec::new();
+    let mut model = None;
+    let mut tool_names: HashMap<String, String> = HashMap::new();
+    for value in lines(path)? {
+        let Ok(value) = value else {
+            skipped.push("invalid JSON line".into());
+            continue;
+        };
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        let at = timestamp(value.get("timestamp"));
+        match kind {
+            "session" | "session_info" | "thinking_level_change" | "label" => {}
+            "model_change" => {
+                model = value
+                    .get("modelId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+            "compaction" | "branch_summary" => skipped.push(format!("skipped {kind}")),
+            "custom" | "custom_message" => {
+                let text = strip_synthetic(&message_text(value.get("content")));
+                if !text.is_empty() {
+                    messages.push(Message::User { text });
+                    timestamps.push(at);
+                }
+            }
+            "message" => {
+                let Some(message) = value.get("message").and_then(Value::as_object) else {
+                    continue;
+                };
+                match message.get("role").and_then(Value::as_str) {
+                    Some("user") => {
+                        let text = strip_synthetic(&message_text(message.get("content")));
+                        if !text.is_empty() {
+                            messages.push(Message::User { text });
+                            timestamps.push(at);
+                        }
+                    }
+                    Some("toolResult") => {
+                        let call_id = message
+                            .get("toolCallId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("imported-call");
+                        messages.push(Message::ToolResult {
+                            call_id: call_id.into(),
+                            name: message
+                                .get("toolName")
+                                .and_then(Value::as_str)
+                                .or_else(|| tool_names.get(call_id).map(String::as_str))
+                                .unwrap_or("imported_tool")
+                                .into(),
+                            content: tool_result_text(message.get("content")),
+                            is_error: message
+                                .get("isError")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        });
+                        timestamps.push(at);
+                    }
+                    Some("assistant") => {
+                        let mut content = Vec::new();
+                        for part in message
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_object)
+                        {
+                            match part.get("type").and_then(Value::as_str) {
+                                Some("thinking") => {
+                                    if let Some(text) = part
+                                        .get("thinking")
+                                        .and_then(Value::as_str)
+                                        .or_else(|| part.get("text").and_then(Value::as_str))
+                                    {
+                                        content.push(ContentBlock::Thinking {
+                                            text: text.into(),
+                                            signature: None,
+                                        });
+                                    }
+                                }
+                                Some("text") => {
+                                    if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                        content.push(ContentBlock::Text { text: text.into() });
+                                    }
+                                }
+                                Some("toolCall") | Some("tool_use") => {
+                                    let id = part
+                                        .get("id")
+                                        .or_else(|| part.get("toolCallId"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("imported-call")
+                                        .to_string();
+                                    let name = part
+                                        .get("name")
+                                        .or_else(|| part.get("toolName"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("imported_tool")
+                                        .to_string();
+                                    tool_names.insert(id.clone(), name.clone());
+                                    content.push(ContentBlock::ToolCall {
+                                        id,
+                                        name,
+                                        arguments: part
+                                            .get("arguments")
+                                            .or_else(|| part.get("input"))
+                                            .cloned()
+                                            .unwrap_or(Value::Object(Default::default())),
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                        let usage = usage(message.get("usage"));
+                        messages.push(Message::Assistant(AssistantMessage {
+                            duration_ms: None,
+                            content,
+                            stop: StopReason::Stop,
+                            usage,
+                            model: message
+                                .get("model")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                .or_else(|| model.clone()),
+                        }));
+                        timestamps.push(at);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(ImportedSession {
+        candidate,
+        messages,
+        timestamps,
+        skipped,
+    })
+}
+
+fn summarize_pi(path: &Path) -> Result<Option<Candidate>, ImportError> {
+    let meta = std::fs::metadata(path)?;
+    let mut cwd = None;
+    let mut title = None;
+    let mut first_user = None;
+    let mut created = 0;
+    let mut updated = 0;
+    let mut count = 0;
+    for value in lines(path)? {
+        let Ok(value) = value else { continue };
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        let at = timestamp(value.get("timestamp"));
+        if created == 0 && at > 0 {
+            created = at;
+        }
+        updated = updated.max(at);
+        if kind == "session" {
+            cwd = value.get("cwd").and_then(Value::as_str).map(str::to_string);
+        } else if kind == "session_info" {
+            title = value
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        } else if kind == "message"
+            && value
+                .get("message")
+                .and_then(Value::as_object)
+                .and_then(|message| message.get("role"))
+                .and_then(Value::as_str)
+                .is_some_and(|role| role == "user" || role == "assistant")
+        {
+            let message = value.get("message").and_then(Value::as_object);
+            let text = message_text(message.and_then(|message| message.get("content")));
+            if first_user.is_none()
+                && message
+                    .and_then(|message| message.get("role"))
+                    .and_then(Value::as_str)
+                    == Some("user")
+                && !text.trim().is_empty()
+            {
+                first_user = Some(text);
+            }
+            count += 1;
+        } else if kind == "custom" || kind == "custom_message" {
+            count += 1;
+        }
+    }
+    let source_id = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string();
+    Some(Candidate {
+        source: "pi".into(),
+        source_id,
+        title: title.or(first_user).unwrap_or_else(|| {
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into()
+        }),
+        cwd,
+        created_at: created,
+        updated_at: updated.max(
+            meta.modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as i64)
+                .unwrap_or(0),
+        ),
+        message_count: count,
+        bytes: meta.len(),
+    })
+    .filter(|candidate| candidate.message_count > 0)
+    .map(Ok)
+    .transpose()
+}
+
 fn lines(
     path: &Path,
 ) -> Result<impl Iterator<Item = Result<Value, serde_json::Error>>, ImportError> {
@@ -402,5 +653,33 @@ mod tests {
         assert_eq!(candidates[0].title, "Imported demo");
         assert!(candidates[0].updated_at > candidates[0].created_at);
         assert_eq!(candidates[0].source, "claude-code");
+    }
+
+    #[test]
+    fn pi_preserves_tool_call_result_and_skips_compaction_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("encoded-cwd");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = project.join("session.jsonl");
+        let lines = [
+            r#"{"type":"session","id":"s1","cwd":"/tmp/pi","timestamp":"2026-10-27T00:00:00Z"}"#,
+            r#"{"type":"session_info","name":"Pi import"}"#,
+            r#"{"type":"message","timestamp":"2026-10-27T00:00:01Z","message":{"role":"user","content":"hello"}}"#,
+            r#"{"type":"message","timestamp":"2026-10-27T00:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"reason"},{"type":"text","text":"answer"},{"type":"toolCall","id":"c1","name":"read","arguments":{"path":"a"}}],"usage":{"input":3,"output":2}}}"#,
+            r#"{"type":"message","timestamp":"2026-10-27T00:00:03Z","message":{"role":"toolResult","toolCallId":"c1","toolName":"read","content":"ok"}}"#,
+            r#"{"type":"compaction","timestamp":"2026-10-27T00:00:04Z"}"#,
+        ];
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let imported = read_pi(&path).unwrap();
+        assert_eq!(imported.candidate.title, "Pi import");
+        assert_eq!(imported.messages.len(), 3);
+        assert_eq!(imported.messages.len(), imported.timestamps.len());
+        assert!(
+            matches!(&imported.messages[1], Message::Assistant(message) if message.content.len() == 3)
+        );
+        assert!(
+            matches!(&imported.messages[2], Message::ToolResult { call_id, content, .. } if call_id == "c1" && content == "ok")
+        );
+        assert_eq!(imported.skipped.len(), 1);
     }
 }

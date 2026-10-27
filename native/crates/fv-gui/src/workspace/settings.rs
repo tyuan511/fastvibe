@@ -384,9 +384,7 @@ impl Workspace {
         let generation = settings.import.generation;
         settings.import.busy = true;
         settings.import.notice = None;
-        let call = backend.call::<ImportScan>(ImportScanParams {
-            source: Some("claude-code".into()),
-        });
+        let call = backend.call::<ImportScan>(ImportScanParams { source: None });
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
@@ -1159,7 +1157,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_size(px(TEXT_SM)).child("Claude Code 会话"))
+                    .child(div().text_size(px(TEXT_SM)).child("其它 Agent 会话"))
                     .child(
                         outline_button("refresh-import-candidates", p)
                             .child(if s.import.busy {
@@ -1171,7 +1169,7 @@ impl Workspace {
                     ),
             )
             .child(div().text_size(px(TEXT_XS)).muted(p).child(
-                "扫描本机 ~/.claude/projects 中的 JSONL，只读显示历史消息，预览不会写入 FastVibe。",
+                "扫描本机 Claude Code 与 pi 的会话文件，只读显示历史消息，预览不会写入 FastVibe。",
             ));
         if let Some(notice) = &s.import.notice {
             claude = claude.child(
@@ -1190,7 +1188,7 @@ impl Workspace {
                     div()
                         .text_size(px(TEXT_XS))
                         .muted(p)
-                        .child("没有找到可导入的 Claude Code 会话。"),
+                        .child("没有找到可导入的 Agent 会话。"),
                 );
             }
             Some(candidates) => {
@@ -1214,8 +1212,11 @@ impl Workspace {
                                     .flex_1()
                                     .min_w_0()
                                     .child(
-                                        ui::truncate(candidate.title.clone())
-                                            .text_size(px(TEXT_SM)),
+                                        ui::truncate(format!(
+                                            "{} · {}",
+                                            candidate.source, candidate.title
+                                        ))
+                                        .text_size(px(TEXT_SM)),
                                     )
                                     .child(div().text_size(px(TEXT_XS)).muted(p).child(format!(
                                         "{} 条消息 · {}",
