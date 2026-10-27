@@ -1411,7 +1411,8 @@ impl Workspace {
 
     fn computer_pane(&self, _cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
-        let supported = cfg!(target_os = "macos") || cfg!(target_os = "linux");
+        let supported =
+            cfg!(target_os = "macos") || cfg!(target_os = "linux") || cfg!(target_os = "windows");
         card(p)
             .p(px(16.0))
             .flex()
@@ -1426,6 +1427,8 @@ impl Workspace {
                         "macOS 已提供截图、点击、输入和有限按键。每个有副作用的动作都会先请求你的确认。"
                     } else if cfg!(target_os = "linux") {
                         "Linux 使用 grim、gnome-screenshot 或 scrot 截图，并通过 xdotool 执行点击、输入和有限按键；每个有副作用的动作都会先请求你的确认。"
+                    } else if cfg!(target_os = "windows") {
+                        "Windows 使用 PowerShell 与系统 API 截图，并执行点击、输入和有限按键；每个有副作用的动作都会先请求你的确认。"
                     } else {
                         "当前平台尚未提供电脑操控；原生工具会明确返回不支持，不会伪造执行成功。"
                     }),
@@ -1436,6 +1439,8 @@ impl Workspace {
                     .muted(p)
                     .child(if cfg!(target_os = "macos") {
                         "首次使用需要在系统设置 → 隐私与安全性 → 辅助功能中允许 FastVibe；拒绝权限时动作会返回可读错误。"
+                    } else if cfg!(target_os = "windows") {
+                        "Windows 需要允许 PowerShell 与桌面自动化访问；缺少系统组件时动作会返回可读错误。"
                     } else if supported {
                         "Linux 桌面需要允许 xdotool 访问当前显示会话；缺少依赖时动作会返回可读错误。"
                     } else {

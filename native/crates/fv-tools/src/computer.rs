@@ -156,10 +156,120 @@ async fn screenshot(ctx: ToolCtx) -> ToolOutput {
             "unable to capture the Linux desktop: install grim, gnome-screenshot or scrot",
         )
     }
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size)
+$stream = New-Object System.IO.MemoryStream
+$bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+[Convert]::ToBase64String($stream.ToArray())
+$graphics.Dispose(); $bitmap.Dispose(); $stream.Dispose()
+"#;
+        match tokio::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
+            .output()
+            .await
+        {
+            Ok(output) if output.status.success() => {
+                let data = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if data.is_empty() {
+                    ToolOutput::err("Windows screenshot returned no image")
+                } else {
+                    ToolOutput::ok("Desktop screenshot captured.").with_images(vec![ImagePart {
+                        mime: "image/png".into(),
+                        source: ImageSource::Base64 { data },
+                    }])
+                }
+            }
+            Ok(output) => ToolOutput::err(format!(
+                "unable to capture the Windows desktop: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(error) => ToolOutput::err(format!("unable to start powershell.exe: {error}")),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let script = match action {
+            Args::Click { x, y } => format!(
+                r#"Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class FastVibeMouse {{
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+}}
+'@; [FastVibeMouse]::SetCursorPos({x}, {y}); [FastVibeMouse]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero); [FastVibeMouse]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero)"#
+            ),
+            Args::Type { text } => {
+                let encoded = utf16_base64(&text);
+                format!(
+                    "$bytes=[Convert]::FromBase64String('{encoded}'); $text=[Text.Encoding]::Unicode.GetString($bytes); Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait($text)"
+                )
+            }
+            Args::Key { key } => {
+                let key = match key.as_str() {
+                    "return" => "{ENTER}",
+                    "escape" => "{ESC}",
+                    "tab" => "{TAB}",
+                    "delete" => "{BACKSPACE}",
+                    "up" => "{UP}",
+                    "down" => "{DOWN}",
+                    "left" => "{LEFT}",
+                    "right" => "{RIGHT}",
+                    _ => return ToolOutput::err("unsupported Windows key"),
+                };
+                format!(
+                    "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{key}')"
+                )
+            }
+            Args::Screenshot => return ToolOutput::err("screenshot is read-only"),
+        };
+        match tokio::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &script,
+            ])
+            .output()
+            .await
+        {
+            Ok(output) if output.status.success() => ToolOutput::ok("Computer action completed."),
+            Ok(output) => ToolOutput::err(format!(
+                "Windows computer action failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(error) => ToolOutput::err(format!("unable to start powershell.exe: {error}")),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn utf16_base64(value: &str) -> String {
+    let bytes = value
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 async fn perform(action: Args) -> ToolOutput {
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = action;
         return ToolOutput::err("computer control is currently supported on macOS only");
