@@ -222,6 +222,17 @@ impl Group {
         }
     }
 
+    fn label_for(self, english: bool) -> &'static str {
+        if !english {
+            return self.label();
+        }
+        match self {
+            Group::Conflicted => "Conflicted",
+            Group::Staged => "Staged",
+            Group::Unstaged => "Unstaged",
+        }
+    }
+
     /// Which layer the patch for a row in this group is read from.
     fn source(self) -> DiffSource {
         match self {
@@ -918,7 +929,11 @@ impl Workspace {
                     .cursor_pointer()
                     .when(selected, |d| d.bg(p.c(Token::Accent)))
                     .hover(|d| d.bg(p.c(Token::Muted)))
-                    .aria_label(format!("Git 仓库：{folder}"))
+                    .aria_label(if english {
+                        format!("Git repository: {folder}")
+                    } else {
+                        format!("Git 仓库：{folder}")
+                    })
                     .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
                     .child(icon("folder01", 12.0, p.c(Token::MutedForeground)))
                     .child(SharedString::from(title))
@@ -980,12 +995,20 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .gap(px(8.0))
-                .child(SharedString::from(
-                    error.unwrap_or_else(|| "正在读取 Git 状态…".into()),
-                ))
+                .child(SharedString::from(error.unwrap_or_else(|| {
+                    if english {
+                        "Reading Git status…".into()
+                    } else {
+                        "正在读取 Git 状态…".into()
+                    }
+                })))
                 .child(
                     icon_button_xs("git-status-retry", "refresh", &p)
-                        .aria_label("重新读取 Git 状态")
+                        .aria_label(if english {
+                            "Reload Git status"
+                        } else {
+                            "重新读取 Git 状态"
+                        })
                         .on_click(cx.listener(|this, _, _, cx| this.load_git_status(cx))),
                 )
                 .into_any_element();
@@ -1059,7 +1082,7 @@ impl Workspace {
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
                     .child(ui::chevron(open, 12.0, p.c(Token::MutedForeground)))
-                    .child(group.label())
+                    .child(group.label_for(english))
                     .child(
                         div()
                             .text_color(p.c(Token::MutedForeground))
@@ -1078,9 +1101,13 @@ impl Workspace {
                                 &p,
                             )
                             .aria_label(if group == Group::Staged {
-                                "取消暂存全部"
+                                if english {
+                                    "Unstage all"
+                                } else {
+                                    "取消暂存全部"
+                                }
                             } else {
-                                "暂存全部"
+                                if english { "Stage all" } else { "暂存全部" }
                             })
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
@@ -1409,11 +1436,23 @@ impl Workspace {
                     .text_size(px(TEXT_XS))
                     .muted(&p)
                     .child(if patch_loading {
-                        "正在读取差异…"
+                        if english {
+                            "Reading diff…"
+                        } else {
+                            "正在读取差异…"
+                        }
                     } else if rows.is_empty() {
-                        "没有未提交的改动"
+                        if english {
+                            "No uncommitted changes"
+                        } else {
+                            "没有未提交的改动"
+                        }
                     } else {
-                        "选择一个文件查看差异"
+                        if english {
+                            "Select a file to view its diff"
+                        } else {
+                            "选择一个文件查看差异"
+                        }
                     }),
             );
         }
@@ -1443,9 +1482,17 @@ impl Workspace {
                             &p,
                         )
                         .aria_label(if tree_hidden {
-                            "展开文件树"
+                            if english {
+                                "Expand file tree"
+                            } else {
+                                "展开文件树"
+                            }
                         } else {
-                            "收起文件树"
+                            if english {
+                                "Collapse file tree"
+                            } else {
+                                "收起文件树"
+                            }
                         })
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(view) = this
@@ -1500,7 +1547,7 @@ impl Workspace {
                     )
                     .child(
                         icon_button_xs("git-refresh", "refresh", &p)
-                            .aria_label("刷新")
+                            .aria_label(if english { "Refresh" } else { "刷新" })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.load_git_status(cx);
                                 this.load_git_history(0, None, cx);
@@ -2116,17 +2163,34 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let target = self.git_target();
         let (title, body, confirm) = match action {
             GitAction::Discard => (
-                "丢弃这些改动？",
-                "文件会回到已暂存的内容；暂存区里的东西不受影响。",
-                "丢弃",
+                if english {
+                    "Discard these changes?"
+                } else {
+                    "丢弃这些改动？"
+                },
+                if english {
+                    "Files will return to their staged contents; staged data is not affected."
+                } else {
+                    "文件会回到已暂存的内容；暂存区里的东西不受影响。"
+                },
+                if english { "Discard" } else { "丢弃" },
             ),
             GitAction::DeleteUntracked => (
-                "删除这些未跟踪的文件？",
-                "它们不在 Git 里，删掉之后无法恢复。",
-                "删除",
+                if english {
+                    "Delete these untracked files?"
+                } else {
+                    "删除这些未跟踪的文件？"
+                },
+                if english {
+                    "They are not in Git and cannot be recovered after deletion."
+                } else {
+                    "它们不在 Git 里，删掉之后无法恢复。"
+                },
+                if english { "Delete" } else { "删除" },
             ),
         };
         let names: Vec<&str> = paths.iter().map(String::as_str).take(5).collect();
@@ -2184,7 +2248,7 @@ impl Workspace {
                                     .cursor_pointer()
                                     .muted(p)
                                     .hover(move |d| d.bg(p.c(Token::Accent)))
-                                    .child("取消")
+                                    .child(if english { "Cancel" } else { "取消" })
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(conversation) = this.selected.clone()
                                             && let Some(view) =
