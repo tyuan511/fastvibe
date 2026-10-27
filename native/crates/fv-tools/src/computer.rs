@@ -202,7 +202,7 @@ $graphics.Dispose(); $bitmap.Dispose(); $stream.Dispose()
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn utf16_base64(value: &str) -> String {
     let bytes = value
         .encode_utf16()
@@ -383,5 +383,20 @@ mod tests {
         let value = ComputerTool.spec().schema;
         assert_eq!(value["properties"]["action"]["enum"][0], "screenshot");
         assert_eq!(value["properties"]["text"]["maxLength"], 4096);
+    }
+
+    #[test]
+    fn windows_text_payload_uses_utf16_base64_without_shell_interpolation() {
+        let encoded = utf16_base64("A🙂");
+        assert_eq!(
+            encoded,
+            base64::engine::general_purpose::STANDARD.encode(
+                "A🙂"
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert!(!encoded.contains('🙂'));
     }
 }
