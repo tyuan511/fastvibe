@@ -8,7 +8,11 @@ use chrono::{DateTime, Days, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use fv_protocol::methods::ScheduleHistory;
 use fv_protocol::schedules::ScheduleHistory as History;
-use fv_protocol::{methods::*, schedules::*, types::Empty};
+use fv_protocol::{
+    methods::*,
+    schedules::*,
+    types::{Empty, UiLanguage},
+};
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -563,6 +567,7 @@ impl Workspace {
     pub(super) fn schedules_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
         let s = &self.schedules_ui;
+        let english = self.app_settings.language == UiLanguage::English;
         let mut grid = div()
             .id("schedules-grid")
             .flex_1()
@@ -586,19 +591,27 @@ impl Workspace {
                 let label = active
                     .map(|r| {
                         if r.stopping {
-                            "正在停止…"
+                            if english {
+                                "Stopping…"
+                            } else {
+                                "正在停止…"
+                            }
                         } else if r.waiting_for_input {
-                            "等待输入"
+                            if english {
+                                "Waiting for input"
+                            } else {
+                                "等待输入"
+                            }
                         } else {
-                            "执行中"
+                            if english { "Running" } else { "执行中" }
                         }
                     })
                     .unwrap_or(if queued {
-                        "排队中"
+                        if english { "Queued" } else { "排队中" }
                     } else if task.enabled {
-                        "已启用"
+                        if english { "Enabled" } else { "已启用" }
                     } else {
-                        "未启用"
+                        if english { "Disabled" } else { "未启用" }
                     });
                 let busy = s.busy.contains(&task.id);
                 let mut actions = div()
@@ -608,14 +621,14 @@ impl Workspace {
                     .child(
                         outline_button(SharedString::from(format!("schedule-run-{}", task.id)), p)
                             .when(busy, |d| d.opacity(0.5))
-                            .child("立即运行")
+                            .child(if english { "Run now" } else { "立即运行" })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.schedule_action(run.clone(), Action::Run, cx)
                             })),
                     )
                     .child(
                         outline_button(SharedString::from(format!("schedule-edit-{}", task.id)), p)
-                            .child("编辑")
+                            .child(if english { "Edit" } else { "编辑" })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.edit_schedule(Some(edit.clone()), window, cx)
                             })),
@@ -625,7 +638,13 @@ impl Workspace {
                             SharedString::from(format!("schedule-toggle-{}", task.id)),
                             p,
                         )
-                        .child(if task.enabled { "暂停" } else { "启用" })
+                        .child(if task.enabled {
+                            if english { "Pause" } else { "暂停" }
+                        } else if english {
+                            "Enable"
+                        } else {
+                            "启用"
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.schedule_action(toggle.clone(), Action::Toggle, cx)
                         })),
@@ -633,7 +652,11 @@ impl Workspace {
                 if active.is_some() || queued {
                     actions = actions.child(
                         outline_button(SharedString::from(format!("schedule-stop-{}", task.id)), p)
-                            .child("停止 / 取消排队")
+                            .child(if english {
+                                "Stop / cancel queue"
+                            } else {
+                                "停止 / 取消排队"
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.schedule_action(stop.clone(), Action::Stop, cx)
                             })),
@@ -676,17 +699,24 @@ impl Workspace {
                                     cx.notify();
                                 })),
                         )
-                        .child(
-                            div()
-                                .text_size(px(TEXT_XS))
-                                .muted(p)
-                                .child(format!("下次：{}", date(task.next_run_at))),
-                        )
-                        .child(div().text_size(px(TEXT_XS)).muted(p).child(format!(
-                            "上次：{} · {}",
-                            date(task.last_run_at),
-                            task.last_status.map(status).unwrap_or("尚未执行")
-                        )))
+                        .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
+                            format!("Next: {}", date(task.next_run_at))
+                        } else {
+                            format!("下次：{}", date(task.next_run_at))
+                        }))
+                        .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
+                            format!(
+                                "Last: {} · {}",
+                                date(task.last_run_at),
+                                task.last_status.map(status).unwrap_or("Not run yet")
+                            )
+                        } else {
+                            format!(
+                                "上次：{} · {}",
+                                date(task.last_run_at),
+                                task.last_status.map(status).unwrap_or("尚未执行")
+                            )
+                        }))
                         .child(actions),
                 );
             }
@@ -696,17 +726,21 @@ impl Workspace {
                         .w_full()
                         .py(px(40.0))
                         .muted(p)
-                        .child("暂无定时任务。创建后，后台服务会按计划执行并保留运行对话。"),
+                        .child(if english { "No scheduled tasks yet. Create one and the background service will keep its run chats." } else { "暂无定时任务。创建后，后台服务会按计划执行并保留运行对话。" }),
                 );
             }
         } else {
-            grid = grid.child(div().muted(p).child("正在读取定时任务…"));
+            grid = grid.child(div().muted(p).child(if english {
+                "Loading schedules…"
+            } else {
+                "正在读取定时任务…"
+            }));
         }
         let mut page=div().flex_1().min_w_0().h_full().flex().flex_col().text_size(px(TEXT_SM))
-            .child(div().h(px(64.0)).flex_none().px(px(20.0)).flex().items_center().justify_between().child("定时任务")
-                .child(div().flex().gap(px(8.0)).child(outline_button("schedule-back",p).child("返回对话").on_click(cx.listener(|this,_,window,cx|this.close_schedules(window,cx))))
-                    .child(outline_button("schedule-new",p).child("新建任务").on_click(cx.listener(|this,_,window,cx|this.edit_schedule(None,window,cx))))))
-            .child(div().px(px(20.0)).pb(px(10.0)).text_size(px(TEXT_XS)).muted(p).child("关闭窗口后仍由后台服务执行。一次运行一个任务；排队时保存配置快照，后续编辑只影响之后的执行。"))
+            .child(div().h(px(64.0)).flex_none().px(px(20.0)).flex().items_center().justify_between().child(if english { "Schedules" } else { "定时任务" })
+                .child(div().flex().gap(px(8.0)).child(outline_button("schedule-back",p).child(if english { "Back to chat" } else { "返回对话" }).on_click(cx.listener(|this,_,window,cx|this.close_schedules(window,cx))))
+                    .child(outline_button("schedule-new",p).child(if english { "New task" } else { "新建任务" }).on_click(cx.listener(|this,_,window,cx|this.edit_schedule(None,window,cx))))))
+            .child(div().px(px(20.0)).pb(px(10.0)).text_size(px(TEXT_XS)).muted(p).child(if english { "The background service keeps running after the window closes. One task runs at a time; queued runs use a saved configuration snapshot." } else { "关闭窗口后仍由后台服务执行。一次运行一个任务；排队时保存配置快照，后续编辑只影响之后的执行。" }))
             .children(s.error.as_ref().map(|e|div().px(px(20.0)).pb(px(10.0)).text_color(p.c(Token::Destructive)).child(e.clone())))
             .child(grid);
         if let Some(focus) = &s.focus {
