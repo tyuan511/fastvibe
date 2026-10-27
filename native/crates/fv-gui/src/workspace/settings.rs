@@ -1169,7 +1169,7 @@ impl Workspace {
                     ),
             )
             .child(div().text_size(px(TEXT_XS)).muted(p).child(
-                "扫描本机 Claude Code、pi、Codex 与 OpenCode 的会话文件，只读显示历史消息，预览不会写入 FastVibe。",
+                "扫描本机 Claude Code、pi、Codex、OpenCode 与 zcode 的会话文件，只读显示历史消息，预览不会写入 FastVibe。",
             ));
         if let Some(notice) = &s.import.notice {
             claude = claude.child(

@@ -873,6 +873,22 @@ pub fn read_opencode(db_path: &Path, session_id: &str) -> Result<ImportedSession
     })
 }
 
+/// zcode uses the same session/message/part SQLite shape as OpenCode. Its database is kept in a
+/// separate application directory, so the source label is rewritten after the shared reader.
+pub fn scan_zcode(db_path: &Path) -> Result<Vec<Candidate>, ImportError> {
+    let mut candidates = scan_opencode(db_path)?;
+    for candidate in &mut candidates {
+        candidate.source = "zcode".into();
+    }
+    Ok(candidates)
+}
+
+pub fn read_zcode(db_path: &Path, session_id: &str) -> Result<ImportedSession, ImportError> {
+    let mut imported = read_opencode(db_path, session_id)?;
+    imported.candidate.source = "zcode".into();
+    Ok(imported)
+}
+
 fn open_import_db(path: &Path) -> Result<rusqlite::Connection, ImportError> {
     Ok(rusqlite::Connection::open_with_flags(
         path,
@@ -1303,6 +1319,10 @@ mod tests {
         assert_eq!(imported.messages.len(), 2);
         assert!(
             matches!(&imported.messages[1], Message::Assistant(message) if message.content.len() == 2 && message.usage.input_tokens == 2)
+        );
+        assert_eq!(
+            read_zcode(&db_path, "s1").unwrap().candidate.source,
+            "zcode"
         );
     }
 }
