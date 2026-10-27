@@ -96,6 +96,7 @@ pnpm dev
 | `pnpm flutter:analyze` / `pnpm flutter:test` | Check the Flutter companion app |
 | `pnpm native:fmt` / `pnpm native:check` | Format-check and compile the native Rust workspace |
 | `pnpm native:test` / `pnpm native:build` | Run native Rust tests or build the server and GUI in release mode |
+| `pnpm native:stage` | Copy native GUI/server binaries into a platform/architecture staging directory with SHA-256 manifest |
 
 To preview the renderer in a browser:
 

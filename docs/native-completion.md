@@ -178,6 +178,7 @@ OAuth 使用真实本地 AS/MCP 服务验证 PKCE、回调归属、错误 issuer
 ## 第四十三批：原生构建入口
 
 - 根目录新增 `pnpm native:fmt`、`pnpm native:check`、`pnpm native:test` 和 `pnpm native:build`，分别覆盖 Rust workspace 格式、编译、测试和 server/GUI release 构建。
+- 新增 `pnpm native:stage`，按平台/架构复制 `fastvibe` 与 `fastvibe-server`，并生成包含字节数和 SHA-256 的 `native-manifest.json`；支持 `--target`、`--profile` 和 `--no-build`，可供后续安装包流程复用。
 - 本机已通过 `pnpm native:fmt` 与 `pnpm native:check`；安装包签名、OfficeCLI 随包和 Windows/Linux 构建仍需对应平台环境。
 - `NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 pnpm native:test` 全 workspace 通过；未设置代理例外时唯一失败是本机代理将 localhost 夹具改写为 502，已在测试环境隔离代理后复核。
 
