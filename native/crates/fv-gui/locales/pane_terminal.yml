@@ -1,0 +1,11 @@
+_version: 2
+
+pane_terminal.could_not_open_terminal_e:
+  zh: "无法打开终端：%{e}"
+  en: "Could not open terminal: %{e}"
+pane_terminal.could_not_read_the_terminal:
+  zh: "无法读取原终端会话：%{e}"
+  en: "Could not read the terminal session: %{e}"
+pane_terminal.could_not_resize_terminal_error:
+  zh: "无法调整终端尺寸：%{error}"
+  en: "Could not resize terminal: %{error}"

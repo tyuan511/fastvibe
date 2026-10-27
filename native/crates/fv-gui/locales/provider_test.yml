@@ -1,0 +1,47 @@
+_version: 2
+
+provider_test.testing:
+  zh: "正在自检…"
+  en: "Testing…"
+provider_test.test_model:
+  zh: "自检模型"
+  en: "Test model"
+provider_test.reply_and_tool_call_passed:
+  zh: "回答与工具调用均正常"
+  en: "Reply and tool call passed"
+provider_test.reply_passed_tool_call_unconfirmed:
+  zh: "回答正常，工具调用尚未确认"
+  en: "Reply passed; tool call unconfirmed"
+provider_test.self_test_failed:
+  zh: "自检未通过"
+  en: "Self-test failed"
+provider_test.all_self_test_slots_are:
+  zh: "自检任务已满，请稍后重试"
+  en: "All self-test slots are busy; try again later"
+provider_test.edit_model:
+  zh: "编辑模型"
+  en: "Edit model"
+provider_test.authentication_failed_check_the_saved:
+  zh: "鉴权失败，请检查已保存的密钥或登录状态"
+  en: "Authentication failed; check the saved key or sign-in state"
+provider_test.the_api_or_parameters_are:
+  zh: "接口或参数不兼容，请检查模型协议与参数"
+  en: "The API or parameters are incompatible; check the model protocol"
+provider_test.too_many_requests_try_again:
+  zh: "请求过于频繁，请稍后重试"
+  en: "Too many requests; try again later"
+provider_test.could_not_connect_to_the:
+  zh: "无法连接提供方，请检查网络与地址"
+  en: "Could not connect to the provider; check the network and URL"
+provider_test.the_provider_did_not_respond:
+  zh: "提供方未在时限内完成响应"
+  en: "The provider did not respond in time"
+provider_test.the_model_is_unavailable_or:
+  zh: "模型不可用或配置已变化，请刷新后重新自检"
+  en: "The model is unavailable or changed; refresh and test again"
+provider_test.the_provider_could_not_complete:
+  zh: "提供方未能完成自检，请稍后重试或检查模型配置"
+  en: "The provider could not complete the self-test; check the model configuration"
+provider_test.the_reply_passed_but_the:
+  zh: "普通回复正常，但未返回指定的测试工具调用"
+  en: "The reply passed, but the requested test tool call was not returned"

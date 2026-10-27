@@ -189,21 +189,14 @@ impl Workspace {
             .count()
             >= 32
         {
-            state.notice = Some(
-                if english {
-                    "A chat can have at most 32 browser tabs"
-                } else {
-                    "一个对话最多打开 32 个浏览器标签"
-                }
-                .into(),
-            );
+            state.notice = Some(trs!(english, "pane_web.a_chat_can_have_at").into());
             cx.notify();
             return;
         }
         let id = new_tab_id();
         state.tabs.push(PaneTab {
             id: id.clone(),
-            title: if english { "Browser" } else { "浏览器" }.into(),
+            title: trs!(english, "pane_web.browser").into(),
             kind: PaneTabKind::Browser { url },
         });
         state.activate(id);
@@ -292,27 +285,15 @@ impl Workspace {
             WebEvent::Crashed => {
                 view.loading = false;
                 view.surface.hide();
-                view.surface.error = Some(
-                    if english {
-                        "The web process exited; retry"
-                    } else {
-                        "网页进程已退出，请重试"
-                    }
-                    .into(),
-                );
+                view.surface.error =
+                    Some(trs!(english, "pane_web.the_web_process_exited_retry").into());
                 if let Some(tab) = key.strip_prefix("office-live:")
                     && let Some(office) = self.office_views.get_mut(tab)
                 {
                     office.live_ready = false;
                     office.url = None;
-                    office.watch_error = Some(
-                        if english {
-                            "The web process exited; refresh the document preview"
-                        } else {
-                            "网页进程已退出，请刷新文档预览"
-                        }
-                        .into(),
-                    );
+                    office.watch_error =
+                        Some(trs!(english, "pane_web.the_web_process_exited_refresh").into());
                 }
             }
             WebEvent::Popup(url) => {
@@ -442,11 +423,8 @@ impl Workspace {
         }
         if self.web_views[id].address.is_none() {
             let address = cx.new(|cx| {
-                InputState::new(window, cx).placeholder(if english {
-                    "Enter a URL or search"
-                } else {
-                    "输入网址或搜索"
-                })
+                InputState::new(window, cx)
+                    .placeholder(trs!(english, "pane_web.enter_a_url_or_search"))
             });
             let key = id.to_string();
             cx.subscribe(&address, move |this, input, event: &InputEvent, cx| {
@@ -495,27 +473,19 @@ impl Workspace {
             .border_b_1()
             .border_color(p.c(fv_theme::Token::Border));
         for (command, glyph, label) in [
-            (
-                "back",
-                "arrow-left01",
-                if english { "Back" } else { "后退" },
-            ),
+            ("back", "arrow-left01", trs!(english, "pane_web.back")),
             (
                 "forward",
                 "arrow-right01",
-                if english { "Forward" } else { "前进" },
+                trs!(english, "pane_web.forward"),
             ),
             (
                 if loading { "stop" } else { "reload" },
                 if loading { "cancel01" } else { "refresh" },
                 if loading {
-                    if english {
-                        "Stop loading"
-                    } else {
-                        "停止加载"
-                    }
+                    trs!(english, "pane_web.stop_loading")
                 } else {
-                    if english { "Reload" } else { "重新加载" }
+                    trs!(english, "pane_web.reload")
                 },
             ),
         ] {
@@ -534,11 +504,7 @@ impl Workspace {
         let external_url = current.clone();
         toolbar = toolbar.child(
             icon_button_xs("browser-external", "link-square02", &p)
-                .aria_label(if english {
-                    "Open in system browser"
-                } else {
-                    "在系统浏览器中打开"
-                })
+                .aria_label(trs!(english, "pane_web.open_in_system_browser"))
                 .on_click(move |_, _, cx| {
                     if let Some(url) = fv_core::safe_web_url(&external_url) {
                         cx.open_url(&url);
@@ -554,17 +520,9 @@ impl Workspace {
                 &p,
             )
             .aria_label(if bookmarked {
-                if english {
-                    "Remove bookmark"
-                } else {
-                    "取消收藏"
-                }
+                trs!(english, "pane_web.remove_bookmark")
             } else {
-                if english {
-                    "Bookmark this page"
-                } else {
-                    "收藏此页"
-                }
+                trs!(english, "pane_web.bookmark_this_page")
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_browser_bookmark(&bookmark_url, &bookmark_title, cx);

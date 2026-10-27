@@ -1,0 +1,68 @@
+_version: 2
+
+pane_git.this_chat_has_no_working:
+  zh: "这个对话没有工作目录"
+  en: "This chat has no working directory"
+pane_git.git_repository_folder:
+  zh: "Git 仓库：%{folder}"
+  en: "Git repository: %{folder}"
+pane_git.reading_git_status:
+  zh: "正在读取 Git 状态…"
+  en: "Reading Git status…"
+pane_git.reload_git_status:
+  zh: "重新读取 Git 状态"
+  en: "Reload Git status"
+pane_git.this_directory_is_not_a:
+  zh: "这个目录不在 Git 仓库里"
+  en: "This directory is not a Git repository"
+pane_git.unstage_all:
+  zh: "取消暂存全部"
+  en: "Unstage all"
+pane_git.stage_all:
+  zh: "暂存全部"
+  en: "Stage all"
+pane_git.no_uncommitted_changes:
+  zh: "没有未提交的改动"
+  en: "No uncommitted changes"
+pane_git.commit_history:
+  zh: "提交历史"
+  en: "Commit history"
+pane_git.reading_diff:
+  zh: "正在读取差异…"
+  en: "Reading diff…"
+pane_git.select_a_file_to_view:
+  zh: "选择一个文件查看差异"
+  en: "Select a file to view its diff"
+pane_git.expand_file_tree:
+  zh: "展开文件树"
+  en: "Expand file tree"
+pane_git.collapse_file_tree:
+  zh: "收起文件树"
+  en: "Collapse file tree"
+pane_git.refresh:
+  zh: "刷新"
+  en: "Refresh"
+pane_git.load_more:
+  zh: "加载更多"
+  en: "Load more"
+pane_git.discard_these_changes:
+  zh: "丢弃这些改动？"
+  en: "Discard these changes?"
+pane_git.files_will_return_to_their:
+  zh: "文件会回到已暂存的内容；暂存区里的东西不受影响。"
+  en: "Files will return to their staged contents; staged data is not affected."
+pane_git.discard:
+  zh: "丢弃"
+  en: "Discard"
+pane_git.delete_these_untracked_files:
+  zh: "删除这些未跟踪的文件？"
+  en: "Delete these untracked files?"
+pane_git.they_are_not_in_git:
+  zh: "它们不在 Git 里，删掉之后无法恢复。"
+  en: "They are not in Git and cannot be recovered after deletion."
+pane_git.delete:
+  zh: "删除"
+  en: "Delete"
+pane_git.cancel:
+  zh: "取消"
+  en: "Cancel"

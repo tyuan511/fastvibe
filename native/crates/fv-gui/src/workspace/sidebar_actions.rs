@@ -310,26 +310,18 @@ impl Workspace {
             .w(px(190.0));
         for (i, (label, sort)) in [
             (
-                if english {
-                    "Manual order"
-                } else {
-                    "手动排序"
-                },
+                trs!(english, "sidebar_actions.manual_order"),
                 SidebarSort::Manual,
             ),
             (
-                if english {
-                    "Recently updated"
-                } else {
-                    "最近更新"
-                },
+                trs!(english, "sidebar_actions.recently_updated"),
                 SidebarSort::Updated,
             ),
             (
-                if english { "Created" } else { "创建时间" },
+                trs!(english, "sidebar_actions.created"),
                 SidebarSort::Created,
             ),
-            (if english { "Name" } else { "名称" }, SidebarSort::Title),
+            (trs!(english, "sidebar_actions.name"), SidebarSort::Title),
         ]
         .into_iter()
         .enumerate()
@@ -356,11 +348,7 @@ impl Workspace {
         menu = menu
             .child(
                 settings::menu_item("expand-projects".into(), false, p.c(Token::Accent))
-                    .child(if english {
-                        "Expand all projects"
-                    } else {
-                        "展开全部项目"
-                    })
+                    .child(trs!(english, "sidebar_actions.expand_all_projects"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.close_menus(cx);
                         this.patch_sidebar(
@@ -374,11 +362,7 @@ impl Workspace {
             )
             .child(
                 settings::menu_item("collapse-projects".into(), false, p.c(Token::Accent))
-                    .child(if english {
-                        "Collapse all projects"
-                    } else {
-                        "折叠全部项目"
-                    })
+                    .child(trs!(english, "sidebar_actions.collapse_all_projects"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.close_menus(cx);
                         this.patch_sidebar(
@@ -394,11 +378,7 @@ impl Workspace {
             )
             .child(
                 settings::menu_item("archived-chats".into(), false, p.c(Token::Accent))
-                    .child(if english {
-                        "Archive chats"
-                    } else {
-                        "归档对话"
-                    })
+                    .child(trs!(english, "sidebar_actions.archive_chats"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.close_menus(cx);
                         this.open_settings(settings::Section::Archived, window, cx);
@@ -467,19 +447,15 @@ impl Workspace {
         let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         let answer = window.prompt(
             PromptLevel::Warning,
-            &if english {
-                format!("Remove project '{}'？", self.project_label(&path))
-            } else {
-                format!("移除项目「{}」？", self.project_label(&path))
-            },
-            Some(if english {
-                "Chats remain in the chat list; files on disk are not deleted."
-            } else {
-                "对话会保留在聊天列表中，磁盘上的文件不会删除。"
-            }),
+            &tr!(
+                english,
+                "sidebar_actions.remove_project_arg1",
+                arg1 = self.project_label(&path)
+            ),
+            Some(trs!(english, "sidebar_actions.chats_remain_in_the_chat")),
             &[
-                PromptButton::cancel(if english { "Cancel" } else { "取消" }),
-                PromptButton::ok(if english { "Remove" } else { "移除" }),
+                PromptButton::cancel(trs!(english, "sidebar_actions.cancel")),
+                PromptButton::ok(trs!(english, "sidebar_actions.remove")),
             ],
             cx,
         );
@@ -501,9 +477,15 @@ impl Workspace {
         let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         let answer = window.prompt(
             PromptLevel::Warning,
-            if english { "Delete this chat?" } else { "删除这个对话？" },
-            Some(if english { "The transcript will be permanently deleted and running tasks will stop. This cannot be undone." } else { "会话记录将永久删除，正在运行的任务也会停止。此操作无法恢复。" }),
-            &[PromptButton::cancel(if english { "Cancel" } else { "取消" }), PromptButton::ok(if english { "Delete" } else { "删除" })],
+            trs!(english, "sidebar_actions.delete_this_chat"),
+            Some(trs!(
+                english,
+                "sidebar_actions.the_transcript_will_be_permanently"
+            )),
+            &[
+                PromptButton::cancel(trs!(english, "sidebar_actions.cancel")),
+                PromptButton::ok(trs!(english, "sidebar_actions.delete")),
+            ],
             cx,
         );
         cx.spawn(async move |this, cx| {

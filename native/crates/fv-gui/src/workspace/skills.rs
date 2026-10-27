@@ -349,12 +349,12 @@ impl Workspace {
                 div()
                     .text_size(px(TEXT_SM))
                     .muted(p)
-                    .child(if english { "Skills are loaded for the current project. Enter /skill:name at the start of a chat to select one." } else { "按当前项目加载技能。在对话开头输入 /skill:名称 可指定使用。" }),
+                    .child(trs!(english, "skills.skills_are_loaded_for_the")),
             )
             .child(Input::new(&s.query))
             .child(
                 outline_button("refresh-skills", p)
-                    .child(if english { "Refresh" } else { "刷新" })
+                    .child(trs!(english, "skills.refresh"))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh_skills(cx))),
             );
         if let Some(notice) = &s.notice {
@@ -376,32 +376,16 @@ impl Workspace {
                 let remove = name.clone();
                 let scope = match skill.scope {
                     SkillScope::Project => {
-                        if english {
-                            "Project"
-                        } else {
-                            "项目"
-                        }
+                        trs!(english, "skills.project")
                     }
                     SkillScope::Managed => {
-                        if english {
-                            "Private"
-                        } else {
-                            "私有"
-                        }
+                        trs!(english, "skills.private")
                     }
                     SkillScope::Global => {
-                        if english {
-                            "Global"
-                        } else {
-                            "全局"
-                        }
+                        trs!(english, "skills.global")
                     }
                     SkillScope::Builtin => {
-                        if english {
-                            "Built-in"
-                        } else {
-                            "内置"
-                        }
+                        trs!(english, "skills.built_in")
                     }
                 };
                 let mut row = div()
@@ -429,16 +413,17 @@ impl Workspace {
                             .child(SharedString::from(skill.path.clone())),
                     );
                 if skill.manual_only {
-                    row = row.child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                        "Used only when selected"
-                    } else {
-                        "仅在指定时使用"
-                    }));
+                    row = row.child(
+                        div()
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child(trs!(english, "skills.used_only_when_selected")),
+                    );
                 }
                 if skill.removable {
                     row = row.child(
                         outline_button(SharedString::from(format!("remove-{remove}")), p)
-                            .child(if english { "Delete" } else { "删除" })
+                            .child(trs!(english, "skills.delete"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(s) = this.settings.as_mut() {
                                     s.skills.confirm_remove = Some(remove.clone());
@@ -450,11 +435,12 @@ impl Workspace {
                 list = list.child(row);
             }
             if catalog.skills.is_empty() {
-                list = list.child(div().text_size(px(TEXT_SM)).muted(p).child(if english {
-                    "No skills yet. Create one or import a local folder."
-                } else {
-                    "还没有技能。可以创建技能，或从本地文件夹导入。"
-                }));
+                list = list.child(
+                    div()
+                        .text_size(px(TEXT_SM))
+                        .muted(p)
+                        .child(trs!(english, "skills.no_skills_yet_create_one")),
+                );
             }
             pane = pane.child(list);
             for message in &catalog.diagnostics {
@@ -466,11 +452,11 @@ impl Workspace {
                 );
             }
         } else {
-            pane = pane.child(div().text_size(px(TEXT_SM)).child(if english {
-                "Loading skills…"
-            } else {
-                "正在加载技能…"
-            }));
+            pane = pane.child(
+                div()
+                    .text_size(px(TEXT_SM))
+                    .child(trs!(english, "skills.loading_skills")),
+            );
         }
         if let Some(name) = &s.confirm_remove {
             let name = name.clone();
@@ -480,25 +466,21 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(SharedString::from(if english {
-                        format!("Delete skill {name} and all its resources? This cannot be undone.")
-                    } else {
-                        format!("删除技能 {name} 及其全部资源？无法恢复。")
-                    }))
+                    .child(SharedString::from(tr!(
+                        english,
+                        "skills.delete_skill_name_and_all",
+                        name = name
+                    )))
                     .child(
                         outline_button("confirm-remove-skill", p)
-                            .child(if english {
-                                "Confirm delete"
-                            } else {
-                                "确认删除"
-                            })
+                            .child(trs!(english, "skills.confirm_delete"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.remove_skill(name.clone(), cx)
                             })),
                     )
                     .child(
                         outline_button("cancel-remove-skill", p)
-                            .child(if english { "Cancel" } else { "取消" })
+                            .child(trs!(english, "skills.cancel"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(s) = this.settings.as_mut() {
                                     s.skills.confirm_remove = None;
@@ -522,26 +504,16 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap(px(10.0))
-                .child(if english {
-                    "Create skill"
-                } else {
-                    "创建技能"
-                })
+                .child(trs!(english, "skills.create_skill"))
                 .child(Input::new(&s.name))
                 .child(Input::new(&s.description))
                 .child(Textarea::new(&s.body))
                 .child(
                     outline_button("create-skill", p)
                         .child(if s.busy {
-                            if english {
-                                "Saving…"
-                            } else {
-                                "正在保存…"
-                            }
-                        } else if english {
-                            "Create"
+                            trs!(english, "skills.saving")
                         } else {
-                            "创建"
+                            trs!(english, "skills.create")
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.create_skill(cx))),
                 ),
@@ -552,26 +524,18 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap(px(10.0))
-                .child(if english {
-                    "Import skill"
-                } else {
-                    "导入技能"
-                })
+                .child(trs!(english, "skills.import_skill"))
                 .child(Input::new(&s.import_path))
                 .child(
                     outline_button("pick-skill-folder", p)
-                        .child(if english {
-                            "Choose folder"
-                        } else {
-                            "选择文件夹"
-                        })
+                        .child(trs!(english, "skills.choose_folder"))
                         .on_click(
                             cx.listener(|this, _, window, cx| this.pick_skill_folder(window, cx)),
                         ),
                 )
                 .child(
                     outline_button("import-skill", p)
-                        .child(if english { "Import" } else { "导入" })
+                        .child(trs!(english, "skills.import"))
                         .on_click(cx.listener(|this, _, _, cx| this.import_skill(cx))),
                 ),
         )

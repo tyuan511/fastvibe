@@ -1,0 +1,74 @@
+_version: 2
+
+subagent_roles.role_responsibilities_working_style_and:
+  zh: "角色的职责、工作方式与完成要求"
+  en: "Role responsibilities, working style, and completion requirements"
+subagent_roles.role_id_letters_numbers_or:
+  zh: "角色 ID（字母、数字、- 或 _）"
+  en: "Role ID (letters, numbers, - or _)"
+subagent_roles.display_name:
+  zh: "显示名称"
+  en: "Display name"
+subagent_roles.description_shown_when_the_main:
+  zh: "供主 Agent 选择角色时参考的说明"
+  en: "Description shown when the main Agent chooses a role"
+subagent_roles.role_templates:
+  zh: "角色模板"
+  en: "Role templates"
+subagent_roles.new_role:
+  zh: "新建角色"
+  en: "New role"
+subagent_roles.roles_can_define_instructions_model:
+  zh: "角色可指定说明、模型、思考强度和工具范围。修改或删除模板不影响已有子任务；主 Agent 创建任务时可按角色 ID 选择。"
+  en: "Roles can define instructions, model, thinking level, and tool scope. Editing or deleting a template does not affect existing subtasks; the main Agent can choose a role by ID."
+subagent_roles.read_only:
+  zh: " · 只读"
+  en: " · read-only"
+subagent_roles.edit:
+  zh: "编辑"
+  en: "Edit"
+subagent_roles.confirm_delete:
+  zh: "确认删除"
+  en: "Confirm delete"
+subagent_roles.delete:
+  zh: "删除"
+  en: "Delete"
+subagent_roles.loading_roles:
+  zh: "正在读取角色…"
+  en: "Loading roles…"
+subagent_roles.inherit_parent_model:
+  zh: "继承父任务模型"
+  en: "Inherit parent model"
+subagent_roles.inherit_thinking_level:
+  zh: "继承思考强度"
+  en: "Inherit thinking level"
+subagent_roles.read_only_workspace:
+  zh: "只读工作区"
+  en: "Read-only workspace"
+subagent_roles.read_only_roles_use_restricted:
+  zh: "只读角色仅使用受限的本机工具，不提供 MCP 或继续委派；不能申请解除文件系统限制。"
+  en: "Read-only roles use restricted local tools only; MCP and further delegation are unavailable, and filesystem restrictions cannot be lifted."
+subagent_roles.tools_inherit_all_available:
+  zh: "工具：继承全部可用工具"
+  en: "Tools: inherit all available"
+subagent_roles.tools_selected_only:
+  zh: "工具：仅选中的工具"
+  en: "Tools: selected only"
+subagent_roles.name_currently_unavailable_click_to:
+  zh: "✓ %{name}（当前不可用，点击移除）"
+  en: "✓ %{name} (currently unavailable; click to remove)"
+subagent_roles.this_role_changed_elsewhere_the:
+  zh: "此角色已在别处更改。草稿仍保留；重新点“编辑”可载入最新版本。"
+  en: "This role changed elsewhere. The draft is kept; click Edit again to load the latest version."
+subagent_roles.saving:
+  zh: "正在保存…"
+  en: "Saving…"
+subagent_roles.save_role:
+  zh: "保存角色"
+  en: "Save role"
+subagent_roles.close_editor:
+  zh: "收起"
+  en: "Close editor"
+subagent_roles.role_id_arg1:
+  zh: "角色 ID：%{arg1}"
+  en: "Role ID: %{arg1}"

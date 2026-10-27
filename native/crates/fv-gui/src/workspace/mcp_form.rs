@@ -50,20 +50,8 @@ fn input(
 
 fn pair(key: &str, value: &str, english: bool, window: &mut Window, cx: &mut App) -> Pair {
     Pair {
-        key: input(
-            key,
-            if english { "Name" } else { "名称" },
-            false,
-            window,
-            cx,
-        ),
-        value: input(
-            value,
-            if english { "Value" } else { "值" },
-            true,
-            window,
-            cx,
-        ),
+        key: input(key, trs!(english, "mcp_form.name"), false, window, cx),
+        value: input(value, trs!(english, "mcp_form.value"), true, window, cx),
     }
 }
 
@@ -77,20 +65,10 @@ fn pairs(rows: &[Pair], english: bool, cx: &App) -> Result<BTreeMap<String, Stri
         let key = value(&row.key, cx).trim().to_string();
         let value = value(&row.value, cx);
         if key.is_empty() {
-            return Err(if english {
-                "Enter a name for each environment variable or header, or remove blank rows"
-            } else {
-                "请填写环境变量或请求头的名称，或删除空白行"
-            }
-            .into());
+            return Err(trs!(english, "mcp_form.enter_a_name_for_each").into());
         }
         if map.insert(key, value).is_some() {
-            return Err(if english {
-                "Environment variable or header names must be unique"
-            } else {
-                "环境变量或请求头的名称不能重复"
-            }
-            .into());
+            return Err(trs!(english, "mcp_form.environment_variable_or_header_names").into());
         }
     }
     Ok(map)
@@ -115,15 +93,7 @@ impl Form {
             .map(|c| {
                 c.args
                     .iter()
-                    .map(|v| {
-                        input(
-                            v,
-                            if english { "Argument" } else { "参数" },
-                            false,
-                            window,
-                            cx,
-                        )
-                    })
+                    .map(|v| input(v, trs!(english, "mcp_form.argument"), false, window, cx))
                     .collect()
             })
             .unwrap_or_default();
@@ -152,11 +122,7 @@ impl Form {
             headers,
             name: input(
                 config.as_ref().map(|c| c.name.as_str()).unwrap_or(""),
-                if english {
-                    "Server name"
-                } else {
-                    "服务器名称"
-                },
+                trs!(english, "mcp_form.server_name"),
                 false,
                 window,
                 cx,
@@ -166,11 +132,7 @@ impl Form {
                     .as_ref()
                     .and_then(|c| c.command.as_deref())
                     .unwrap_or(""),
-                if english {
-                    "e.g. npx or an executable path"
-                } else {
-                    "例如 npx 或可执行文件路径"
-                },
+                trs!(english, "mcp_form.e_g_npx_or_an"),
                 false,
                 window,
                 cx,
@@ -283,13 +245,10 @@ impl Workspace {
         s.mcp.busy = true;
         s.mcp.notice = None;
         cx.spawn(async move |this, cx| {
-            let result = backend.call::<McpUpdate>(params).await.map_err(|e| {
-                if english {
-                    format!("Could not save MCP: {e}")
-                } else {
-                    format!("无法保存 MCP：{e}")
-                }
-            });
+            let result = backend
+                .call::<McpUpdate>(params)
+                .await
+                .map_err(|e| tr!(english, "mcp_form.could_not_save_mcp_e", e = e));
             this.update(cx, |this, cx| {
                 if result.is_ok()
                     && let Some(s) = this.settings.as_mut().filter(|s| s.mcp.session == session)
@@ -313,44 +272,25 @@ impl Workspace {
         };
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
-        let label = |zh: &'static str, en: &'static str| {
-            div()
-                .text_size(px(TEXT_SM))
-                .child(if english { en } else { zh })
-        };
+        let label = |key: &'static str| div().text_size(px(TEXT_SM)).child(trs!(english, key));
         let mut body = card(p)
             .p(px(16.0))
             .flex()
             .flex_col()
             .gap(px(12.0))
             .child(if form.original.is_some() {
-                if english {
-                    "Edit server"
-                } else {
-                    "编辑服务器"
-                }
+                trs!(english, "mcp_form.edit_server")
             } else {
-                if english {
-                    "Add server"
-                } else {
-                    "添加服务器"
-                }
+                trs!(english, "mcp_form.add_server")
             })
             .child(
                 div()
-                    .child(label("名称", "Name"))
+                    .child(label("mcp_form.name"))
                     .child(Input::new(&form.name)),
             );
         let mut transports = div().flex().gap(px(8.0));
         for (transport, title) in [
-            (
-                McpTransport::Stdio,
-                if english {
-                    "Local process"
-                } else {
-                    "本地进程"
-                },
-            ),
+            (McpTransport::Stdio, trs!(english, "mcp_form.local_process")),
             (McpTransport::Http, "Streamable HTTP"),
         ] {
             transports = transports.child(
@@ -381,13 +321,10 @@ impl Workspace {
             body = body
                 .child(
                     div()
-                        .child(label("启动命令", "Launch command"))
+                        .child(label("mcp_form.launch_command"))
                         .child(Input::new(&form.command)),
                 )
-                .child(label(
-                    "参数（每行一个，按原样传给进程）",
-                    "Arguments (one per line, passed as entered)",
-                ));
+                .child(label("mcp_form.arguments"));
             for (i, arg) in form.args.iter().enumerate() {
                 body = body.child(
                     div()
@@ -396,7 +333,7 @@ impl Workspace {
                         .child(div().flex_1().child(Input::new(arg)))
                         .child(
                             outline_button(SharedString::from(format!("mcp-remove-arg-{i}")), p)
-                                .child(if english { "Remove" } else { "删除" })
+                                .child(trs!(english, "mcp_form.remove"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
                                         && let Some(form) = &mut s.mcp.form
@@ -411,11 +348,7 @@ impl Workspace {
             }
             body = body.child(
                 outline_button("mcp-add-arg", p)
-                    .child(if english {
-                        "Add argument"
-                    } else {
-                        "添加参数"
-                    })
+                    .child(trs!(english, "mcp_form.add_argument"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
                             && let Some(form) = &mut s.mcp.form
@@ -434,20 +367,17 @@ impl Workspace {
         } else {
             body = body.child(
                 div()
-                    .child(label("服务器地址", "Server URL"))
+                    .child(label("mcp_form.server_url"))
                     .child(Input::new(&form.url)),
             );
         }
         let local = form.transport == McpTransport::Stdio;
         let rows = if local { &form.env } else { &form.headers };
-        body = body.child(label(
-            if local { "环境变量" } else { "请求头" },
-            if local {
-                "Environment variables"
-            } else {
-                "Request headers"
-            },
-        ));
+        body = body.child(label(if local {
+            "mcp_form.environment_variables"
+        } else {
+            "mcp_form.request_headers"
+        }));
         for (i, row) in rows.iter().enumerate() {
             body = body.child(
                 div()
@@ -457,7 +387,7 @@ impl Workspace {
                     .child(div().flex_1().child(Input::new(&row.value).mask_toggle()))
                     .child(
                         outline_button(SharedString::from(format!("mcp-remove-pair-{i}")), p)
-                            .child(if english { "Remove" } else { "删除" })
+                            .child(trs!(english, "mcp_form.remove"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
                                     && let Some(form) = &mut s.mcp.form
@@ -479,17 +409,9 @@ impl Workspace {
         body = body.child(
             outline_button("mcp-add-pair", p)
                 .child(if local {
-                    if english {
-                        "Add environment variable"
-                    } else {
-                        "添加环境变量"
-                    }
+                    trs!(english, "mcp_form.add_environment_variable")
                 } else {
-                    if english {
-                        "Add request header"
-                    } else {
-                        "添加请求头"
-                    }
+                    trs!(english, "mcp_form.add_request_header")
                 })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
@@ -506,23 +428,11 @@ impl Workspace {
                 })),
         );
         for (deferred, active, label) in [
-            (
-                false,
-                form.enabled,
-                if english {
-                    "Enable server"
-                } else {
-                    "启用服务器"
-                },
-            ),
+            (false, form.enabled, trs!(english, "mcp_form.enable_server")),
             (
                 true,
                 form.deferred,
-                if english {
-                    "Search and load tools on demand"
-                } else {
-                    "按需搜索并加载工具"
-                },
+                trs!(english, "mcp_form.search_and_load_tools_on"),
             ),
         ] {
             body = body.child(
@@ -552,23 +462,15 @@ impl Workspace {
                 .child(
                     outline_button("mcp-save-form", p)
                         .child(if s.mcp.busy {
-                            if english {
-                                "Saving…"
-                            } else {
-                                "正在保存…"
-                            }
+                            trs!(english, "mcp_form.saving")
                         } else {
-                            if english {
-                                "Save server"
-                            } else {
-                                "保存服务器"
-                            }
+                            trs!(english, "mcp_form.save_server")
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.save_mcp_form(cx))),
                 )
                 .child(
                     outline_button("mcp-cancel-form", p)
-                        .child(if english { "Cancel" } else { "取消" })
+                        .child(trs!(english, "mcp_form.cancel"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy) {
                                 s.mcp.form = None;

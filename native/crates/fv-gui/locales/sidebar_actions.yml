@@ -1,0 +1,44 @@
+_version: 2
+
+sidebar_actions.manual_order:
+  zh: "手动排序"
+  en: "Manual order"
+sidebar_actions.recently_updated:
+  zh: "最近更新"
+  en: "Recently updated"
+sidebar_actions.created:
+  zh: "创建时间"
+  en: "Created"
+sidebar_actions.name:
+  zh: "名称"
+  en: "Name"
+sidebar_actions.expand_all_projects:
+  zh: "展开全部项目"
+  en: "Expand all projects"
+sidebar_actions.collapse_all_projects:
+  zh: "折叠全部项目"
+  en: "Collapse all projects"
+sidebar_actions.archive_chats:
+  zh: "归档对话"
+  en: "Archive chats"
+sidebar_actions.chats_remain_in_the_chat:
+  zh: "对话会保留在聊天列表中，磁盘上的文件不会删除。"
+  en: "Chats remain in the chat list; files on disk are not deleted."
+sidebar_actions.cancel:
+  zh: "取消"
+  en: "Cancel"
+sidebar_actions.remove:
+  zh: "移除"
+  en: "Remove"
+sidebar_actions.delete_this_chat:
+  zh: "删除这个对话？"
+  en: "Delete this chat?"
+sidebar_actions.the_transcript_will_be_permanently:
+  zh: "会话记录将永久删除，正在运行的任务也会停止。此操作无法恢复。"
+  en: "The transcript will be permanently deleted and running tasks will stop. This cannot be undone."
+sidebar_actions.delete:
+  zh: "删除"
+  en: "Delete"
+sidebar_actions.remove_project_arg1:
+  zh: "移除项目「%{arg1}」？"
+  en: "Remove project '%{arg1}'？"

@@ -354,13 +354,44 @@ impl Workspace {
         let p = &self.palette;
         let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         let query = state.query.read(cx).value().trim().to_lowercase();
-        let mut pane = div().track_focus(&state.focus).flex().flex_col().gap(px(16.0))
+        let mut pane = div()
+            .track_focus(&state.focus)
+            .flex()
+            .flex_col()
+            .gap(px(16.0))
             .child(Input::new(&state.query))
-            .child(card(p).p(px(16.0)).flex_row().items_center().justify_between()
-                .child(div().flex().flex_col().gap(px(4.0)).child(if english { "Send on Enter" } else { "回车发送" }).child(div().text_size(px(TEXT_XS)).muted(p).child(if english { "Enter sends and Shift+Enter inserts a newline; when off, Enter inserts a newline and the send shortcut is used." } else { "开启后 Enter 发送、Shift+Enter 换行；关闭后 Enter 换行，使用发送快捷键。" })))
-                .child(switch("send-on-enter".into(), self.app_settings.send_on_enter, p).on_click(cx.listener(|this, _, _, cx| {
-                    this.patch_settings(AppSettingsPatch { send_on_enter: Some(!this.app_settings.send_on_enter), ..Default::default() }, cx);
-                }))));
+            .child(
+                card(p)
+                    .p(px(16.0))
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(trs!(english, "shortcuts.send_on_enter"))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_XS))
+                                    .muted(p)
+                                    .child(trs!(english, "shortcuts.enter_sends_and_shift_enter")),
+                            ),
+                    )
+                    .child(
+                        switch("send-on-enter".into(), self.app_settings.send_on_enter, p)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.patch_settings(
+                                    AppSettingsPatch {
+                                        send_on_enter: Some(!this.app_settings.send_on_enter),
+                                        ..Default::default()
+                                    },
+                                    cx,
+                                );
+                            })),
+                    ),
+            );
         let mut count = 0;
         for group in ["通用", "对话", "视图"] {
             let mut rows = card(p).p(px(12.0)).gap(px(10.0));
@@ -378,22 +409,12 @@ impl Workspace {
                 let display = binding
                     .and_then(|s| Chord::parse(s).ok())
                     .map(|c| c.label(cfg!(target_os = "macos")))
-                    .unwrap_or_else(|| {
-                        if english {
-                            "Unassigned".into()
-                        } else {
-                            "未设置".into()
-                        }
-                    });
+                    .unwrap_or_else(|| trs!(english, "shortcuts.unassigned").into());
                 let mut buttons = div().flex().gap(px(8.0));
                 if binding != Some(fallback) {
                     buttons = buttons.child(
                         outline_button(SharedString::from(format!("restore-{id:?}")), p)
-                            .child(if english {
-                                "Restore default"
-                            } else {
-                                "恢复默认"
-                            })
+                            .child(trs!(english, "shortcuts.restore_default"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(s) = this.settings.as_mut() {
                                     s.shortcuts.cancel();
@@ -411,11 +432,7 @@ impl Workspace {
                 buttons = buttons.child(
                     outline_button(SharedString::from(format!("record-{id:?}")), p)
                         .child(SharedString::from(if recording {
-                            if english {
-                                "Press a key combination…".into()
-                            } else {
-                                "请按组合键…".into()
-                            }
+                            trs!(english, "shortcuts.press_a_key_combination").into()
                         } else {
                             display
                         }))
@@ -451,11 +468,7 @@ impl Workspace {
             }
         }
         if count == 0 {
-            pane = pane.child(if english {
-                "No shortcuts found"
-            } else {
-                "未找到快捷键"
-            });
+            pane = pane.child(trs!(english, "shortcuts.no_shortcuts_found"));
         }
         if let Some(error) = &state.error {
             pane = pane.child(
@@ -465,18 +478,16 @@ impl Workspace {
             );
         }
         if state.recording.is_some() {
-            pane =
-                pane.child(div().text_size(px(TEXT_XS)).muted(p).child(
-                    if english { "Esc cancels; Backspace or Delete clears. Assigning a duplicate chord unbinds the previous action." } else { "Esc 取消；Backspace 或 Delete 清除。设置重复组合键会取消原操作的绑定。" },
-                ));
+            pane = pane.child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "shortcuts.esc_cancels_backspace_or_delete")),
+            );
         }
         pane.child(
             outline_button("reset-all-shortcuts", p)
-                .child(if english {
-                    "Restore all default shortcuts"
-                } else {
-                    "恢复全部默认快捷键"
-                })
+                .child(trs!(english, "shortcuts.restore_all_default_shortcuts"))
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Some(s) = this.settings.as_mut() {
                         s.shortcuts.cancel();

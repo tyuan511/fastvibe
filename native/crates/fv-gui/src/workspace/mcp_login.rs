@@ -53,31 +53,19 @@ impl Workspace {
         s.mcp.login_form = Some(Form {
             server,
             client_id: input(
-                if english {
-                    "Client ID (optional; leave blank to register automatically)"
-                } else {
-                    "Client ID（可选，留空自动注册）"
-                },
+                trs!(english, "mcp_login.client_id_optional_leave_blank"),
                 false,
                 window,
                 cx,
             ),
             client_secret: input(
-                if english {
-                    "Client Secret (optional)"
-                } else {
-                    "Client Secret（可选）"
-                },
+                trs!(english, "mcp_login.client_secret_optional"),
                 true,
                 window,
                 cx,
             ),
             scopes: input(
-                if english {
-                    "Scopes (optional, space separated)"
-                } else {
-                    "权限范围（可选，以空格分隔）"
-                },
+                trs!(english, "mcp_login.scopes_optional_space_separated"),
                 false,
                 window,
                 cx,
@@ -237,54 +225,34 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(if english {
-                "OAuth sign-in"
-            } else {
-                "OAuth 登录"
-            })
+            .child(trs!(english, "mcp_login.oauth_sign_in"))
             .child(Input::new(&form.client_id))
             .child(Input::new(&form.client_secret).mask_toggle())
             .child(Input::new(&form.scopes));
         if let Some(login) = &s.mcp.login {
             body = body.child(if login.url.is_some() {
-                if english {
-                    "Complete authorization in your browser."
-                } else {
-                    "请在浏览器中完成授权。"
-                }
+                trs!(english, "mcp_login.complete_authorization_in_your_browser")
             } else {
-                if english {
-                    "Preparing sign-in…"
-                } else {
-                    "正在准备登录…"
-                }
+                trs!(english, "mcp_login.preparing_sign_in")
             });
             if let Some(url) = &login.url {
                 let url = url.clone();
                 body = body.child(
                     outline_button("mcp-reopen-oauth", p)
-                        .child(if english {
-                            "Reopen authorization page"
-                        } else {
-                            "重新打开授权页"
-                        })
+                        .child(trs!(english, "mcp_login.reopen_authorization_page"))
                         .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
                 );
             }
         } else {
             body = body.child(
                 outline_button("mcp-start-oauth", p)
-                    .child(if english {
-                        "Open authorization page"
-                    } else {
-                        "打开授权页"
-                    })
+                    .child(trs!(english, "mcp_login.open_authorization_page"))
                     .on_click(cx.listener(|this, _, _, cx| this.start_mcp_login(cx))),
             );
         }
         body.child(
             outline_button("mcp-cancel-oauth", p)
-                .child(if english { "Cancel" } else { "取消" })
+                .child(trs!(english, "mcp_login.cancel"))
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Some(s) = this.settings.as_mut() {
                         s.mcp.login = None;

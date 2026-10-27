@@ -99,6 +99,7 @@ pnpm dev
 | `pnpm native:stage` | Copy native GUI/server binaries into a platform/architecture staging directory with SHA-256 manifest |
 | `pnpm native:bundle` | Stage a runnable native bundle with built-in skills and the pinned OfficeCLI resources |
 | `pnpm native:verify -- --bundle DIR` | Verify native bundle resources and binaries after staging or signing |
+| `cargo dev` | Build the native server and GUI, replace an idle changed server, and launch the app (from the repository root or `native/`) |
 
 To preview the renderer in a browser:
 

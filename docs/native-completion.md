@@ -717,3 +717,15 @@ GPUI 不带 i18n，此前文案靠手写 `if english { … } else { … }`，漏
 - 其余 `if english { … }` 尚未迁移；后续按模块逐批搬进 `app.yml`，每批保持中文逐字不变。
 
 验证：`fv-gui` 92 项单测、all-targets 严格 Clippy 通过；仅代码与自动化验证，没有 computer use。
+
+## 第四十九批：界面文案全部迁入 locale 文件
+
+`fv-gui` 里约 610 处 `if english { … } else { … }` 全部迁入 `crates/fv-gui/locales/<模块>.yml`，每个模块一个文件，键为 `<模块>.<英文前几个词>`，同一模块内相同的中英文对复用一个键。
+
+- 调用点：无变量的用 `trs!(english, "模块.键")`（返回 `&'static str`，每个（键，语言）只泄漏一次，键集合编译期固定）；带变量的用 `tr!(english, "模块.键", name = value)`（返回 `String`，yml 里写 `%{name}`）。两个宏在 `workspace/mod.rs` 顶部、子模块声明之前，所以子模块可直接用。位置参数 `{}` 在迁移时改成 `%{arg1}`、`%{arg2}`。
+- 思考强度标签统一为 `composer::thinking_label_in(level, english)`；两个 `|zh, en|` 闭包改为只传键。
+- 个性化页把已存的中文状态翻译成英文的那段逻辑保留（`if english` 只剩这一处），其中的文案同样走 locale 文件。
+- 测试 `locale_file_tests` 现在读全部 yml：键不重复、每个键 zh/en 都非空、两种语言的占位符一致，并扫描源码里所有 `tr!`/`trs!`/`text::tr` 的键确认都存在（缺键时 `t!` 会直接显示键名）。迁移过程中它抓到了两处重复定义。
+- 仍在 `workspace/mod.rs` 里的 `text` 常量、`presentation.rs` 的 `label(中, 英)` 辅助、`fixture.rs` 的示例数据不属于 `if english`，未动。
+
+验证：`fv-gui` 95 项单测、all-targets 严格 Clippy 通过；仅代码与自动化验证，没有真实窗口里的视觉验证。

@@ -50,8 +50,9 @@
   Main 里」「保持唤醒」「定时任务需要应用开着」的问题：它们都属于 server，不属于窗口。
 - GUI 启动时由 `fv-daemon` 连接已有的 server；没有就拉起一个。server 的数据目录内有 `server.pid`、`server.lock`、
   `server.sock`（0600，父目录 0700）。GUI 升级后发现 server 版本不同，等它空闲再重启。
-  `cargo dev` 构建后比较本次服务端二进制的 SHA-256 与握手中运行进程的报告：相同直接复用；不同且没有回合运行时，停止本次数据目录下的旧 server、
-  等它退出再启动 GUI。有回合运行或旧服务端无法报告状态时保留旧进程并提示，绝不因开发启动而中断会话。直接运行 GUI 仍复用常驻 server。
+  `cargo dev`（仓库根和 `native/` 下都能运行：两处各有一份 `.cargo/config.toml` 别名，而 xtask 按自己所在的 crate 定位工作区、
+  用 `--manifest-path` 调 cargo，所以调用目录不参与解析）构建后比较本次服务端二进制的 SHA-256 与握手中运行进程的报告：相同直接复用；
+  不同且没有回合运行时，停止本次数据目录下的旧 server、等它退出再启动 GUI。有回合运行或旧服务端无法报告状态时保留旧进程并提示，绝不因开发启动而中断会话。直接运行 GUI 仍复用常驻 server。
 - 「退出 FastVibe」= 停 server（有运行中的任务先确认）；只关窗口不停 server。是否在没有窗口时继续常驻是一个设置项
   （默认：有定时任务或远程访问开着时常驻）。
 - **同一个二进制也是 SSH 主机上的 Agent**：远端跑 `fastvibe-server --listen stdio`，经 `ssh` 的 stdio 直接连，

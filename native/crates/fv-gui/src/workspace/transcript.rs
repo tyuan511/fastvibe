@@ -1123,11 +1123,7 @@ impl Workspace {
                     div()
                         .flex_none()
                         .text_color(p.c(Token::Destructive))
-                        .child(if english {
-                            "Execution failed"
-                        } else {
-                            "执行失败"
-                        }),
+                        .child(trs!(english, "transcript.execution_failed")),
                 )
             })
     }
@@ -1239,46 +1235,26 @@ impl Workspace {
                 .unwrap_or("")
             {
                 "completed" => {
-                    if english {
-                        "Completed"
-                    } else {
-                        "已完成"
-                    }
+                    trs!(english, "transcript.completed")
                 }
                 "failed" => {
-                    if english {
-                        "Failed"
-                    } else {
-                        "失败"
-                    }
+                    trs!(english, "transcript.failed")
                 }
                 "interrupted" => {
-                    if english {
-                        "Interrupted"
-                    } else {
-                        "已中断"
-                    }
+                    trs!(english, "transcript.interrupted")
                 }
                 "searching" => {
-                    if english {
-                        "Searching"
-                    } else {
-                        "搜索中"
-                    }
+                    trs!(english, "transcript.searching")
                 }
                 _ => {
-                    if english {
-                        "Preparing search"
-                    } else {
-                        "准备搜索"
-                    }
+                    trs!(english, "transcript.preparing_search")
                 }
             };
-            col = col.child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                format!("Status: {status}")
-            } else {
-                format!("状态：{status}")
-            }));
+            col = col.child(div().text_size(px(TEXT_XS)).muted(p).child(tr!(
+                english,
+                "transcript.status_status",
+                status = status
+            )));
             if let Some(sources) = arguments.get("sources").and_then(|v| v.as_array()) {
                 for (index, source) in sources.iter().enumerate() {
                     let Some(url) = source

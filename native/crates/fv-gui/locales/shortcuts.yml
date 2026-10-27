@@ -1,0 +1,26 @@
+_version: 2
+
+shortcuts.send_on_enter:
+  zh: "回车发送"
+  en: "Send on Enter"
+shortcuts.enter_sends_and_shift_enter:
+  zh: "开启后 Enter 发送、Shift+Enter 换行；关闭后 Enter 换行，使用发送快捷键。"
+  en: "Enter sends and Shift+Enter inserts a newline; when off, Enter inserts a newline and the send shortcut is used."
+shortcuts.unassigned:
+  zh: "未设置"
+  en: "Unassigned"
+shortcuts.restore_default:
+  zh: "恢复默认"
+  en: "Restore default"
+shortcuts.press_a_key_combination:
+  zh: "请按组合键…"
+  en: "Press a key combination…"
+shortcuts.no_shortcuts_found:
+  zh: "未找到快捷键"
+  en: "No shortcuts found"
+shortcuts.esc_cancels_backspace_or_delete:
+  zh: "Esc 取消；Backspace 或 Delete 清除。设置重复组合键会取消原操作的绑定。"
+  en: "Esc cancels; Backspace or Delete clears. Assigning a duplicate chord unbinds the previous action."
+shortcuts.restore_all_default_shortcuts:
+  zh: "恢复全部默认快捷键"
+  en: "Restore all default shortcuts"

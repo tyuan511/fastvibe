@@ -222,11 +222,7 @@ impl Editor {
         let prompt = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(4, 12)
-                .placeholder(if english {
-                    "What should each run accomplish?"
-                } else {
-                    "每次运行需要完成什么"
-                })
+                .placeholder(trs!(english, "schedules.what_should_each_run_accomplish"))
         });
         if let Some(task) = &task {
             prompt.update(cx, |s, cx| {
@@ -238,7 +234,7 @@ impl Editor {
             id: task.as_ref().map(|t| t.id.clone()),
             version: task.as_ref().map(|t| t.version),
             name: input(
-                if english { "Task name" } else { "任务名称" },
+                trs!(english, "schedules.task_name"),
                 task.as_ref()
                     .map(|t| t.definition.name.as_str())
                     .unwrap_or(""),
@@ -249,21 +245,13 @@ impl Editor {
             day: input("YYYY-MM-DD", &day, window, cx),
             time: input("HH:MM", &time, window, cx),
             zone: input(
-                if english {
-                    "Time zone, e.g. Asia/Shanghai"
-                } else {
-                    "时区，如 Asia/Shanghai"
-                },
+                trs!(english, "schedules.time_zone_e_g_asia"),
                 &tz,
                 window,
                 cx,
             ),
             seconds: input(
-                if english {
-                    "Maximum run time (seconds)"
-                } else {
-                    "最长运行时间（秒）"
-                },
+                trs!(english, "schedules.maximum_run_time_seconds"),
                 &task
                     .as_ref()
                     .map(|t| t.definition.max_run_seconds)
@@ -657,27 +645,19 @@ impl Workspace {
                 let label = active
                     .map(|r| {
                         if r.stopping {
-                            if english {
-                                "Stopping…"
-                            } else {
-                                "正在停止…"
-                            }
+                            trs!(english, "schedules.stopping")
                         } else if r.waiting_for_input {
-                            if english {
-                                "Waiting for input"
-                            } else {
-                                "等待输入"
-                            }
+                            trs!(english, "schedules.waiting_for_input")
                         } else {
-                            if english { "Running" } else { "执行中" }
+                            trs!(english, "schedules.running")
                         }
                     })
                     .unwrap_or(if queued {
-                        if english { "Queued" } else { "排队中" }
+                        trs!(english, "schedules.queued")
                     } else if task.enabled {
-                        if english { "Enabled" } else { "已启用" }
+                        trs!(english, "schedules.enabled")
                     } else {
-                        if english { "Disabled" } else { "未启用" }
+                        trs!(english, "schedules.disabled")
                     });
                 let busy = s.busy.contains(&task.id);
                 let mut actions = div()
@@ -687,14 +667,14 @@ impl Workspace {
                     .child(
                         outline_button(SharedString::from(format!("schedule-run-{}", task.id)), p)
                             .when(busy, |d| d.opacity(0.5))
-                            .child(if english { "Run now" } else { "立即运行" })
+                            .child(trs!(english, "schedules.run_now"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.schedule_action(run.clone(), Action::Run, cx)
                             })),
                     )
                     .child(
                         outline_button(SharedString::from(format!("schedule-edit-{}", task.id)), p)
-                            .child(if english { "Edit" } else { "编辑" })
+                            .child(trs!(english, "schedules.edit"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.edit_schedule(Some(edit.clone()), window, cx)
                             })),
@@ -705,11 +685,9 @@ impl Workspace {
                             p,
                         )
                         .child(if task.enabled {
-                            if english { "Pause" } else { "暂停" }
-                        } else if english {
-                            "Enable"
+                            trs!(english, "schedules.pause")
                         } else {
-                            "启用"
+                            trs!(english, "schedules.enable")
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.schedule_action(toggle.clone(), Action::Toggle, cx)
@@ -718,11 +696,7 @@ impl Workspace {
                 if active.is_some() || queued {
                     actions = actions.child(
                         outline_button(SharedString::from(format!("schedule-stop-{}", task.id)), p)
-                            .child(if english {
-                                "Stop / cancel queue"
-                            } else {
-                                "停止 / 取消排队"
-                            })
+                            .child(trs!(english, "schedules.stop_cancel_queue"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.schedule_action(stop.clone(), Action::Stop, cx)
                             })),
@@ -765,24 +739,20 @@ impl Workspace {
                                     cx.notify();
                                 })),
                         )
-                        .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                            format!("Next: {}", date(task.next_run_at))
-                        } else {
-                            format!("下次：{}", date(task.next_run_at))
-                        }))
-                        .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                            format!(
-                                "Last: {} · {}",
-                                date(task.last_run_at),
-                                task.last_status.map(status).unwrap_or("Not run yet")
-                            )
-                        } else {
-                            format!(
-                                "上次：{} · {}",
-                                date(task.last_run_at),
-                                task.last_status.map(status).unwrap_or("尚未执行")
-                            )
-                        }))
+                        .child(div().text_size(px(TEXT_XS)).muted(p).child(tr!(
+                            english,
+                            "schedules.next_arg1",
+                            arg1 = date(task.next_run_at)
+                        )))
+                        .child(div().text_size(px(TEXT_XS)).muted(p).child(tr!(
+                                english,
+                                "schedules.last_run",
+                                arg1 = date(task.last_run_at),
+                                arg2 = task
+                                    .last_status
+                                    .map(status)
+                                    .unwrap_or(trs!(english, "schedules.not_run_yet"))
+                            )))
                         .child(actions),
                 );
             }
@@ -792,22 +762,70 @@ impl Workspace {
                         .w_full()
                         .py(px(40.0))
                         .muted(p)
-                        .child(if english { "No scheduled tasks yet. Create one and the background service will keep its run chats." } else { "暂无定时任务。创建后，后台服务会按计划执行并保留运行对话。" }),
+                        .child(trs!(english, "schedules.no_scheduled_tasks_yet_create")),
                 );
             }
         } else {
-            grid = grid.child(div().muted(p).child(if english {
-                "Loading schedules…"
-            } else {
-                "正在读取定时任务…"
-            }));
+            grid = grid.child(
+                div()
+                    .muted(p)
+                    .child(trs!(english, "schedules.loading_schedules")),
+            );
         }
-        let mut page=div().flex_1().min_w_0().h_full().flex().flex_col().text_size(px(TEXT_SM))
-            .child(div().h(px(64.0)).flex_none().px(px(20.0)).flex().items_center().justify_between().child(if english { "Schedules" } else { "定时任务" })
-                .child(div().flex().gap(px(8.0)).child(outline_button("schedule-back",p).child(if english { "Back to chat" } else { "返回对话" }).on_click(cx.listener(|this,_,window,cx|this.close_schedules(window,cx))))
-                    .child(outline_button("schedule-new",p).child(if english { "New task" } else { "新建任务" }).on_click(cx.listener(|this,_,window,cx|this.edit_schedule(None,window,cx))))))
-            .child(div().px(px(20.0)).pb(px(10.0)).text_size(px(TEXT_XS)).muted(p).child(if english { "The background service keeps running after the window closes. One task runs at a time; queued runs use a saved configuration snapshot." } else { "关闭窗口后仍由后台服务执行。一次运行一个任务；排队时保存配置快照，后续编辑只影响之后的执行。" }))
-            .children(s.error.as_ref().map(|e|div().px(px(20.0)).pb(px(10.0)).text_color(p.c(Token::Destructive)).child(e.clone())))
+        let mut page = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .text_size(px(TEXT_SM))
+            .child(
+                div()
+                    .h(px(64.0))
+                    .flex_none()
+                    .px(px(20.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(trs!(english, "schedules.schedules"))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.0))
+                            .child(
+                                outline_button("schedule-back", p)
+                                    .child(trs!(english, "schedules.back_to_chat"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.close_schedules(window, cx)
+                                    })),
+                            )
+                            .child(
+                                outline_button("schedule-new", p)
+                                    .child(trs!(english, "schedules.new_task"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.edit_schedule(None, window, cx)
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .px(px(20.0))
+                    .pb(px(10.0))
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(
+                        english,
+                        "schedules.the_background_service_keeps_running"
+                    )),
+            )
+            .children(s.error.as_ref().map(|e| {
+                div()
+                    .px(px(20.0))
+                    .pb(px(10.0))
+                    .text_color(p.c(Token::Destructive))
+                    .child(e.clone())
+            }))
             .child(grid);
         if let Some(focus) = &s.focus {
             page = page.track_focus(focus);
@@ -836,9 +854,12 @@ impl Workspace {
             .gap(px(12.0));
         body = body
             .child(div().child(rule_label_for(&task.definition.rule, english)))
-            .child(div().text_size(px(TEXT_XS)).muted(p).child(
-                if english { "Each run uses a separate chat. The latest 500 global runs are kept; deleting a task does not delete its run chats." } else { "每次运行使用独立对话。保留最近 500 条全局运行历史，删除任务不会删除运行对话。" },
-            ));
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "schedules.each_run_uses_a_separate")),
+            );
         if let Some(history) = &self.schedules_ui.history {
             for run in &history.runs {
                 let mut row = div()
@@ -848,36 +869,24 @@ impl Workspace {
                     .border_b_1()
                     .border_color(p.c(Token::Border))
                     .pb(px(10.0))
-                    .child(if english {
-                        format!(
-                            "{} · {} · version {}",
-                            status_for(run.status, english),
-                            if run.manual { "Manual" } else { "Scheduled" },
-                            run.task_version
-                        )
-                    } else {
-                        format!(
-                            "{} · {} · 版本 {}",
-                            status_for(run.status, english),
-                            if run.manual { "手动" } else { "计划" },
-                            run.task_version
-                        )
-                    })
-                    .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                        format!(
-                            "Scheduled {} / started {} / ended {}",
-                            date(Some(run.scheduled_at)),
-                            date(run.started_at),
-                            date(run.ended_at)
-                        )
-                    } else {
-                        format!(
-                            "计划 {} / 开始 {} / 结束 {}",
-                            date(Some(run.scheduled_at)),
-                            date(run.started_at),
-                            date(run.ended_at)
-                        )
-                    }))
+                    .child(tr!(
+                        english,
+                        "schedules.run_header",
+                        status = status_for(run.status, english),
+                        kind = if run.manual {
+                            trs!(english, "schedules.manual")
+                        } else {
+                            trs!(english, "schedules.scheduled")
+                        },
+                        version = run.task_version
+                    ))
+                    .child(div().text_size(px(TEXT_XS)).muted(p).child(tr!(
+                        english,
+                        "schedules.scheduled_arg1_started_arg2_ended",
+                        arg1 = date(Some(run.scheduled_at)),
+                        arg2 = date(run.started_at),
+                        arg3 = date(run.ended_at)
+                    )))
                     .children(run.error.as_ref().map(|e| {
                         div()
                             .text_size(px(TEXT_XS))
@@ -900,17 +909,9 @@ impl Workspace {
                             p,
                         )
                         .child(if run.waiting_for_input {
-                            if english {
-                                "View and answer"
-                            } else {
-                                "查看并回答"
-                            }
+                            trs!(english, "schedules.view_and_answer")
                         } else {
-                            if english {
-                                "Open run chat"
-                            } else {
-                                "打开运行对话"
-                            }
+                            trs!(english, "schedules.open_run_chat")
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.schedules_ui.detail = None;
@@ -921,11 +922,11 @@ impl Workspace {
                 body = body.child(row);
             }
             if history.runs.is_empty() {
-                body = body.child(div().muted(p).child(if english {
-                    "No run history"
-                } else {
-                    "暂无运行记录"
-                }));
+                body = body.child(
+                    div()
+                        .muted(p)
+                        .child(trs!(english, "schedules.no_run_history")),
+                );
             }
             let prev = history.offset.saturating_sub(30);
             let next = history.offset + 30;
@@ -942,7 +943,7 @@ impl Workspace {
                     .when(history.offset > 0, |d| {
                         d.child(
                             outline_button("schedule-history-prev", p)
-                                .child(if english { "Previous" } else { "上一页" })
+                                .child(trs!(english, "schedules.previous"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.refresh_schedule_history(prev, cx)
                                 })),
@@ -951,7 +952,7 @@ impl Workspace {
                     .when(next < history.total, |d| {
                         d.child(
                             outline_button("schedule-history-next", p)
-                                .child(if english { "Next" } else { "下一页" })
+                                .child(trs!(english, "schedules.next"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.refresh_schedule_history(next, cx)
                                 })),
@@ -959,11 +960,7 @@ impl Workspace {
                     }),
             );
         } else {
-            body = body.child(if english {
-                "Loading history…"
-            } else {
-                "正在读取历史…"
-            });
+            body = body.child(trs!(english, "schedules.loading_history"));
         }
         let remove = task.clone();
         let confirm = self
@@ -974,11 +971,7 @@ impl Workspace {
         let card = dialog_card(p, 650.0)
             .child(dialog_head(
                 &task.definition.name,
-                if english {
-                    "Run history"
-                } else {
-                    "运行历史"
-                },
+                trs!(english, "schedules.run_history"),
                 p,
             ))
             .child(body)
@@ -997,17 +990,9 @@ impl Workspace {
                     .child(
                         outline_button("schedule-delete", p)
                             .child(if confirm {
-                                if english {
-                                    "Confirm delete task (keep chats)"
-                                } else {
-                                    "确认删除任务（保留对话）"
-                                }
+                                trs!(english, "schedules.confirm_delete_task_keep_chats")
                             } else {
-                                if english {
-                                    "Delete task"
-                                } else {
-                                    "删除任务"
-                                }
+                                trs!(english, "schedules.delete_task")
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.schedule_action(remove.clone(), Action::Delete, cx)
@@ -1015,7 +1000,7 @@ impl Workspace {
                     )
                     .child(
                         outline_button("schedule-history-close", p)
-                            .child(if english { "Close" } else { "关闭" })
+                            .child(trs!(english, "schedules.close"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.schedules_ui.detail = None;
                                 cx.notify();
@@ -1057,23 +1042,15 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(10.0))
-            .child(if english { "Task name" } else { "任务名称" })
+            .child(trs!(english, "schedules.task_name"))
             .child(Input::new(&e.name))
-            .child(if english {
-                "Task prompt"
-            } else {
-                "任务内容"
-            })
-            .child(Textarea::new(&e.prompt).aria_label(if english {
-                "Task prompt"
-            } else {
-                "任务内容"
-            }));
+            .child(trs!(english, "schedules.task_prompt"))
+            .child(Textarea::new(&e.prompt).aria_label(trs!(english, "schedules.task_prompt")));
         let mut kinds = div().flex().gap(px(6.0));
         for (i, (kind, label)) in [
-            (Kind::Once, if english { "Once" } else { "单次" }),
-            (Kind::Daily, if english { "Daily" } else { "每天" }),
-            (Kind::Weekly, if english { "Weekly" } else { "每周" }),
+            (Kind::Once, trs!(english, "schedules.once")),
+            (Kind::Daily, trs!(english, "schedules.daily")),
+            (Kind::Weekly, trs!(english, "schedules.weekly")),
         ]
         .into_iter()
         .enumerate()
@@ -1090,9 +1067,7 @@ impl Workspace {
                     })),
             );
         }
-        form = form
-            .child(if english { "Run time" } else { "执行时间" })
-            .child(kinds);
+        form = form.child(trs!(english, "schedules.run_time")).child(kinds);
         if e.kind == Kind::Once {
             form = form.child(Input::new(&e.day));
         }
@@ -1132,26 +1107,12 @@ impl Workspace {
                     .find(|p| &p.path == path)
                     .map(|p| p.name.clone())
                     .unwrap_or_else(|| {
-                        if english {
-                            format!("Project unavailable: {path}")
-                        } else {
-                            format!("项目不可用：{path}")
-                        }
+                        tr!(english, "schedules.project_unavailable_path", path = path)
                     })
             })
-            .unwrap_or_else(|| {
-                if english {
-                    "Independent scratch directory".into()
-                } else {
-                    "独立临时工作目录".into()
-                }
-            });
+            .unwrap_or_else(|| trs!(english, "schedules.independent_scratch_directory").into());
         form = form
-            .child(if english {
-                "Working directory"
-            } else {
-                "工作目录"
-            })
+            .child(trs!(english, "schedules.working_directory"))
             .child(
                 outline_button("schedule-project", p)
                     .child(project_label)
@@ -1173,11 +1134,7 @@ impl Workspace {
                 .gap(px(4.0));
             for (i, (value, label)) in std::iter::once((
                 None,
-                if english {
-                    "Independent scratch directory".to_string()
-                } else {
-                    "独立临时工作目录".to_string()
-                },
+                trs!(english, "schedules.independent_scratch_directory").to_string(),
             ))
             .chain(
                 self.projects
@@ -1211,22 +1168,10 @@ impl Workspace {
                     .iter()
                     .find(|m| &m.label == id)
                     .map(|m| format!("{} / {}", m.provider_name, m.model.id))
-                    .unwrap_or_else(|| {
-                        if english {
-                            format!("Model unavailable: {id}")
-                        } else {
-                            format!("模型不可用：{id}")
-                        }
-                    })
+                    .unwrap_or_else(|| tr!(english, "schedules.model_unavailable_id", id = id))
             })
-            .unwrap_or_else(|| {
-                if english {
-                    "Use default model".into()
-                } else {
-                    "使用默认模型".into()
-                }
-            });
-        form = form.child(if english { "Model" } else { "模型" }).child(
+            .unwrap_or_else(|| trs!(english, "schedules.use_default_model").into());
+        form = form.child(trs!(english, "schedules.model")).child(
             outline_button("schedule-model", p)
                 .child(model_label)
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -1247,11 +1192,7 @@ impl Workspace {
                 .gap(px(4.0));
             for (i, (value, label)) in std::iter::once((
                 None,
-                if english {
-                    "Use default model".to_string()
-                } else {
-                    "使用默认模型".to_string()
-                },
+                trs!(english, "schedules.use_default_model").to_string(),
             ))
             .chain(self.models.iter().map(|m| {
                 (
@@ -1294,11 +1235,7 @@ impl Workspace {
                     .child(
                         value
                             .map(super::composer::thinking_label)
-                            .unwrap_or(if english {
-                                "Default thinking"
-                            } else {
-                                "默认思考强度"
-                            }),
+                            .unwrap_or(trs!(english, "schedules.default_thinking")),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(e) = &mut this.schedules_ui.editor {
@@ -1310,33 +1247,17 @@ impl Workspace {
         }
         form = form
             .child(thinking)
-            .child(if english {
-                "Maximum run time (seconds, 1–86400)"
-            } else {
-                "最长运行时间（秒，1–86400）"
-            })
+            .child(trs!(english, "schedules.maximum_run_time_seconds_1"))
             .child(Input::new(&e.seconds))
-            .child(if english {
-                "When a run is missed"
-            } else {
-                "错过执行时间时"
-            });
+            .child(trs!(english, "schedules.when_a_run_is_missed"));
         for (i, (policy, label)) in [
             (
                 MissedPolicy::RunLatest,
-                if english {
-                    "Run the latest missed task within 24 hours"
-                } else {
-                    "24 小时内补跑最近一次"
-                },
+                trs!(english, "schedules.run_the_latest_missed_task"),
             ),
             (
                 MissedPolicy::Skip,
-                if english {
-                    "Skip when more than 1 minute late"
-                } else {
-                    "延迟超过 1 分钟则跳过"
-                },
+                trs!(english, "schedules.skip_when_more_than_1"),
             ),
         ]
         .into_iter()
@@ -1354,9 +1275,30 @@ impl Workspace {
                     })),
             );
         }
-        form=form.child(div().flex().items_center().justify_between().child(if english { "Enable schedule" } else { "启用计划" })
-            .child(switch("schedule-enabled".into(),e.enabled,p).on_click(cx.listener(|this,_,_,cx|{if let Some(e)=&mut this.schedules_ui.editor{e.enabled = !e.enabled;}cx.notify();}))))
-            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english { "Pausing cancels queued runs but does not stop a running task. Each run uses a separate chat; edits after queuing apply to later runs." } else { "暂停会取消排队，不会停止正在运行的任务。每次运行使用独立对话；排队之后的编辑只影响后续运行。" }));
+        form = form
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(trs!(english, "schedules.enable_schedule"))
+                    .child(
+                        switch("schedule-enabled".into(), e.enabled, p).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                if let Some(e) = &mut this.schedules_ui.editor {
+                                    e.enabled = !e.enabled;
+                                }
+                                cx.notify();
+                            },
+                        )),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "schedules.pausing_cancels_queued_runs_but")),
+            );
         if let Some(error) = &self.schedules_ui.error {
             form = form.child(
                 div()
@@ -1378,18 +1320,14 @@ impl Workspace {
         {
             let latest = latest.clone();
             form = form
-                .child(div().muted(p).child(if english {
-                    "This task changed elsewhere. Your draft was kept; reload to replace it."
-                } else {
-                    "任务已在其他位置更新。当前草稿已保留，重新载入会替换草稿。"
-                }))
+                .child(
+                    div()
+                        .muted(p)
+                        .child(trs!(english, "schedules.this_task_changed_elsewhere_your")),
+                )
                 .child(
                     outline_button("schedule-reload", p)
-                        .child(if english {
-                            "Reload latest configuration"
-                        } else {
-                            "重新载入最新配置"
-                        })
+                        .child(trs!(english, "schedules.reload_latest_configuration"))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.edit_schedule(Some(latest.clone()), window, cx)
                         })),
@@ -1400,23 +1338,11 @@ impl Workspace {
             dialog_card(p, 650.0)
                 .child(dialog_head(
                     if e.id.is_some() {
-                        if english {
-                            "Edit scheduled task"
-                        } else {
-                            "编辑定时任务"
-                        }
+                        trs!(english, "schedules.edit_scheduled_task")
                     } else {
-                        if english {
-                            "New scheduled task"
-                        } else {
-                            "新建定时任务"
-                        }
+                        trs!(english, "schedules.new_scheduled_task")
                     },
-                    if english {
-                        "Run on schedule through the local background service"
-                    } else {
-                        "由本机后台服务按时执行"
-                    },
+                    trs!(english, "schedules.run_on_schedule_through_the"),
                     p,
                 ))
                 .child(form)

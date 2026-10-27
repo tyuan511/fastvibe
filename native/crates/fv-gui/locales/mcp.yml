@@ -1,0 +1,92 @@
+_version: 2
+
+mcp.could_not_read_mcp_e:
+  zh: "无法读取 MCP：%{e}"
+  en: "Could not read MCP: %{e}"
+mcp.configuration_updated:
+  zh: "配置已更新"
+  en: "Configuration updated"
+mcp.add_server:
+  zh: "添加服务器"
+  en: "Add server"
+mcp.connect_local_or_remote_mcp:
+  zh: "连接本地或远程 MCP 服务器，为对话添加工具和资源。"
+  en: "Connect local or remote MCP servers to add tools and resources to chats."
+mcp.refresh_status:
+  zh: "刷新状态"
+  en: "Refresh status"
+mcp.no_mcp_servers_yet_add:
+  zh: "还没有 MCP 服务器，点击添加服务器或导入配置。"
+  en: "No MCP servers yet. Add a server or import a configuration."
+mcp.disabled:
+  zh: "已停用"
+  en: "Disabled"
+mcp.connected:
+  zh: "已连接"
+  en: "Connected"
+mcp.connecting:
+  zh: "正在连接…"
+  en: "Connecting…"
+mcp.disconnected:
+  zh: "未连接"
+  en: "Disconnected"
+mcp.edit:
+  zh: "编辑"
+  en: "Edit"
+mcp.disable:
+  zh: "停用"
+  en: "Disable"
+mcp.enable:
+  zh: "启用"
+  en: "Enable"
+mcp.reconnect:
+  zh: "重新连接"
+  en: "Reconnect"
+mcp.resources:
+  zh: "资源"
+  en: "Resources"
+mcp.diagnostics:
+  zh: "诊断"
+  en: "Diagnostics"
+mcp.delete:
+  zh: "删除"
+  en: "Delete"
+mcp.reauthorize_oauth:
+  zh: "重新登录 OAuth"
+  en: "Reauthorize OAuth"
+mcp.oauth_login:
+  zh: "OAuth 登录"
+  en: "OAuth login"
+mcp.log_out:
+  zh: "退出登录"
+  en: "Log out"
+mcp.loading_mcp_configuration:
+  zh: "正在读取 MCP 配置…"
+  en: "Loading MCP configuration…"
+mcp.delete_this_mcp_server_configuration:
+  zh: "删除这个 MCP 服务器配置？"
+  en: "Delete this MCP server configuration?"
+mcp.confirm_delete:
+  zh: "确认删除"
+  en: "Confirm delete"
+mcp.cancel:
+  zh: "取消"
+  en: "Cancel"
+mcp.add_or_edit_configuration:
+  zh: "添加或编辑配置"
+  en: "Add or edit configuration"
+mcp.edit_current_configuration:
+  zh: "编辑现有配置"
+  en: "Edit current configuration"
+mcp.import_or_update:
+  zh: "导入或更新"
+  en: "Import or update"
+mcp.saving:
+  zh: "正在保存…"
+  en: "Saving…"
+mcp.save_full_configuration:
+  zh: "保存完整配置"
+  en: "Save full configuration"
+mcp.arg1_tools_arg2:
+  zh: "%{arg1} 个工具 · %{arg2}"
+  en: "%{arg1} tools · %{arg2}"

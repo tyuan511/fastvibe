@@ -1,0 +1,98 @@
+_version: 2
+
+model_detail.label_enter_a_valid_positive:
+  zh: "%{label}需要填写有效的正整数"
+  en: "%{label}: enter a valid positive integer"
+model_detail.context_window:
+  zh: "上下文窗口"
+  en: "Context window"
+model_detail.max_output:
+  zh: "最大输出"
+  en: "Max output"
+model_detail.select_at_least_one_thinking:
+  zh: "请至少选择一种思考强度"
+  en: "Select at least one thinking level"
+model_detail.display_name:
+  zh: "显示名称"
+  en: "Display name"
+model_detail.model_id:
+  zh: "模型 ID"
+  en: "Model ID"
+model_detail.inherit_provider_protocol:
+  zh: "继承供应商协议"
+  en: "Inherit provider protocol"
+model_detail.protocol:
+  zh: "协议"
+  en: "Protocol"
+model_detail.context_window_tokens:
+  zh: "上下文窗口（Tokens）"
+  en: "Context window (tokens)"
+model_detail.max_output_tokens:
+  zh: "最大输出（Tokens）"
+  en: "Max output (tokens)"
+model_detail.hosted_web_search:
+  zh: "托管网页搜索"
+  en: "Hosted web search"
+model_detail.requires_a_custom_endpoint_and:
+  zh: "需自定义端点和模型支持；仅 Responses 接口生效，其他格式不会发送搜索参数。"
+  en: "Requires a custom endpoint and model support; only Responses sends the search parameter."
+model_detail.reasoning:
+  zh: "推理"
+  en: "Reasoning"
+model_detail.images:
+  zh: "图片"
+  en: "Images"
+model_detail.video:
+  zh: "视频"
+  en: "Video"
+model_detail.files:
+  zh: "文件"
+  en: "Files"
+model_detail.capabilities_text_always_supported:
+  zh: "能力（始终支持文本）"
+  en: "Capabilities (text always supported)"
+model_detail.thinking_effort:
+  zh: "思考强度"
+  en: "Thinking effort"
+model_detail.base_price:
+  zh: "基础价格"
+  en: "Base price"
+model_detail.unknown:
+  zh: "未知"
+  en: "Unknown"
+model_detail.reference_price_usd_million_tokens:
+  zh: "参考价格（USD / 百万 Tokens）"
+  en: "Reference price (USD / million tokens)"
+model_detail.saved_model_parameters_are_kept:
+  zh: "保存的模型参数会保留，模型同步不会覆盖。参考价格始终跟随模型目录。"
+  en: "Saved model parameters are kept and are not overwritten by sync. Reference prices follow the catalog."
+model_detail.loading_model_details:
+  zh: "正在读取模型详情…"
+  en: "Loading model details…"
+model_detail.unable_to_load_model_details:
+  zh: "未能读取模型详情"
+  en: "Unable to load model details"
+model_detail.this_model_changed_elsewhere_the:
+  zh: "模型已在其他位置修改；本地草稿已保留，请先重新载入。"
+  en: "This model changed elsewhere; the local draft was kept. Reload before saving."
+model_detail.reload:
+  zh: "重新载入"
+  en: "Reload"
+model_detail.restore_catalog_values:
+  zh: "恢复目录参数"
+  en: "Restore catalog values"
+model_detail.model_details:
+  zh: "模型详情"
+  en: "Model details"
+model_detail.adjust_this_model_s_parameters:
+  zh: "调整这个模型的参数和能力。"
+  en: "Adjust this model's parameters and capabilities."
+model_detail.saving:
+  zh: "正在保存…"
+  en: "Saving…"
+model_detail.save:
+  zh: "保存"
+  en: "Save"
+model_detail.over_arg1_tokens:
+  zh: "超过 %{arg1} Tokens"
+  en: "Over %{arg1} tokens"

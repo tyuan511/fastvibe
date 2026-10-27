@@ -1,0 +1,188 @@
+_version: 2
+
+schedules.what_should_each_run_accomplish:
+  zh: "每次运行需要完成什么"
+  en: "What should each run accomplish?"
+schedules.task_name:
+  zh: "任务名称"
+  en: "Task name"
+schedules.time_zone_e_g_asia:
+  zh: "时区，如 Asia/Shanghai"
+  en: "Time zone, e.g. Asia/Shanghai"
+schedules.maximum_run_time_seconds:
+  zh: "最长运行时间（秒）"
+  en: "Maximum run time (seconds)"
+schedules.stopping:
+  zh: "正在停止…"
+  en: "Stopping…"
+schedules.waiting_for_input:
+  zh: "等待输入"
+  en: "Waiting for input"
+schedules.running:
+  zh: "执行中"
+  en: "Running"
+schedules.queued:
+  zh: "排队中"
+  en: "Queued"
+schedules.enabled:
+  zh: "已启用"
+  en: "Enabled"
+schedules.disabled:
+  zh: "未启用"
+  en: "Disabled"
+schedules.run_now:
+  zh: "立即运行"
+  en: "Run now"
+schedules.edit:
+  zh: "编辑"
+  en: "Edit"
+schedules.pause:
+  zh: "暂停"
+  en: "Pause"
+schedules.enable:
+  zh: "启用"
+  en: "Enable"
+schedules.stop_cancel_queue:
+  zh: "停止 / 取消排队"
+  en: "Stop / cancel queue"
+schedules.no_scheduled_tasks_yet_create:
+  zh: "暂无定时任务。创建后，后台服务会按计划执行并保留运行对话。"
+  en: "No scheduled tasks yet. Create one and the background service will keep its run chats."
+schedules.loading_schedules:
+  zh: "正在读取定时任务…"
+  en: "Loading schedules…"
+schedules.schedules:
+  zh: "定时任务"
+  en: "Schedules"
+schedules.back_to_chat:
+  zh: "返回对话"
+  en: "Back to chat"
+schedules.new_task:
+  zh: "新建任务"
+  en: "New task"
+schedules.the_background_service_keeps_running:
+  zh: "关闭窗口后仍由后台服务执行。一次运行一个任务；排队时保存配置快照，后续编辑只影响之后的执行。"
+  en: "The background service keeps running after the window closes. One task runs at a time; queued runs use a saved configuration snapshot."
+schedules.each_run_uses_a_separate:
+  zh: "每次运行使用独立对话。保留最近 500 条全局运行历史，删除任务不会删除运行对话。"
+  en: "Each run uses a separate chat. The latest 500 global runs are kept; deleting a task does not delete its run chats."
+schedules.view_and_answer:
+  zh: "查看并回答"
+  en: "View and answer"
+schedules.open_run_chat:
+  zh: "打开运行对话"
+  en: "Open run chat"
+schedules.no_run_history:
+  zh: "暂无运行记录"
+  en: "No run history"
+schedules.previous:
+  zh: "上一页"
+  en: "Previous"
+schedules.next:
+  zh: "下一页"
+  en: "Next"
+schedules.loading_history:
+  zh: "正在读取历史…"
+  en: "Loading history…"
+schedules.run_history:
+  zh: "运行历史"
+  en: "Run history"
+schedules.confirm_delete_task_keep_chats:
+  zh: "确认删除任务（保留对话）"
+  en: "Confirm delete task (keep chats)"
+schedules.delete_task:
+  zh: "删除任务"
+  en: "Delete task"
+schedules.close:
+  zh: "关闭"
+  en: "Close"
+schedules.task_prompt:
+  zh: "任务内容"
+  en: "Task prompt"
+schedules.once:
+  zh: "单次"
+  en: "Once"
+schedules.daily:
+  zh: "每天"
+  en: "Daily"
+schedules.weekly:
+  zh: "每周"
+  en: "Weekly"
+schedules.run_time:
+  zh: "执行时间"
+  en: "Run time"
+schedules.project_unavailable_path:
+  zh: "项目不可用：%{path}"
+  en: "Project unavailable: %{path}"
+schedules.independent_scratch_directory:
+  zh: "独立临时工作目录"
+  en: "Independent scratch directory"
+schedules.working_directory:
+  zh: "工作目录"
+  en: "Working directory"
+schedules.model_unavailable_id:
+  zh: "模型不可用：%{id}"
+  en: "Model unavailable: %{id}"
+schedules.use_default_model:
+  zh: "使用默认模型"
+  en: "Use default model"
+schedules.model:
+  zh: "模型"
+  en: "Model"
+schedules.default_thinking:
+  zh: "默认思考强度"
+  en: "Default thinking"
+schedules.maximum_run_time_seconds_1:
+  zh: "最长运行时间（秒，1–86400）"
+  en: "Maximum run time (seconds, 1–86400)"
+schedules.when_a_run_is_missed:
+  zh: "错过执行时间时"
+  en: "When a run is missed"
+schedules.run_the_latest_missed_task:
+  zh: "24 小时内补跑最近一次"
+  en: "Run the latest missed task within 24 hours"
+schedules.skip_when_more_than_1:
+  zh: "延迟超过 1 分钟则跳过"
+  en: "Skip when more than 1 minute late"
+schedules.enable_schedule:
+  zh: "启用计划"
+  en: "Enable schedule"
+schedules.pausing_cancels_queued_runs_but:
+  zh: "暂停会取消排队，不会停止正在运行的任务。每次运行使用独立对话；排队之后的编辑只影响后续运行。"
+  en: "Pausing cancels queued runs but does not stop a running task. Each run uses a separate chat; edits after queuing apply to later runs."
+schedules.this_task_changed_elsewhere_your:
+  zh: "任务已在其他位置更新。当前草稿已保留，重新载入会替换草稿。"
+  en: "This task changed elsewhere. Your draft was kept; reload to replace it."
+schedules.reload_latest_configuration:
+  zh: "重新载入最新配置"
+  en: "Reload latest configuration"
+schedules.edit_scheduled_task:
+  zh: "编辑定时任务"
+  en: "Edit scheduled task"
+schedules.new_scheduled_task:
+  zh: "新建定时任务"
+  en: "New scheduled task"
+schedules.run_on_schedule_through_the:
+  zh: "由本机后台服务按时执行"
+  en: "Run on schedule through the local background service"
+schedules.next_arg1:
+  zh: "下次：%{arg1}"
+  en: "Next: %{arg1}"
+schedules.scheduled_arg1_started_arg2_ended:
+  zh: "计划 %{arg1} / 开始 %{arg2} / 结束 %{arg3}"
+  en: "Scheduled %{arg1} / started %{arg2} / ended %{arg3}"
+schedules.last_run:
+  zh: "上次：%{arg1} · %{arg2}"
+  en: "Last: %{arg1} · %{arg2}"
+schedules.not_run_yet:
+  zh: "尚未执行"
+  en: "Not run yet"
+schedules.run_header:
+  zh: "%{status} · %{kind} · 版本 %{version}"
+  en: "%{status} · %{kind} · version %{version}"
+schedules.manual:
+  zh: "手动"
+  en: "Manual"
+schedules.scheduled:
+  zh: "计划"
+  en: "Scheduled"

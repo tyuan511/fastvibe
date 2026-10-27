@@ -28,6 +28,18 @@ pub fn thinking_label(level: ThinkingLevel) -> &'static str {
     }
 }
 
+/// [`thinking_label`] in the interface language.
+pub fn thinking_label_in(level: ThinkingLevel, english: bool) -> &'static str {
+    match level {
+        ThinkingLevel::Minimal => trs!(english, "composer.thinking_minimal"),
+        ThinkingLevel::Low => trs!(english, "composer.thinking_low"),
+        ThinkingLevel::Medium => trs!(english, "composer.thinking_medium"),
+        ThinkingLevel::High => trs!(english, "composer.thinking_high"),
+        ThinkingLevel::Xhigh => trs!(english, "composer.thinking_xhigh"),
+        ThinkingLevel::Max => trs!(english, "composer.thinking_max"),
+    }
+}
+
 impl Workspace {
     /// The `Tab` chip that leads the guessed placeholder.
     fn suggestion_hint(&self) -> Div {
@@ -92,11 +104,7 @@ impl Workspace {
         let thinking_text = self
             .current_thinking()
             .map(thinking_label)
-            .unwrap_or(if english {
-                "Follow default"
-            } else {
-                "跟随默认"
-            });
+            .unwrap_or(trs!(english, "composer.follow_default"));
 
         // How full the model's window is: a ring that warms up as it nears the limit.
         let usage = self
@@ -157,11 +165,11 @@ impl Workspace {
             .cursor_pointer()
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(if stops {
-                    if english { "Stop" } else { "停止" }
+                    trs!(english, "composer.stop")
                 } else if running {
-                    if english { "Queue" } else { "加入队列" }
+                    trs!(english, "composer.queue")
                 } else {
-                    if english { "Send" } else { "发送" }
+                    trs!(english, "composer.send")
                 })
                 .build(window, cx)
             })
@@ -665,26 +673,14 @@ impl Workspace {
             })
             .tooltip(move |window, cx| {
                 Tooltip::new(if busy {
-                    if english {
-                        "Cannot compact while the chat is running"
-                    } else {
-                        "会话进行中，无法压缩"
-                    }
+                    trs!(english, "composer.cannot_compact_while_the_chat")
                 } else {
-                    if english {
-                        "Compact context"
-                    } else {
-                        "压缩上下文"
-                    }
+                    trs!(english, "composer.compact_context")
                 })
                 .build(window, cx)
             })
             .child(icon("scissor", 14.0, p.c(Token::Foreground)))
-            .child(if english {
-                "Compact context"
-            } else {
-                "压缩上下文"
-            })
+            .child(trs!(english, "composer.compact_context"))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if can_compact {
                     this.compact(cx);
@@ -712,11 +708,11 @@ impl Workspace {
                             .items_center()
                             .justify_between()
                             .text_size(px(TEXT_SM))
-                            .child(div().font_weight(FontWeight::MEDIUM).child(if english {
-                                "Context window"
-                            } else {
-                                "上下文窗口"
-                            }))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(trs!(english, "composer.context_window")),
+                            )
                             .child(
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
@@ -839,13 +835,7 @@ impl Workspace {
         let hover = p.c(Token::Muted);
         let label = match &self.draft_project {
             Some(path) => self.project_label(path),
-            None => {
-                if english {
-                    "Choose project".to_string()
-                } else {
-                    "选择项目".to_string()
-                }
-            }
+            None => trs!(english, "composer.choose_project").to_string(),
         };
         let projects: Vec<String> = self.projects.iter().map(|p| p.path.clone()).collect();
         let menu = self.project_menu.then(|| {
@@ -865,11 +855,13 @@ impl Workspace {
                 .flex_col()
                 .text_size(px(TEXT_SM));
             if projects.is_empty() {
-                list = list.child(div().px(px(8.0)).py(px(6.0)).muted(p).child(if english {
-                    "No matching projects"
-                } else {
-                    "没有匹配的项目"
-                }));
+                list = list.child(
+                    div()
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .muted(p)
+                        .child(trs!(english, "composer.no_matching_projects")),
+                );
             }
             for project in &projects {
                 let chosen = Some(project.clone());

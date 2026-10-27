@@ -222,7 +222,7 @@ impl Workspace {
                         nav(
                             "tasks",
                             "clock01",
-                            SharedString::from(if english { "Schedules" } else { text::TASKS }),
+                            SharedString::from(trs!(english, "sidebar.schedules")),
                         )
                         .on_click(
                             cx.listener(|this, _, window, cx| this.open_schedules(window, cx)),
@@ -302,12 +302,12 @@ impl Workspace {
                         .text_size(px(TEXT_XS))
                         .font_weight(FontWeight::MEDIUM)
                         .muted(p)
-                        .child(if english { "Pinned" } else { "置顶" }),
+                        .child(trs!(english, "sidebar.pinned")),
                 )
                 .child(list);
         }
         body = body.child(section_label(
-            if english { "Projects" } else { text::PROJECTS },
+            trs!(english, "sidebar.projects"),
             pinned.is_empty(),
             icon_button_xs("new-project", "add01", p).on_click(
                 cx.listener(|this, _, window, cx| this.open_project_dialog(None, window, cx)),
@@ -321,11 +321,7 @@ impl Workspace {
                     .py(px(8.0))
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(if english {
-                        "No projects"
-                    } else {
-                        text::NO_PROJECTS
-                    }),
+                    .child(trs!(english, "sidebar.no_projects")),
             );
         } else {
             // Projects are 2px apart; a project's chats follow its row directly.
@@ -349,11 +345,7 @@ impl Workspace {
                                 .py(px(6.0))
                                 .text_size(px(TEXT_XS))
                                 .muted(p)
-                                .child(if english {
-                                    "No chats"
-                                } else {
-                                    text::EMPTY_CHATS
-                                }),
+                                .child(trs!(english, "sidebar.no_chats")),
                         );
                     }
                     if threads.len() > 5 {
@@ -367,17 +359,9 @@ impl Workspace {
                                 .text_size(px(TEXT_XS))
                                 .muted(p)
                                 .child(if expanded {
-                                    if english {
-                                        "Collapse".to_string()
-                                    } else {
-                                        "收起".to_string()
-                                    }
+                                    trs!(english, "sidebar.collapse").to_string()
                                 } else {
-                                    if english {
-                                        format!("Show {} more", threads.len() - 5)
-                                    } else {
-                                        format!("展开更多（{}）", threads.len() - 5)
-                                    }
+                                    tr!(english, "sidebar.show_arg1_more", arg1 = threads.len() - 5)
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     let mut paths =
@@ -404,7 +388,7 @@ impl Workspace {
             body = body.child(list);
         }
         body = body.child(section_label(
-            if english { "Chats" } else { text::CHATS },
+            trs!(english, "sidebar.chats"),
             false,
             icon_button_xs("new-session", "pencil-edit02", p)
                 .on_click(cx.listener(|this, _, _, cx| this.new_chat(None, cx))),
@@ -417,11 +401,7 @@ impl Workspace {
                     .py(px(8.0))
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(if english {
-                        "No chats"
-                    } else {
-                        text::EMPTY_CHATS
-                    }),
+                    .child(trs!(english, "sidebar.no_chats")),
             );
         } else {
             let mut list = div().flex().flex_col().gap(px(2.0));
@@ -599,9 +579,9 @@ impl Workspace {
                 icon_button_xs(SharedString::from(format!("pin-{}", t.id)), "pin", p)
                     .tooltip(move |window, cx| {
                         Tooltip::new(if pinned {
-                            if english { "Unpin" } else { "取消置顶" }
+                            trs!(english, "sidebar.unpin")
                         } else {
-                            if english { "Pin" } else { "置顶" }
+                            trs!(english, "sidebar.pin")
                         })
                         .build(window, cx)
                     })
@@ -755,17 +735,11 @@ impl Workspace {
                     .rounded_full()
                     .cursor_pointer()
                     .tooltip(move |window, cx| {
-                        Tooltip::new(if english { "Account" } else { "账号" }).build(window, cx)
+                        Tooltip::new(trs!(english, "sidebar.account")).build(window, cx)
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.sidebar_notice = Some(
-                            if english {
-                                "FastVibe account sign-in is not available in this version."
-                            } else {
-                                "此版本暂不支持 FastVibe 账号登录。"
-                            }
-                            .into(),
-                        );
+                        this.sidebar_notice =
+                            Some(trs!(english, "sidebar.fastvibe_account_sign_in_is").into());
                         cx.notify();
                     }))
                     .child(icon("user02", 14.0, p.c(Token::MutedForeground))),

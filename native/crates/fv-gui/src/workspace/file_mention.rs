@@ -348,11 +348,7 @@ impl Workspace {
                     .py(px(8.0))
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(if english {
-                        "Searching…"
-                    } else {
-                        "正在查找…"
-                    }),
+                    .child(trs!(english, "file_mention.searching")),
             );
         } else if state.hits.is_empty() {
             rows = rows.child(
@@ -361,11 +357,7 @@ impl Workspace {
                     .py(px(8.0))
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(if english {
-                        "No matching files"
-                    } else {
-                        "没有匹配的文件"
-                    }),
+                    .child(trs!(english, "file_mention.no_matching_files")),
             );
         }
         for (index, hit) in state.hits.iter().enumerate() {

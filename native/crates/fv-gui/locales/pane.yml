@@ -1,0 +1,50 @@
+_version: 2
+
+pane.files:
+  zh: "文件"
+  en: "Files"
+pane.expand_sidebar:
+  zh: "展开侧边栏"
+  en: "Expand sidebar"
+pane.new_chat:
+  zh: "新对话"
+  en: "New chat"
+pane.add_panel:
+  zh: "新增标签"
+  en: "Add panel"
+pane.restore_side_panel:
+  zh: "还原侧边面板"
+  en: "Restore side panel"
+pane.maximize_side_panel:
+  zh: "最大化侧边面板"
+  en: "Maximize side panel"
+pane.collapse_side_panel:
+  zh: "收起侧边面板"
+  en: "Collapse side panel"
+pane.collapse_side_panel_b:
+  zh: "收起侧边面板  ⌃⌥B"
+  en: "Collapse side panel  ⌃⌥B"
+pane.auxiliary_chat:
+  zh: "辅助对话"
+  en: "Auxiliary chat"
+pane.changes:
+  zh: "变更"
+  en: "Changes"
+pane.terminal:
+  zh: "终端"
+  en: "Terminal"
+pane.browser:
+  zh: "浏览器"
+  en: "Browser"
+pane.is_being_ported:
+  zh: "功能正在移植中"
+  en: " is being ported"
+pane.close_tab:
+  zh: "关闭标签"
+  en: "Close tab"
+pane.close_other_tabs:
+  zh: "关闭其他标签"
+  en: "Close other tabs"
+pane.close_all_tabs:
+  zh: "关闭所有标签"
+  en: "Close all tabs"

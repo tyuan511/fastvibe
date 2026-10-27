@@ -1,0 +1,80 @@
+_version: 2
+
+subagents.waiting_for_input:
+  zh: "等待输入"
+  en: "Waiting for input"
+subagents.idle:
+  zh: "待命"
+  en: "Idle"
+subagents.running:
+  zh: "执行中"
+  en: "Running"
+subagents.completed:
+  zh: "已完成"
+  en: "Completed"
+subagents.stopped:
+  zh: "已停止"
+  en: "Stopped"
+subagents.failed:
+  zh: "失败"
+  en: "Failed"
+subagents.closed:
+  zh: "已关闭"
+  en: "Closed"
+subagents.inherited_context:
+  zh: " · 继承上下文"
+  en: " · inherited context"
+subagents.please_wait:
+  zh: "请稍候…"
+  en: "Please wait…"
+subagents.resume:
+  zh: "恢复"
+  en: "Resume"
+subagents.close:
+  zh: "关闭"
+  en: "Close"
+subagents.loading_sub_agent_settings:
+  zh: "正在读取子 Agent 设置…"
+  en: "Loading sub-agent settings…"
+subagents.max_per_conversation:
+  zh: "每个对话最多"
+  en: "Max per conversation"
+subagents.delegation_depth:
+  zh: "委派层数"
+  en: "Delegation depth"
+subagents.allow_sub_agents:
+  zh: "允许子 Agent"
+  en: "Allow sub-agents"
+subagents.sub_agents_can_use_an:
+  zh: "子 Agent 可使用独立上下文或派生父对话，并继承项目、技能与模型配置。共享工作区；父任务停止会停止其子任务。关闭后可查看记录或显式恢复。"
+  en: "Sub-agents can use an independent context or fork the parent, inheriting its project, skills, and model. They share the workspace; stopping the parent stops its children. Closed tasks remain available to inspect or resume."
+subagents.the_limit_counts_non_closed:
+  zh: "上限计算未关闭的子 Agent。关闭释放名额；修改限制不会中断已有任务。"
+  en: "The limit counts non-closed sub-agents. Closing one frees a slot; changing the limit does not interrupt existing tasks."
+subagents.subtasks_in_this_conversation:
+  zh: "当前对话的子任务"
+  en: "Subtasks in this conversation"
+subagents.recent_subtasks_up_to_100:
+  zh: "最近的子任务（最多 100 条）"
+  en: "Recent subtasks (up to 100)"
+subagents.loading:
+  zh: "正在读取…"
+  en: "Loading…"
+subagents.no_subtasks:
+  zh: "暂无子任务"
+  en: "No subtasks"
+subagents.subtasks:
+  zh: " 子任务"
+  en: " Subtasks"
+subagents.running_2:
+  zh: "个执行中"
+  en: "running"
+subagents.waiting_waiting:
+  zh: " · %{waiting} 个等待输入"
+  en: " · %{waiting} waiting"
+subagents.stop_all:
+  zh: "停止全部"
+  en: "Stop all"
+subagents.back_to_main_chat:
+  zh: "返回主对话"
+  en: "Back to main chat"

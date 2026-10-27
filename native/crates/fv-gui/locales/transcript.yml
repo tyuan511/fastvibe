@@ -1,0 +1,23 @@
+_version: 2
+
+transcript.execution_failed:
+  zh: "执行失败"
+  en: "Execution failed"
+transcript.completed:
+  zh: "已完成"
+  en: "Completed"
+transcript.failed:
+  zh: "失败"
+  en: "Failed"
+transcript.interrupted:
+  zh: "已中断"
+  en: "Interrupted"
+transcript.searching:
+  zh: "搜索中"
+  en: "Searching"
+transcript.preparing_search:
+  zh: "准备搜索"
+  en: "Preparing search"
+transcript.status_status:
+  zh: "状态：%{status}"
+  en: "Status: %{status}"

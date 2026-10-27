@@ -13,7 +13,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::composer::thinking_label;
+use super::composer::thinking_label_in;
 use super::sidebar::{INSET, SIDEBAR_WIDTH};
 use super::{Workspace, text};
 use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon, icon_button_xs};
@@ -224,11 +224,7 @@ impl ProxySettings {
         let url = input(
             window,
             cx,
-            if english {
-                "Leave empty for system network settings"
-            } else {
-                "留空使用系统网络设置"
-            },
+            trs!(english, "settings.leave_empty_for_system_network"),
             false,
         );
         url.update(cx, |state, cx| {
@@ -244,22 +240,14 @@ impl BrowserSettings {
             homepage: input(
                 window,
                 cx,
-                if english {
-                    "about:blank or https://…"
-                } else {
-                    "about:blank 或 https://…"
-                },
+                trs!(english, "settings.about_blank_or_https"),
                 false,
             ),
             search_engine: input(window, cx, "https://…/?q={query}", false),
             download_dir: input(
                 window,
                 cx,
-                if english {
-                    "Leave empty for ~/Downloads"
-                } else {
-                    "留空使用 ~/Downloads"
-                },
+                trs!(english, "settings.leave_empty_for_downloads"),
                 false,
             ),
         }
@@ -385,11 +373,7 @@ impl Workspace {
                 search: input(
                     window,
                     cx,
-                    if english {
-                        "Search providers or models"
-                    } else {
-                        "搜索供应商或模型"
-                    },
+                    trs!(english, "settings.search_providers_or_models"),
                     false,
                 ),
                 add: None,
@@ -862,25 +846,12 @@ impl Workspace {
     pub(super) fn open_add_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let english = self.app_settings.language == UiLanguage::English;
         let add = AddProvider {
-            name: input(
-                window,
-                cx,
-                if english {
-                    "e.g. OpenRouter"
-                } else {
-                    "例如 OpenRouter"
-                },
-                false,
-            ),
+            name: input(window, cx, trs!(english, "settings.e_g_openrouter"), false),
             base_url: input(window, cx, "https://api.example.com/v1", false),
             key: input(
                 window,
                 cx,
-                if english {
-                    "Paste this provider's API key"
-                } else {
-                    "粘贴该供应商的 API 密钥"
-                },
+                trs!(english, "settings.paste_this_provider_s_api"),
                 true,
             ),
             protocol: ApiProtocol::Chat,
@@ -1287,20 +1258,27 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_size(px(TEXT_SM)).child(if english { "Other Agent sessions" } else { "其它 Agent 会话" }))
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .child(trs!(english, "settings.other_agent_sessions")),
+                    )
                     .child(
                         outline_button("refresh-import-candidates", p)
                             .child(if s.import.busy {
-                                if english { "Reading…" } else { "读取中…" }
+                                trs!(english, "settings.reading")
                             } else {
-                                if english { "Refresh" } else { "刷新" }
+                                trs!(english, "settings.refresh")
                             })
                             .on_click(refresh),
                     ),
             )
-            .child(div().text_size(px(TEXT_XS)).muted(p).child(
-                if english { "Scan local Claude Code, pi, Codex, OpenCode, and zcode session files. History is read-only; preview does not write to FastVibe." } else { "扫描本机 Claude Code、pi、Codex、OpenCode 与 zcode 的会话文件，只读显示历史消息，预览不会写入 FastVibe。" },
-            ));
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "settings.scan_local_claude_code_pi")),
+            );
         if let Some(notice) = &s.import.notice {
             claude = claude.child(
                 div()
@@ -1311,18 +1289,20 @@ impl Workspace {
         }
         match &s.import.candidates {
             None if s.import.busy => {
-                claude = claude.child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                    "Looking for sessions…"
-                } else {
-                    "正在查找会话…"
-                }));
+                claude = claude.child(
+                    div()
+                        .text_size(px(TEXT_XS))
+                        .muted(p)
+                        .child(trs!(english, "settings.looking_for_sessions")),
+                );
             }
             Some(candidates) if candidates.is_empty() => {
-                claude = claude.child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                    "No importable Agent sessions found."
-                } else {
-                    "没有找到可导入的 Agent 会话。"
-                }));
+                claude = claude.child(
+                    div()
+                        .text_size(px(TEXT_XS))
+                        .muted(p)
+                        .child(trs!(english, "settings.no_importable_agent_sessions_found")),
+                );
             }
             Some(candidates) => {
                 for (index, candidate) in candidates.iter().enumerate() {
@@ -1352,15 +1332,14 @@ impl Workspace {
                                         .text_size(px(TEXT_SM)),
                                     )
                                     .child(div().text_size(px(TEXT_XS)).muted(p).child(format!(
-                                        "{} {} · {}",
-                                        candidate.message_count,
-                                        if english { "messages" } else { "条消息" },
-                                        candidate.cwd.as_deref().unwrap_or(if english {
-                                            "Unknown directory"
-                                        } else {
-                                            "未知目录"
-                                        })
-                                    ))),
+                                            "{} {} · {}",
+                                            candidate.message_count,
+                                            trs!(english, "settings.messages"),
+                                            candidate.cwd.as_deref().unwrap_or(trs!(
+                                                english,
+                                                "settings.unknown_directory"
+                                            ))
+                                        ))),
                             )
                             .child(
                                 outline_button(
@@ -1368,9 +1347,9 @@ impl Workspace {
                                     p,
                                 )
                                 .child(if selected {
-                                    if english { "Previewed" } else { "已预览" }
+                                    trs!(english, "settings.previewed")
                                 } else {
-                                    if english { "Preview" } else { "预览" }
+                                    trs!(english, "settings.preview")
                                 })
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
@@ -1396,26 +1375,15 @@ impl Workspace {
                     .border_t_1()
                     .border_color(p.c(Token::Border))
                     .text_size(px(TEXT_XS))
-                    .child(div().flex_1().child(if english {
-                        format!(
-                            "Preview: {} engine messages, skipped {} source records.",
-                            preview.messages.len(),
-                            preview.skipped.len()
-                        )
-                    } else {
-                        format!(
-                            "预览：{} 条引擎消息，跳过 {} 条源记录。",
-                            preview.messages.len(),
-                            preview.skipped.len()
-                        )
-                    }))
+                    .child(div().flex_1().child(tr!(
+                        english,
+                        "settings.preview_arg1_engine_messages_skipped",
+                        arg1 = preview.messages.len(),
+                        arg2 = preview.skipped.len()
+                    )))
                     .child(
                         outline_button("commit-import", p)
-                            .child(if english {
-                                "Import as new chat"
-                            } else {
-                                "导入为新对话"
-                            })
+                            .child(trs!(english, "settings.import_as_new_chat"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.commit_import(commit_candidate.clone(), cx)
                             })),
@@ -1427,12 +1395,17 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(14.))
-            .child(div().text_size(px(TEXT_SM)).child(if english { "Import tools and extensions" } else { "导入工具与扩展" }))
+            .child(
+                div()
+                    .text_size(px(TEXT_SM))
+                    .child(trs!(english, "settings.import_tools_and_extensions")),
+            )
             .child(claude)
             .child(
-                div().text_size(px(TEXT_SM)).muted(p).child(
-                    if english { "Native import entry points are separated by data type so third-party configuration is not written directly into settings." } else { "原生版的导入入口按数据类型分开处理，避免把第三方配置直接写入设置文件。" },
-                ),
+                div()
+                    .text_size(px(TEXT_SM))
+                    .muted(p)
+                    .child(trs!(english, "settings.native_import_entry_points_are")),
             )
             .child(
                 div()
@@ -1443,17 +1416,21 @@ impl Workspace {
                     .child(
                         div()
                             .flex_1()
-                            .child(div().text_size(px(TEXT_SM)).child(if english { "Skills folder" } else { "技能文件夹" }))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .child(trs!(english, "settings.skills_folder")),
+                            )
                             .child(
                                 div()
                                     .text_size(px(TEXT_XS))
                                     .muted(p)
-                                    .child(if english { "Import a local SKILL.md and its resources while preserving the source scope." } else { "导入本地 SKILL.md 与附属资源，并保留来源范围。" }),
+                                    .child(trs!(english, "settings.import_a_local_skill_md")),
                             ),
                     )
                     .child(
                         outline_button("open-import-skills", p)
-                            .child(if english { "Open skill import" } else { "打开技能导入" })
+                            .child(trs!(english, "settings.open_skill_import"))
                             .on_click(open_skills),
                     ),
             )
@@ -1466,17 +1443,19 @@ impl Workspace {
                     .child(
                         div()
                             .flex_1()
-                            .child(div().text_size(px(TEXT_SM)).child(if english { "MCP configuration" } else { "MCP 配置" }))
                             .child(
                                 div()
-                                    .text_size(px(TEXT_XS))
-                                    .muted(p)
-                                    .child(if english { "Paste mcpServers/servers JSON; validate each server before updating the configuration." } else { "粘贴 mcpServers/servers JSON，逐项校验后更新配置。" }),
-                            ),
+                                    .text_size(px(TEXT_SM))
+                                    .child(trs!(english, "settings.mcp_configuration")),
+                            )
+                            .child(div().text_size(px(TEXT_XS)).muted(p).child(trs!(
+                                english,
+                                "settings.paste_mcpservers_servers_json_validate"
+                            ))),
                     )
                     .child(
                         outline_button("open-import-mcp", p)
-                            .child(if english { "Open MCP import" } else { "打开 MCP 导入" })
+                            .child(trs!(english, "settings.open_mcp_import"))
                             .on_click(open_mcp),
                     ),
             )
@@ -1492,11 +1471,7 @@ impl Workspace {
                 .py(px(24.0))
                 .text_size(px(TEXT_SM))
                 .muted(p)
-                .child(if english {
-                    "This page is being ported."
-                } else {
-                    "这一页还在移植中。"
-                }),
+                .child(trs!(english, "settings.this_page_is_being_ported")),
         )
     }
 
@@ -1534,65 +1509,56 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(div().text_size(px(TEXT_SM)).child(if english {
-                                "Browser control"
-                            } else {
-                                "浏览器控制"
-                            }))
                             .child(
                                 div()
-                                    .text_size(px(TEXT_XS))
-                                    .muted(p)
-                                    .child(if english {
-                                        "Configure new tabs, address-bar search, and downloads. Pages run in an isolated native WebView."
-                                    } else {
-                                        "设置新标签页、地址栏搜索和下载位置。网页仍在隔离的原生 WebView 中运行。"
-                                    }),
+                                    .text_size(px(TEXT_SM))
+                                    .child(trs!(english, "settings.browser_control")),
+                            )
+                            .child(
+                                div().text_size(px(TEXT_XS)).muted(p).child(trs!(
+                                    english,
+                                    "settings.configure_new_tabs_address_bar"
+                                )),
                             ),
                     )
                     .child(
                         outline_button("save-browser-settings", p)
-                            .child(if english { "Save" } else { "保存" })
+                            .child(trs!(english, "settings.save"))
                             .on_click(cx.listener(|this, _, _, cx| this.save_browser(cx))),
                     ),
             )
-            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                "Home page"
-            } else {
-                "主页"
-            }))
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "settings.home_page")),
+            )
             .child(Input::new(&s.browser.homepage).small())
-            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                "Search URL template"
-            } else {
-                "搜索地址模板"
-            }))
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "settings.search_url_template")),
+            )
             .child(Input::new(&s.browser.search_engine).small())
             .child(
                 div()
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(if english {
-                        "The template must contain {query}, for example https://www.google.com/search?q={query}."
-                    } else {
-                        "模板必须包含 {query}，例如 https://www.google.com/search?q={query}。"
-                    }),
+                    .child(trs!(english, "settings.the_template_must_contain_query")),
             )
-            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                "Download directory"
-            } else {
-                "下载目录"
-            }))
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "settings.download_directory")),
+            )
             .child(Input::new(&s.browser.download_dir).small())
             .child(
                 div()
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(if english {
-                        "Leave empty to use the current user's Downloads directory; a value must be an absolute path."
-                    } else {
-                        "留空使用当前用户的 Downloads 目录；填写时必须是绝对路径。"
-                    }),
+                    .child(trs!(english, "settings.leave_empty_to_use_the")),
             )
             .into_any_element()
     }
@@ -1607,23 +1573,23 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(div().text_size(px(TEXT_SM)).child(if english {
-                "Computer control"
-            } else {
-                "电脑操控"
-            }))
+            .child(
+                div()
+                    .text_size(px(TEXT_SM))
+                    .child(trs!(english, "settings.computer_control")),
+            )
             .child(
                 div()
                     .text_size(px(TEXT_XS))
                     .muted(p)
                     .child(if cfg!(target_os = "macos") {
-                        if english { "macOS supports screenshots, clicks, text input, and limited keys. Every side-effecting action asks for confirmation first." } else { "macOS 已提供截图、点击、输入和有限按键。每个有副作用的动作都会先请求你的确认。" }
+                        trs!(english, "settings.macos_supports_screenshots_clicks_text")
                     } else if cfg!(target_os = "linux") {
-                        if english { "Linux uses grim, gnome-screenshot, or scrot for screenshots and xdotool for clicks, text input, and limited keys; every side-effecting action asks for confirmation first." } else { "Linux 使用 grim、gnome-screenshot 或 scrot 截图，并通过 xdotool 执行点击、输入和有限按键；每个有副作用的动作都会先请求你的确认。" }
+                        trs!(english, "settings.linux_uses_grim_gnome_screenshot")
                     } else if cfg!(target_os = "windows") {
-                        if english { "Windows uses PowerShell and system APIs for screenshots, clicks, text input, and limited keys; every side-effecting action asks for confirmation first." } else { "Windows 使用 PowerShell 与系统 API 截图，并执行点击、输入和有限按键；每个有副作用的动作都会先请求你的确认。" }
+                        trs!(english, "settings.windows_uses_powershell_and_system")
                     } else {
-                        if english { "Computer control is not available on this platform; native tools report unsupported instead of pretending to succeed." } else { "当前平台尚未提供电脑操控；原生工具会明确返回不支持，不会伪造执行成功。" }
+                        trs!(english, "settings.computer_control_is_not_available")
                     }),
             )
             .child(
@@ -1631,13 +1597,13 @@ impl Workspace {
                     .text_size(px(TEXT_XS))
                     .muted(p)
                     .child(if cfg!(target_os = "macos") {
-                        if english { "The first use requires FastVibe to be allowed in System Settings → Privacy & Security → Accessibility; denied permission returns a readable error." } else { "首次使用需要在系统设置 → 隐私与安全性 → 辅助功能中允许 FastVibe；拒绝权限时动作会返回可读错误。" }
+                        trs!(english, "settings.the_first_use_requires_fastvibe")
                     } else if cfg!(target_os = "windows") {
-                        if english { "Windows requires PowerShell and desktop automation access; missing system components return a readable error." } else { "Windows 需要允许 PowerShell 与桌面自动化访问；缺少系统组件时动作会返回可读错误。" }
+                        trs!(english, "settings.windows_requires_powershell_and_desktop")
                     } else if supported {
-                        if english { "The Linux desktop must allow xdotool to access the current display session; missing dependencies return a readable error." } else { "Linux 桌面需要允许 xdotool 访问当前显示会话；缺少依赖时动作会返回可读错误。" }
+                        trs!(english, "settings.the_linux_desktop_must_allow")
                     } else {
-                        if english { "This platform has no computer-control dependencies." } else { "当前平台没有电脑操控依赖。" }
+                        trs!(english, "settings.this_platform_has_no_computer")
                     }),
             )
             .into_any_element()
@@ -1669,14 +1635,14 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_size(px(TEXT_SM)).child(if english {
-                        "Network proxy"
-                    } else {
-                        "网络代理"
-                    }))
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .child(trs!(english, "settings.network_proxy")),
+                    )
                     .child(
                         outline_button("save-proxy", p)
-                            .child(if english { "Save" } else { "保存" })
+                            .child(trs!(english, "settings.save"))
                             .on_click(cx.listener(|this, _, _, cx| this.save_proxy(cx))),
                     ),
             )
@@ -1684,11 +1650,7 @@ impl Workspace {
                 div()
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(if english {
-                        "Used for model requests, catalog refreshes, and model lists. Supports HTTP(S) and SOCKS proxies; leave empty for the system default."
-                    } else {
-                        "用于模型请求、模型目录刷新和模型列表读取。支持 HTTP(S) 与 SOCKS 代理；留空使用系统默认。"
-                    }),
+                    .child(trs!(english, "settings.used_for_model_requests_catalog")),
             )
             .child(Input::new(&s.proxy.url).small())
             .into_any_element()
@@ -1713,7 +1675,7 @@ impl Workspace {
                 .find(|m| &m.label == label)
                 .map(|m| format!("{}/{}", m.provider_name, m.model.id))
                 .unwrap_or_else(|| label.clone()),
-            None => if english { "Not set" } else { "未设置" }.to_string(),
+            None => trs!(english, "settings.not_set").to_string(),
         };
         let effective_thinking = self
             .defaults
@@ -1724,21 +1686,8 @@ impl Workspace {
                 m.model.effective_thinking(self.defaults.thinking)
             });
         let thinking = effective_thinking
-            .map(|level| {
-                if english {
-                    match level {
-                        ThinkingLevel::Minimal => "Minimal",
-                        ThinkingLevel::Low => "Low",
-                        ThinkingLevel::Medium => "Medium",
-                        ThinkingLevel::High => "High",
-                        ThinkingLevel::Xhigh => "Very high",
-                        ThinkingLevel::Max => "Maximum",
-                    }
-                } else {
-                    thinking_label(level)
-                }
-            })
-            .unwrap_or(if english { "Default" } else { "默认" });
+            .map(|level| thinking_label_in(level, english))
+            .unwrap_or(trs!(english, "settings.default"));
         let default_row = div()
             .relative()
             .px(px(16.0))
@@ -1755,7 +1704,7 @@ impl Workspace {
                         div()
                             .text_size(px(TEXT_SM))
                             .font_weight(FontWeight::MEDIUM)
-                            .child(if english { "Conversation model" } else { "会话模型" }),
+                            .child(trs!(english, "settings.conversation_model")),
                     )
                     .child(
                         div()
@@ -1763,7 +1712,7 @@ impl Workspace {
                             .text_size(px(TEXT_XS))
                             .line_height(px(16.0))
                             .muted(p)
-                            .child(if english { "New chats use this model and thinking level; individual chats can still switch temporarily." } else { "新建对话使用这个模型和推理强度，单个对话仍可临时切换。" }),
+                            .child(trs!(english, "settings.new_chats_use_this_model")),
                     ),
             )
             .child(
@@ -1795,17 +1744,13 @@ impl Workspace {
                     .gap(px(6.0))
                     .text_size(px(TEXT_SM))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(if english { "Providers" } else { "供应商" })
+                    .child(trs!(english, "settings.providers"))
                     .child(div().muted(p).child(SharedString::from(count.to_string()))),
             )
             .child(
                 outline_button("add-provider", p)
                     .child(icon("add01", 14.0, p.c(Token::Foreground)))
-                    .child(if english {
-                        "Add provider"
-                    } else {
-                        "添加供应商"
-                    })
+                    .child(trs!(english, "settings.add_provider"))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_add_provider(window, cx)),
                     ),
@@ -1820,11 +1765,7 @@ impl Workspace {
                         .py(px(20.0))
                         .text_size(px(TEXT_SM))
                         .muted(p)
-                        .child(if english {
-                            "Loading providers…"
-                        } else {
-                            "正在加载供应商…"
-                        }),
+                        .child(trs!(english, "settings.loading_providers")),
                 )
             }
             Some([]) => {
@@ -1840,17 +1781,14 @@ impl Workspace {
                             div()
                                 .text_size(px(TEXT_SM))
                                 .font_weight(FontWeight::MEDIUM)
-                                .child(if english {
-                                    "Add your first provider"
-                                } else {
-                                    "添加第一个供应商"
-                                }),
+                                .child(trs!(english, "settings.add_your_first_provider")),
                         )
-                        .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                            "Connect an API key and choose the models to use."
-                        } else {
-                            "连接 API 密钥，选择要使用的模型。"
-                        })),
+                        .child(
+                            div()
+                                .text_size(px(TEXT_XS))
+                                .muted(p)
+                                .child(trs!(english, "settings.connect_an_api_key_and")),
+                        ),
                 )
             }
             Some(all) => {
@@ -1910,56 +1848,30 @@ impl Workspace {
         let english = a.language == UiLanguage::English;
         let hover = p.c(Token::Accent);
         let modes: [(SandboxMode, &str); 3] = [
-            (
-                SandboxMode::ReadOnly,
-                if english { "Read only" } else { "只读" },
-            ),
+            (SandboxMode::ReadOnly, trs!(english, "settings.read_only")),
             (
                 SandboxMode::WorkspaceWrite,
-                if english {
-                    "Workspace write"
-                } else {
-                    "工作区可写"
-                },
+                trs!(english, "settings.workspace_write"),
             ),
             (
                 SandboxMode::DangerFullAccess,
-                if english {
-                    "Full access"
-                } else {
-                    "完全访问"
-                },
+                trs!(english, "settings.full_access"),
             ),
         ];
         let policies: [(ApprovalPolicy, &str); 4] = [
             (
                 ApprovalPolicy::OnRequest,
-                if english {
-                    "Ask when needed"
-                } else {
-                    "按需询问"
-                },
+                trs!(english, "settings.ask_when_needed"),
             ),
             (
                 ApprovalPolicy::OnFailure,
-                if english {
-                    "Ask after failure"
-                } else {
-                    "失败后询问"
-                },
+                trs!(english, "settings.ask_after_failure"),
             ),
             (
                 ApprovalPolicy::Untrusted,
-                if english {
-                    "Ask for untrusted"
-                } else {
-                    "不受信任时询问"
-                },
+                trs!(english, "settings.ask_for_untrusted"),
             ),
-            (
-                ApprovalPolicy::Never,
-                if english { "Never ask" } else { "从不询问" },
-            ),
+            (ApprovalPolicy::Never, trs!(english, "settings.never_ask")),
         ];
         let label_of = |m: SandboxMode| {
             modes
@@ -2067,55 +1979,27 @@ impl Workspace {
         let network_usable = a.sandbox_mode == SandboxMode::WorkspaceWrite;
         let mode_note = match a.sandbox_mode {
             SandboxMode::ReadOnly => {
-                if english {
-                    "Commands can read but cannot write files"
-                } else {
-                    "命令只能读，不能写任何文件"
-                }
+                trs!(english, "settings.commands_can_read_but_cannot")
             }
             SandboxMode::WorkspaceWrite => {
-                if english {
-                    "Commands can read anywhere but can write only project folders and temporary directories"
-                } else {
-                    "命令可读任何位置，只能写项目文件夹和临时目录"
-                }
+                trs!(english, "settings.commands_can_read_anywhere_but")
             }
             SandboxMode::DangerFullAccess => {
-                if english {
-                    "Commands have no restrictions; use only in a trusted environment"
-                } else {
-                    "命令不受任何限制，请只在信任的环境里使用"
-                }
+                trs!(english, "settings.commands_have_no_restrictions_use")
             }
         };
         let policy_note = match a.approval_policy {
             ApprovalPolicy::OnRequest => {
-                if english {
-                    "Commands run in the sandbox; the model asks before leaving it"
-                } else {
-                    "命令在沙箱里直接运行；需要离开沙箱时由模型来问你"
-                }
+                trs!(english, "settings.commands_run_in_the_sandbox")
             }
             ApprovalPolicy::OnFailure => {
-                if english {
-                    "Commands run in the sandbox; after a block, ask whether to retry without it"
-                } else {
-                    "命令在沙箱里直接运行；被沙箱挡住后问你是否不用沙箱重试"
-                }
+                trs!(english, "settings.commands_run_in_the_sandbox_2")
             }
             ApprovalPolicy::Untrusted => {
-                if english {
-                    "Ask first except for known read-only commands"
-                } else {
-                    "除了已知只读的命令，其余都先问你"
-                }
+                trs!(english, "settings.ask_first_except_for_known")
             }
             ApprovalPolicy::Never => {
-                if english {
-                    "Never ask: a sandbox block remains a block"
-                } else {
-                    "从不询问：沙箱挡住的就是挡住了"
-                }
+                trs!(english, "settings.never_ask_a_sandbox_block")
             }
         };
         div()
@@ -2127,12 +2011,12 @@ impl Workspace {
                     .pl(px(4.0))
                     .text_size(px(TEXT_SM))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(if english { "Sandbox & approvals" } else { "沙箱与审批" }),
+                    .child(trs!(english, "settings.sandbox_approvals")),
             )
             .child(
                 card(p)
                     .child(setting_row(
-                        if english { "Sandbox mode" } else { "沙箱模式" },
+                        trs!(english, "settings.sandbox_mode"),
                         mode_note,
                         false,
                         p,
@@ -2144,7 +2028,7 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        if english { "Approval policy" } else { "审批策略" },
+                        trs!(english, "settings.approval_policy"),
                         policy_note,
                         true,
                         p,
@@ -2156,11 +2040,11 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        if english { "Allow network access" } else { "允许联网" },
+                        trs!(english, "settings.allow_network_access"),
                         if network_usable {
-                            if english { "Sandboxed commands can access the network" } else { "沙箱里的命令可以访问网络" }
+                            trs!(english, "settings.sandboxed_commands_can_access_the")
                         } else {
-                            if english { "Only applies to Workspace write; Full access is already unrestricted and Read only has no network" } else { "只在「工作区可写」下有效；完全访问本来就不限网络，只读不开放" }
+                            trs!(english, "settings.only_applies_to_workspace_write")
                         },
                         true,
                         p,
@@ -2196,25 +2080,13 @@ impl Workspace {
         };
         let mode_label = |m: ThemeMode| match m {
             ThemeMode::System => {
-                if english {
-                    "System"
-                } else {
-                    "跟随系统"
-                }
+                trs!(english, "settings.system")
             }
             ThemeMode::Light => {
-                if english {
-                    "Light"
-                } else {
-                    "亮色"
-                }
+                trs!(english, "settings.light")
             }
             ThemeMode::Dark => {
-                if english {
-                    "Dark"
-                } else {
-                    "暗色"
-                }
+                trs!(english, "settings.dark")
             }
         };
         let select =
@@ -2384,17 +2256,13 @@ impl Workspace {
                     .pl(px(4.0))
                     .text_size(px(TEXT_SM))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(if english { "Appearance" } else { "外观" }),
+                    .child(trs!(english, "settings.appearance")),
             )
             .child(
                 card(p)
                     .child(setting_row(
-                        if english { "Interface language" } else { "界面语言" },
-                        if english {
-                            "Switch the native interface language; untranslated copy falls back to Chinese"
-                        } else {
-                            "切换原生界面语言；未迁移的文案保留中文回退"
-                        },
+                        trs!(english, "settings.interface_language"),
+                        trs!(english, "settings.switch_the_native_interface_language"),
                         false,
                         p,
                         div()
@@ -2405,12 +2273,8 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        if english { "Theme mode" } else { "主题模式" },
-                        if english {
-                            "Follow the macOS appearance when using System"
-                        } else {
-                            "跟随系统时随 macOS 外观自动切换"
-                        },
+                        trs!(english, "settings.theme_mode"),
+                        trs!(english, "settings.follow_the_macos_appearance_when"),
                         false,
                         p,
                         div()
@@ -2421,8 +2285,8 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        if english { "Light theme" } else { "亮色主题" },
-                        if english { "Theme used in Light mode" } else { "亮色模式下使用的主题" },
+                        trs!(english, "settings.light_theme"),
+                        trs!(english, "settings.theme_used_in_light_mode"),
                         true,
                         p,
                         div()
@@ -2433,8 +2297,8 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        if english { "Dark theme" } else { "暗色主题" },
-                        if english { "Theme used in Dark mode" } else { "暗色模式下使用的主题" },
+                        trs!(english, "settings.dark_theme"),
+                        trs!(english, "settings.theme_used_in_dark_mode"),
                         true,
                         p,
                         div()
@@ -2445,12 +2309,8 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        if english { "Glass effect" } else { "玻璃效果" },
-                        if english {
-                            "Make the window background translucent"
-                        } else {
-                            "窗口背景半透明，透出桌面"
-                        },
+                        trs!(english, "settings.glass_effect"),
+                        trs!(english, "settings.make_the_window_background_translucent"),
                         true,
                         p,
                         switch(SharedString::from("glass"), glass, p).on_click(cx.listener(
@@ -2466,12 +2326,8 @@ impl Workspace {
                         )),
                     ))
                     .child(setting_row(
-                        if english { "Reply suggestions" } else { "回复推荐" },
-                        if english {
-                            "Suggest what you may say next after a reply; press Tab to insert it"
-                        } else {
-                            "回复结束后猜测你下一句，显示在输入框里，按 Tab 填入"
-                        },
+                        trs!(english, "settings.reply_suggestions"),
+                        trs!(english, "settings.suggest_what_you_may_say"),
                         true,
                         p,
                         switch(
@@ -2490,12 +2346,8 @@ impl Workspace {
                         })),
                     ))
                     .child(setting_row(
-                        if english { "Code mode" } else { "代码模式" },
-                        if english {
-                            "Let the model orchestrate existing tools through isolated JavaScript; applies next turn"
-                        } else {
-                            "允许模型通过隔离 JavaScript 编排已有工具；使用现有权限，下个回合生效"
-                        },
+                        trs!(english, "settings.code_mode"),
+                        trs!(english, "settings.let_the_model_orchestrate_existing"),
                         true,
                         p,
                         switch(SharedString::from("code-mode"), code_mode_enabled, p).on_click(
@@ -2511,12 +2363,8 @@ impl Workspace {
                         ),
                     ))
                     .child(setting_row(
-                        if english { "Auto-compact context" } else { "自动压缩上下文" },
-                        if english {
-                            "Organize context near its limit while keeping the original messages"
-                        } else {
-                            "接近上下文上限时自动整理，保留原始消息；关闭后仍可手动整理"
-                        },
+                        trs!(english, "settings.auto_compact_context"),
+                        trs!(english, "settings.organize_context_near_its_limit"),
                         true,
                         p,
                         switch(
@@ -2535,8 +2383,8 @@ impl Workspace {
                         })),
                     ))
                     .child(setting_row(
-                        if english { "Auto-archive old chats" } else { "自动归档旧对话" },
-                        if english { "Every hour, archive chats inactive for 30 days that are not pinned and have no running task" } else { "每小时检查一次，将 30 天未活动、未置顶且没有运行任务的对话移入归档" },
+                        trs!(english, "settings.auto_archive_old_chats"),
+                        trs!(english, "settings.every_hour_archive_chats_inactive"),
                         true,
                         p,
                         switch(SharedString::from("auto-archive"), auto_archive, p).on_click(
@@ -2556,8 +2404,8 @@ impl Workspace {
                         ),
                     ))
                     .child(setting_row(
-                        if english { "Keep awake" } else { "保持唤醒" },
-                        if english { "Prevent macOS from sleeping during replies or scheduled tasks; other platforms ignore this switch" } else { "生成回复或定时任务期间阻止 macOS 进入睡眠；其它平台会忽略此开关" },
+                        trs!(english, "settings.keep_awake"),
+                        trs!(english, "settings.prevent_macos_from_sleeping_during"),
                         true,
                         p,
                         switch(SharedString::from("keep-awake"), keep_awake, p).on_click(
@@ -2584,7 +2432,7 @@ impl Workspace {
                 .pl(px(4.0))
                 .text_size(px(TEXT_XS))
                 .muted(p)
-                .child(if english { "Archiving hides a chat from the sidebar; its contents remain. Deleting removes the transcript and cannot be undone." } else { "归档只是从侧边栏收起，内容仍在；删除会一并移除会话记录，无法恢复。" }),
+                .child(trs!(english, "settings.archiving_hides_a_chat_from")),
         );
         let list = match &s.archived {
             None => card(p).child(
@@ -2593,7 +2441,7 @@ impl Workspace {
                     .py(px(20.0))
                     .text_size(px(TEXT_SM))
                     .muted(p)
-                    .child(if english { "Loading…" } else { "正在加载…" }),
+                    .child(trs!(english, "settings.loading")),
             ),
             Some(items) if items.is_empty() => card(p).child(
                 div()
@@ -2607,13 +2455,13 @@ impl Workspace {
                         div()
                             .text_size(px(TEXT_SM))
                             .font_weight(FontWeight::MEDIUM)
-                            .child(if english { "No archived chats" } else { "没有已归档的对话" }),
+                            .child(trs!(english, "settings.no_archived_chats")),
                     )
                     .child(
                         div()
                             .text_size(px(TEXT_XS))
                             .muted(p)
-                            .child(if english { "Hover a chat in the sidebar and click the archive icon, or right-click and choose Archive." } else { "在侧边栏悬停对话点归档图标，或右键选择「归档」。" }),
+                            .child(trs!(english, "settings.hover_a_chat_in_the")),
                     ),
             ),
             Some(items) => {
@@ -2624,7 +2472,7 @@ impl Workspace {
                         .project
                         .as_deref()
                         .map(|path| self.project_label(path))
-                        .unwrap_or_else(|| if english { "No project".to_string() } else { "无项目".to_string() });
+                        .unwrap_or_else(|| trs!(english, "settings.no_project").to_string());
                     card = card.child(
                         div()
                             .px(px(16.0))
@@ -2650,7 +2498,7 @@ impl Workspace {
                             )
                             .child(
                                 outline_button(SharedString::from(format!("restore-{}", t.id)), p)
-                                    .child(if english { "Restore" } else { "恢复" })
+                                    .child(trs!(english, "settings.restore"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.update_thread(
                                             ThreadUpdateParams {
@@ -2666,7 +2514,7 @@ impl Workspace {
                             .child(
                                 outline_button(SharedString::from(format!("delete-{}", t.id)), p)
                                     .text_color(p.c(Token::Destructive))
-                                    .child(if english { "Delete" } else { "删除" })
+                                    .child(trs!(english, "settings.delete"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if let Some(s) = &mut this.settings {
                                             s.confirm_delete = Some(delete_id.clone());
@@ -2692,7 +2540,7 @@ impl Workspace {
             .right(px(16.0))
             .w(px(300.0));
         let english = self.app_settings.language == UiLanguage::English;
-        menu = menu.child(menu_label(if english { "Model" } else { "模型" }, p));
+        menu = menu.child(menu_label(trs!(english, "settings.model"), p));
         if self.models.is_empty() {
             menu = menu.child(
                 div()
@@ -2721,25 +2569,14 @@ impl Workspace {
             );
         }
         menu = menu.child(div().my(px(4.0)).h(px(1.0)).bg(p.c(Token::Border)));
-        menu = menu.child(menu_label(
-            if english {
-                "Thinking effort"
-            } else {
-                "推理强度"
-            },
-            p,
-        ));
+        menu = menu.child(menu_label(trs!(english, "settings.thinking_effort"), p));
         menu = menu.child(
             menu_item(
                 "default-thinking-inherit".into(),
                 self.defaults.thinking.is_none(),
                 hover,
             )
-            .child(if english {
-                "Follow model default"
-            } else {
-                "跟随模型默认"
-            })
+            .child(trs!(english, "settings.follow_model_default"))
             .on_click(cx.listener(|this, _, _, cx| {
                 let model = this.defaults.model.clone();
                 this.set_default(
@@ -2772,18 +2609,7 @@ impl Workspace {
             let active = effective == Some(level);
             menu = menu.child(
                 menu_item(SharedString::from(format!("dl-{level:?}")), active, hover)
-                    .child(if english {
-                        match level {
-                            ThinkingLevel::Minimal => "Minimal",
-                            ThinkingLevel::Low => "Low",
-                            ThinkingLevel::Medium => "Medium",
-                            ThinkingLevel::High => "High",
-                            ThinkingLevel::Xhigh => "Very high",
-                            ThinkingLevel::Max => "Maximum",
-                        }
-                    } else {
-                        thinking_label(level)
-                    })
+                    .child(thinking_label_in(level, english))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let model = this.defaults.model.clone();
                         this.set_default(
@@ -2836,11 +2662,7 @@ impl Workspace {
                         .bg(p.c(Token::Warning).opacity(0.12))
                         .text_size(px(TEXT_XS))
                         .text_color(p.c(Token::Warning))
-                        .child(if english {
-                            "Not connected"
-                        } else {
-                            "未连接"
-                        }),
+                        .child(trs!(english, "settings.not_connected")),
                 )
             })
             .child(
@@ -2850,7 +2672,7 @@ impl Workspace {
                     .child(SharedString::from(format!(
                         "{} {}",
                         provider.models.len(),
-                        if english { "models" } else { "个模型" }
+                        trs!(english, "settings.models")
                     ))),
             )
             .child(
@@ -2904,12 +2726,12 @@ impl Workspace {
         let english = self.app_settings.language == UiLanguage::English;
         let id = provider.id.clone();
         let hover = p.c(Token::Accent);
-        let field = |zh: &'static str, en: &'static str| {
+        let field = |key: &'static str| {
             div()
                 .text_size(px(TEXT_XS))
                 .muted(p)
                 .mb(px(6.0))
-                .child(if english { en } else { zh })
+                .child(trs!(english, key))
         };
         let (save_url_id, save_key_id, add_id, sync_id) =
             (id.clone(), id.clone(), id.clone(), id.clone());
@@ -2972,11 +2794,12 @@ impl Workspace {
                         )
                     })
                     .when(m.edited, |d| {
-                        d.child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                            "Edited"
-                        } else {
-                            "已编辑"
-                        }))
+                        d.child(
+                            div()
+                                .text_size(px(TEXT_XS))
+                                .muted(p)
+                                .child(trs!(english, "settings.edited")),
+                        )
                     })
                     .child(
                         div()
@@ -3012,17 +2835,9 @@ impl Workspace {
         if provider.models.is_empty() {
             models = models.child(div().py(px(8.0)).text_size(px(TEXT_XS)).muted(p).child(
                 if provider.has_key {
-                    if english {
-                        "No models yet; click + to add"
-                    } else {
-                        "还没有模型，点击右上角添加"
-                    }
+                    trs!(english, "settings.no_models_yet_click_to")
                 } else {
-                    if english {
-                        "Connect to choose models"
-                    } else {
-                        "连接后即可选择模型"
-                    }
+                    trs!(english, "settings.connect_to_choose_models")
                 },
             ));
         }
@@ -3034,14 +2849,14 @@ impl Workspace {
             .flex_col()
             .gap(px(14.0))
             .child(
-                div().child(field("Base URL", "Base URL")).child(
+                div().child(field("settings.base_url")).child(
                     div()
                         .flex()
                         .gap(px(6.0))
                         .child(div().flex_1().child(Input::new(&edit.base_url)))
                         .child(
                             outline_button(SharedString::from(format!("save-url-{id}")), p)
-                                .child(if english { "Save" } else { "保存" })
+                                .child(trs!(english, "settings.save"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     let url = value(&base_state, cx);
                                     this.save_provider(
@@ -3055,7 +2870,7 @@ impl Workspace {
                 ),
             )
             .child(
-                div().child(field("API 格式", "API format")).child(
+                div().child(field("settings.api_format")).child(
                     div()
                         .relative()
                         .child(
@@ -3079,14 +2894,14 @@ impl Workspace {
                 ),
             )
             .child(
-                div().child(field("API 密钥", "API key")).child(
+                div().child(field("settings.api_key")).child(
                     div()
                         .flex()
                         .gap(px(6.0))
                         .child(div().flex_1().child(Input::new(&edit.key).mask_toggle()))
                         .child(
                             outline_button(SharedString::from(format!("save-key-{id}")), p)
-                                .child(if english { "Save" } else { "保存" })
+                                .child(trs!(english, "settings.save"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     let key = value(&key_state, cx);
                                     if key.is_empty() {
@@ -3112,11 +2927,7 @@ impl Workspace {
                             .gap(px(6.0))
                             .text_size(px(TEXT_SM))
                             .font_weight(FontWeight::MEDIUM)
-                            .child(if english {
-                                "Model list"
-                            } else {
-                                "模型列表"
-                            })
+                            .child(trs!(english, "settings.model_list"))
                             .child(
                                 div()
                                     .muted(p)
@@ -3181,8 +2992,8 @@ impl Workspace {
             let target = id.clone();
             let body = dialog_card(&self.palette, 448.0)
                 .child(dialog_head(
-                    if english { "Delete this chat?" } else { "删除这个对话？" },
-                    &if english { format!("{title} and all of its messages will be permanently deleted and cannot be recovered.") } else { format!("「{title}」及其全部消息会被删除，无法恢复。") },
+                    trs!(english, "settings.delete_this_chat"),
+                    &tr!(english, "settings.title_and_all_of_its", title = title),
                     &self.palette,
                 ))
                 .child(dialog_foot(
@@ -3194,7 +3005,7 @@ impl Workspace {
                         }
                         cx.notify();
                     },
-                    if english { "Delete" } else { "删除" },
+                    trs!(english, "settings.delete"),
                     move |this, _, cx| {
                         if let Some(s) = &mut this.settings {
                             s.confirm_delete = None;
@@ -3218,16 +3029,8 @@ impl Workspace {
                 .unwrap_or_default();
             let body = dialog_card(&self.palette, 672.0)
                 .child(dialog_head(
-                    &if english {
-                        format!("Manage models · {name}")
-                    } else {
-                        format!("管理模型 · {name}")
-                    },
-                    if english {
-                        "Select the models to use."
-                    } else {
-                        "勾选要使用的模型。"
-                    },
+                    &tr!(english, "settings.manage_models_name", name = name),
+                    trs!(english, "settings.select_the_models_to_use"),
                     &self.palette,
                 ))
                 .child(div().px(px(20.0)).pb(px(16.0)).child(self.picker(
@@ -3245,13 +3048,9 @@ impl Workspace {
                         cx.notify();
                     },
                     if am.busy {
-                        if english {
-                            "Saving…"
-                        } else {
-                            "正在保存…"
-                        }
+                        trs!(english, "settings.saving")
                     } else {
-                        if english { "Confirm" } else { "确认" }
+                        trs!(english, "settings.confirm")
                     },
                     |this, _, cx| this.finish_add_models(cx),
                     am.busy,
@@ -3273,26 +3072,16 @@ impl Workspace {
             let n = picker.chosen.len();
             return dialog_card(p, 672.0)
                 .child(dialog_head(
-                    if english {
-                        "Choose models"
-                    } else {
-                        "选择模型"
-                    },
+                    trs!(english, "settings.choose_models"),
                     &match &picker.models {
                         Some(list) => {
-                            if english {
-                                format!("Fetched {} models; select the ones to add.", list.len())
-                            } else {
-                                format!("已获取 {} 个模型，勾选后加入。", list.len())
-                            }
+                            tr!(
+                                english,
+                                "settings.fetched_arg1_models_select_the",
+                                arg1 = list.len()
+                            )
                         }
-                        None => {
-                            if english {
-                                "Fetching model list…".to_string()
-                            } else {
-                                "正在拉取模型列表…".to_string()
-                            }
-                        }
+                        None => trs!(english, "settings.fetching_model_list").to_string(),
                     },
                     p,
                 ))
@@ -3327,11 +3116,7 @@ impl Workspace {
                         }
                         cx.notify();
                     },
-                    &if english {
-                        format!("Add {n} models")
-                    } else {
-                        format!("添加 {n} 个模型")
-                    },
+                    &tr!(english, "settings.add_n_models", n = n),
                     |this, _, cx| this.finish_add_provider(cx),
                     n == 0 || a.busy,
                 ));
@@ -3372,7 +3157,7 @@ impl Workspace {
             form = form
                 .child(
                     div()
-                        .child(label(if english { "Name" } else { "名称" }))
+                        .child(label(trs!(english, "settings.name")))
                         .child(Input::new(&a.name)),
                 )
                 .child(
@@ -3382,7 +3167,7 @@ impl Workspace {
                 )
                 .child(
                     div()
-                        .child(label(if english { "API format" } else { "API 格式" }))
+                        .child(label(trs!(english, "settings.api_format")))
                         .child(
                             div()
                                 .relative()
@@ -3414,7 +3199,7 @@ impl Workspace {
         form = form
             .child(
                 div()
-                    .child(label(if english { "API key" } else { "API 密钥" }))
+                    .child(label(trs!(english, "settings.api_key")))
                     .child(Input::new(&a.key).mask_toggle()),
             )
             .when_some(a.error.clone(), |d, e| {
@@ -3427,16 +3212,8 @@ impl Workspace {
             });
         dialog_card(p, 448.0)
             .child(dialog_head(
-                if english {
-                    "Add provider"
-                } else {
-                    "添加供应商"
-                },
-                if english {
-                    "Enter a name, URL, and API key."
-                } else {
-                    "填写名称、地址和密钥。"
-                },
+                trs!(english, "settings.add_provider"),
+                trs!(english, "settings.enter_a_name_url_and"),
                 p,
             ))
             .child(form)
@@ -3450,13 +3227,9 @@ impl Workspace {
                     cx.notify();
                 },
                 if a.busy {
-                    if english {
-                        "Fetching…"
-                    } else {
-                        "正在拉取…"
-                    }
+                    trs!(english, "settings.fetching")
                 } else {
-                    if english { "Confirm" } else { "确认" }
+                    trs!(english, "settings.confirm")
                 },
                 |this, window, cx| this.confirm_add_provider(window, cx),
                 a.busy,
@@ -3484,11 +3257,7 @@ impl Workspace {
                         .justify_center()
                         .text_size(px(TEXT_XS))
                         .muted(p)
-                        .child(if english {
-                            "Fetching model list…"
-                        } else {
-                            "正在拉取模型列表…"
-                        }),
+                        .child(trs!(english, "settings.fetching_model_list")),
                 )
             }
             Some(list) if list.is_empty() => {
@@ -3504,13 +3273,7 @@ impl Workspace {
                             p.c(Token::MutedForeground)
                         })
                         .child(SharedString::from(picker.error.clone().unwrap_or_else(
-                            || {
-                                if english {
-                                    "No models".to_string()
-                                } else {
-                                    "没有模型".to_string()
-                                }
-                            },
+                            || trs!(english, "settings.no_models").to_string(),
                         ))),
                 )
             }

@@ -1,0 +1,398 @@
+_version: 2
+
+settings.leave_empty_for_system_network:
+  zh: "留空使用系统网络设置"
+  en: "Leave empty for system network settings"
+settings.about_blank_or_https:
+  zh: "about:blank 或 https://…"
+  en: "about:blank or https://…"
+settings.leave_empty_for_downloads:
+  zh: "留空使用 ~/Downloads"
+  en: "Leave empty for ~/Downloads"
+settings.search_providers_or_models:
+  zh: "搜索供应商或模型"
+  en: "Search providers or models"
+settings.e_g_openrouter:
+  zh: "例如 OpenRouter"
+  en: "e.g. OpenRouter"
+settings.paste_this_provider_s_api:
+  zh: "粘贴该供应商的 API 密钥"
+  en: "Paste this provider's API key"
+settings.other_agent_sessions:
+  zh: "其它 Agent 会话"
+  en: "Other Agent sessions"
+settings.reading:
+  zh: "读取中…"
+  en: "Reading…"
+settings.refresh:
+  zh: "刷新"
+  en: "Refresh"
+settings.scan_local_claude_code_pi:
+  zh: "扫描本机 Claude Code、pi、Codex、OpenCode 与 zcode 的会话文件，只读显示历史消息，预览不会写入 FastVibe。"
+  en: "Scan local Claude Code, pi, Codex, OpenCode, and zcode session files. History is read-only; preview does not write to FastVibe."
+settings.looking_for_sessions:
+  zh: "正在查找会话…"
+  en: "Looking for sessions…"
+settings.no_importable_agent_sessions_found:
+  zh: "没有找到可导入的 Agent 会话。"
+  en: "No importable Agent sessions found."
+settings.messages:
+  zh: "条消息"
+  en: "messages"
+settings.unknown_directory:
+  zh: "未知目录"
+  en: "Unknown directory"
+settings.previewed:
+  zh: "已预览"
+  en: "Previewed"
+settings.preview:
+  zh: "预览"
+  en: "Preview"
+settings.import_as_new_chat:
+  zh: "导入为新对话"
+  en: "Import as new chat"
+settings.import_tools_and_extensions:
+  zh: "导入工具与扩展"
+  en: "Import tools and extensions"
+settings.native_import_entry_points_are:
+  zh: "原生版的导入入口按数据类型分开处理，避免把第三方配置直接写入设置文件。"
+  en: "Native import entry points are separated by data type so third-party configuration is not written directly into settings."
+settings.skills_folder:
+  zh: "技能文件夹"
+  en: "Skills folder"
+settings.import_a_local_skill_md:
+  zh: "导入本地 SKILL.md 与附属资源，并保留来源范围。"
+  en: "Import a local SKILL.md and its resources while preserving the source scope."
+settings.open_skill_import:
+  zh: "打开技能导入"
+  en: "Open skill import"
+settings.mcp_configuration:
+  zh: "MCP 配置"
+  en: "MCP configuration"
+settings.paste_mcpservers_servers_json_validate:
+  zh: "粘贴 mcpServers/servers JSON，逐项校验后更新配置。"
+  en: "Paste mcpServers/servers JSON; validate each server before updating the configuration."
+settings.open_mcp_import:
+  zh: "打开 MCP 导入"
+  en: "Open MCP import"
+settings.this_page_is_being_ported:
+  zh: "这一页还在移植中。"
+  en: "This page is being ported."
+settings.browser_control:
+  zh: "浏览器控制"
+  en: "Browser control"
+settings.configure_new_tabs_address_bar:
+  zh: "设置新标签页、地址栏搜索和下载位置。网页仍在隔离的原生 WebView 中运行。"
+  en: "Configure new tabs, address-bar search, and downloads. Pages run in an isolated native WebView."
+settings.save:
+  zh: "保存"
+  en: "Save"
+settings.home_page:
+  zh: "主页"
+  en: "Home page"
+settings.search_url_template:
+  zh: "搜索地址模板"
+  en: "Search URL template"
+settings.the_template_must_contain_query:
+  zh: "模板必须包含 {query}，例如 https://www.google.com/search?q={query}。"
+  en: "The template must contain {query}, for example https://www.google.com/search?q={query}."
+settings.download_directory:
+  zh: "下载目录"
+  en: "Download directory"
+settings.leave_empty_to_use_the:
+  zh: "留空使用当前用户的 Downloads 目录；填写时必须是绝对路径。"
+  en: "Leave empty to use the current user's Downloads directory; a value must be an absolute path."
+settings.computer_control:
+  zh: "电脑操控"
+  en: "Computer control"
+settings.macos_supports_screenshots_clicks_text:
+  zh: "macOS 已提供截图、点击、输入和有限按键。每个有副作用的动作都会先请求你的确认。"
+  en: "macOS supports screenshots, clicks, text input, and limited keys. Every side-effecting action asks for confirmation first."
+settings.linux_uses_grim_gnome_screenshot:
+  zh: "Linux 使用 grim、gnome-screenshot 或 scrot 截图，并通过 xdotool 执行点击、输入和有限按键；每个有副作用的动作都会先请求你的确认。"
+  en: "Linux uses grim, gnome-screenshot, or scrot for screenshots and xdotool for clicks, text input, and limited keys; every side-effecting action asks for confirmation first."
+settings.windows_uses_powershell_and_system:
+  zh: "Windows 使用 PowerShell 与系统 API 截图，并执行点击、输入和有限按键；每个有副作用的动作都会先请求你的确认。"
+  en: "Windows uses PowerShell and system APIs for screenshots, clicks, text input, and limited keys; every side-effecting action asks for confirmation first."
+settings.computer_control_is_not_available:
+  zh: "当前平台尚未提供电脑操控；原生工具会明确返回不支持，不会伪造执行成功。"
+  en: "Computer control is not available on this platform; native tools report unsupported instead of pretending to succeed."
+settings.the_first_use_requires_fastvibe:
+  zh: "首次使用需要在系统设置 → 隐私与安全性 → 辅助功能中允许 FastVibe；拒绝权限时动作会返回可读错误。"
+  en: "The first use requires FastVibe to be allowed in System Settings → Privacy & Security → Accessibility; denied permission returns a readable error."
+settings.windows_requires_powershell_and_desktop:
+  zh: "Windows 需要允许 PowerShell 与桌面自动化访问；缺少系统组件时动作会返回可读错误。"
+  en: "Windows requires PowerShell and desktop automation access; missing system components return a readable error."
+settings.the_linux_desktop_must_allow:
+  zh: "Linux 桌面需要允许 xdotool 访问当前显示会话；缺少依赖时动作会返回可读错误。"
+  en: "The Linux desktop must allow xdotool to access the current display session; missing dependencies return a readable error."
+settings.this_platform_has_no_computer:
+  zh: "当前平台没有电脑操控依赖。"
+  en: "This platform has no computer-control dependencies."
+settings.network_proxy:
+  zh: "网络代理"
+  en: "Network proxy"
+settings.used_for_model_requests_catalog:
+  zh: "用于模型请求、模型目录刷新和模型列表读取。支持 HTTP(S) 与 SOCKS 代理；留空使用系统默认。"
+  en: "Used for model requests, catalog refreshes, and model lists. Supports HTTP(S) and SOCKS proxies; leave empty for the system default."
+settings.not_set:
+  zh: "未设置"
+  en: "Not set"
+settings.default:
+  zh: "默认"
+  en: "Default"
+settings.conversation_model:
+  zh: "会话模型"
+  en: "Conversation model"
+settings.new_chats_use_this_model:
+  zh: "新建对话使用这个模型和推理强度，单个对话仍可临时切换。"
+  en: "New chats use this model and thinking level; individual chats can still switch temporarily."
+settings.providers:
+  zh: "供应商"
+  en: "Providers"
+settings.add_provider:
+  zh: "添加供应商"
+  en: "Add provider"
+settings.loading_providers:
+  zh: "正在加载供应商…"
+  en: "Loading providers…"
+settings.add_your_first_provider:
+  zh: "添加第一个供应商"
+  en: "Add your first provider"
+settings.connect_an_api_key_and:
+  zh: "连接 API 密钥，选择要使用的模型。"
+  en: "Connect an API key and choose the models to use."
+settings.read_only:
+  zh: "只读"
+  en: "Read only"
+settings.workspace_write:
+  zh: "工作区可写"
+  en: "Workspace write"
+settings.full_access:
+  zh: "完全访问"
+  en: "Full access"
+settings.ask_when_needed:
+  zh: "按需询问"
+  en: "Ask when needed"
+settings.ask_after_failure:
+  zh: "失败后询问"
+  en: "Ask after failure"
+settings.ask_for_untrusted:
+  zh: "不受信任时询问"
+  en: "Ask for untrusted"
+settings.never_ask:
+  zh: "从不询问"
+  en: "Never ask"
+settings.commands_can_read_but_cannot:
+  zh: "命令只能读，不能写任何文件"
+  en: "Commands can read but cannot write files"
+settings.commands_can_read_anywhere_but:
+  zh: "命令可读任何位置，只能写项目文件夹和临时目录"
+  en: "Commands can read anywhere but can write only project folders and temporary directories"
+settings.commands_have_no_restrictions_use:
+  zh: "命令不受任何限制，请只在信任的环境里使用"
+  en: "Commands have no restrictions; use only in a trusted environment"
+settings.commands_run_in_the_sandbox:
+  zh: "命令在沙箱里直接运行；需要离开沙箱时由模型来问你"
+  en: "Commands run in the sandbox; the model asks before leaving it"
+settings.commands_run_in_the_sandbox_2:
+  zh: "命令在沙箱里直接运行；被沙箱挡住后问你是否不用沙箱重试"
+  en: "Commands run in the sandbox; after a block, ask whether to retry without it"
+settings.ask_first_except_for_known:
+  zh: "除了已知只读的命令，其余都先问你"
+  en: "Ask first except for known read-only commands"
+settings.never_ask_a_sandbox_block:
+  zh: "从不询问：沙箱挡住的就是挡住了"
+  en: "Never ask: a sandbox block remains a block"
+settings.sandbox_approvals:
+  zh: "沙箱与审批"
+  en: "Sandbox & approvals"
+settings.sandbox_mode:
+  zh: "沙箱模式"
+  en: "Sandbox mode"
+settings.approval_policy:
+  zh: "审批策略"
+  en: "Approval policy"
+settings.allow_network_access:
+  zh: "允许联网"
+  en: "Allow network access"
+settings.sandboxed_commands_can_access_the:
+  zh: "沙箱里的命令可以访问网络"
+  en: "Sandboxed commands can access the network"
+settings.only_applies_to_workspace_write:
+  zh: "只在「工作区可写」下有效；完全访问本来就不限网络，只读不开放"
+  en: "Only applies to Workspace write; Full access is already unrestricted and Read only has no network"
+settings.system:
+  zh: "跟随系统"
+  en: "System"
+settings.light:
+  zh: "亮色"
+  en: "Light"
+settings.dark:
+  zh: "暗色"
+  en: "Dark"
+settings.appearance:
+  zh: "外观"
+  en: "Appearance"
+settings.interface_language:
+  zh: "界面语言"
+  en: "Interface language"
+settings.switch_the_native_interface_language:
+  zh: "切换原生界面语言；未迁移的文案保留中文回退"
+  en: "Switch the native interface language; untranslated copy falls back to Chinese"
+settings.theme_mode:
+  zh: "主题模式"
+  en: "Theme mode"
+settings.follow_the_macos_appearance_when:
+  zh: "跟随系统时随 macOS 外观自动切换"
+  en: "Follow the macOS appearance when using System"
+settings.light_theme:
+  zh: "亮色主题"
+  en: "Light theme"
+settings.theme_used_in_light_mode:
+  zh: "亮色模式下使用的主题"
+  en: "Theme used in Light mode"
+settings.dark_theme:
+  zh: "暗色主题"
+  en: "Dark theme"
+settings.theme_used_in_dark_mode:
+  zh: "暗色模式下使用的主题"
+  en: "Theme used in Dark mode"
+settings.glass_effect:
+  zh: "玻璃效果"
+  en: "Glass effect"
+settings.make_the_window_background_translucent:
+  zh: "窗口背景半透明，透出桌面"
+  en: "Make the window background translucent"
+settings.reply_suggestions:
+  zh: "回复推荐"
+  en: "Reply suggestions"
+settings.suggest_what_you_may_say:
+  zh: "回复结束后猜测你下一句，显示在输入框里，按 Tab 填入"
+  en: "Suggest what you may say next after a reply; press Tab to insert it"
+settings.code_mode:
+  zh: "代码模式"
+  en: "Code mode"
+settings.let_the_model_orchestrate_existing:
+  zh: "允许模型通过隔离 JavaScript 编排已有工具；使用现有权限，下个回合生效"
+  en: "Let the model orchestrate existing tools through isolated JavaScript; applies next turn"
+settings.auto_compact_context:
+  zh: "自动压缩上下文"
+  en: "Auto-compact context"
+settings.organize_context_near_its_limit:
+  zh: "接近上下文上限时自动整理，保留原始消息；关闭后仍可手动整理"
+  en: "Organize context near its limit while keeping the original messages"
+settings.auto_archive_old_chats:
+  zh: "自动归档旧对话"
+  en: "Auto-archive old chats"
+settings.every_hour_archive_chats_inactive:
+  zh: "每小时检查一次，将 30 天未活动、未置顶且没有运行任务的对话移入归档"
+  en: "Every hour, archive chats inactive for 30 days that are not pinned and have no running task"
+settings.keep_awake:
+  zh: "保持唤醒"
+  en: "Keep awake"
+settings.prevent_macos_from_sleeping_during:
+  zh: "生成回复或定时任务期间阻止 macOS 进入睡眠；其它平台会忽略此开关"
+  en: "Prevent macOS from sleeping during replies or scheduled tasks; other platforms ignore this switch"
+settings.archiving_hides_a_chat_from:
+  zh: "归档只是从侧边栏收起，内容仍在；删除会一并移除会话记录，无法恢复。"
+  en: "Archiving hides a chat from the sidebar; its contents remain. Deleting removes the transcript and cannot be undone."
+settings.loading:
+  zh: "正在加载…"
+  en: "Loading…"
+settings.no_archived_chats:
+  zh: "没有已归档的对话"
+  en: "No archived chats"
+settings.hover_a_chat_in_the:
+  zh: "在侧边栏悬停对话点归档图标，或右键选择「归档」。"
+  en: "Hover a chat in the sidebar and click the archive icon, or right-click and choose Archive."
+settings.no_project:
+  zh: "无项目"
+  en: "No project"
+settings.restore:
+  zh: "恢复"
+  en: "Restore"
+settings.delete:
+  zh: "删除"
+  en: "Delete"
+settings.model:
+  zh: "模型"
+  en: "Model"
+settings.thinking_effort:
+  zh: "推理强度"
+  en: "Thinking effort"
+settings.follow_model_default:
+  zh: "跟随模型默认"
+  en: "Follow model default"
+settings.not_connected:
+  zh: "未连接"
+  en: "Not connected"
+settings.models:
+  zh: "个模型"
+  en: "models"
+settings.edited:
+  zh: "已编辑"
+  en: "Edited"
+settings.no_models_yet_click_to:
+  zh: "还没有模型，点击右上角添加"
+  en: "No models yet; click + to add"
+settings.connect_to_choose_models:
+  zh: "连接后即可选择模型"
+  en: "Connect to choose models"
+settings.model_list:
+  zh: "模型列表"
+  en: "Model list"
+settings.delete_this_chat:
+  zh: "删除这个对话？"
+  en: "Delete this chat?"
+settings.title_and_all_of_its:
+  zh: "「%{title}」及其全部消息会被删除，无法恢复。"
+  en: "%{title} and all of its messages will be permanently deleted and cannot be recovered."
+settings.manage_models_name:
+  zh: "管理模型 · %{name}"
+  en: "Manage models · %{name}"
+settings.select_the_models_to_use:
+  zh: "勾选要使用的模型。"
+  en: "Select the models to use."
+settings.saving:
+  zh: "正在保存…"
+  en: "Saving…"
+settings.confirm:
+  zh: "确认"
+  en: "Confirm"
+settings.choose_models:
+  zh: "选择模型"
+  en: "Choose models"
+settings.fetching_model_list:
+  zh: "正在拉取模型列表…"
+  en: "Fetching model list…"
+settings.add_n_models:
+  zh: "添加 %{n} 个模型"
+  en: "Add %{n} models"
+settings.name:
+  zh: "名称"
+  en: "Name"
+settings.api_format:
+  zh: "API 格式"
+  en: "API format"
+settings.api_key:
+  zh: "API 密钥"
+  en: "API key"
+settings.enter_a_name_url_and:
+  zh: "填写名称、地址和密钥。"
+  en: "Enter a name, URL, and API key."
+settings.fetching:
+  zh: "正在拉取…"
+  en: "Fetching…"
+settings.no_models:
+  zh: "没有模型"
+  en: "No models"
+settings.preview_arg1_engine_messages_skipped:
+  zh: "预览：%{arg1} 条引擎消息，跳过 %{arg2} 条源记录。"
+  en: "Preview: %{arg1} engine messages, skipped %{arg2} source records."
+settings.fetched_arg1_models_select_the:
+  zh: "已获取 %{arg1} 个模型，勾选后加入。"
+  en: "Fetched %{arg1} models; select the ones to add."
+settings.base_url:
+  zh: "Base URL"
+  en: "Base URL"

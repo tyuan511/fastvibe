@@ -1,0 +1,32 @@
+_version: 2
+
+ask.skip:
+  zh: "跳过"
+  en: "Skip"
+ask.send:
+  zh: "发送"
+  en: "Send"
+ask.question:
+  zh: "问题"
+  en: "Question"
+ask.terminal:
+  zh: "终端"
+  en: "Terminal"
+ask.files:
+  zh: "文件"
+  en: "Files"
+ask.allow_this_command_to_run:
+  zh: "是否允许运行这条命令？"
+  en: "Allow this command to run?"
+ask.allow_these_files_to_be:
+  zh: "是否允许修改这些文件？"
+  en: "Allow these files to be changed?"
+ask.deny:
+  zh: "拒绝"
+  en: "Deny"
+ask.allow_once:
+  zh: "允许一次"
+  en: "Allow once"
+ask.allow_for_this_chat:
+  zh: "本次会话都允许"
+  en: "Allow for this chat"

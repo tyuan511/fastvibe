@@ -314,7 +314,7 @@ impl Workspace {
             .cursor_pointer()
             .text_size(px(12.8))
             .font_weight(FontWeight::MEDIUM)
-            .child(if english { "Skip" } else { "跳过" })
+            .child(trs!(english, "ask.skip"))
             .on_click(cx.listener(move |this, _, _, cx| this.skip_question(skip_id.clone(), cx)));
         let send = div()
             .id("ask-send")
@@ -334,7 +334,7 @@ impl Workspace {
                 d.bg(p.c(Token::Muted))
                     .text_color(p.c(Token::MutedForeground))
             })
-            .child(if english { "Send" } else { "发送" })
+            .child(trs!(english, "ask.send"))
             .on_click(cx.listener(move |this, _, window, cx| {
                 let _ = &send_id;
                 this.submit_free(window, cx)
@@ -361,11 +361,7 @@ impl Workspace {
                         SharedString::from(if total > 1 {
                             format!("问题 {}/{}", index + 1, total)
                         } else {
-                            if english {
-                                "Question".to_string()
-                            } else {
-                                "问题".to_string()
-                            }
+                            trs!(english, "ask.question").to_string()
                         }),
                     ))
                     .child(
@@ -414,30 +410,18 @@ impl Workspace {
         let (glyph, kind, detail) = match &a.kind {
             ApprovalKind::Command { command, .. } => (
                 "command-line",
-                if english { "Terminal" } else { "终端" },
+                trs!(english, "ask.terminal"),
                 command.clone(),
             ),
-            ApprovalKind::Patch { files } => (
-                "edit02",
-                if english { "Files" } else { "文件" },
-                files.join("\n"),
-            ),
+            ApprovalKind::Patch { files } => {
+                ("edit02", trs!(english, "ask.files"), files.join("\n"))
+            }
         };
         let question = a.reason.clone().unwrap_or_else(|| match &a.kind {
             ApprovalKind::Command { .. } => {
-                if english {
-                    "Allow this command to run?".to_string()
-                } else {
-                    "是否允许运行这条命令？".to_string()
-                }
+                trs!(english, "ask.allow_this_command_to_run").to_string()
             }
-            ApprovalKind::Patch { .. } => {
-                if english {
-                    "Allow these files to be changed?".to_string()
-                } else {
-                    "是否允许修改这些文件？".to_string()
-                }
-            }
+            ApprovalKind::Patch { .. } => trs!(english, "ask.allow_these_files_to_be").to_string(),
         });
         let kbd = |label: &'static str, on_dark: bool| {
             div()
@@ -470,7 +454,7 @@ impl Workspace {
             .bg(p.c(Token::Background))
             .cursor_pointer()
             .text_size(px(TEXT_SM))
-            .child(if english { "Deny" } else { "拒绝" })
+            .child(trs!(english, "ask.deny"))
             .child(kbd("Esc", false))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.decide(deny_id.clone(), ApprovalDecision::Denied, cx)
@@ -488,11 +472,7 @@ impl Workspace {
             .text_color(p.c(Token::PrimaryForeground))
             .cursor_pointer()
             .text_size(px(TEXT_SM))
-            .child(if english {
-                "Allow once"
-            } else {
-                "允许一次"
-            })
+            .child(trs!(english, "ask.allow_once"))
             .child(kbd("↵", true))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.decide(once_id.clone(), ApprovalDecision::Approved, cx)
@@ -526,11 +506,7 @@ impl Workspace {
                             false,
                             p.c(Token::Accent),
                         )
-                        .child(if english {
-                            "Allow for this chat"
-                        } else {
-                            "本次会话都允许"
-                        })
+                        .child(trs!(english, "ask.allow_for_this_chat"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.approval_menu = false;
                             this.decide(

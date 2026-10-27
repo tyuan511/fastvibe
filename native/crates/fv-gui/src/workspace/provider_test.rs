@@ -179,17 +179,9 @@ impl Workspace {
             })
             .tooltip(move |window, cx| {
                 Tooltip::new(if running {
-                    if english {
-                        "Testing…"
-                    } else {
-                        "正在自检…"
-                    }
+                    trs!(english, "provider_test.testing")
                 } else {
-                    if english {
-                        "Test model"
-                    } else {
-                        "自检模型"
-                    }
+                    trs!(english, "provider_test.test_model")
                 })
                 .build(window, cx)
             })
@@ -211,36 +203,20 @@ impl Workspace {
         let english = self.app_settings.language == UiLanguage::English;
         let (title, token) = match n.result.status {
             ProviderTestStatus::Passed => (
-                if english {
-                    "Reply and tool call passed"
-                } else {
-                    "回答与工具调用均正常"
-                },
+                trs!(english, "provider_test.reply_and_tool_call_passed"),
                 Token::Success,
             ),
             ProviderTestStatus::Partial => (
-                if english {
-                    "Reply passed; tool call unconfirmed"
-                } else {
-                    "回答正常，工具调用尚未确认"
-                },
+                trs!(english, "provider_test.reply_passed_tool_call_unconfirmed"),
                 Token::Warning,
             ),
             ProviderTestStatus::Failed => (
-                if english {
-                    "Self-test failed"
-                } else {
-                    "自检未通过"
-                },
+                trs!(english, "provider_test.self_test_failed"),
                 Token::Destructive,
             ),
         };
         let advice = if n.overloaded {
-            if english {
-                "All self-test slots are busy; try again later"
-            } else {
-                "自检任务已满，请稍后重试"
-            }
+            trs!(english, "provider_test.all_self_test_slots_are")
         } else {
             advice(&n.result, english)
         };
@@ -312,11 +288,7 @@ impl Workspace {
                 .when(n.result.status != ProviderTestStatus::Passed, |d| {
                     d.child(
                         outline_button("edit-checked-model", p)
-                            .child(if english {
-                                "Edit model"
-                            } else {
-                                "编辑模型"
-                            })
+                            .child(trs!(english, "provider_test.edit_model"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if this.settings.as_ref().is_some_and(|s| {
                                     s.model_checks.notice.as_ref().is_some_and(|n| n.id == id)
@@ -349,60 +321,31 @@ fn api_label(api: ApiProtocol) -> &'static str {
 fn advice(result: &ProviderTestResult, english: bool) -> &'static str {
     match result.error_code {
         Some(ProviderTestError::Auth) => {
-            if english {
-                "Authentication failed; check the saved key or sign-in state"
-            } else {
-                "鉴权失败，请检查已保存的密钥或登录状态"
-            }
+            trs!(
+                english,
+                "provider_test.authentication_failed_check_the_saved"
+            )
         }
         Some(ProviderTestError::Protocol) => {
-            if english {
-                "The API or parameters are incompatible; check the model protocol"
-            } else {
-                "接口或参数不兼容，请检查模型协议与参数"
-            }
+            trs!(english, "provider_test.the_api_or_parameters_are")
         }
         Some(ProviderTestError::RateLimit) => {
-            if english {
-                "Too many requests; try again later"
-            } else {
-                "请求过于频繁，请稍后重试"
-            }
+            trs!(english, "provider_test.too_many_requests_try_again")
         }
         Some(ProviderTestError::Network) => {
-            if english {
-                "Could not connect to the provider; check the network and URL"
-            } else {
-                "无法连接提供方，请检查网络与地址"
-            }
+            trs!(english, "provider_test.could_not_connect_to_the")
         }
         Some(ProviderTestError::Timeout) => {
-            if english {
-                "The provider did not respond in time"
-            } else {
-                "提供方未在时限内完成响应"
-            }
+            trs!(english, "provider_test.the_provider_did_not_respond")
         }
         Some(ProviderTestError::Model) => {
-            if english {
-                "The model is unavailable or changed; refresh and test again"
-            } else {
-                "模型不可用或配置已变化，请刷新后重新自检"
-            }
+            trs!(english, "provider_test.the_model_is_unavailable_or")
         }
         Some(ProviderTestError::Unknown) => {
-            if english {
-                "The provider could not complete the self-test; check the model configuration"
-            } else {
-                "提供方未能完成自检，请稍后重试或检查模型配置"
-            }
+            trs!(english, "provider_test.the_provider_could_not_complete")
         }
         None if result.tools == ProviderTestTools::Unconfirmed => {
-            if english {
-                "The reply passed, but the requested test tool call was not returned"
-            } else {
-                "普通回复正常，但未返回指定的测试工具调用"
-            }
+            trs!(english, "provider_test.the_reply_passed_but_the")
         }
         None => "",
     }

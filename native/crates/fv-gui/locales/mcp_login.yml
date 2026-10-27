@@ -1,0 +1,29 @@
+_version: 2
+
+mcp_login.client_id_optional_leave_blank:
+  zh: "Client ID（可选，留空自动注册）"
+  en: "Client ID (optional; leave blank to register automatically)"
+mcp_login.client_secret_optional:
+  zh: "Client Secret（可选）"
+  en: "Client Secret (optional)"
+mcp_login.scopes_optional_space_separated:
+  zh: "权限范围（可选，以空格分隔）"
+  en: "Scopes (optional, space separated)"
+mcp_login.oauth_sign_in:
+  zh: "OAuth 登录"
+  en: "OAuth sign-in"
+mcp_login.complete_authorization_in_your_browser:
+  zh: "请在浏览器中完成授权。"
+  en: "Complete authorization in your browser."
+mcp_login.preparing_sign_in:
+  zh: "正在准备登录…"
+  en: "Preparing sign-in…"
+mcp_login.reopen_authorization_page:
+  zh: "重新打开授权页"
+  en: "Reopen authorization page"
+mcp_login.open_authorization_page:
+  zh: "打开授权页"
+  en: "Open authorization page"
+mcp_login.cancel:
+  zh: "取消"
+  en: "Cancel"

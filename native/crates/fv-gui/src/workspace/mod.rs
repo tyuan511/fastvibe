@@ -12,6 +12,23 @@ use fv_theme::Token;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::*;
 
+/// `tr!(english, "module.key", name = value)`: copy lives in `locales/<module>.yml`.
+/// Declared before the child modules so they can use it.
+macro_rules! tr {
+    ($english:expr, $key:literal $(, $name:ident = $value:expr)* $(,)?) => {
+        rust_i18n::t!($key, locale = if $english { "en" } else { "zh" } $(, $name = $value)*)
+            .into_owned()
+    };
+}
+
+/// Like `tr!` for copy with no placeholders, as a `&'static str`. The set of keys is
+/// fixed at compile time, so each (key, language) is leaked once.
+macro_rules! trs {
+    ($english:expr, $key:expr) => {
+        $crate::workspace::static_text($english, $key)
+    };
+}
+
 mod about;
 mod ask;
 mod composer;
@@ -48,14 +65,20 @@ use crate::theme::Palette;
 use crate::view_model::{Applied, ThreadView};
 
 /// The Electron app's Chinese copy (`locales/zh`), word for word.
+pub(crate) fn static_text(english: bool, key: &'static str) -> &'static str {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<(&'static str, bool), &'static str>>> = OnceLock::new();
+    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
+    cache.entry((key, english)).or_insert_with(|| {
+        let text = rust_i18n::t!(key, locale = if english { "en" } else { "zh" });
+        Box::leak(text.into_owned().into_boxed_str())
+    })
+}
+
 mod text {
     use super::UiLanguage;
 
-    pub const TASKS: &str = "定时任务";
-    pub const PROJECTS: &str = "项目";
-    pub const NO_PROJECTS: &str = "暂无项目";
-    pub const CHATS: &str = "聊天";
-    pub const EMPTY_CHATS: &str = "暂无对话";
     pub const CHANGED_FILES: &str = "已修改 {n} 个文件";
     pub const QUEUE_SEND_NOW: &str = "立即";
     pub const QUEUE_RESUME: &str = "继续";
@@ -2854,18 +2877,55 @@ impl Workspace {
 
 #[cfg(test)]
 mod locale_file_tests {
-    //! The locale file is the only place copy lives, so a key with a missing language would
-    //! silently fall back to Chinese in the English UI. Read the file itself, not the macro.
+    //! Copy lives in `locales/*.yml`. A key with a missing language silently falls back to
+    //! Chinese, and a mistyped key renders as the key itself, so read the files and the
+    //! sources themselves rather than trusting the macro.
     use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    type Doc = BTreeMap<String, BTreeMap<String, String>>;
+
+    fn locale_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("locales")
+    }
+
+    /// The files are flat (`key:` then `  zh: "…"` / `  en: "…"`), so no YAML parser is needed.
+    fn load() -> Doc {
+        let mut out = Doc::new();
+        for entry in std::fs::read_dir(locale_dir()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "yml") {
+                continue;
+            }
+            let mut key = String::new();
+            for line in std::fs::read_to_string(&path).unwrap().lines() {
+                if line.trim().is_empty() || line.starts_with("_version") {
+                    continue;
+                }
+                if let Some(rest) = line.strip_prefix("  ") {
+                    let (lang, text) = rest.split_once(':').expect("lang line");
+                    let text = text.trim();
+                    let text = serde_json::from_str::<String>(text).unwrap_or_else(|_| text.into());
+                    out.get_mut(&key).unwrap().insert(lang.trim().into(), text);
+                } else {
+                    key = line.trim_end_matches(':').to_string();
+                    assert!(
+                        out.insert(key.clone(), BTreeMap::new()).is_none(),
+                        "{key} is defined twice"
+                    );
+                }
+            }
+        }
+        out
+    }
 
     #[test]
     fn every_key_has_both_languages() {
-        let raw = include_str!("../../locales/app.yml");
-        let doc: BTreeMap<String, serde_json::Value> = serde_yaml_ng_free(raw);
-        assert!(!doc.is_empty());
-        for (key, value) in doc.iter().filter(|(k, _)| !k.starts_with('_')) {
+        let doc = load();
+        assert!(doc.len() > 100);
+        for (key, langs) in &doc {
             for lang in ["zh", "en"] {
-                let text = value.get(lang).and_then(|v| v.as_str()).unwrap_or("");
+                let text = langs.get(lang).map(String::as_str).unwrap_or("");
                 assert!(!text.trim().is_empty(), "{key} has no {lang} text");
             }
         }
@@ -2873,21 +2933,66 @@ mod locale_file_tests {
 
     #[test]
     fn placeholders_agree_between_languages() {
-        let doc = serde_yaml_ng_free(include_str!("../../locales/app.yml"));
         let names = |text: &str| -> Vec<String> {
-            text.split("%{")
+            let mut v: Vec<String> = text
+                .split("%{")
                 .skip(1)
                 .filter_map(|r| r.split_once('}'))
                 .map(|(n, _)| n.to_string())
-                .collect()
+                .collect();
+            v.sort();
+            v
         };
-        for (key, value) in doc.iter().filter(|(k, _)| !k.starts_with('_')) {
+        for (key, langs) in load() {
             assert_eq!(
-                names(value["zh"].as_str().unwrap()),
-                names(value["en"].as_str().unwrap()),
-                "{key} uses different placeholders per language"
+                names(&langs["zh"]),
+                names(&langs["en"]),
+                "{key}: placeholders differ"
             );
         }
+    }
+
+    /// Every key the code asks for must exist; a miss would show the key on screen.
+    #[test]
+    fn every_key_used_in_source_exists() {
+        let doc = load();
+        let mut used = 0;
+        let mut stack = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let src: String = std::fs::read_to_string(&path)
+                        .unwrap()
+                        .lines()
+                        .filter(|l| !l.trim_start().starts_with("//"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    for marker in [
+                        "tr!(english, \"",
+                        "trs!(english, \"",
+                        "tr(Chinese, \"",
+                        "tr(language, \"",
+                    ] {
+                        for part in src.split(marker).skip(1) {
+                            let key = part.split('"').next().unwrap();
+                            assert!(
+                                doc.contains_key(key),
+                                "{}: unknown key {key}",
+                                path.display()
+                            );
+                            used += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            used > 400,
+            "only {used} keys found; the scan is probably broken"
+        );
     }
 
     #[test]
@@ -2905,39 +3010,27 @@ mod locale_file_tests {
         );
     }
 
-    /// The file is flat (`key:` then `  zh:` / `  en:`), so no YAML parser is needed.
-    fn serde_yaml_ng_free(raw: &str) -> BTreeMap<String, serde_json::Value> {
-        let mut out: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-        let mut key = String::new();
-        for line in raw.lines().filter(|l| !l.trim().is_empty()) {
-            if let Some(rest) = line.strip_prefix("  ") {
-                let (lang, text) = rest.split_once(':').expect("lang line");
-                let text = text.trim().trim_matches('"');
-                out.get_mut(&key).unwrap()[lang.trim()] = text.into();
-            } else {
-                key = line
-                    .trim_end_matches(':')
-                    .split(':')
-                    .next()
-                    .unwrap()
-                    .to_string();
-                out.insert(key.clone(), serde_json::json!({}));
-            }
-        }
-        out
-    }
-
     #[test]
-    fn rendered_text_matches_the_previous_copy() {
-        use super::text;
-        use fv_protocol::types::UiLanguage::{Chinese, English};
-        assert_eq!(text::new_chat(Chinese), "新对话");
-        assert_eq!(text::new_chat(English), "New chat");
+    fn migrated_copy_matches_the_old_inline_text() {
+        assert_eq!(trs!(true, "about.bundled"), "bundled");
+        assert_eq!(trs!(false, "about.bundled"), "应用内置");
         assert_eq!(
-            text::edit_hint(Chinese),
-            "正在编辑这条提示词，发送会重写这一轮"
+            tr!(
+                false,
+                "about.catalog_stats",
+                models = 3,
+                aliases = 5,
+                source = "x"
+            ),
+            "3 个模型 · 5 个名称索引 · x"
         );
-        assert_eq!(text::connecting(English), "Connecting…");
-        assert_eq!(text::view_changes(English), "View changes");
+        assert_eq!(
+            tr!(true, "pane_entries.operation_failed", error = "boom"),
+            "Operation failed: boom"
+        );
+        assert_eq!(
+            tr!(false, "pane_entries.operation_failed", error = "boom"),
+            "boom"
+        );
     }
 }

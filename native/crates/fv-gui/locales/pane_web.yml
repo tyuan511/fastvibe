@@ -1,0 +1,38 @@
+_version: 2
+
+pane_web.a_chat_can_have_at:
+  zh: "一个对话最多打开 32 个浏览器标签"
+  en: "A chat can have at most 32 browser tabs"
+pane_web.browser:
+  zh: "浏览器"
+  en: "Browser"
+pane_web.the_web_process_exited_retry:
+  zh: "网页进程已退出，请重试"
+  en: "The web process exited; retry"
+pane_web.the_web_process_exited_refresh:
+  zh: "网页进程已退出，请刷新文档预览"
+  en: "The web process exited; refresh the document preview"
+pane_web.enter_a_url_or_search:
+  zh: "输入网址或搜索"
+  en: "Enter a URL or search"
+pane_web.back:
+  zh: "后退"
+  en: "Back"
+pane_web.forward:
+  zh: "前进"
+  en: "Forward"
+pane_web.stop_loading:
+  zh: "停止加载"
+  en: "Stop loading"
+pane_web.reload:
+  zh: "重新加载"
+  en: "Reload"
+pane_web.open_in_system_browser:
+  zh: "在系统浏览器中打开"
+  en: "Open in system browser"
+pane_web.remove_bookmark:
+  zh: "取消收藏"
+  en: "Remove bookmark"
+pane_web.bookmark_this_page:
+  zh: "收藏此页"
+  en: "Bookmark this page"

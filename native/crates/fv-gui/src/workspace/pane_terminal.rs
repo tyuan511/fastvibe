@@ -450,11 +450,11 @@ impl Workspace {
                         this.terminals.insert(
                             id.clone(),
                             TerminalView {
-                                notice: Some(if english {
-                                    format!("Could not open terminal: {e}")
-                                } else {
-                                    format!("无法打开终端：{e}")
-                                }),
+                                notice: Some(tr!(
+                                    english,
+                                    "pane_terminal.could_not_open_terminal_e",
+                                    e = e
+                                )),
                                 ..Default::default()
                             },
                         );
@@ -560,11 +560,11 @@ impl Workspace {
                             visible && !exited
                         }
                         Err(e) => {
-                            view.notice = Some(if english {
-                                format!("Could not read the terminal session: {e}")
-                            } else {
-                                format!("无法读取原终端会话：{e}")
-                            });
+                            view.notice = Some(tr!(
+                                english,
+                                "pane_terminal.could_not_read_the_terminal",
+                                e = e
+                            ));
                             cx.notify();
                             false
                         }
@@ -630,11 +630,11 @@ impl Workspace {
                 view.resizing = false;
                 if let Err(error) = result {
                     view.last_size_sent = None;
-                    view.notice = Some(if english {
-                        format!("Could not resize terminal: {error}")
-                    } else {
-                        format!("无法调整终端尺寸：{error}")
-                    });
+                    view.notice = Some(tr!(
+                        english,
+                        "pane_terminal.could_not_resize_terminal_error",
+                        error = error
+                    ));
                     cx.notify();
                     return;
                 }

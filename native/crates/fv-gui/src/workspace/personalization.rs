@@ -236,29 +236,22 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(div().text_size(px(TEXT_SM)).child(if english {
-                                "Agent instructions"
-                            } else {
-                                "Agent 说明"
-                            }))
-                            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                                "Appended after the system prompt in every conversation."
-                            } else {
-                                "追加到所有对话的系统提示词之后。"
-                            })),
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .child(trs!(english, "personalization.agent_instructions")),
+                            )
+                            .child(div().text_size(px(TEXT_XS)).muted(p).child(trs!(
+                                english,
+                                "personalization.appended_after_the_system_prompt"
+                            ))),
                     )
                     .child(
                         outline_button("save-personalization", p)
                             .child(if busy {
-                                if english {
-                                    "Saving…"
-                                } else {
-                                    "正在保存…"
-                                }
-                            } else if english {
-                                "Save"
+                                trs!(english, "personalization.saving")
                             } else {
-                                "保存"
+                                trs!(english, "personalization.save")
                             })
                             .when(!enabled, |b| b.opacity(0.4))
                             .when(enabled, |b| {
@@ -268,16 +261,16 @@ impl Workspace {
                             }),
                     ),
             )
-            .child(Textarea::new(&s.editor).aria_label(if english {
-                "Agent instructions"
-            } else {
-                "Agent 说明"
-            }))
-            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                "Used in every turn; leave empty to disable. Changes apply from the next turn."
-            } else {
-                "每轮对话都会使用；留空即停用。保存后从下一轮起生效。"
-            }));
+            .child(
+                Textarea::new(&s.editor)
+                    .aria_label(trs!(english, "personalization.agent_instructions")),
+            )
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "personalization.used_in_every_turn_leave")),
+            );
         if s.draft.conflict() {
             pane = pane.child(
                 div()
@@ -288,11 +281,10 @@ impl Workspace {
                         div()
                             .text_size(px(TEXT_XS))
                             .text_color(p.c(Token::Destructive))
-                            .child(if english {
-                                "Another window changed the instructions; your draft was kept."
-                            } else {
-                                "其他窗口已修改说明，当前草稿已保留。"
-                            }),
+                            .child(trs!(
+                                english,
+                                "personalization.another_window_changed_the_instructions"
+                            )),
                     )
                     .child(
                         div()
@@ -300,11 +292,7 @@ impl Workspace {
                             .gap(px(8.0))
                             .child(
                                 outline_button("reload-personalization", p)
-                                    .child(if english {
-                                        "Load saved content"
-                                    } else {
-                                        "载入已保存内容"
-                                    })
+                                    .child(trs!(english, "personalization.load_saved_content"))
                                     .when(!busy, |b| {
                                         b.on_click(cx.listener(|this, _, _, cx| {
                                             if let Some(s) = this.settings.as_mut() {
@@ -316,11 +304,7 @@ impl Workspace {
                             )
                             .child(
                                 outline_button("overwrite-personalization", p)
-                                    .child(if english {
-                                        "Save anyway"
-                                    } else {
-                                        "覆盖保存"
-                                    })
+                                    .child(trs!(english, "personalization.save_anyway"))
                                     .when(!busy, |b| {
                                         b.on_click(cx.listener(|this, _, _, cx| {
                                             this.save_personalization(true, cx)
@@ -333,10 +317,10 @@ impl Workspace {
         if let Some(notice) = &s.draft.notice {
             let notice = if english {
                 if notice == "已保存" {
-                    "Saved".to_string()
+                    trs!(english, "personalization.saved").to_string()
                 } else if let Some(error) = notice.strip_prefix("保存失败，草稿已保留：")
                 {
-                    format!("Save failed; draft kept: {error}")
+                    tr!(english, "personalization.save_failed", error = error)
                 } else {
                     notice.clone()
                 }

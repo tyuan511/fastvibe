@@ -294,11 +294,11 @@ impl Workspace {
                         if let Some(storage) = this.pane_storage.as_mut() {
                             storage.invalidate();
                         }
-                        let message = if english {
-                            format!("Could not save workspace recovery state: {error}")
-                        } else {
-                            format!("无法保存工作区恢复信息：{error}")
-                        };
+                        let message = tr!(
+                            english,
+                            "pane_persistence.could_not_save_workspace_recovery",
+                            error = error
+                        );
                         if this
                             .notice
                             .as_ref()

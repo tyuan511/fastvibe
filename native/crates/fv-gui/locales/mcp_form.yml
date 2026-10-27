@@ -1,0 +1,77 @@
+_version: 2
+
+mcp_form.name:
+  zh: "名称"
+  en: "Name"
+mcp_form.value:
+  zh: "值"
+  en: "Value"
+mcp_form.enter_a_name_for_each:
+  zh: "请填写环境变量或请求头的名称，或删除空白行"
+  en: "Enter a name for each environment variable or header, or remove blank rows"
+mcp_form.environment_variable_or_header_names:
+  zh: "环境变量或请求头的名称不能重复"
+  en: "Environment variable or header names must be unique"
+mcp_form.argument:
+  zh: "参数"
+  en: "Argument"
+mcp_form.server_name:
+  zh: "服务器名称"
+  en: "Server name"
+mcp_form.e_g_npx_or_an:
+  zh: "例如 npx 或可执行文件路径"
+  en: "e.g. npx or an executable path"
+mcp_form.could_not_save_mcp_e:
+  zh: "无法保存 MCP：%{e}"
+  en: "Could not save MCP: %{e}"
+mcp_form.edit_server:
+  zh: "编辑服务器"
+  en: "Edit server"
+mcp_form.add_server:
+  zh: "添加服务器"
+  en: "Add server"
+mcp_form.local_process:
+  zh: "本地进程"
+  en: "Local process"
+mcp_form.remove:
+  zh: "删除"
+  en: "Remove"
+mcp_form.add_argument:
+  zh: "添加参数"
+  en: "Add argument"
+mcp_form.add_environment_variable:
+  zh: "添加环境变量"
+  en: "Add environment variable"
+mcp_form.add_request_header:
+  zh: "添加请求头"
+  en: "Add request header"
+mcp_form.enable_server:
+  zh: "启用服务器"
+  en: "Enable server"
+mcp_form.search_and_load_tools_on:
+  zh: "按需搜索并加载工具"
+  en: "Search and load tools on demand"
+mcp_form.saving:
+  zh: "正在保存…"
+  en: "Saving…"
+mcp_form.save_server:
+  zh: "保存服务器"
+  en: "Save server"
+mcp_form.cancel:
+  zh: "取消"
+  en: "Cancel"
+mcp_form.launch_command:
+  zh: "启动命令"
+  en: "Launch command"
+mcp_form.server_url:
+  zh: "服务器地址"
+  en: "Server URL"
+mcp_form.arguments:
+  zh: "参数（每行一个，按原样传给进程）"
+  en: "Arguments (one per line, passed as entered)"
+mcp_form.environment_variables:
+  zh: "环境变量"
+  en: "Environment variables"
+mcp_form.request_headers:
+  zh: "请求头"
+  en: "Request headers"

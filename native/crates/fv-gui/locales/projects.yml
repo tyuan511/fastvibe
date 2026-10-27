@@ -1,0 +1,26 @@
+_version: 2
+
+projects.main:
+  zh: "主"
+  en: "Main"
+projects.make_primary_folder:
+  zh: "设为主文件夹"
+  en: "Make primary folder"
+projects.add_folder:
+  zh: "添加文件夹"
+  en: "Add folder"
+projects.edit_project:
+  zh: "编辑项目"
+  en: "Edit project"
+projects.create_project:
+  zh: "创建项目"
+  en: "Create project"
+projects.leave_blank_to_use_hint:
+  zh: "不填则用「%{hint}」"
+  en: "Leave blank to use \"%{hint}\""
+projects.source_folders:
+  zh: "源文件夹"
+  en: "Source folders"
+projects.confirm:
+  zh: "确认"
+  en: "Confirm"

@@ -68,11 +68,10 @@ impl Editor {
         let prompt = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(4, 12)
-                .placeholder(if english {
-                    "Role responsibilities, working style, and completion requirements"
-                } else {
-                    "角色的职责、工作方式与完成要求"
-                })
+                .placeholder(trs!(
+                    english,
+                    "subagent_roles.role_responsibilities_working_style_and"
+                ))
         });
         prompt.update(cx, |state, cx| {
             state.set_value(current.system_prompt.clone(), window, cx)
@@ -81,31 +80,19 @@ impl Editor {
             session: ticket(),
             expected: role,
             id: field(
-                if english {
-                    "Role ID (letters, numbers, - or _)"
-                } else {
-                    "角色 ID（字母、数字、- 或 _）"
-                },
+                trs!(english, "subagent_roles.role_id_letters_numbers_or"),
                 window,
                 cx,
                 &current.id,
             ),
             name: field(
-                if english {
-                    "Display name"
-                } else {
-                    "显示名称"
-                },
+                trs!(english, "subagent_roles.display_name"),
                 window,
                 cx,
                 &current.name,
             ),
             description: field(
-                if english {
-                    "Description shown when the main Agent chooses a role"
-                } else {
-                    "供主 Agent 选择角色时参考的说明"
-                },
+                trs!(english, "subagent_roles.description_shown_when_the_main"),
                 window,
                 cx,
                 &current.description,
@@ -299,10 +286,28 @@ impl Workspace {
         let p = &self.palette;
         let s = &self.subagent_roles;
         let english = self.app_settings.language == UiLanguage::English;
-        let mut pane=card(p).p(px(16.0)).gap(px(12.0)).text_size(px(TEXT_SM))
-            .child(div().flex().items_center().justify_between().child(if english { "Role templates" } else { "角色模板" })
-                .child(outline_button("role-add",p).child(if english { "New role" } else { "新建角色" }).on_click(cx.listener(|this,_,window,cx|this.edit_role(None,window,cx)))))
-            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english { "Roles can define instructions, model, thinking level, and tool scope. Editing or deleting a template does not affect existing subtasks; the main Agent can choose a role by ID." } else { "角色可指定说明、模型、思考强度和工具范围。修改或删除模板不影响已有子任务；主 Agent 创建任务时可按角色 ID 选择。" }));
+        let mut pane = card(p)
+            .p(px(16.0))
+            .gap(px(12.0))
+            .text_size(px(TEXT_SM))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(trs!(english, "subagent_roles.role_templates"))
+                    .child(
+                        outline_button("role-add", p)
+                            .child(trs!(english, "subagent_roles.new_role"))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.edit_role(None, window, cx)),
+                            ),
+                    ),
+            )
+            .child(div().text_size(px(TEXT_XS)).muted(p).child(trs!(
+                english,
+                "subagent_roles.roles_can_define_instructions_model"
+            )));
         if let Some(saved) = &s.saved {
             for role in &saved.roles {
                 let edit = role.clone();
@@ -322,11 +327,7 @@ impl Workspace {
                                     role.name,
                                     role.id,
                                     if role.read_only {
-                                        if english {
-                                            " · read-only"
-                                        } else {
-                                            " · 只读"
-                                        }
+                                        trs!(english, "subagent_roles.read_only")
                                     } else {
                                         ""
                                     }
@@ -340,7 +341,7 @@ impl Workspace {
                         )
                         .child(
                             outline_button(SharedString::from(format!("role-edit-{}", role.id)), p)
-                                .child(if english { "Edit" } else { "编辑" })
+                                .child(trs!(english, "subagent_roles.edit"))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.edit_role(Some(edit.clone()), window, cx)
                                 })),
@@ -351,13 +352,9 @@ impl Workspace {
                                 p,
                             )
                             .child(if confirm {
-                                if english {
-                                    "Confirm delete"
-                                } else {
-                                    "确认删除"
-                                }
+                                trs!(english, "subagent_roles.confirm_delete")
                             } else {
-                                if english { "Delete" } else { "删除" }
+                                trs!(english, "subagent_roles.delete")
                             })
                             .on_click(cx.listener(
                                 move |this, _, _, cx| this.delete_role(remove.clone(), cx),
@@ -366,11 +363,11 @@ impl Workspace {
                 );
             }
         } else {
-            pane = pane.child(div().muted(p).child(if english {
-                "Loading roles…"
-            } else {
-                "正在读取角色…"
-            }));
+            pane = pane.child(
+                div()
+                    .muted(p)
+                    .child(trs!(english, "subagent_roles.loading_roles")),
+            );
         }
         if let Some(error) = &s.error {
             pane = pane.child(
@@ -404,11 +401,11 @@ impl Workspace {
             .border_color(p.c(Token::Border))
             .pt(px(12.0));
         if let Some(role) = &e.expected {
-            form = form.child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
-                format!("Role ID: {}", role.id)
-            } else {
-                format!("角色 ID：{}", role.id)
-            }));
+            form = form.child(div().text_size(px(TEXT_XS)).muted(p).child(tr!(
+                english,
+                "subagent_roles.role_id_arg1",
+                arg1 = role.id
+            )));
         } else if busy {
             form = form.child(format!("角色 ID：{}", e.id.read(cx).value()));
         } else {
@@ -432,13 +429,7 @@ impl Workspace {
                     .map(|m| format!("{} / {}", m.provider_name, m.model.id))
                     .unwrap_or_else(|| id.clone())
             })
-            .unwrap_or_else(|| {
-                if english {
-                    "Inherit parent model".into()
-                } else {
-                    "继承父任务模型".into()
-                }
-            });
+            .unwrap_or_else(|| trs!(english, "subagent_roles.inherit_parent_model").into());
         form = form.child(
             outline_button("role-model", p)
                 .child(label)
@@ -459,11 +450,7 @@ impl Workspace {
                 .gap(px(4.0));
             for (i, (value, label)) in std::iter::once((
                 None,
-                if english {
-                    "Inherit parent model".to_string()
-                } else {
-                    "继承父任务模型".to_string()
-                },
+                trs!(english, "subagent_roles.inherit_parent_model").to_string(),
             ))
             .chain(self.models.iter().map(|m| {
                 (
@@ -502,11 +489,7 @@ impl Workspace {
         {
             let label = value
                 .map(super::composer::thinking_label)
-                .unwrap_or(if english {
-                    "Inherit thinking level"
-                } else {
-                    "继承思考强度"
-                });
+                .unwrap_or(trs!(english, "subagent_roles.inherit_thinking_level"));
             thinking = thinking.child(
                 outline_button(SharedString::from(format!("role-thinking-{i}")), p)
                     .when(e.thinking == value, |d| d.bg(p.c(Token::Accent)))
@@ -525,11 +508,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .justify_between()
-                .child(if english {
-                    "Read-only workspace"
-                } else {
-                    "只读工作区"
-                })
+                .child(trs!(english, "subagent_roles.read_only_workspace"))
                 .child(
                     switch("role-read-only".into(), e.read_only, p).on_click(cx.listener(
                         move |this, _, _, cx| {
@@ -557,25 +536,18 @@ impl Workspace {
                 ),
         );
         if e.read_only {
-            form = form.child(div().text_size(px(TEXT_XS)).muted(p).child(
-                if english { "Read-only roles use restricted local tools only; MCP and further delegation are unavailable, and filesystem restrictions cannot be lifted." } else { "只读角色仅使用受限的本机工具，不提供 MCP 或继续委派；不能申请解除文件系统限制。" },
-            ));
+            form = form.child(div().text_size(px(TEXT_XS)).muted(p).child(trs!(
+                english,
+                "subagent_roles.read_only_roles_use_restricted"
+            )));
         }
         let all = e.tools.is_none();
         form = form.child(
             outline_button("role-tools-mode", p)
                 .child(if all {
-                    if english {
-                        "Tools: inherit all available"
-                    } else {
-                        "工具：继承全部可用工具"
-                    }
+                    trs!(english, "subagent_roles.tools_inherit_all_available")
                 } else {
-                    if english {
-                        "Tools: selected only"
-                    } else {
-                        "工具：仅选中的工具"
-                    }
+                    trs!(english, "subagent_roles.tools_selected_only")
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(e) = &mut this.subagent_roles.editor {
@@ -624,11 +596,11 @@ impl Workspace {
                 let name = name.clone();
                 tools = tools.child(
                     outline_button(SharedString::from(format!("role-missing-{name}")), p)
-                        .child(if english {
-                            format!("✓ {name} (currently unavailable; click to remove)")
-                        } else {
-                            format!("✓ {name}（当前不可用，点击移除）")
-                        })
+                        .child(tr!(
+                            english,
+                            "subagent_roles.name_currently_unavailable_click_to",
+                            name = name
+                        ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(e) = &mut this.subagent_roles.editor
                                 && let Some(tools) = &mut e.tools
@@ -646,7 +618,10 @@ impl Workspace {
                 div()
                     .text_size(px(TEXT_XS))
                     .text_color(p.c(Token::Destructive))
-                    .child(if english { "This role changed elsewhere. The draft is kept; click Edit again to load the latest version." } else { "此角色已在别处更改。草稿仍保留；重新点“编辑”可载入最新版本。" }),
+                    .child(trs!(
+                        english,
+                        "subagent_roles.this_role_changed_elsewhere_the"
+                    )),
             );
         }
         form.child(
@@ -657,19 +632,15 @@ impl Workspace {
                     outline_button("role-save", p)
                         .when(busy, |d| d.opacity(0.5))
                         .child(if busy {
-                            if english {
-                                "Saving…"
-                            } else {
-                                "正在保存…"
-                            }
+                            trs!(english, "subagent_roles.saving")
                         } else {
-                            if english { "Save role" } else { "保存角色" }
+                            trs!(english, "subagent_roles.save_role")
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.save_role(cx))),
                 )
                 .child(
                     outline_button("role-cancel", p)
-                        .child(if english { "Close editor" } else { "收起" })
+                        .child(trs!(english, "subagent_roles.close_editor"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.subagent_roles.editor = None;
                             cx.notify();

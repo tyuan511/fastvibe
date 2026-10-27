@@ -252,7 +252,7 @@ impl Workspace {
                             .bg(p.c(Token::Muted))
                             .text_size(px(TEXT_XS))
                             .muted(p)
-                            .child(if english { "Main" } else { "主" })
+                            .child(trs!(english, "projects.main"))
                             .into_any_element()
                     } else {
                         div()
@@ -272,11 +272,7 @@ impl Workspace {
                                     .cursor_pointer()
                                     .text_size(px(TEXT_XS))
                                     .hover(move |d| d.bg(hover))
-                                    .child(if english {
-                                        "Make primary folder"
-                                    } else {
-                                        "设为主文件夹"
-                                    })
+                                    .child(trs!(english, "projects.make_primary_folder"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if let Some(d) = &mut this.project_dialog {
                                             d.folders.retain(|f| f != &primary_of);
@@ -317,11 +313,7 @@ impl Workspace {
                 .muted(p)
                 .hover(move |d| d.bg(hover))
                 .child(icon("add01", 16.0, p.c(Token::MutedForeground)))
-                .child(if english {
-                    "Add folder"
-                } else {
-                    "添加文件夹"
-                })
+                .child(trs!(english, "projects.add_folder"))
                 .on_click(cx.listener(|this, _, _, cx| this.pick_folders(cx))),
         );
 
@@ -329,17 +321,9 @@ impl Workspace {
             dialog_card(p, 448.0)
                 .child(dialog_head(
                     if editing {
-                        if english {
-                            "Edit project"
-                        } else {
-                            "编辑项目"
-                        }
+                        trs!(english, "projects.edit_project")
                     } else {
-                        if english {
-                            "Create project"
-                        } else {
-                            "创建项目"
-                        }
+                        trs!(english, "projects.create_project")
                     },
                     "",
                     p,
@@ -369,11 +353,11 @@ impl Workspace {
                         )
                         .when_some(placeholder_hint.filter(|_| !editing), |col, hint| {
                             col.child(div().text_size(px(TEXT_XS)).muted(p).child(
-                                SharedString::from(if english {
-                                    format!("Leave blank to use \"{hint}\"")
-                                } else {
-                                    format!("不填则用「{hint}」")
-                                }),
+                                SharedString::from(tr!(
+                                    english,
+                                    "projects.leave_blank_to_use_hint",
+                                    hint = hint
+                                )),
                             ))
                         })
                         .child(
@@ -381,11 +365,12 @@ impl Workspace {
                                 .flex()
                                 .flex_col()
                                 .gap(px(4.0))
-                                .child(div().text_size(px(TEXT_SM)).muted(p).child(if english {
-                                    "Source folders"
-                                } else {
-                                    "源文件夹"
-                                }))
+                                .child(
+                                    div()
+                                        .text_size(px(TEXT_SM))
+                                        .muted(p)
+                                        .child(trs!(english, "projects.source_folders")),
+                                )
                                 .child(rows),
                         )
                         .when_some(d.error.clone(), |col, e| {
@@ -405,11 +390,9 @@ impl Workspace {
                         cx.notify();
                     },
                     if editing {
-                        if english { "Confirm" } else { "确认" }
-                    } else if english {
-                        "Create project"
+                        trs!(english, "projects.confirm")
                     } else {
-                        "创建项目"
+                        trs!(english, "projects.create_project")
                     },
                     |this, _, cx| this.save_project(cx),
                     d.folders.is_empty() || d.busy,

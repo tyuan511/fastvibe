@@ -74,11 +74,11 @@ impl Workspace {
                     match result {
                         Ok(update) => settings.about.update = Some(update),
                         Err(error) => {
-                            settings.about.error = Some(if english {
-                                format!("Update check failed: {error}")
-                            } else {
-                                format!("检查更新失败：{error}")
-                            })
+                            settings.about.error = Some(tr!(
+                                english,
+                                "about.update_check_failed_error",
+                                error = error
+                            ))
                         }
                     }
                 }
@@ -151,21 +151,12 @@ impl Workspace {
                         this.observe_personalization(&settings.custom_system_prompt);
                         this.app_settings = settings;
                         this.appearance_dirty = true;
-                        this.sidebar_notice = Some(
-                            if english {
-                                "Preferences restored to defaults"
-                            } else {
-                                "偏好设置已恢复默认"
-                            }
-                            .into(),
-                        );
+                        this.sidebar_notice =
+                            Some(trs!(english, "about.preferences_restored_to_defaults").into());
                     }
                     Err(error) => {
-                        this.sidebar_notice = Some(if english {
-                            format!("Reset failed: {error}")
-                        } else {
-                            format!("恢复默认失败：{error}")
-                        })
+                        this.sidebar_notice =
+                            Some(tr!(english, "about.reset_failed_error", error = error))
                     }
                 }
                 this.refresh_app_settings(cx);
@@ -289,42 +280,25 @@ impl Workspace {
         let mut details = div().flex().flex_col().gap(px(6.0));
         if let Some(catalog) = &s.catalog {
             details = details.child(if catalog.models == 0 {
-                if english {
-                    "No model catalog yet; unknown models use defaults and show unknown costs."
-                        .into()
-                } else {
-                    "尚无模型目录；未知模型使用默认参数，费用显示为未知。".into()
-                }
+                trs!(english, "about.no_model_catalog_yet_unknown").into()
             } else {
-                if english {
-                    format!(
-                        "{} models · {} name aliases · {}",
-                        catalog.models,
-                        catalog.aliases,
-                        if catalog.bundled {
-                            "bundled"
-                        } else {
-                            "downloaded"
-                        }
-                    )
-                } else {
-                    format!(
-                        "{} 个模型 · {} 个名称索引 · {}",
-                        catalog.models,
-                        catalog.aliases,
-                        if catalog.bundled {
-                            "应用内置"
-                        } else {
-                            "已下载"
-                        }
-                    )
-                }
+                tr!(
+                    english,
+                    "about.catalog_stats",
+                    models = catalog.models,
+                    aliases = catalog.aliases,
+                    source = if catalog.bundled {
+                        trs!(english, "about.bundled")
+                    } else {
+                        trs!(english, "about.downloaded")
+                    }
+                )
             });
-            details = details.child(if english {
-                format!("Updated {}", timestamp(catalog.generated_at))
-            } else {
-                format!("更新于 {}", timestamp(catalog.generated_at))
-            });
+            details = details.child(tr!(
+                english,
+                "about.updated_arg1",
+                arg1 = timestamp(catalog.generated_at)
+            ));
             if !catalog.path.is_empty() {
                 details = details.child(
                     div()
@@ -335,17 +309,9 @@ impl Workspace {
             }
         } else {
             details = details.child(if s.loading {
-                if english {
-                    "Loading model catalog…"
-                } else {
-                    "正在读取模型目录…"
-                }
+                trs!(english, "about.loading_model_catalog")
             } else {
-                if english {
-                    "Waiting for connection"
-                } else {
-                    "等待连接"
-                }
+                trs!(english, "about.waiting_for_connection")
             });
         }
         let refreshing = s.refreshing;
@@ -353,66 +319,231 @@ impl Workspace {
         let diagnostics_loading = s.diagnostics_loading;
         let update = s.update.clone();
         let update_loading = s.update_loading;
-        div().flex().flex_col().gap(px(20.0))
-            .child(div().flex().items_center().gap(px(12.0))
-                .child(div().text_size(px(24.0)).font_weight(FontWeight::BOLD).child("FastVibe"))
-                .child(div().text_size(px(TEXT_SM)).muted(p)
-                    .child(format!("v{}", env!("CARGO_PKG_VERSION")))))
-            .child(div().text_size(px(TEXT_SM)).muted(p).child(if english {
-                "A workspace for code, documents, and agent collaboration"
-            } else {
-                "代码、办公与智能体协作工作区"
-            }))
-            .child(card(p).p(px(16.0)).flex().items_center().justify_between()
-                .child(div().flex().flex_col().gap(px(4.0))
-                    .child(div().text_size(px(TEXT_SM)).child(if english { "App updates" } else { "应用更新" }))
-                    .child(div().text_size(px(TEXT_XS)).muted(p).child(match update.as_ref().and_then(|u| u.latest_version.as_deref()) {
-                        Some(version) if update.as_ref().is_some_and(|u| u.current_version != version) => {
-                            if english { format!("New version v{version} available") } else { format!("发现新版本 v{version}") }
-                        }
-                        Some(_) => if english { "Already up to date".into() } else { "当前已是最新版本".into() },
-                        None => if english { "Check the latest GitHub release".into() } else { "从 GitHub 检查最新发布版本".into() },
-                    })))
-                .child(outline_button("check-app-update", p)
-                    .child(if update_loading { if english { "Checking…" } else { "检查中…" } } else if english { "Check for updates" } else { "检查更新" })
-                    .when(!update_loading, |button| button.on_click(cx.listener(|this, _, _, cx| this.check_update(cx)))))
-            .when_some(update.and_then(|u| u.release_url), |d, url| d.child(
-                outline_button("open-release", p).child(if english { "Open release page" } else { "打开发布页" }).on_click(move |_, _, cx| cx.open_url(&url))
-            )))
-            .child(card(p).p(px(16.0)).flex().items_center().justify_between()
-                .child(div().text_size(px(TEXT_SM)).child("tyuan511/fastvibe"))
-                .child(outline_button("about-repository", p).child(if english { "Repository" } else { "开源仓库" })
-                    .on_click(cx.listener(|_, _, _, cx| cx.open_url("https://github.com/tyuan511/fastvibe")))))
-            .child(card(p).p(px(16.0)).flex().flex_col().gap(px(10.0))
-                .child(div().flex().items_center().justify_between()
-                    .child(div().text_size(px(TEXT_SM)).font_weight(FontWeight::MEDIUM).child(if english { "Diagnostics" } else { "诊断信息" }))
-                    .child(outline_button("load-diagnostics", p)
-                        .child(if diagnostics_loading { if english { "Loading…" } else { "读取中…" } } else if diagnostics.is_some() { if english { "Copy diagnostics" } else { "复制诊断" } } else if english { "Read and copy" } else { "读取并复制" })
-                        .when(!diagnostics_loading, |button| button.on_click(cx.listener(|this, _, _, cx| this.copy_diagnostics(cx))))))
-                .when_some(diagnostics, |d, diagnostics| {
-                    d.child(div().text_size(px(TEXT_XS)).muted(p).child(diagnostics_text(&diagnostics)))
-                }))
-            .child(card(p).p(px(16.0)).flex().items_center().justify_between()
-                .child(div().flex().flex_col().gap(px(4.0))
-                    .child(div().text_size(px(TEXT_SM)).child(if english { "Preferences" } else { "偏好设置" }))
-                    .child(div().text_size(px(TEXT_XS)).muted(p)
-                        .child(if english { "Reset themes, sandbox, shortcuts, browser, and Agent instructions; providers and chats are kept." } else { "恢复主题、沙箱、快捷键、浏览器和 Agent 说明的默认值；供应商与对话不会删除。" })))
-                .child(outline_button("reset-preferences", p).child(if english { "Reset" } else { "恢复默认" })
-                    .on_click(cx.listener(|this, _, _, cx| this.reset_preferences(cx)))))
-            .child(card(p).p(px(16.0)).flex().flex_col().gap(px(12.0))
-                .child(div().flex().items_center().justify_between()
-                    .child(div().text_size(px(TEXT_SM)).font_weight(FontWeight::MEDIUM).child(if english { "Model catalog" } else { "模型目录" }))
-                    .child(outline_button("update-model-catalog", p)
-                        .when(refreshing, |d| d.opacity(0.5))
-                        .child(if refreshing { if english { "Updating…" } else { "正在更新…" } } else if english { "Update model catalog" } else { "更新模型目录" })
-                        .on_click(cx.listener(|this, _, _, cx| this.update_catalog(cx)))))
-                .child(details.text_size(px(TEXT_SM)))
-                .child(div().text_size(px(TEXT_XS)).muted(p)
-                    .child(if english { "Model parameters and reference prices come from models.dev and refresh hourly. Updates apply to later requests." } else { "模型参数和参考价格来自 models.dev，每小时自动刷新。更新适用于后续请求，保留正在生成的回复。" })))
-            .when_some(s.notice.clone(), |d, notice| d.child(div().text_size(px(TEXT_XS)).muted(p)
-                .child(SharedString::from(notice))))
-            .when_some(s.error.clone(), |d, error| d.child(div().text_size(px(TEXT_XS))
-                .text_color(p.c(Token::Destructive)).child(SharedString::from(error))))
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(20.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .text_size(px(24.0))
+                            .font_weight(FontWeight::BOLD)
+                            .child("FastVibe"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .muted(p)
+                            .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(TEXT_SM))
+                    .muted(p)
+                    .child(trs!(english, "about.a_workspace_for_code_documents")),
+            )
+            .child(
+                card(p)
+                    .p(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .child(trs!(english, "about.app_updates")),
+                            )
+                            .child(
+                                div().text_size(px(TEXT_XS)).muted(p).child(
+                                    match update.as_ref().and_then(|u| u.latest_version.as_deref())
+                                    {
+                                        Some(version)
+                                            if update
+                                                .as_ref()
+                                                .is_some_and(|u| u.current_version != version) =>
+                                        {
+                                            tr!(
+                                                english,
+                                                "about.new_version_v_version_available",
+                                                version = version
+                                            )
+                                        }
+                                        Some(_) => trs!(english, "about.already_up_to_date").into(),
+                                        None => {
+                                            trs!(english, "about.check_the_latest_github_release")
+                                                .into()
+                                        }
+                                    },
+                                ),
+                            ),
+                    )
+                    .child(
+                        outline_button("check-app-update", p)
+                            .child(if update_loading {
+                                trs!(english, "about.checking")
+                            } else {
+                                trs!(english, "about.check_for_updates")
+                            })
+                            .when(!update_loading, |button| {
+                                button.on_click(cx.listener(|this, _, _, cx| this.check_update(cx)))
+                            }),
+                    )
+                    .when_some(update.and_then(|u| u.release_url), |d, url| {
+                        d.child(
+                            outline_button("open-release", p)
+                                .child(trs!(english, "about.open_release_page"))
+                                .on_click(move |_, _, cx| cx.open_url(&url)),
+                        )
+                    }),
+            )
+            .child(
+                card(p)
+                    .p(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_size(px(TEXT_SM)).child("tyuan511/fastvibe"))
+                    .child(
+                        outline_button("about-repository", p)
+                            .child(trs!(english, "about.repository"))
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.open_url("https://github.com/tyuan511/fastvibe")
+                            })),
+                    ),
+            )
+            .child(
+                card(p)
+                    .p(px(16.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(trs!(english, "about.diagnostics")),
+                            )
+                            .child(
+                                outline_button("load-diagnostics", p)
+                                    .child(if diagnostics_loading {
+                                        trs!(english, "about.loading")
+                                    } else if diagnostics.is_some() {
+                                        trs!(english, "about.copy_diagnostics")
+                                    } else {
+                                        trs!(english, "about.read_and_copy")
+                                    })
+                                    .when(!diagnostics_loading, |button| {
+                                        button.on_click(
+                                            cx.listener(|this, _, _, cx| this.copy_diagnostics(cx)),
+                                        )
+                                    }),
+                            ),
+                    )
+                    .when_some(diagnostics, |d, diagnostics| {
+                        d.child(
+                            div()
+                                .text_size(px(TEXT_XS))
+                                .muted(p)
+                                .child(diagnostics_text(&diagnostics)),
+                        )
+                    }),
+            )
+            .child(
+                card(p)
+                    .p(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .child(trs!(english, "about.preferences")),
+                            )
+                            .child(div().text_size(px(TEXT_XS)).muted(p).child(trs!(
+                                english,
+                                "about.reset_themes_sandbox_shortcuts_browser"
+                            ))),
+                    )
+                    .child(
+                        outline_button("reset-preferences", p)
+                            .child(trs!(english, "about.reset"))
+                            .on_click(cx.listener(|this, _, _, cx| this.reset_preferences(cx))),
+                    ),
+            )
+            .child(
+                card(p)
+                    .p(px(16.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(trs!(english, "about.model_catalog")),
+                            )
+                            .child(
+                                outline_button("update-model-catalog", p)
+                                    .when(refreshing, |d| d.opacity(0.5))
+                                    .child(if refreshing {
+                                        trs!(english, "about.updating")
+                                    } else {
+                                        trs!(english, "about.update_model_catalog")
+                                    })
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.update_catalog(cx)),
+                                    ),
+                            ),
+                    )
+                    .child(details.text_size(px(TEXT_SM)))
+                    .child(
+                        div()
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child(trs!(english, "about.model_parameters_and_reference_prices")),
+                    ),
+            )
+            .when_some(s.notice.clone(), |d, notice| {
+                d.child(
+                    div()
+                        .text_size(px(TEXT_XS))
+                        .muted(p)
+                        .child(SharedString::from(notice)),
+                )
+            })
+            .when_some(s.error.clone(), |d, error| {
+                d.child(
+                    div()
+                        .text_size(px(TEXT_XS))
+                        .text_color(p.c(Token::Destructive))
+                        .child(SharedString::from(error)),
+                )
+            })
             .into_any_element()
     }
 }

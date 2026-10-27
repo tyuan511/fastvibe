@@ -1,0 +1,47 @@
+_version: 2
+
+composer.follow_default:
+  zh: "跟随默认"
+  en: "Follow default"
+composer.stop:
+  zh: "停止"
+  en: "Stop"
+composer.queue:
+  zh: "加入队列"
+  en: "Queue"
+composer.send:
+  zh: "发送"
+  en: "Send"
+composer.cannot_compact_while_the_chat:
+  zh: "会话进行中，无法压缩"
+  en: "Cannot compact while the chat is running"
+composer.compact_context:
+  zh: "压缩上下文"
+  en: "Compact context"
+composer.context_window:
+  zh: "上下文窗口"
+  en: "Context window"
+composer.choose_project:
+  zh: "选择项目"
+  en: "Choose project"
+composer.no_matching_projects:
+  zh: "没有匹配的项目"
+  en: "No matching projects"
+composer.thinking_minimal:
+  zh: "极低"
+  en: "Minimal"
+composer.thinking_low:
+  zh: "低"
+  en: "Low"
+composer.thinking_medium:
+  zh: "中"
+  en: "Medium"
+composer.thinking_high:
+  zh: "高"
+  en: "High"
+composer.thinking_xhigh:
+  zh: "极高"
+  en: "Very high"
+composer.thinking_max:
+  zh: "最高"
+  en: "Maximum"

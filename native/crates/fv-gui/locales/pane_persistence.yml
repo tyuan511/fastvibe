@@ -1,0 +1,5 @@
+_version: 2
+
+pane_persistence.could_not_save_workspace_recovery:
+  zh: "无法保存工作区恢复信息：%{error}"
+  en: "Could not save workspace recovery state: %{error}"

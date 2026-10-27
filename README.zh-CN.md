@@ -95,6 +95,7 @@ pnpm dev
 | `pnpm native:fmt` / `pnpm native:check` / `pnpm native:test` | 检查原生 Rust 工作区 |
 | `pnpm native:build` / `pnpm native:bundle` | 构建并生成带技能、OfficeCLI 资源清单的原生 bundle |
 | `pnpm native:verify -- --bundle DIR` | 校验原生 bundle 的资源和签名后二进制 |
+| `cargo dev` | 构建原生 server 与 GUI，空闲时替换有变更的 server，然后启动应用（仓库根或 `native/` 下都可运行） |
 | `pnpm sync:models` | 更新 models.dev 快照 |
 | `pnpm flutter:analyze` / `pnpm flutter:test` | 检查 Flutter 手机客户端 |
 

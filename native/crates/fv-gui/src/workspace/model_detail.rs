@@ -1,6 +1,6 @@
 //! Per-model form. Live reads update clean forms; a changed model never overwrites a dirty draft.
 use super::Workspace;
-use super::composer::thinking_label;
+use super::composer::thinking_label_in;
 use super::settings::{
     checkbox, dialog_card, dialog_foot, dialog_head, menu_item, modal, outline_button, popover,
     protocol_label,
@@ -96,36 +96,17 @@ impl Form {
                 .ok()
                 .filter(|n| *n > 0)
                 .ok_or_else(|| {
-                    if english {
-                        format!("{label}: enter a valid positive integer")
-                    } else {
-                        format!("{label}需要填写有效的正整数")
-                    }
+                    tr!(
+                        english,
+                        "model_detail.label_enter_a_valid_positive",
+                        label = label
+                    )
                 })
         };
-        let context = positive(
-            &self.context,
-            if english {
-                "Context window"
-            } else {
-                "上下文窗口"
-            },
-        )?;
-        let output = positive(
-            &self.output,
-            if english {
-                "Max output"
-            } else {
-                "最大输出"
-            },
-        )?;
+        let context = positive(&self.context, trs!(english, "model_detail.context_window"))?;
+        let output = positive(&self.output, trs!(english, "model_detail.max_output"))?;
         if self.reasoning && self.levels.is_empty() {
-            return Err(if english {
-                "Select at least one thinking level"
-            } else {
-                "请至少选择一种思考强度"
-            }
-            .into());
+            return Err(trs!(english, "model_detail.select_at_least_one_thinking").into());
         }
         Ok(ModelInfo {
             id: id.into(),
@@ -470,25 +451,21 @@ impl Workspace {
         if e.draft.base.is_some() {
             content = content
                 .child(field(
-                    if english {
-                        "Display name"
-                    } else {
-                        "显示名称"
-                    },
+                    trs!(english, "model_detail.display_name"),
                     Input::new(&e.name).into_any_element(),
                 ))
                 .child(field(
-                    if english { "Model ID" } else { "模型 ID" },
+                    trs!(english, "model_detail.model_id"),
                     div()
                         .text_size(px(TEXT_XS))
                         .child(SharedString::from(e.model_id.clone()))
                         .into_any_element(),
                 ));
-            let label = e.form.protocol.map(protocol_label).unwrap_or(if english {
-                "Inherit provider protocol"
-            } else {
-                "继承供应商协议"
-            });
+            let label = e
+                .form
+                .protocol
+                .map(protocol_label)
+                .unwrap_or(trs!(english, "model_detail.inherit_provider_protocol"));
             let mut protocol = div().relative().child(
                 outline_button("model-protocol", p)
                     .w_full()
@@ -517,11 +494,11 @@ impl Workspace {
                             e.form.protocol == proto,
                             p.c(Token::Accent),
                         )
-                        .child(proto.map(protocol_label).unwrap_or(if english {
-                            "Inherit provider protocol"
-                        } else {
-                            "继承供应商协议"
-                        }))
+                        .child(
+                            proto
+                                .map(protocol_label)
+                                .unwrap_or(trs!(english, "model_detail.inherit_provider_protocol")),
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(e) =
                                 this.settings.as_mut().and_then(|s| s.model_edit.as_mut())
@@ -537,7 +514,7 @@ impl Workspace {
             }
             content = content
                 .child(field(
-                    if english { "Protocol" } else { "协议" },
+                    trs!(english, "model_detail.protocol"),
                     protocol.into_any_element(),
                 ))
                 .child(
@@ -546,22 +523,14 @@ impl Workspace {
                         .gap(px(12.0))
                         .child(
                             field(
-                                if english {
-                                    "Context window (tokens)"
-                                } else {
-                                    "上下文窗口（Tokens）"
-                                },
+                                trs!(english, "model_detail.context_window_tokens"),
                                 Input::new(&e.context).into_any_element(),
                             )
                             .flex_1(),
                         )
                         .child(
                             field(
-                                if english {
-                                    "Max output (tokens)"
-                                } else {
-                                    "最大输出（Tokens）"
-                                },
+                                trs!(english, "model_detail.max_output_tokens"),
                                 Input::new(&e.output).into_any_element(),
                             )
                             .flex_1(),
@@ -581,7 +550,7 @@ impl Workspace {
                             .gap(px(6.0))
                             .cursor_pointer()
                             .child(checkbox(search_enabled, p))
-                            .child(if english { "Hosted web search" } else { "托管网页搜索" })
+                            .child(trs!(english, "model_detail.hosted_web_search"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(e) =
                                     this.settings.as_mut().and_then(|s| s.model_edit.as_mut())
@@ -591,25 +560,22 @@ impl Workspace {
                                 cx.notify();
                             })),
                     )
-                    .child(div().text_size(px(TEXT_XS)).muted(p).child(
-                        if english { "Requires a custom endpoint and model support; only Responses sends the search parameter." } else { "需自定义端点和模型支持；仅 Responses 接口生效，其他格式不会发送搜索参数。" },
-                    )),
+                    .child(
+                        div()
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child(trs!(english, "model_detail.requires_a_custom_endpoint_and")),
+                    ),
             );
             let mut traits = div().flex().flex_wrap().gap(px(12.0));
             for (kind, label) in [
-                (None, if english { "Reasoning" } else { "推理" }),
+                (None, trs!(english, "model_detail.reasoning")),
                 (
                     Some(ModelInput::Image),
-                    if english { "Images" } else { "图片" },
+                    trs!(english, "model_detail.images"),
                 ),
-                (
-                    Some(ModelInput::Video),
-                    if english { "Video" } else { "视频" },
-                ),
-                (
-                    Some(ModelInput::File),
-                    if english { "Files" } else { "文件" },
-                ),
+                (Some(ModelInput::Video), trs!(english, "model_detail.video")),
+                (Some(ModelInput::File), trs!(english, "model_detail.files")),
             ] {
                 let active = kind.map_or(e.form.reasoning, |k| e.form.input.contains(&k));
                 traits = traits.child(
@@ -636,11 +602,7 @@ impl Workspace {
                 );
             }
             content = content.child(field(
-                if english {
-                    "Capabilities (text always supported)"
-                } else {
-                    "能力（始终支持文本）"
-                },
+                trs!(english, "model_detail.capabilities_text_always_supported"),
                 traits.text_size(px(TEXT_SM)).into_any_element(),
             ));
             let mut efforts = div().flex().flex_wrap().gap(px(12.0));
@@ -656,18 +618,7 @@ impl Workspace {
                         .when(!enabled, |d| d.opacity(0.45))
                         .when(enabled, |d| d.cursor_pointer())
                         .child(checkbox(active, p))
-                        .child(if english {
-                            match level {
-                                ThinkingLevel::Minimal => "Minimal",
-                                ThinkingLevel::Low => "Low",
-                                ThinkingLevel::Medium => "Medium",
-                                ThinkingLevel::High => "High",
-                                ThinkingLevel::Xhigh => "Very high",
-                                ThinkingLevel::Max => "Maximum",
-                            }
-                        } else {
-                            thinking_label(level)
-                        })
+                        .child(thinking_label_in(level, english))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(e) =
                                 this.settings.as_mut().and_then(|s| s.model_edit.as_mut())
@@ -679,11 +630,7 @@ impl Workspace {
                 );
             }
             content = content.child(field(
-                if english {
-                    "Thinking effort"
-                } else {
-                    "思考强度"
-                },
+                trs!(english, "model_detail.thinking_effort"),
                 efforts.text_size(px(TEXT_SM)).into_any_element(),
             ));
             if let Some(detail) = &e.draft.detail {
@@ -694,55 +641,31 @@ impl Workspace {
                     .text_size(px(TEXT_XS))
                     .muted(p);
                 if let Some(price) = detail.price {
-                    prices = prices.child(price_row(
-                        if english {
-                            "Base price"
-                        } else {
-                            "基础价格"
-                        },
-                        price,
-                    ));
+                    prices =
+                        prices.child(price_row(trs!(english, "model_detail.base_price"), price));
                     for tier in &detail.price_tiers {
                         prices = prices.child(price_row(
-                            &if english {
-                                format!("Over {} tokens", tier.over)
-                            } else {
-                                format!("超过 {} Tokens", tier.over)
-                            },
+                            &tr!(english, "model_detail.over_arg1_tokens", arg1 = tier.over),
                             tier.price,
                         ));
                     }
                 } else {
-                    prices = prices.child(if english { "Unknown" } else { "未知" });
+                    prices = prices.child(trs!(english, "model_detail.unknown"));
                 }
                 content = content.child(field(
-                    if english {
-                        "Reference price (USD / million tokens)"
-                    } else {
-                        "参考价格（USD / 百万 Tokens）"
-                    },
+                    trs!(english, "model_detail.reference_price_usd_million_tokens"),
                     prices.into_any_element(),
                 ));
             }
-            content = content.child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(if english { "Saved model parameters are kept and are not overwritten by sync. Reference prices follow the catalog." } else { "保存的模型参数会保留，模型同步不会覆盖。参考价格始终跟随模型目录。" }),
-            );
+            content = content.child(div().text_size(px(TEXT_XS)).muted(p).child(trs!(
+                english,
+                "model_detail.saved_model_parameters_are_kept"
+            )));
         } else {
             content = content.child(if e.loading {
-                if english {
-                    "Loading model details…"
-                } else {
-                    "正在读取模型详情…"
-                }
+                trs!(english, "model_detail.loading_model_details")
             } else {
-                if english {
-                    "Unable to load model details"
-                } else {
-                    "未能读取模型详情"
-                }
+                trs!(english, "model_detail.unable_to_load_model_details")
             });
         }
         if e.draft.conflict() {
@@ -750,7 +673,10 @@ impl Workspace {
                 div()
                     .text_size(px(TEXT_XS))
                     .text_color(p.c(Token::Destructive))
-                    .child(if english { "This model changed elsewhere; the local draft was kept. Reload before saving." } else { "模型已在其他位置修改；本地草稿已保留，请先重新载入。" }),
+                    .child(trs!(
+                        english,
+                        "model_detail.this_model_changed_elsewhere_the"
+                    )),
             );
         }
         for error in [&e.error, &e.read_error].into_iter().flatten() {
@@ -775,7 +701,7 @@ impl Workspace {
             .gap(px(8.0))
             .child(
                 outline_button("reload-model", p)
-                    .child(if english { "Reload" } else { "重新载入" })
+                    .child(trs!(english, "model_detail.reload"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(e) = this.settings.as_mut().and_then(|s| s.model_edit.as_mut())
                             && e.saving.is_none()
@@ -791,26 +717,14 @@ impl Workspace {
                 d.child(
                     outline_button("restore-model", p)
                         .when(busy, |d| d.opacity(0.5))
-                        .child(if english {
-                            "Restore catalog values"
-                        } else {
-                            "恢复目录参数"
-                        })
+                        .child(trs!(english, "model_detail.restore_catalog_values"))
                         .on_click(cx.listener(|this, _, _, cx| this.save_model_detail(true, cx))),
                 )
             });
         let body = dialog_card(p, 640.0)
             .child(dialog_head(
-                if english {
-                    "Model details"
-                } else {
-                    "模型详情"
-                },
-                if english {
-                    "Adjust this model's parameters and capabilities."
-                } else {
-                    "调整这个模型的参数和能力。"
-                },
+                trs!(english, "model_detail.model_details"),
+                trs!(english, "model_detail.adjust_this_model_s_parameters"),
                 p,
             ))
             .child(content)
@@ -825,15 +739,9 @@ impl Workspace {
                     cx.notify();
                 },
                 if busy {
-                    if english {
-                        "Saving…"
-                    } else {
-                        "正在保存…"
-                    }
-                } else if english {
-                    "Save"
+                    trs!(english, "model_detail.saving")
                 } else {
-                    "保存"
+                    trs!(english, "model_detail.save")
                 },
                 |this, _, cx| this.save_model_detail(false, cx),
                 busy || e.draft.base.is_none(),

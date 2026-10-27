@@ -1,0 +1,38 @@
+_version: 2
+
+pane_entries.not_connected_to_the_server:
+  zh: "未连接到服务端"
+  en: "Not connected to the server"
+pane_entries.new_file:
+  zh: "新建文件"
+  en: "New file"
+pane_entries.new_folder:
+  zh: "新建文件夹"
+  en: "New folder"
+pane_entries.rename:
+  zh: "重命名"
+  en: "Rename"
+pane_entries.move_to_trash:
+  zh: "移到废纸篓…"
+  en: "Move to Trash…"
+pane_entries.delete_permanently:
+  zh: "永久删除…"
+  en: "Delete permanently…"
+pane_entries.move_to_trash_2:
+  zh: "移到废纸篓"
+  en: "Move to Trash"
+pane_entries.delete_permanently_2:
+  zh: "永久删除"
+  en: "Delete permanently"
+pane_entries.the_selected_file_or_folder:
+  zh: "所选文件或文件夹及其内容将永久删除，无法从废纸篓恢复。相关文件标签会关闭，未保存的编辑也会丢弃。"
+  en: "The selected file or folder and its contents will be permanently deleted and cannot be restored from Trash. Related file tabs will close and unsaved edits will be discarded."
+pane_entries.move_to_the_server_computer:
+  zh: "移到服务端电脑的废纸篓。相关文件标签会关闭，未保存的编辑也会丢弃。"
+  en: "Move to the server computer's Trash. Related file tabs will close and unsaved edits will be discarded."
+pane_entries.working:
+  zh: "正在处理…"
+  en: "Working…"
+pane_entries.operation_failed:
+  zh: "%{error}"
+  en: "Operation failed: %{error}"

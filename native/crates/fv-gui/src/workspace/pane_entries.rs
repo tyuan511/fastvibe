@@ -288,14 +288,7 @@ impl Workspace {
             return;
         }
         let Some(backend) = self.backend.clone() else {
-            dialog.error = Some(
-                if english {
-                    "Not connected to the server"
-                } else {
-                    "未连接到服务端"
-                }
-                .into(),
-            );
+            dialog.error = Some(trs!(english, "pane_entries.not_connected_to_the_server").into());
             cx.notify();
             return;
         };
@@ -363,11 +356,8 @@ impl Workspace {
                     Err(error) => {
                         if current && let Some(dialog) = &mut this.entry_dialog {
                             dialog.busy = false;
-                            dialog.error = Some(if english {
-                                format!("Operation failed: {error}")
-                            } else {
-                                error.to_string()
-                            });
+                            dialog.error =
+                                Some(tr!(english, "pane_entries.operation_failed", error = error));
                         }
                     }
                 }
@@ -394,35 +384,23 @@ impl Workspace {
             .w(px(184.0));
         let mut actions = vec![
             (
-                if english { "New file" } else { "新建文件" },
+                trs!(english, "pane_entries.new_file"),
                 Intent::Create(EntryKind::File),
             ),
             (
-                if english {
-                    "New folder"
-                } else {
-                    "新建文件夹"
-                },
+                trs!(english, "pane_entries.new_folder"),
                 Intent::Create(EntryKind::Directory),
             ),
         ];
         if !target.is_root {
             actions.extend([
-                (if english { "Rename" } else { "重命名" }, Intent::Rename),
+                (trs!(english, "pane_entries.rename"), Intent::Rename),
                 (
-                    if english {
-                        "Move to Trash…"
-                    } else {
-                        "移到废纸篓…"
-                    },
+                    trs!(english, "pane_entries.move_to_trash"),
                     Intent::Delete { permanent: false },
                 ),
                 (
-                    if english {
-                        "Delete permanently…"
-                    } else {
-                        "永久删除…"
-                    },
+                    trs!(english, "pane_entries.delete_permanently"),
                     Intent::Delete { permanent: true },
                 ),
             ]);
@@ -485,56 +463,28 @@ impl Workspace {
         let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         let label = match d.intent {
             Intent::Create(EntryKind::File) => {
-                if english {
-                    "New file"
-                } else {
-                    "新建文件"
-                }
+                trs!(english, "pane_entries.new_file")
             }
             Intent::Create(EntryKind::Directory) => {
-                if english {
-                    "New folder"
-                } else {
-                    "新建文件夹"
-                }
+                trs!(english, "pane_entries.new_folder")
             }
             Intent::Rename => {
-                if english {
-                    "Rename"
-                } else {
-                    "重命名"
-                }
+                trs!(english, "pane_entries.rename")
             }
             Intent::Delete { permanent: false } => {
-                if english {
-                    "Move to Trash"
-                } else {
-                    "移到废纸篓"
-                }
+                trs!(english, "pane_entries.move_to_trash_2")
             }
             Intent::Delete { permanent: true } => {
-                if english {
-                    "Delete permanently"
-                } else {
-                    "永久删除"
-                }
+                trs!(english, "pane_entries.delete_permanently_2")
             }
         };
         let deleting = matches!(d.intent, Intent::Delete { .. });
         let description = match d.intent {
             Intent::Delete { permanent: true } => {
-                if english {
-                    "The selected file or folder and its contents will be permanently deleted and cannot be restored from Trash. Related file tabs will close and unsaved edits will be discarded."
-                } else {
-                    "所选文件或文件夹及其内容将永久删除，无法从废纸篓恢复。相关文件标签会关闭，未保存的编辑也会丢弃。"
-                }
+                trs!(english, "pane_entries.the_selected_file_or_folder")
             }
             Intent::Delete { permanent: false } => {
-                if english {
-                    "Move to the server computer's Trash. Related file tabs will close and unsaved edits will be discarded."
-                } else {
-                    "移到服务端电脑的废纸篓。相关文件标签会关闭，未保存的编辑也会丢弃。"
-                }
+                trs!(english, "pane_entries.move_to_the_server_computer")
             }
             _ => "",
         };
@@ -579,11 +529,7 @@ impl Workspace {
                     cx.notify();
                 },
                 if d.busy {
-                    if english {
-                        "Working…"
-                    } else {
-                        "正在处理…"
-                    }
+                    trs!(english, "pane_entries.working")
                 } else {
                     label
                 },

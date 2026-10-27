@@ -306,7 +306,7 @@ impl Workspace {
         state.tabs.push(PaneTab {
             id: new_tab_id(),
             kind: PaneTabKind::Files { path: root.clone() },
-            title: if english { "Files" } else { "文件" }.into(),
+            title: trs!(english, "pane.files").into(),
         });
         state.active = state.tabs.first().map(|t| t.id.clone());
         state.expanded.insert(root.clone());
@@ -503,18 +503,14 @@ impl Workspace {
             .when(lead, |d| {
                 d.child(
                     icon_button("pane-expand-sidebar", "panel-left-open", &p)
-                        .aria_label(if english {
-                            "Expand sidebar"
-                        } else {
-                            "展开侧边栏"
-                        })
+                        .aria_label(trs!(english, "pane.expand_sidebar"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.on_toggle_sidebar(&super::ToggleSidebar, window, cx)
                         })),
                 )
                 .child(
                     icon_button("pane-new-chat", "message-square-plus", &p)
-                        .aria_label(if english { "New chat" } else { "新对话" })
+                        .aria_label(trs!(english, "pane.new_chat"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.on_new_chat(&super::NewChat, window, cx)
                         })),
@@ -532,10 +528,9 @@ impl Workspace {
                             icon_button_xs("pane-add-tab", "add01", &p)
                                 .border_1()
                                 .border_color(p.c(Token::Border))
-                                .aria_label(if english { "Add panel" } else { "新增标签" })
+                                .aria_label(trs!(english, "pane.add_panel"))
                                 .tooltip(move |window, cx| {
-                                    Tooltip::new(if english { "Add panel" } else { "新增标签" })
-                                        .build(window, cx)
+                                    Tooltip::new(trs!(english, "pane.add_panel")).build(window, cx)
                                 })
                                 .on_click(cx.listener(|this, e: &ClickEvent, _, cx| {
                                     let at = e.position();
@@ -557,17 +552,9 @@ impl Workspace {
                     &p,
                 )
                 .aria_label(if self.side_pane_maximized {
-                    if english {
-                        "Restore side panel"
-                    } else {
-                        "还原侧边面板"
-                    }
+                    trs!(english, "pane.restore_side_panel")
                 } else {
-                    if english {
-                        "Maximize side panel"
-                    } else {
-                        "最大化侧边面板"
-                    }
+                    trs!(english, "pane.maximize_side_panel")
                 })
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.side_pane_maximized = !this.side_pane_maximized;
@@ -576,18 +563,9 @@ impl Workspace {
             )
             .child(
                 icon_button("pane-collapse", "panel-right-close", &p)
-                    .aria_label(if english {
-                        "Collapse side panel"
-                    } else {
-                        "收起侧边面板"
-                    })
+                    .aria_label(trs!(english, "pane.collapse_side_panel"))
                     .tooltip(move |window, cx| {
-                        Tooltip::new(if english {
-                            "Collapse side panel  ⌃⌥B"
-                        } else {
-                            "收起侧边面板  ⌃⌥B"
-                        })
-                        .build(window, cx)
+                        Tooltip::new(trs!(english, "pane.collapse_side_panel_b")).build(window, cx)
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_side_pane(cx))),
             );
@@ -778,40 +756,23 @@ impl Workspace {
             items.push((
                 "chat",
                 "message-square",
-                if english {
-                    "Auxiliary chat"
-                } else {
-                    "辅助对话"
-                }
-                .into(),
+                trs!(english, "pane.auxiliary_chat").into(),
             ));
         }
-        items.push((
-            "files",
-            "folder01",
-            if english { "Files" } else { "文件" }.into(),
-        ));
+        items.push(("files", "folder01", trs!(english, "pane.files").into()));
         if !self
             .panes
             .get(self.selected.as_deref().unwrap_or("__draft__"))
             .is_some_and(|s| s.tabs.iter().any(|t| t.kind == PaneTabKind::Git))
         {
-            items.push((
-                "git",
-                "git-compare",
-                if english { "Changes" } else { "变更" }.into(),
-            ));
+            items.push(("git", "git-compare", trs!(english, "pane.changes").into()));
         }
         items.push((
             "terminal",
             "terminal",
-            if english { "Terminal" } else { "终端" }.into(),
+            trs!(english, "pane.terminal").into(),
         ));
-        items.push((
-            "browser",
-            "chrome",
-            if english { "Browser" } else { "浏览器" }.into(),
-        ));
+        items.push(("browser", "chrome", trs!(english, "pane.browser").into()));
         items
     }
 
@@ -837,7 +798,7 @@ impl Workspace {
                 state.tabs.push(PaneTab {
                     id: id.clone(),
                     kind: PaneTabKind::Files { path },
-                    title: if english { "Files" } else { "文件" }.into(),
+                    title: trs!(english, "pane.files").into(),
                 });
                 state.activate(id);
             }
@@ -849,30 +810,11 @@ impl Workspace {
                 state.notice = Some(format!(
                     "{}{}",
                     match kind {
-                        "chat" =>
-                            if english {
-                                "Auxiliary chat"
-                            } else {
-                                "辅助对话"
-                            },
-                        "browser" =>
-                            if english {
-                                "Browser"
-                            } else {
-                                "浏览器"
-                            },
-                        _ =>
-                            if english {
-                                "Terminal"
-                            } else {
-                                "终端"
-                            },
+                        "chat" => trs!(english, "pane.auxiliary_chat"),
+                        "browser" => trs!(english, "pane.browser"),
+                        _ => trs!(english, "pane.terminal"),
                     },
-                    if english {
-                        " is being ported"
-                    } else {
-                        "功能正在移植中"
-                    }
+                    trs!(english, "pane.is_being_ported")
                 ));
             }
         }
@@ -966,17 +908,9 @@ impl Workspace {
             .w(px(176.0));
         if let Some(id) = tab {
             for (index, label) in [
-                if english { "Close tab" } else { "关闭标签" },
-                if english {
-                    "Close other tabs"
-                } else {
-                    "关闭其他标签"
-                },
-                if english {
-                    "Close all tabs"
-                } else {
-                    "关闭所有标签"
-                },
+                trs!(english, "pane.close_tab"),
+                trs!(english, "pane.close_other_tabs"),
+                trs!(english, "pane.close_all_tabs"),
             ]
             .into_iter()
             .enumerate()

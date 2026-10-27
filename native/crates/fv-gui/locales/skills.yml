@@ -1,0 +1,59 @@
+_version: 2
+
+skills.skills_are_loaded_for_the:
+  zh: "按当前项目加载技能。在对话开头输入 /skill:名称 可指定使用。"
+  en: "Skills are loaded for the current project. Enter /skill:name at the start of a chat to select one."
+skills.refresh:
+  zh: "刷新"
+  en: "Refresh"
+skills.project:
+  zh: "项目"
+  en: "Project"
+skills.private:
+  zh: "私有"
+  en: "Private"
+skills.global:
+  zh: "全局"
+  en: "Global"
+skills.built_in:
+  zh: "内置"
+  en: "Built-in"
+skills.used_only_when_selected:
+  zh: "仅在指定时使用"
+  en: "Used only when selected"
+skills.delete:
+  zh: "删除"
+  en: "Delete"
+skills.no_skills_yet_create_one:
+  zh: "还没有技能。可以创建技能，或从本地文件夹导入。"
+  en: "No skills yet. Create one or import a local folder."
+skills.loading_skills:
+  zh: "正在加载技能…"
+  en: "Loading skills…"
+skills.delete_skill_name_and_all:
+  zh: "删除技能 %{name} 及其全部资源？无法恢复。"
+  en: "Delete skill %{name} and all its resources? This cannot be undone."
+skills.confirm_delete:
+  zh: "确认删除"
+  en: "Confirm delete"
+skills.cancel:
+  zh: "取消"
+  en: "Cancel"
+skills.create_skill:
+  zh: "创建技能"
+  en: "Create skill"
+skills.saving:
+  zh: "正在保存…"
+  en: "Saving…"
+skills.create:
+  zh: "创建"
+  en: "Create"
+skills.import_skill:
+  zh: "导入技能"
+  en: "Import skill"
+skills.choose_folder:
+  zh: "选择文件夹"
+  en: "Choose folder"
+skills.import:
+  zh: "导入"
+  en: "Import"

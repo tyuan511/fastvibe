@@ -1,0 +1,92 @@
+_version: 2
+
+about.update_check_failed_error:
+  zh: "检查更新失败：%{error}"
+  en: "Update check failed: %{error}"
+about.preferences_restored_to_defaults:
+  zh: "偏好设置已恢复默认"
+  en: "Preferences restored to defaults"
+about.reset_failed_error:
+  zh: "恢复默认失败：%{error}"
+  en: "Reset failed: %{error}"
+about.no_model_catalog_yet_unknown:
+  zh: "尚无模型目录；未知模型使用默认参数，费用显示为未知。"
+  en: "No model catalog yet; unknown models use defaults and show unknown costs."
+about.loading_model_catalog:
+  zh: "正在读取模型目录…"
+  en: "Loading model catalog…"
+about.waiting_for_connection:
+  zh: "等待连接"
+  en: "Waiting for connection"
+about.a_workspace_for_code_documents:
+  zh: "代码、办公与智能体协作工作区"
+  en: "A workspace for code, documents, and agent collaboration"
+about.app_updates:
+  zh: "应用更新"
+  en: "App updates"
+about.new_version_v_version_available:
+  zh: "发现新版本 v%{version}"
+  en: "New version v%{version} available"
+about.already_up_to_date:
+  zh: "当前已是最新版本"
+  en: "Already up to date"
+about.check_the_latest_github_release:
+  zh: "从 GitHub 检查最新发布版本"
+  en: "Check the latest GitHub release"
+about.checking:
+  zh: "检查中…"
+  en: "Checking…"
+about.check_for_updates:
+  zh: "检查更新"
+  en: "Check for updates"
+about.open_release_page:
+  zh: "打开发布页"
+  en: "Open release page"
+about.repository:
+  zh: "开源仓库"
+  en: "Repository"
+about.diagnostics:
+  zh: "诊断信息"
+  en: "Diagnostics"
+about.loading:
+  zh: "读取中…"
+  en: "Loading…"
+about.copy_diagnostics:
+  zh: "复制诊断"
+  en: "Copy diagnostics"
+about.read_and_copy:
+  zh: "读取并复制"
+  en: "Read and copy"
+about.preferences:
+  zh: "偏好设置"
+  en: "Preferences"
+about.reset_themes_sandbox_shortcuts_browser:
+  zh: "恢复主题、沙箱、快捷键、浏览器和 Agent 说明的默认值；供应商与对话不会删除。"
+  en: "Reset themes, sandbox, shortcuts, browser, and Agent instructions; providers and chats are kept."
+about.reset:
+  zh: "恢复默认"
+  en: "Reset"
+about.model_catalog:
+  zh: "模型目录"
+  en: "Model catalog"
+about.updating:
+  zh: "正在更新…"
+  en: "Updating…"
+about.update_model_catalog:
+  zh: "更新模型目录"
+  en: "Update model catalog"
+about.model_parameters_and_reference_prices:
+  zh: "模型参数和参考价格来自 models.dev，每小时自动刷新。更新适用于后续请求，保留正在生成的回复。"
+  en: "Model parameters and reference prices come from models.dev and refresh hourly. Updates apply to later requests."
+about.updated_arg1:
+  zh: "更新于 %{arg1}"
+  en: "Updated %{arg1}"
+about.catalog_stats:
+  zh: "%{models} 个模型 · %{aliases} 个名称索引 · %{source}"
+  en: "%{models} models · %{aliases} name aliases · %{source}"
+about.bundled:
+  zh: "应用内置"
+  en: "bundled"
+about.downloaded:
+  zh: "已下载"
+  en: "downloaded"

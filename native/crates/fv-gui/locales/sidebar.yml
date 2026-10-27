@@ -1,0 +1,38 @@
+_version: 2
+
+sidebar.schedules:
+  zh: "定时任务"
+  en: "Schedules"
+sidebar.pinned:
+  zh: "置顶"
+  en: "Pinned"
+sidebar.projects:
+  zh: "项目"
+  en: "Projects"
+sidebar.no_projects:
+  zh: "暂无项目"
+  en: "No projects"
+sidebar.no_chats:
+  zh: "暂无对话"
+  en: "No chats"
+sidebar.collapse:
+  zh: "收起"
+  en: "Collapse"
+sidebar.chats:
+  zh: "聊天"
+  en: "Chats"
+sidebar.unpin:
+  zh: "取消置顶"
+  en: "Unpin"
+sidebar.pin:
+  zh: "置顶"
+  en: "Pin"
+sidebar.account:
+  zh: "账号"
+  en: "Account"
+sidebar.fastvibe_account_sign_in_is:
+  zh: "此版本暂不支持 FastVibe 账号登录。"
+  en: "FastVibe account sign-in is not available in this version."
+sidebar.show_arg1_more:
+  zh: "展开更多（%{arg1}）"
+  en: "Show %{arg1} more"

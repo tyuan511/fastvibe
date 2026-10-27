@@ -27,54 +27,26 @@ pub(super) struct Subagents {
 }
 fn label(a: &Subagent, english: bool) -> &'static str {
     if a.waiting_for_input {
-        return if english {
-            "Waiting for input"
-        } else {
-            "等待输入"
-        };
+        return trs!(english, "subagents.waiting_for_input");
     }
     match a.status {
         SubagentStatus::Idle => {
-            if english {
-                "Idle"
-            } else {
-                "待命"
-            }
+            trs!(english, "subagents.idle")
         }
         SubagentStatus::Running => {
-            if english {
-                "Running"
-            } else {
-                "执行中"
-            }
+            trs!(english, "subagents.running")
         }
         SubagentStatus::Completed => {
-            if english {
-                "Completed"
-            } else {
-                "已完成"
-            }
+            trs!(english, "subagents.completed")
         }
         SubagentStatus::Interrupted => {
-            if english {
-                "Stopped"
-            } else {
-                "已停止"
-            }
+            trs!(english, "subagents.stopped")
         }
         SubagentStatus::Failed => {
-            if english {
-                "Failed"
-            } else {
-                "失败"
-            }
+            trs!(english, "subagents.failed")
         }
         SubagentStatus::Closed => {
-            if english {
-                "Closed"
-            } else {
-                "已关闭"
-            }
+            trs!(english, "subagents.closed")
         }
     }
 }
@@ -252,11 +224,7 @@ impl Workspace {
                                         .map(|r| format!(" · {}", r.name))
                                         .unwrap_or_default(),
                                     if agent.fork_context {
-                                        if english {
-                                            " · inherited context"
-                                        } else {
-                                            " · 继承上下文"
-                                        }
+                                        trs!(english, "subagents.inherited_context")
                                     } else {
                                         ""
                                     }
@@ -276,15 +244,11 @@ impl Workspace {
                         outline_button(SharedString::from(format!("child-close-{id}")), p)
                             .when(busy, |d| d.opacity(0.5))
                             .child(if busy {
-                                if english {
-                                    "Please wait…"
-                                } else {
-                                    "请稍候…"
-                                }
+                                trs!(english, "subagents.please_wait")
                             } else if reopen {
-                                if english { "Resume" } else { "恢复" }
+                                trs!(english, "subagents.resume")
                             } else {
-                                if english { "Close" } else { "关闭" }
+                                trs!(english, "subagents.close")
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.child_action(id.clone(), reopen, cx)
@@ -302,23 +266,18 @@ impl Workspace {
                 .text_size(px(TEXT_SM))
                 .muted(p)
                 .child(self.subagents.error.clone().unwrap_or_else(|| {
-                    if english {
-                        "Loading sub-agent settings…"
-                    } else {
-                        "正在读取子 Agent 设置…"
-                    }
-                    .into()
+                    trs!(english, "subagents.loading_sub_agent_settings").into()
                 }))
                 .into_any_element();
         }
         let config = self.subagents.config.clone();
         let mut toggled = config.clone();
         toggled.enabled = !toggled.enabled;
-        let mut limits = div().flex().items_center().gap(px(6.0)).child(if english {
-            "Max per conversation"
-        } else {
-            "每个对话最多"
-        });
+        let mut limits = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(trs!(english, "subagents.max_per_conversation"));
         for count in [1, 3, 6, 12, 16] {
             let mut value = config.clone();
             value.max_agents = count;
@@ -331,11 +290,11 @@ impl Workspace {
                     })),
             );
         }
-        let mut depth = div().flex().items_center().gap(px(6.0)).child(if english {
-            "Delegation depth"
-        } else {
-            "委派层数"
-        });
+        let mut depth = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(trs!(english, "subagents.delegation_depth"));
         for count in [1, 2, 3] {
             let mut value = config.clone();
             value.max_depth = count;
@@ -348,18 +307,67 @@ impl Workspace {
                     })),
             );
         }
-        div().flex().flex_col().gap(px(16.0)).text_size(px(TEXT_SM))
-            .child(card(p).p(px(16.0)).gap(px(16.0))
-                .child(div().flex().items_center().justify_between().child(if english { "Allow sub-agents" } else { "允许子 Agent" })
-                    .child(switch("agents-enabled".into(), config.enabled, p).on_click(cx.listener(move |this, _, _, cx| this.save_subagent_config(toggled.clone(), cx)))))
-                .child(div().text_size(px(TEXT_XS)).muted(p).child(if english { "Sub-agents can use an independent context or fork the parent, inheriting its project, skills, and model. They share the workspace; stopping the parent stops its children. Closed tasks remain available to inspect or resume." } else { "子 Agent 可使用独立上下文或派生父对话，并继承项目、技能与模型配置。共享工作区；父任务停止会停止其子任务。关闭后可查看记录或显式恢复。" }))
-                .child(limits).child(depth)
-                .child(div().text_size(px(TEXT_XS)).muted(p).child(if english { "The limit counts non-closed sub-agents. Closing one frees a slot; changing the limit does not interrupt existing tasks." } else { "上限计算未关闭的子 Agent。关闭释放名额；修改限制不会中断已有任务。" })))
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(16.0))
+            .text_size(px(TEXT_SM))
+            .child(
+                card(p)
+                    .p(px(16.0))
+                    .gap(px(16.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(trs!(english, "subagents.allow_sub_agents"))
+                            .child(switch("agents-enabled".into(), config.enabled, p).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.save_subagent_config(toggled.clone(), cx)
+                                }),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child(trs!(english, "subagents.sub_agents_can_use_an")),
+                    )
+                    .child(limits)
+                    .child(depth)
+                    .child(
+                        div()
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child(trs!(english, "subagents.the_limit_counts_non_closed")),
+                    ),
+            )
             .child(self.roles_pane(cx))
-            .children(self.subagents.error.as_ref().map(|e| div().text_color(p.c(Token::Destructive)).child(e.clone())))
-            .child(card(p).p(px(16.0)).gap(px(10.0)).child(if self.selected.is_some() { if english { "Subtasks in this conversation" } else { "当前对话的子任务" } } else { if english { "Recent subtasks (up to 100)" } else { "最近的子任务（最多 100 条）" } })
-                .when(self.subagents.agents.is_empty(), |d| d.child(div().muted(p).child(if self.subagents.loading { if english { "Loading…" } else { "正在读取…" } } else { if english { "No subtasks" } else { "暂无子任务" } })))
-                .child(self.child_rows(self.subagents.agents.clone(), cx)))
+            .children(
+                self.subagents
+                    .error
+                    .as_ref()
+                    .map(|e| div().text_color(p.c(Token::Destructive)).child(e.clone())),
+            )
+            .child(
+                card(p)
+                    .p(px(16.0))
+                    .gap(px(10.0))
+                    .child(if self.selected.is_some() {
+                        trs!(english, "subagents.subtasks_in_this_conversation")
+                    } else {
+                        trs!(english, "subagents.recent_subtasks_up_to_100")
+                    })
+                    .when(self.subagents.agents.is_empty(), |d| {
+                        d.child(div().muted(p).child(if self.subagents.loading {
+                            trs!(english, "subagents.loading")
+                        } else {
+                            trs!(english, "subagents.no_subtasks")
+                        }))
+                    })
+                    .child(self.child_rows(self.subagents.agents.clone(), cx)),
+            )
             .into_any_element()
     }
     pub(super) fn subagent_tray(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -415,14 +423,10 @@ impl Workspace {
                             .child(format!(
                                 "{}{} · {count} {}{}",
                                 if open { "⌄" } else { "›" },
-                                if english { " Subtasks" } else { " 子任务" },
-                                if english { "running" } else { "个执行中" },
+                                trs!(english, "subagents.subtasks"),
+                                trs!(english, "subagents.running_2"),
                                 if waiting > 0 {
-                                    if english {
-                                        format!(" · {waiting} waiting")
-                                    } else {
-                                        format!(" · {waiting} 个等待输入")
-                                    }
+                                    tr!(english, "subagents.waiting_waiting", waiting = waiting)
                                 } else {
                                     String::new()
                                 }
@@ -436,7 +440,7 @@ impl Workspace {
                     .when(count > 0, |d| {
                         d.child(
                             outline_button("child-stop-all", p)
-                                .child(if english { "Stop all" } else { "停止全部" })
+                                .child(trs!(english, "subagents.stop_all"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.stop_children(stop_id.clone(), cx)
                                 })),
@@ -444,11 +448,7 @@ impl Workspace {
                     })
                     .children(child.map(|_| {
                         outline_button("child-back", p)
-                            .child(if english {
-                                "Back to main chat"
-                            } else {
-                                "返回主对话"
-                            })
+                            .child(trs!(english, "subagents.back_to_main_chat"))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.select(root_id.clone(), cx)),
                             )
