@@ -28,7 +28,7 @@
 - [x] 内容：Office 开发资源下的静态/实时预览、选中引用与内置 CLI 子进程环境；代码和自动化验证见第二十六批，安装包资源/签名仍列入交付。
 - [x] 内容：Markdown 数学公式；行内/块级 TeX 节点、常用符号、原始源码复制与安全降级已接通，见第二十七批。
 - [x] 内容：辅助对话侧栏入口；复用真实子 Agent 线程、已有转写和生命周期，不创建第二套会话/状态存储。
-- [ ] 内容：电脑操控入口已接通 macOS、Linux 与 Windows（分别使用系统 API/桌面工具完成截图、点击、输入和有限按键）；浏览器导航控制、主页/搜索模板、下载目录、书签和历史已接通，跨平台安装验收仍列入交付。
+- [x] 内容：电脑操控已改用 Cua Driver（第五十五批）；macOS、Windows 走驱动，Linux 仍是基础的 `computer` 工具。浏览器导航控制、主页/搜索模板、下载目录、书签和历史已接通。真实桌面上的端到端验收仍列入交付。
 - [x] 设置：个性化 Agent 说明；编辑、保存、跨客户端同步与每轮指令注入已接通。
 - [x] 设置：快捷键（macOS）；录入、冲突处理、跨客户端持久化、原生操作分发与回车发送已接通。
 - [x] 设置：使用统计（原生对话）；持久账本、公开查询、汇总/分布/活跃度/趋势/模型图表已接通。
@@ -803,3 +803,21 @@ Electron 的会话标题栏在“项目 / 标题”后面有一个仓库状态�
 **没有迁的**：测试用夹具 `fixture.rs`；`mcp_oauth.rs`、`webview.rs`、`web_content.rs` 里回给用户的错误句子（它们不在持有语言的结构上）；几个本来就是中英并排的输入框占位符（`名称 / Name`）；个性化页把已存的中文状态译成英文的转换逻辑。
 
 验证：在干净的工作树里单独验证了本批改动（工作区里同时有别的会话未提交的编辑，已分开）：`fv-gui` 95 项单测 + 12 项展示层测试、all-targets 严格 Clippy 通过。
+
+## 第五十五批：电脑操控改用 Cua Driver（照 Electron 版的方式）
+
+原来的 `computer` 工具只有截图、坐标点击、输入和 8 个键，调的是 `screencapture`/`osascript`/`xdotool`/PowerShell。现在接入 Electron 版用的同一个驱动 `cua-driver-rs 0.28.2`（MIT，Rust），约 60 个工具：窗口与应用列表、界面元素树加元素令牌、后台点击与输入、滚动、拖拽、菜单、剪贴板、浏览器等。
+
+**权限在谁身上**：macOS 把辅助功能和屏幕录制记在发起进程所属的*应用*上，不是可执行文件路径。所以**由持有授权的 GUI 直接拉起驱动守护进程**（`cua-driver serve --embedded`，`CUA_DRIVER_EMBEDDED=1`，不经 shell、`open` 或 LaunchServices），驱动留在 FastVibe 的责任链里，用户只给 FastVibe 授权一次。守护进程盯着我们持有的 stdin 管道，GUI 退出或崩溃它就退出；`Host` 被丢弃时也会停掉它。服务端是独立进程，不拉起驱动，只经 `computer/host` 知道守护进程监听在哪里，并把 `cua-driver mcp --embedded --socket …` 作为一个**受管 MCP 服务器**接进来：不落盘、不出现在 MCP 设置页、用户保存自己的 MCP 列表也不会把它带走。
+
+**协议**：`AppSettings.computerControl`（默认关）；`computer/status`、`computer/install`、`computer/host`；通知 `computer/changed`、`computer/installProgress`。`install` 与 `host` 远程一律拒绝（驱动操作的是这台电脑的桌面，socket 也只该由宿主指定），SSH 同样；GUI 的能力串里加了 `computerControl`，旧的空闲服务端会被替换。
+
+**服务端**（`fv-server/src/computer.rs`）：固定版本和 SHA-256（与 Electron 版同一份），下载先走 GitHub、超时或校验失败换镜像；先落到临时文件，校验通过才解包，只取压缩包里叫 `cua-driver(.exe)` 的那一个成员（不按压缩包里的路径写盘），再原子替换；失败不动原来能用的版本。macOS 用一个通用二进制（43 MB），Windows 分 x64 与 arm64；Linux 不提供（驱动的 Linux 版要靠合成器相关的辅助程序，Electron 版也是这个结论）。已装版本不等于固定版本不算已安装：守护进程和代理必须是同一个发行版。
+
+**批准**：照 Electron 版的口径，FastVibe 不在驱动之上再加每次动作的确认层——驱动的 `standard` 模式下常规自动化不弹窗，由宿主负责权限体验；总开关、OS 授权、屏幕上可见的代理光标是控制手段。原来的 `computer` 工具逐个动作确认，现在：开关关着时模型根本没有桌面工具；开着且驱动在跑时由驱动的工具取代它；开着但驱动没起来（Linux，或还没装好）时它仍作为回退。驱动的工具标为“延迟”，通过 `tool_search` 取用，因为每个工具的 schema 约 7 KB，直接放进每次请求要十万 token。内置技能 `computer-use` 重写了一份，讲的是这批工具的真实名字和流程。
+
+**设置页**（`workspace/computer.rs`）：开关（打开时若没装就自动下载，并在 macOS 上请求授权）、下载进度、组件版本和运行状态、辅助功能与屏幕录制各一行（未授权时有“打开系统设置”）、错误提示。`computer_sync` 是唯一的决定点：设置开着、组件已装、macOS 上两项授权齐了，守护进程才跑；设置推送、服务端通知、授权轮询（每 2 秒，只在等授权时）都调它。服务端重启后守护进程会被重新登记。
+
+**验证**：`fv-server` 的 6 个新单测（下载校验与镜像回退、替换不破坏原版本、tar.gz 与 zip 取成员、空文件拒绝）加 3 个走公共协议的集成测试（用一个会记录启动参数、再扮成真 MCP 对端的假驱动：参数是 `mcp --embedded --socket …`、环境里 `CUA_DRIVER_EMBEDDED=1` 和遥测关闭、工具经 `mcp_computer_*` 到达并可调用、保存 MCP 列表不丢它、关开关立刻撤走工具、开关关着没有 `computer` 工具）；`fv-gui` 的 `Host` 用假守护进程测了：参数与环境变量、不带 `RESPONSIBILITY_DISCLAIMED`、丢弃即退出、启动即死时带回它的 stderr；设置页用离屏截图看过。
+
+**没有验证的**：没有在这台机器上启动真正的驱动守护进程，也没有跑真实的点击或截图——那需要把辅助功能和屏幕录制授权给 FastVibe，应由你来操作；我也没有验证“授权后屏幕录制要重开应用才生效”在这个应用的签名下是否成立。Windows 的命名管道就绪检测、Windows 解包路径只有代码，没有在 Windows 上跑过。`--host-bundle-id` 用的是 `dev.fastvibe.desktop`（它只是驱动日志里的一个标签，不是信任依据）。`Cargo.toml` 里另一个会话加的 `gpui-test` 开发依赖和 `capture` 特性冲突（同一个包用了两个名字），带 `--features capture` 的构建过不了；我截图时临时去掉了它，没有改动提交内容。

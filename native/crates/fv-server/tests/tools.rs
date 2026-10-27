@@ -137,7 +137,7 @@ async fn a_turn_can_write_read_and_run_in_the_threads_directory() {
             "apply_patch",
             "close_agent",
             "code_mode",
-            "computer",
+            // No "computer": 允许操作电脑 is off until the user turns it on.
             "exec_command",
             "list_agents",
             "request_user_input",

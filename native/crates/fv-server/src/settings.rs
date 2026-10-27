@@ -135,6 +135,7 @@ fn write(state: &ServerState, settings: AppSettings) -> Result<AppSettings, Erro
         std::sync::atomic::Ordering::Release,
     );
     state.keep_awake.set(settings.keep_awake);
+    state.computer_settings_changed(settings.computer_control);
     state.broadcast(ServerNotification::SettingsChanged(settings.clone()));
     Ok(settings)
 }

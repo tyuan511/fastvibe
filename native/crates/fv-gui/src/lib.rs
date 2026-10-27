@@ -24,6 +24,7 @@ macro_rules! trs {
 
 pub mod assets;
 pub mod backend;
+pub mod computer_host;
 pub mod context_stats;
 pub mod dock;
 pub mod file_icons;

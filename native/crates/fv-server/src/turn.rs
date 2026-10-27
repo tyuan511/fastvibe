@@ -866,6 +866,15 @@ async fn build_context(
         rt.code_mode.register(&mut mcp.tools);
     }
     crate::subagents::register(state, thread_id, turn_id, &mut mcp.tools);
+    // 电脑操控: off means no desktop tools at all; on, the driver's own tools (reached through the
+    // managed MCP server) replace the basic `computer` tool, which stays only as the fallback for
+    // a platform or a moment where the driver is not up.
+    let desktop = crate::settings::read(state)
+        .map(|s| s.computer_control)
+        .unwrap_or(false);
+    if !desktop || state.computer_status().running {
+        mcp.tools.retain(|name| name != "computer");
+    }
     if !crate::settings::read(state)
         .map(|s| s.code_mode_enabled)
         .unwrap_or(true)

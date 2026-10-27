@@ -76,7 +76,7 @@ impl Backend {
                         }
                     };
                     let daemon = fv_daemon::Daemon::new(data_dir, bin);
-                    let conn = match daemon.connect_current("fastvibe-gui", env!("CARGO_PKG_VERSION"), &["sidebarSettings", "skills", "mcp", "mcpConfigEdit", "mcpOAuth", "execSessions", "workspaceEntries", "terminalInteraction", "memory", "autoCompaction", "personalization", "shortcuts", "usageStats", "modelCatalogRefresh", "modelDetails", "providerModelTest", "subagents", "subagentRoles", "schedules", "codeMode", "hostedWebSearch", "officePreview"]).await
+                    let conn = match daemon.connect_current("fastvibe-gui", env!("CARGO_PKG_VERSION"), &["sidebarSettings", "skills", "mcp", "mcpConfigEdit", "mcpOAuth", "execSessions", "workspaceEntries", "terminalInteraction", "memory", "autoCompaction", "personalization", "shortcuts", "usageStats", "modelCatalogRefresh", "modelDetails", "providerModelTest", "subagents", "subagentRoles", "schedules", "codeMode", "hostedWebSearch", "officePreview", "computerControl"]).await
                     {
                         Ok(c) => c,
                         Err(e) => {

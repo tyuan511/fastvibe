@@ -1855,6 +1855,11 @@ pub struct AppSettings {
     pub auto_archive_after_days: Option<u32>,
     #[serde(default)]
     pub keep_awake: bool,
+    /// 允许操作电脑: the master switch for the desktop-control driver. Off, the driver is not
+    /// running and the agent has no desktop tools; on, the app that holds the OS permissions
+    /// runs it (`computer/host`).
+    #[serde(default)]
+    pub computer_control: bool,
     /// Optional HTTP(S)/SOCKS proxy used for model and catalog requests.
     #[serde(default)]
     pub proxy_url: String,
@@ -1964,6 +1969,7 @@ impl Default for AppSettings {
             browser_download_dir: String::new(),
             auto_archive_after_days: None,
             keep_awake: false,
+            computer_control: false,
             proxy_url: String::new(),
         }
     }
@@ -2019,6 +2025,8 @@ pub struct AppSettingsPatch {
     #[serde(default)]
     pub keep_awake: Option<bool>,
     #[serde(default)]
+    pub computer_control: Option<bool>,
+    #[serde(default)]
     pub proxy_url: Option<String>,
 }
 
@@ -2033,6 +2041,51 @@ pub struct Diagnostics {
     pub threads: usize,
     pub mcp_servers: usize,
     pub memory_enabled: bool,
+}
+
+/// Where the desktop-control driver stands on this machine.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerStatus {
+    /// Whether this OS and CPU have a driver build at all. `false` also covers a server running
+    /// with no desktop (the SSH Agent), which has nothing to control.
+    pub supported: bool,
+    /// Why not, when `supported` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsupported_reason: Option<String>,
+    /// The driver executable is in the data directory and its version is the one this build pins.
+    pub installed: bool,
+    /// Where that executable is, for the application that runs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// A download is in flight.
+    pub installing: bool,
+    /// The host application has a driver daemon up and registered with this server.
+    pub running: bool,
+    /// The last failure of an install, for the pane to show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerInstallProgress {
+    pub received: u64,
+    /// Zero until every part's size is known.
+    pub total: u64,
+}
+
+/// The host application says where its private driver daemon listens, or that it is gone.
+///
+/// Only the application that holds Accessibility and Screen Recording can start the daemon (the
+/// OS attributes those grants to the process that spawned it), so the server cannot; it learns
+/// of the daemon from here and talks to it through a stdio proxy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerHostParams {
+    pub socket: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2069,6 +2122,9 @@ impl AppSettings {
         }
         if let Some(v) = patch.auto_archive_after_days {
             self.auto_archive_after_days = v;
+        }
+        if let Some(v) = patch.computer_control {
+            self.computer_control = v;
         }
         if let Some(v) = patch.keep_awake {
             self.keep_awake = v;

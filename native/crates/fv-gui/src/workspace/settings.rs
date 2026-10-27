@@ -1601,50 +1601,8 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn computer_pane(&self, _cx: &mut Context<Self>) -> AnyElement {
-        let p = &self.palette;
-        let english = self.app_settings.language == UiLanguage::English;
-        let supported =
-            cfg!(target_os = "macos") || cfg!(target_os = "linux") || cfg!(target_os = "windows");
-        card(p)
-            .p(px(16.0))
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .text_size(px(TEXT_SM))
-                    .child(trs!(english, "settings.computer_control")),
-            )
-            .child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(if cfg!(target_os = "macos") {
-                        trs!(english, "settings.macos_supports_screenshots_clicks_text")
-                    } else if cfg!(target_os = "linux") {
-                        trs!(english, "settings.linux_uses_grim_gnome_screenshot")
-                    } else if cfg!(target_os = "windows") {
-                        trs!(english, "settings.windows_uses_powershell_and_system")
-                    } else {
-                        trs!(english, "settings.computer_control_is_not_available")
-                    }),
-            )
-            .child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(if cfg!(target_os = "macos") {
-                        trs!(english, "settings.the_first_use_requires_fastvibe")
-                    } else if cfg!(target_os = "windows") {
-                        trs!(english, "settings.windows_requires_powershell_and_desktop")
-                    } else if supported {
-                        trs!(english, "settings.the_linux_desktop_must_allow")
-                    } else {
-                        trs!(english, "settings.this_platform_has_no_computer")
-                    }),
-            )
-            .into_any_element()
+    fn computer_pane(&self, cx: &mut Context<Self>) -> AnyElement {
+        self.computer_pane_view(cx)
     }
 
     fn save_proxy(&mut self, cx: &mut Context<Self>) {
@@ -1770,16 +1728,14 @@ impl Workspace {
                     })),
             )
             .when(s.default_menu, |d| {
-                d.child(ui::float(self.default_menu(cx))).when(
-                    s.default_thinking_menu,
-                    |d| {
+                d.child(ui::float(self.default_menu(cx)))
+                    .when(s.default_thinking_menu, |d| {
                         // Its own float: a child of the parent popover is clipped to that
                         // card, so the glass fill never covers the page and the text shows through.
                         d.child(
                             deferred(self.thinking_flyout(window, cx).occlude()).with_priority(11),
                         )
-                    },
-                )
+                    })
             });
 
         let count = providers.map(|l| l.len()).unwrap_or(0);
@@ -2661,39 +2617,39 @@ impl Workspace {
             .map(|level| thinking_label_in(level, english))
             .unwrap_or(trs!(english, "settings.follow_model_default"));
         div().w_full().child(
-                menu_item("default-thinking".into(), open, hover)
-                    .h(px(32.0))
-                    .w_full()
-                    .justify_between()
-                    .child(trs!(english, "settings.thinking_effort"))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .flex_none()
-                            .text_size(px(TEXT_XS))
-                            .text_color(p.c(Token::MutedForeground))
-                            .child(current)
-                            .child(icon("arrow-right01", 12.0, p.c(Token::MutedForeground))),
-                    )
-                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                        if *hovered {
-                            if let Some(s) = &mut this.settings {
-                                if !s.default_thinking_menu {
-                                    s.default_thinking_menu = true;
-                                    cx.notify();
-                                }
+            menu_item("default-thinking".into(), open, hover)
+                .h(px(32.0))
+                .w_full()
+                .justify_between()
+                .child(trs!(english, "settings.thinking_effort"))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .flex_none()
+                        .text_size(px(TEXT_XS))
+                        .text_color(p.c(Token::MutedForeground))
+                        .child(current)
+                        .child(icon("arrow-right01", 12.0, p.c(Token::MutedForeground))),
+                )
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        if let Some(s) = &mut this.settings {
+                            if !s.default_thinking_menu {
+                                s.default_thinking_menu = true;
+                                cx.notify();
                             }
                         }
-                    }))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(s) = &mut this.settings {
-                            s.default_thinking_menu = !s.default_thinking_menu;
-                        }
-                        cx.notify();
-                    })),
-            )
+                    }
+                }))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.default_thinking_menu = !s.default_thinking_menu;
+                    }
+                    cx.notify();
+                })),
+        )
     }
 
     /// Levels beside the session-model menu. A sibling of that card, not a child: the card clips

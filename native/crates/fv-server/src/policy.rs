@@ -16,6 +16,8 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
                 | ClientRequest::OfficeWatchStop { .. }
                 | ClientRequest::OfficeWatchStateGet { .. }
                 | ClientRequest::OfficeSelectionGet { .. }
+                | ClientRequest::ComputerInstall { .. }
+                | ClientRequest::ComputerHost { .. }
         ),
         ClientOrigin::Lan | ClientOrigin::Official => match request {
             ClientRequest::Initialize { .. }
@@ -101,6 +103,7 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::SubagentConfigGet { .. }
             | ClientRequest::SubagentConfigSet { .. }
             | ClientRequest::SettingsGet { .. }
+            | ClientRequest::ComputerStatusGet { .. }
             | ClientRequest::SettingsReset { .. }
             | ClientRequest::DiagnosticsGet { .. }
             | ClientRequest::AppUpdateCheck { .. }
@@ -136,7 +139,11 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::OfficeWatchStart { .. }
             | ClientRequest::OfficeWatchStop { .. }
             | ClientRequest::OfficeWatchStateGet { .. }
-            | ClientRequest::OfficeSelectionGet { .. } => false,
+            | ClientRequest::OfficeSelectionGet { .. }
+            // The driver acts on this machine's desktop, and the socket it is reached through is
+            // the host's to name: neither is a lever a remote client should have.
+            | ClientRequest::ComputerInstall { .. }
+            | ClientRequest::ComputerHost { .. } => false,
         },
     }
 }

@@ -4,6 +4,7 @@
 
 mod catalog;
 mod commit_message;
+mod computer;
 mod connection;
 pub mod context;
 mod git;

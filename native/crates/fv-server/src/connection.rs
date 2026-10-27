@@ -676,6 +676,12 @@ async fn dispatch(
             &params.message,
             params.amend,
         )?),
+        ClientRequest::ComputerStatusGet { .. } => to_value(state.computer_status()),
+        ClientRequest::ComputerInstall { .. } => to_value(state.computer_install().await?),
+        ClientRequest::ComputerHost { params, .. } => {
+            state.computer_set_host(params.socket)?;
+            to_value(Empty {})
+        }
         ClientRequest::WorkspaceGitGenerateCommitMessage { params, .. } => {
             let thread = state
                 .thread(&params.conversation_id)?

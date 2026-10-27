@@ -1,0 +1,53 @@
+_version: 2
+
+computer.allow:
+  zh: "允许操作电脑"
+  en: "Allow computer control"
+computer.allow_description:
+  zh: "让智能体查看屏幕、点击和输入，操作你电脑上的应用。"
+  en: "Let the agent see the screen, click and type in apps on this computer."
+computer.unsupported:
+  zh: "这台电脑不支持电脑操控。"
+  en: "Computer control is not available on this computer."
+computer.downloading:
+  zh: "正在下载电脑操控组件…"
+  en: "Downloading the computer-control component…"
+computer.downloading_progress:
+  zh: "正在下载电脑操控组件：%{received} / %{total}"
+  en: "Downloading the computer-control component: %{received} / %{total}"
+computer.installed:
+  zh: "组件版本 %{version} · %{state}"
+  en: "Component %{version} · %{state}"
+computer.running:
+  zh: "运行中"
+  en: "running"
+computer.waiting:
+  zh: "等待启动"
+  en: "starting"
+computer.stopped:
+  zh: "已关闭"
+  en: "off"
+computer.download:
+  zh: "下载电脑操控组件"
+  en: "Download the computer-control component"
+computer.accessibility:
+  zh: "辅助功能"
+  en: "Accessibility"
+computer.screen_recording:
+  zh: "屏幕录制"
+  en: "Screen Recording"
+computer.granted:
+  zh: "已授权"
+  en: "Granted"
+computer.not_granted:
+  zh: "未授权。授权后才能控制电脑。"
+  en: "Not granted. Computer control needs it."
+computer.open_settings:
+  zh: "打开系统设置"
+  en: "Open System Settings"
+computer.relaunch_note:
+  zh: "授权后，屏幕录制通常需要重新打开 FastVibe 才生效。"
+  en: "After granting, Screen Recording usually takes effect only once FastVibe is reopened."
+computer.daemon_exited:
+  zh: "电脑操控组件意外退出了。"
+  en: "The computer-control component exited unexpectedly."

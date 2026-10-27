@@ -111,6 +111,13 @@
               "null"
             ]
           },
+          "computerControl": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "customSystemPrompt": {
             "default": null,
             "type": [
@@ -372,6 +379,18 @@
           "name",
           "version"
         ],
+        "type": "object"
+      },
+      "ComputerHostParams": {
+        "description": "The host application says where its private driver daemon listens, or that it is gone.\n\nOnly the application that holds Accessibility and Screen Recording can start the daemon (the\nOS attributes those grants to the process that spawned it), so the server cannot; it learns\nof the daemon from here and talks to it through a stdio proxy.",
+        "properties": {
+          "socket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "CreateEntryParams": {
@@ -4013,6 +4032,66 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "computer/status",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "computer/install",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "computer/host",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ComputerHostParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "settings/get",
             "type": "string"
           },
@@ -5909,6 +5988,11 @@
             "description": "JavaScript orchestration. Changes take effect at the next turn boundary.",
             "type": "boolean"
           },
+          "computerControl": {
+            "default": false,
+            "description": "允许操作电脑: the master switch for the desktop-control driver. Off, the driver is not\nrunning and the agent has no desktop tools; on, the app that holds the OS permissions\nruns it (`computer/host`).",
+            "type": "boolean"
+          },
           "customSystemPrompt": {
             "default": "",
             "description": "User-authored suffix of each conversation's system instructions. Empty disables it.",
@@ -6079,6 +6163,81 @@
         ]
       },
       "CatalogChanged": {
+        "type": "object"
+      },
+      "ComputerInstallProgress": {
+        "properties": {
+          "received": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "description": "Zero until every part's size is known.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "received",
+          "total"
+        ],
+        "type": "object"
+      },
+      "ComputerStatus": {
+        "description": "Where the desktop-control driver stands on this machine.",
+        "properties": {
+          "binary": {
+            "description": "Where that executable is, for the application that runs it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "description": "The last failure of an install, for the pane to show.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "installed": {
+            "description": "The driver executable is in the data directory and its version is the one this build pins.",
+            "type": "boolean"
+          },
+          "installing": {
+            "description": "A download is in flight.",
+            "type": "boolean"
+          },
+          "running": {
+            "description": "The host application has a driver daemon up and registered with this server.",
+            "type": "boolean"
+          },
+          "supported": {
+            "description": "Whether this OS and CPU have a driver build at all. `false` also covers a server running\nwith no desktop (the SSH Agent), which has nothing to control.",
+            "type": "boolean"
+          },
+          "unsupportedReason": {
+            "description": "Why not, when `supported` is false.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "supported",
+          "installed",
+          "installing",
+          "running"
+        ],
         "type": "object"
       },
       "DirEntry": {
@@ -7361,6 +7520,38 @@
           },
           "params": {
             "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "computer/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ComputerStatus"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "computer/installProgress",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ComputerInstallProgress"
           }
         },
         "required": [

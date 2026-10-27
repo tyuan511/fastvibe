@@ -54,6 +54,7 @@ gpui-macos-capture = { package = "gpui-pre-macos", version = "=0.3.9", features 
 # The window's own vibrancy view (see `vibrancy.rs`); both are already in the lockfile via GPUI.
 wry = { version = "=0.57.1", default-features = false, features = ["os-webview"] }
 objc = "0.2"
+core-foundation = "0.10"
 raw-window-handle = "0.6"
 
 [dev-dependencies]

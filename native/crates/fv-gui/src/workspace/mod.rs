@@ -16,6 +16,7 @@ mod about;
 mod app_menu;
 mod ask;
 mod composer;
+mod computer;
 mod diff;
 mod file_mention;
 mod header_git;
@@ -293,6 +294,7 @@ pub struct Workspace {
     /// The language the menu bar was last built in.
     menu_english: bool,
     header_git: header_git::HeaderGit,
+    computer: computer::ComputerUi,
     system_dark: bool,
 }
 
@@ -559,6 +561,7 @@ impl Workspace {
             appearance_dirty: false,
             menu_english: false,
             header_git: Default::default(),
+            computer: Default::default(),
             system_dark: matches!(
                 window.appearance(),
                 WindowAppearance::Dark | WindowAppearance::VibrantDark
@@ -906,6 +909,11 @@ impl Workspace {
                 }
             }
             "archived" => self.open_settings(settings::Section::Archived, window, cx),
+            // Dev capture: the 电脑操控 pane in a state the fixture cannot reach on its own.
+            "computer" | "computer-downloading" | "computer-off" => {
+                self.open_settings(settings::Section::Computer, window, cx);
+                self.computer_fixture(name);
+            }
             "add-provider" => {
                 self.open_settings(settings::Section::Providers, window, cx);
                 self.open_add_provider(window, cx);
@@ -1334,6 +1342,7 @@ impl Workspace {
     fn on_event(&mut self, event: BackendEvent, cx: &mut Context<Self>) {
         match event {
             BackendEvent::Connected { version_mismatch } => {
+                self.computer_refresh(cx);
                 self.invalidate_provider_checks();
                 self.refresh_mcp(cx);
                 self.refresh_skills(cx);
@@ -1395,6 +1404,7 @@ impl Workspace {
                             || self.app_settings.dark_theme != s.dark_theme
                             || self.app_settings.glass != s.glass;
                         self.app_settings = s.clone();
+                        self.computer_sync(cx);
                     }
                     ServerNotification::ProvidersChanged(_) => {
                         self.invalidate_provider_checks();
@@ -1412,6 +1422,12 @@ impl Workspace {
                     ServerNotification::SubagentRolesChanged(_) => self.refresh_roles(cx),
                     ServerNotification::SubagentsChanged(_) => self.refresh_subagents(cx),
                     ServerNotification::SchedulesChanged(_) => self.refresh_schedules(cx),
+                    ServerNotification::ComputerChanged(status) => {
+                        self.computer_status_changed(status.clone(), cx)
+                    }
+                    ServerNotification::ComputerInstallProgress(progress) => {
+                        self.computer_progress(progress.clone(), cx)
+                    }
                     ServerNotification::McpChanged(_) => {
                         self.refresh_mcp(cx);
                         self.refresh_roles(cx);

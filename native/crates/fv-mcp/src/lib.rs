@@ -61,6 +61,9 @@ struct Entry {
 
 struct Inner {
     configs: Vec<McpServerConfig>,
+    /// A server the application itself runs (the desktop driver), alongside the user's. It is
+    /// never saved, listed or edited: its lifetime follows the feature that owns it.
+    managed: Option<McpServerConfig>,
     entries: BTreeMap<String, Entry>,
     epoch: u64,
     retired: Vec<std::sync::Weak<Connection>>,
@@ -112,6 +115,7 @@ impl Manager {
             output_dir: data_dir.join("mcp-results"),
             inner: Mutex::new(Inner {
                 configs,
+                managed: None,
                 entries: BTreeMap::new(),
                 epoch: 0,
                 retired: Vec::new(),
@@ -142,6 +146,26 @@ impl Manager {
         let configs = self.inner.lock().unwrap().configs.clone();
         for config in configs.into_iter().filter(|c| c.enabled) {
             self.spawn_connect(config);
+        }
+    }
+
+    /// Run, replace or stop the application's own server. Its tools join every turn's registry
+    /// like any other server's; a config that equals the current one reconnects it, which is what
+    /// the caller wants when the endpoint it points at has been restarted.
+    pub fn set_managed(self: &Arc<Self>, config: Option<McpServerConfig>) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(old) = inner.managed.take()
+                && let Some(entry) = inner.entries.remove(&old.id)
+                && let Some(connection) = &entry.connection
+            {
+                inner.retired.push(Arc::downgrade(connection));
+            }
+            inner.managed = config.clone();
+        }
+        match config {
+            Some(config) if config.enabled => self.spawn_connect(config),
+            _ => self.changed(),
         }
     }
 
@@ -222,6 +246,11 @@ impl Manager {
             inner.epoch += 1;
             let entries = std::mem::take(&mut inner.entries);
             for (id, entry) in entries {
+                // The user's list is being replaced; the application's own server is not in it.
+                if inner.managed.as_ref().is_some_and(|m| m.id == id) {
+                    inner.entries.insert(id, entry);
+                    continue;
+                }
                 let unchanged = inner
                     .configs
                     .iter()
@@ -465,10 +494,12 @@ impl Manager {
         let diagnostics = Diagnostics::new(&config);
         let epoch = {
             let mut inner = self.inner.lock().unwrap();
-            if !inner
-                .configs
-                .iter()
-                .any(|current| current == &config && current.enabled)
+            let managed = inner.managed.as_ref() == Some(&config);
+            if !managed
+                && !inner
+                    .configs
+                    .iter()
+                    .any(|current| current == &config && current.enabled)
             {
                 return;
             }
