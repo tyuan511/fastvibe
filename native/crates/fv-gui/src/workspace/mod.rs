@@ -164,6 +164,7 @@ pub struct Workspace {
     navigation: crate::sidebar_state::History,
     sidebar_menu: Option<Point<Pixels>>,
     sidebar_notice: Option<String>,
+    dock_badge: u32,
     /// Scroll to the end once the transcript has been laid out (opening a conversation).
     stick_to_bottom: bool,
     /// 设置, while it is open (it covers the workspace, which keeps its state behind it).
@@ -456,6 +457,7 @@ impl Workspace {
             navigation: Default::default(),
             sidebar_menu: None,
             sidebar_notice: None,
+            dock_badge: 0,
             stick_to_bottom: true,
             settings: None,
             search_box: None,
@@ -1155,6 +1157,8 @@ impl Workspace {
             .visit(self.selected.clone(), Some(id.clone()));
         self.cancel_terminal_compositions(cx);
         self.selected = Some(id.clone());
+        self.dock_badge = 0;
+        crate::dock::set(0);
         self.subagents.open = None;
         self.refresh_subagents(cx);
         self.close_menus(cx);
@@ -1323,6 +1327,8 @@ impl Workspace {
                     ServerNotification::TurnCompleted(event)
                         if self.selected.as_deref() != Some(event.thread_id.as_str()) =>
                     {
+                        self.dock_badge = self.dock_badge.saturating_add(1);
+                        crate::dock::set(self.dock_badge);
                         self.sidebar_notice = Some(match event.body.status {
                             TurnStatus::Completed => "后台对话已完成".into(),
                             TurnStatus::Interrupted => "后台对话已停止".into(),

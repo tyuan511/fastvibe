@@ -6,6 +6,7 @@
 pub mod assets;
 pub mod backend;
 pub mod context_stats;
+pub mod dock;
 pub mod file_icons;
 pub mod fixture;
 pub mod markdown;
