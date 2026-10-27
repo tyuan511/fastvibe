@@ -28,7 +28,7 @@
 - [x] 内容：Office 开发资源下的静态/实时预览、选中引用与内置 CLI 子进程环境；代码和自动化验证见第二十六批，安装包资源/签名仍列入交付。
 - [x] 内容：Markdown 数学公式；行内/块级 TeX 节点、常用符号、原始源码复制与安全降级已接通，见第二十七批。
 - [x] 内容：辅助对话侧栏入口；复用真实子 Agent 线程、已有转写和生命周期，不创建第二套会话/状态存储。
-- [x] 内容：电脑操控已改用 Cua Driver（第五十五批）；macOS、Windows 走驱动，Linux 仍是基础的 `computer` 工具。浏览器导航控制、主页/搜索模板、下载目录、书签和历史已接通。真实桌面上的端到端验收仍列入交付。
+- [x] 内容：电脑操控已改用 Cua Driver（第五十五批）；macOS、Windows 走驱动，Linux 没有驱动构建，因而连设置入口和基础 `computer` 回退工具都不提供（第五十七批）。浏览器导航控制、主页/搜索模板、下载目录、书签和历史已接通。真实桌面上的端到端验收仍列入交付。
 - [x] 设置：个性化 Agent 说明；编辑、保存、跨客户端同步与每轮指令注入已接通。
 - [x] 设置：快捷键（macOS）；录入、冲突处理、跨客户端持久化、原生操作分发与回车发送已接通。
 - [x] 设置：使用统计（原生对话）；持久账本、公开查询、汇总/分布/活跃度/趋势/模型图表已接通。
@@ -815,7 +815,7 @@ Electron 的会话标题栏在“项目 / 标题”后面有一个仓库状态�
 
 **服务端**（`fv-server/src/computer.rs`）：固定版本和 SHA-256（与 Electron 版同一份），下载先走 GitHub、超时或校验失败换镜像；先落到临时文件，校验通过才解包，只取压缩包里叫 `cua-driver(.exe)` 的那一个成员（不按压缩包里的路径写盘），再原子替换；失败不动原来能用的版本。macOS 用一个通用二进制（43 MB），Windows 分 x64 与 arm64；Linux 不提供（驱动的 Linux 版要靠合成器相关的辅助程序，Electron 版也是这个结论）。已装版本不等于固定版本不算已安装：守护进程和代理必须是同一个发行版。
 
-**批准**：照 Electron 版的口径，FastVibe 不在驱动之上再加每次动作的确认层——驱动的 `standard` 模式下常规自动化不弹窗，由宿主负责权限体验；总开关、OS 授权、屏幕上可见的代理光标是控制手段。原来的 `computer` 工具逐个动作确认，现在：开关关着时模型根本没有桌面工具；开着且驱动在跑时由驱动的工具取代它；开着但驱动没起来（Linux，或还没装好）时它仍作为回退。驱动的工具标为“延迟”，通过 `tool_search` 取用，因为每个工具的 schema 约 7 KB，直接放进每次请求要十万 token。内置技能 `computer-use` 重写了一份，讲的是这批工具的真实名字和流程。
+**批准**：照 Electron 版的口径，FastVibe 不在驱动之上再加每次动作的确认层——驱动的 `standard` 模式下常规自动化不弹窗，由宿主负责权限体验；总开关、OS 授权、屏幕上可见的代理光标是控制手段。原来的 `computer` 工具逐个动作确认，现在：开关关着时模型根本没有桌面工具；开着且驱动在跑时由驱动的工具取代它；开着但驱动没起来（还没装好、守护进程死了、授权没给）时它仍作为回退；没有驱动构建的平台连回退也没有，设置里整项隐藏（第五十七批）。驱动的工具标为“延迟”，通过 `tool_search` 取用，因为每个工具的 schema 约 7 KB，直接放进每次请求要十万 token。内置技能 `computer-use` 重写了一份，讲的是这批工具的真实名字和流程。
 
 **设置页**（`workspace/computer.rs`）：开关（打开时若没装就自动下载，并在 macOS 上请求授权）、下载进度、组件版本和运行状态、辅助功能与屏幕录制各一行（未授权时有“打开系统设置”）、错误提示。`computer_sync` 是唯一的决定点：设置开着、组件已装、macOS 上两项授权齐了，守护进程才跑；设置推送、服务端通知、授权轮询（每 2 秒，只在等授权时）都调它。服务端重启后守护进程会被重新登记。
 
@@ -834,3 +834,15 @@ Electron 版滚动转写时把最近一条滚出视口的用户提示词 pin 在
 **测试与验收**：`sticky.rs` 六个纯函数用例（未滚/边界不 pin、回合中段 pin、顶起时 y = bottom − 提示词高、间隙不 pin、无提示词回合不 pin）；一个无头 GPUI 用例钉住度量区间是内容坐标、滚动后不变，且滚动后 `pinned()` 给出正确位置。`cargo test -p fv-gui` 全过、`cargo fmt --check` 干净。离屏截图目检：最后一回合不够高的夹具不画带子（正确）；markdown 夹具带子贴顶、回复在带子底边切断；玻璃下带子是高密度浮层、文字清晰。
 
 **顺带修好 capture 构建**：第五十五批留下的 `gpui-test` dev-dependency 与 `capture` 特性给同一个 `gpui-pre` 包用了两个名字，任何 `--features capture` 构建都报 `the crate fv-gui depends on crate gpui-pre v0.3.9 multiple times with different names`（上一批靠截图时临时删 dev-dependency 绕过）。dev-dependency 改名 `gpui-capture`、与同名可选依赖合一后，`scripts/compare-ui.sh` 与 `--screenshot` 恢复可用，普通测试构建不受影响。
+
+## 第五十七批：没有驱动构建的平台不提供电脑操控入口
+
+第五十五批在 Linux 上留下一个「灰掉但还在」的入口：设置里「系统 → 电脑操控」照样列出，点进去开关按 `status.supported` 变灰、下面写一行「Linux 暂不支持电脑操控组件。」；而基础 `computer` 工具（xdotool）在开关为真、驱动又永远起不来时仍作为回退留给模型。两件事都不对：一个永远打不开的开关是噪音，而那个回退只能靠手写设置文件打开——界面上再没有地方能看见它或关掉它。
+
+现在 Linux（以及任何没有驱动构建的平台）**根本没有这一页**。平台判定只有一处：`fv_protocol::types::computer_control_supported(os)`（`macos | windows`），界面和服务端读的是同一个函数，所以两边不会对某个平台各说各话。
+
+- **界面**：`settings::section_available(section, os)` 是导航唯一的过滤器，`settings_nav` 按它跳过整行；一组里的页全被隐藏时连组标题一起不画，不留空标题。dev capture 的 `--settings computer` 仍直接开这一页——夹具要在它实际被截取的那个平台上可达，Linux 上不跑它。页内的 `!supported` 降级分支保留：它现在服务的是「共享判定按 OS 说有、`artifact()` 按 OS+CPU 说没有」的平台（32 位 Windows）。
+- **服务端**：`computer::keep_basic_computer_tool(control_on, driver_running, supported)` 取代 `turn.rs` 里内联的三态判断，`!supported` 与「开关关着」「驱动在跑」一样撤掉基础工具。macOS / Windows 的行为逐位不变（那里 `supported` 恒真，函数退化成原来的 `control_on && !driver_running`），驱动的下载、校验、守护进程与授权轮询一个字没动；`computer_sync` 本来就要求 `status.supported`，Linux 上从不会去拉守护进程。
+- **一致只有一个方向是硬性的**：有构建的平台**必须**显示这一页，否则用户没法装——`every_os_with_a_build_shows_the_pane` 钉住 `artifact()` 成功的每个 os/arch 都被共享判定认为支持。反过来允许不同：共享判定按 OS 回答，所以 32 位 Windows 保留这一页并在页内读到不支持的原因，那正是 `unsupported_reason` 存在的理由。
+
+**验证**：`fv-server` 两个新单测（回退工具的四态真值表、构建与页可见性一致），`fv-gui/tests/settings_sections.rs` 三个用例（驱动平台每一页都可见、Linux 只少电脑操控这一页、未知平台同样隐藏）；后者遍历 `all_sections()` 而不是手写变体列表，所以以后新增一页会自动被覆盖。

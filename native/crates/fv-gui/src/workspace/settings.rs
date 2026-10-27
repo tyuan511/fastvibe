@@ -83,6 +83,25 @@ const SECTIONS: &[(&str, &[SectionItem])] = &[
     ("关于", &[(Section::About, "关于", "information-circle")]),
 ];
 
+/// Whether this platform shows a pane at all.
+///
+/// 电脑操控 needs the desktop-control driver, which has no Linux build, so on Linux there is no
+/// pane to open. `fv-server` withholds the basic `computer` fallback tool on the same reading
+/// (`computer::keep_basic_computer_tool`), so nothing desktop-shaped is left that a switch nobody
+/// can reach would have governed.
+pub fn section_available(section: Section, os: &str) -> bool {
+    section != Section::Computer || computer_control_supported(os)
+}
+
+/// Every pane in the table, in navigation order — what `section_available` filters.
+pub fn all_sections() -> Vec<Section> {
+    SECTIONS
+        .iter()
+        .flat_map(|(_, items)| items.iter())
+        .map(|(section, _, _)| *section)
+        .collect()
+}
+
 fn section_label(section: Section) -> &'static str {
     SECTIONS
         .iter()
@@ -1177,6 +1196,14 @@ impl Workspace {
         let hover = ui::half(p.c(Token::SidebarAccent));
         let mut list = div().px(px(8.0)).pb(px(12.0)).flex().flex_col();
         for (gi, (group, items)) in SECTIONS.iter().enumerate() {
+            // A group whose every pane this platform hides keeps no heading of its own.
+            let visible: Vec<&SectionItem> = items
+                .iter()
+                .filter(|(section, _, _)| section_available(*section, std::env::consts::OS))
+                .collect();
+            if visible.is_empty() {
+                continue;
+            }
             list = list.child(
                 div()
                     .when(gi > 0, |d| d.mt(px(12.0)))
@@ -1187,7 +1214,7 @@ impl Workspace {
                     .muted(p)
                     .child(section_group_label(group, language)),
             );
-            for (section, label, glyph) in items.iter() {
+            for (section, label, glyph) in visible {
                 let section = *section;
                 let active = s.section == section;
                 list = list.child(

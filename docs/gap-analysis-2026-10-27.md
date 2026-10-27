@@ -8,6 +8,8 @@
 - codex 基线：`/tmp/codex-src`，`codex-rs` HEAD `6fe77fc`（2026-10-27，#57394），约 120 个 crate；
   本机安装的 CLI 是 `codex-cli 0.164.0`。仓库 `codex-cli/package.json` 的 version 是 `0.0.0-dev`，无 tag。
 - 方法：只读源码取证，每条结论附文件与行号。未运行任何一方的应用。
+- 基线之后的更正：本文取证于 `77cb3bf4`，而电脑操控已在 `e02b31f1`（第五十五批）改用 Cua Driver，§1 与 §3.4
+  里涉及它的两行已按该提交的实际状态改写；其余结论仍以 `77cb3bf4` 为准。
 
 **范围口径**（三条，决定哪些差异算「差距」）：
 
@@ -47,7 +49,7 @@ Guardian 审查）、**上下文经济学**（world_state 增量注入、可缓�
 | MCP：stdio + Streamable HTTP、OAuth、resources/templates、图片落盘、`tools/list_changed` | `fv-mcp/src/`（`lib.rs:740 on_tool_list_changed` → `catalog_changes.send_modify`）、`tools.rs:102-110` | `core/src/mcp*.rs`、`McpToolListChanged` |
 | Code mode（进程内 JS，工具目录 + `__call` 并发 16） | `fv-tools/src/code_mode/`（rquickjs 0.14：64 MB 内存 / 512 KB 栈 / 600 s / interrupt handler） | `code-mode/`、`code-mode-host/`、`Feature::CodeMode*` |
 | hosted web_search（Responses） | `fv-tools/src/web_search.rs`、`fv-core/src/web_search.rs` | `core/src/web_search.rs`、`WebSearchRequest` |
-| 电脑操控（三平台） | `fv-tools/src/computer.rs`（macOS CGEvent / Linux xdotool / Windows SendKeys） | `Feature::ComputerUse`（requirements-only gate，实现由桌面宿主提供） |
+| 电脑操控（macOS / Windows；Linux 不提供） | `fv-server/src/computer.rs` + `fv-gui/src/computer_host.rs`：Electron 版同一个 `cua-driver-rs 0.28.2`（版本与 SHA-256 固定），由持授权的 GUI 拉起 `serve --embedded`，经受管 MCP 暴露约 60 个 `mcp_computer_*` 工具（deferred，经 `tool_search` 取用）。`fv-tools/src/computer.rs`（screencapture / osascript / xdotool / SendKeys）只在驱动没起来时作回退，Linux 连回退也没有 | `Feature::ComputerUse`（requirements-only gate，实现由桌面宿主提供） |
 | 模型端重试与错误分类 | `fv-provider/src/model.rs::open_with_retry`、`error.rs`（`status_retryable = 408|409|425|429|5xx`、`retry_after` clamp 0..120s、`is_overflow()`） | `responses_retry.rs`、`PendingUnauthorizedRetry` |
 | 重启恢复（先抢监听再恢复，避免误标别人的活子进程） | `fv-server/src/listener.rs:55-84`（`AlreadyRunning` → `schedules.recover()` → `recover_subagents()`） | `session/daemon_recovery.rs`、`app-server-daemon/` |
 | git 对象级检查点（隐藏身份） | `fv-store/src/checkpoint.rs:115-140`（`write-tree` + `commit-tree -p HEAD`，`-c user.name=FastVibe`） | `Feature::GhostCommit` —— **已是 Removed no-op，这条 FastVibe 领先** |
@@ -267,9 +269,9 @@ codex `core/src/tools/spec_plan.rs` 的处理器全集减去 FastVibe 已有的�
   settings」）。FastVibe 是进程内 rquickjs。
 - **浏览器**：codex `BrowserUse`（+ `BrowserUseFullCdpAccess`、`BrowserUseExternal`、
   `BrowserAnnotationApi`：「Allow websites to open and customize annotation tools in desktop apps」）、
-  `InAppBrowser` / `InAppChat`。FastVibe 原生只有 OS 级 `computer` 工具 + GUI webview 预览，
-  **没有结构化浏览器工具**（无 snapshot / 元素 ref / click by ref）——Electron 版的 `browser_*` +
-  `data-fv-ref` 元素寻址没有移植，**这是相对自家旧版的第二处回退**。
+  `InAppBrowser` / `InAppChat`。FastVibe 原生只有 Cua Driver 的桌面工具（它开的是用户自己的浏览器窗口）
+  + GUI webview 预览，**没有结构化浏览器工具**（无 snapshot / 元素 ref / click by ref）——Electron 版的
+  `browser_*` + `data-fv-ref` 元素寻址没有移植，**这是相对自家旧版的第二处回退**。
 
 ### 3.5 插件与 apps（生态入口）
 
