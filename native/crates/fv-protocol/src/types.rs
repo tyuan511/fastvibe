@@ -1773,11 +1773,22 @@ pub enum ThemeMode {
     System,
 }
 
+/// The desktop language. Chinese remains the default for existing installs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UiLanguage {
+    #[default]
+    Chinese,
+    English,
+}
+
 /// What every client of this server shares about how the app looks. Ids name themes from the
 /// clients' own catalog; one a client does not know falls back to its default.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default)]
+    pub language: UiLanguage,
     pub theme_mode: ThemeMode,
     pub light_theme: String,
     pub dark_theme: String,
@@ -1914,6 +1925,7 @@ pub struct ApprovalResponse {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            language: UiLanguage::Chinese,
             theme_mode: ThemeMode::System,
             light_theme: "github-light".into(),
             dark_theme: "github-dark".into(),
@@ -1942,6 +1954,8 @@ impl Default for AppSettings {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettingsPatch {
+    #[serde(default)]
+    pub language: Option<UiLanguage>,
     #[serde(default)]
     pub theme_mode: Option<ThemeMode>,
     #[serde(default)]
@@ -2013,6 +2027,9 @@ pub struct AppUpdateInfo {
 
 impl AppSettings {
     pub fn apply(&mut self, patch: AppSettingsPatch) {
+        if let Some(v) = patch.language {
+            self.language = v;
+        }
         if let Some(v) = patch.send_on_enter {
             self.send_on_enter = v;
         }

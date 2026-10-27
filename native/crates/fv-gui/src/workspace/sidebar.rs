@@ -4,7 +4,7 @@
 use super::sidebar_actions::SidebarDrag;
 use crate::sidebar_state;
 use fv_protocol::types::ThreadUpdateParams;
-use fv_protocol::types::{SidebarSettingsPatch, Thread};
+use fv_protocol::types::{SidebarSettingsPatch, Thread, UiLanguage};
 use fv_theme::Token;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::tooltip::Tooltip;
@@ -157,6 +157,7 @@ impl Workspace {
 
     fn brand_and_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let nav = |id: &'static str, glyph: &'static str, label: &'static str| {
             nav_row(id, glyph, label, p)
         };
@@ -208,20 +209,31 @@ impl Workspace {
                     .flex_col()
                     .gap(px(2.0))
                     .child(
-                        nav("new-chat", "message-square-plus", text::NEW_CHAT).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.new_chat(None, cx);
-                            }),
-                        ),
+                        nav(
+                            "new-chat",
+                            "message-square-plus",
+                            if english { "New chat" } else { text::NEW_CHAT },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.new_chat(None, cx);
+                        })),
                     )
-                    .child(nav("tasks", "clock01", text::TASKS).on_click(
-                        cx.listener(|this, _, window, cx| this.open_schedules(window, cx)),
-                    )),
+                    .child(
+                        nav(
+                            "tasks",
+                            "clock01",
+                            if english { "Schedules" } else { text::TASKS },
+                        )
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.open_schedules(window, cx)),
+                        ),
+                    ),
             )
     }
 
     fn lists(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let all_visible: Vec<&Thread> = self.threads.iter().filter(|t| !t.archived).collect();
         let prefs = &self.app_settings.sidebar;
         let pinned = sidebar_state::ordered(
@@ -290,12 +302,12 @@ impl Workspace {
                         .text_size(px(TEXT_XS))
                         .font_weight(FontWeight::MEDIUM)
                         .muted(p)
-                        .child("置顶"),
+                        .child(if english { "Pinned" } else { "置顶" }),
                 )
                 .child(list);
         }
         body = body.child(section_label(
-            text::PROJECTS,
+            if english { "Projects" } else { text::PROJECTS },
             pinned.is_empty(),
             icon_button_xs("new-project", "add01", p).on_click(
                 cx.listener(|this, _, window, cx| this.open_project_dialog(None, window, cx)),
@@ -309,7 +321,11 @@ impl Workspace {
                     .py(px(8.0))
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(text::NO_PROJECTS),
+                    .child(if english {
+                        "No projects"
+                    } else {
+                        text::NO_PROJECTS
+                    }),
             );
         } else {
             // Projects are 2px apart; a project's chats follow its row directly.
@@ -333,7 +349,11 @@ impl Workspace {
                                 .py(px(6.0))
                                 .text_size(px(TEXT_XS))
                                 .muted(p)
-                                .child(text::EMPTY_CHATS),
+                                .child(if english {
+                                    "No chats"
+                                } else {
+                                    text::EMPTY_CHATS
+                                }),
                         );
                     }
                     if threads.len() > 5 {
@@ -347,9 +367,17 @@ impl Workspace {
                                 .text_size(px(TEXT_XS))
                                 .muted(p)
                                 .child(if expanded {
-                                    "收起".to_string()
+                                    if english {
+                                        "Collapse".to_string()
+                                    } else {
+                                        "收起".to_string()
+                                    }
                                 } else {
-                                    format!("展开更多（{}）", threads.len() - 5)
+                                    if english {
+                                        format!("Show {} more", threads.len() - 5)
+                                    } else {
+                                        format!("展开更多（{}）", threads.len() - 5)
+                                    }
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     let mut paths =
@@ -376,7 +404,7 @@ impl Workspace {
             body = body.child(list);
         }
         body = body.child(section_label(
-            text::CHATS,
+            if english { "Chats" } else { text::CHATS },
             false,
             icon_button_xs("new-session", "pencil-edit02", p)
                 .on_click(cx.listener(|this, _, _, cx| this.new_chat(None, cx))),
@@ -389,7 +417,11 @@ impl Workspace {
                     .py(px(8.0))
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(text::EMPTY_CHATS),
+                    .child(if english {
+                        "No chats"
+                    } else {
+                        text::EMPTY_CHATS
+                    }),
             );
         } else {
             let mut list = div().flex().flex_col().gap(px(2.0));
@@ -680,6 +712,7 @@ impl Workspace {
 
     fn footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         div()
             .flex_none()
             .p(px(8.0))
@@ -687,19 +720,24 @@ impl Workspace {
             .items_center()
             .gap(px(4.0))
             .child(
-                nav_row("settings", "settings01", text::SETTINGS, p)
-                    .flex_1()
-                    .min_w_0()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // Nothing works before a model is connected, so that is where an
-                        // install with none is taken.
-                        let section = if this.models.is_empty() {
-                            super::settings::Section::Providers
-                        } else {
-                            super::settings::Section::General
-                        };
-                        this.open_settings(section, window, cx)
-                    })),
+                nav_row(
+                    "settings",
+                    "settings01",
+                    if english { "Settings" } else { text::SETTINGS },
+                    p,
+                )
+                .flex_1()
+                .min_w_0()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    // Nothing works before a model is connected, so that is where an
+                    // install with none is taken.
+                    let section = if this.models.is_empty() {
+                        super::settings::Section::Providers
+                    } else {
+                        super::settings::Section::General
+                    };
+                    this.open_settings(section, window, cx)
+                })),
             )
             .child(
                 div()

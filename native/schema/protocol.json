@@ -147,6 +147,17 @@
               "null"
             ]
           },
+          "language": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UiLanguage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "lightTheme": {
             "default": null,
             "type": [
@@ -2514,6 +2525,14 @@
           "text"
         ],
         "type": "object"
+      },
+      "UiLanguage": {
+        "description": "The desktop language. Chinese remains the default for existing installs.",
+        "enum": [
+          "chinese",
+          "english"
+        ],
+        "type": "string"
       },
       "UsageParams": {
         "properties": {
@@ -5824,6 +5843,10 @@
             "default": false,
             "type": "boolean"
           },
+          "language": {
+            "$ref": "#/$defs/UiLanguage",
+            "default": "chinese"
+          },
           "lightTheme": {
             "type": "string"
           },
@@ -7029,6 +7052,14 @@
             "type": "string"
           }
         ]
+      },
+      "UiLanguage": {
+        "description": "The desktop language. Chinese remains the default for existing installs.",
+        "enum": [
+          "chinese",
+          "english"
+        ],
+        "type": "string"
       },
       "WorkspaceEntryChange": {
         "description": "Global workspace notification: invalidate listings, and remap open paths after a rename.",

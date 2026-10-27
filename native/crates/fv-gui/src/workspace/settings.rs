@@ -210,6 +210,7 @@ impl BrowserSettings {
 /// Which 外观 list is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeMenu {
+    Language,
     Mode,
     Light,
     Dark,
@@ -1752,6 +1753,7 @@ impl Workspace {
                 })),
             );
         }
+
         let mut policy_menu = popover(p)
             .absolute()
             .top(px(40.0))
@@ -1875,6 +1877,10 @@ impl Workspace {
         let auto_archive = a.auto_archive_after_days.is_some();
         let keep_awake = a.keep_awake;
         let hover = p.c(Token::Accent);
+        let language_label = |language: UiLanguage| match language {
+            UiLanguage::Chinese => "中文",
+            UiLanguage::English => "English",
+        };
         let mode_label = |m: ThemeMode| match m {
             ThemeMode::System => "跟随系统",
             ThemeMode::Light => "亮色",
@@ -1923,6 +1929,34 @@ impl Workspace {
                     this.patch_settings(
                         AppSettingsPatch {
                             theme_mode: Some(m),
+                            ..Default::default()
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+
+        let mut language_menu = popover(p)
+            .absolute()
+            .top(px(40.0))
+            .right(px(0.0))
+            .w(px(172.0));
+        for language in [UiLanguage::Chinese, UiLanguage::English] {
+            language_menu = language_menu.child(
+                menu_item(
+                    SharedString::from(format!("language-{language:?}")),
+                    a.language == language,
+                    hover,
+                )
+                .child(language_label(language))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.theme_menu = None;
+                    }
+                    this.patch_settings(
+                        AppSettingsPatch {
+                            language: Some(language),
                             ..Default::default()
                         },
                         cx,
@@ -2002,6 +2036,12 @@ impl Workspace {
         );
         let light_menu = theme_list(fv_theme::ThemeKind::Light, &a.light_theme, cx);
         let dark_menu = theme_list(fv_theme::ThemeKind::Dark, &a.dark_theme, cx);
+        let language_btn = select(
+            "ui-language",
+            ThemeMenu::Language,
+            div().child(language_label(a.language)).into_any_element(),
+            cx,
+        );
         let glass = a.glass;
 
         div()
@@ -2017,6 +2057,18 @@ impl Workspace {
             )
             .child(
                 card(p)
+                    .child(setting_row(
+                        "界面语言",
+                        "切换原生界面语言；未迁移的文案保留中文回退",
+                        false,
+                        p,
+                        div()
+                            .relative()
+                            .child(language_btn)
+                            .when(s.theme_menu == Some(ThemeMenu::Language), |d| {
+                                d.child(ui::float(language_menu))
+                            }),
+                    ))
                     .child(setting_row(
                         "主题模式",
                         "跟随系统时随 macOS 外观自动切换",
