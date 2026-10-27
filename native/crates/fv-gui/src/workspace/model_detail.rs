@@ -85,18 +85,47 @@ impl Form {
             self.levels.sort();
         }
     }
+    #[cfg(test)]
     fn model(&self, id: &str) -> Result<ModelInfo, String> {
+        self.model_localized(id, false)
+    }
+    fn model_localized(&self, id: &str, english: bool) -> Result<ModelInfo, String> {
         let positive = |s: &str, label: &str| {
             s.trim()
                 .parse::<u32>()
                 .ok()
                 .filter(|n| *n > 0)
-                .ok_or_else(|| format!("{label}需要填写有效的正整数"))
+                .ok_or_else(|| {
+                    if english {
+                        format!("{label}: enter a valid positive integer")
+                    } else {
+                        format!("{label}需要填写有效的正整数")
+                    }
+                })
         };
-        let context = positive(&self.context, "上下文窗口")?;
-        let output = positive(&self.output, "最大输出")?;
+        let context = positive(
+            &self.context,
+            if english {
+                "Context window"
+            } else {
+                "上下文窗口"
+            },
+        )?;
+        let output = positive(
+            &self.output,
+            if english {
+                "Max output"
+            } else {
+                "最大输出"
+            },
+        )?;
         if self.reasoning && self.levels.is_empty() {
-            return Err("请至少选择一种思考强度".into());
+            return Err(if english {
+                "Select at least one thinking level"
+            } else {
+                "请至少选择一种思考强度"
+            }
+            .into());
         }
         Ok(ModelInfo {
             id: id.into(),
@@ -347,6 +376,7 @@ impl Workspace {
         let Some(b) = self.backend.clone() else {
             return;
         };
+        let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         let Some(e) = self.settings.as_mut().and_then(|s| s.model_edit.as_mut()) else {
             return;
         };
@@ -360,7 +390,7 @@ impl Workspace {
         let model = if restore {
             None
         } else {
-            match form.model(&e.model_id) {
+            match form.model_localized(&e.model_id, english) {
                 Ok(model) => Some(model),
                 Err(error) => {
                     e.error = Some(error);

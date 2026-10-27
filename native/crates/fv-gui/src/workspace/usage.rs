@@ -89,6 +89,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.app_settings.language == UiLanguage::English;
                 let Some(s) = this
                     .settings
                     .as_mut()
@@ -100,7 +101,13 @@ impl Workspace {
                 s.loading = false;
                 match result {
                     Ok(stats) => s.stats = Some(stats),
-                    Err(error) => s.error = Some(format!("读取使用统计失败：{error}")),
+                    Err(error) => {
+                        s.error = Some(if english {
+                            format!("Failed to load usage statistics: {error}")
+                        } else {
+                            format!("读取使用统计失败：{error}")
+                        })
+                    }
                 }
                 let again = std::mem::take(&mut s.dirty);
                 if again {

@@ -64,6 +64,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.app_settings.language == UiLanguage::English;
                 if let Some(settings) = this
                     .settings
                     .as_mut()
@@ -72,7 +73,13 @@ impl Workspace {
                     settings.about.update_loading = false;
                     match result {
                         Ok(update) => settings.about.update = Some(update),
-                        Err(error) => settings.about.error = Some(format!("检查更新失败：{error}")),
+                        Err(error) => {
+                            settings.about.error = Some(if english {
+                                format!("Update check failed: {error}")
+                            } else {
+                                format!("检查更新失败：{error}")
+                            })
+                        }
                     }
                 }
                 cx.notify();
@@ -138,14 +145,28 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.app_settings.language == UiLanguage::English;
                 match result {
                     Ok(settings) => {
                         this.observe_personalization(&settings.custom_system_prompt);
                         this.app_settings = settings;
                         this.appearance_dirty = true;
-                        this.sidebar_notice = Some("偏好设置已恢复默认".into());
+                        this.sidebar_notice = Some(
+                            if english {
+                                "Preferences restored to defaults"
+                            } else {
+                                "偏好设置已恢复默认"
+                            }
+                            .into(),
+                        );
                     }
-                    Err(error) => this.sidebar_notice = Some(format!("恢复默认失败：{error}")),
+                    Err(error) => {
+                        this.sidebar_notice = Some(if english {
+                            format!("Reset failed: {error}")
+                        } else {
+                            format!("恢复默认失败：{error}")
+                        })
+                    }
                 }
                 this.refresh_app_settings(cx);
                 cx.notify();
