@@ -28,6 +28,14 @@ fn usage() -> ! {
     std::process::exit(2)
 }
 
+fn print_help() -> ! {
+    println!(
+        "usage: fastvibe-server --data-dir DIR [--listen unix|stdio]\n\
+         \x20      [--model echo | --protocol chat|responses|anthropic|google --base-url URL --model-id ID [--thinking minimal|low|medium|high|xhigh|max] [--no-images]]"
+    );
+    std::process::exit(0)
+}
+
 fn fail(message: impl std::fmt::Display) -> ! {
     eprintln!("{message}");
     std::process::exit(1)
@@ -56,6 +64,13 @@ fn thinking(name: &str) -> ThinkingLevel {
 }
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--help" || arg == "-h") {
+        print_help();
+    }
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("fastvibe-server {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

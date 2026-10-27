@@ -60,6 +60,15 @@ jobs:
       - name: Verify bundle
         run: node scripts/check-native-bundle.mjs --bundle release/native/${{ matrix.platform }}-${{ matrix.arch }}
 
+      - name: Smoke test staged server
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "win" ]; then
+            ./release/native/${{ matrix.platform }}-${{ matrix.arch }}/bin/fastvibe-server.exe --help
+          else
+            ./release/native/${{ matrix.platform }}-${{ matrix.arch }}/bin/fastvibe-server --help
+          fi
+
       - name: Upload native bundle
         uses: actions/upload-artifact@v4
         with:
