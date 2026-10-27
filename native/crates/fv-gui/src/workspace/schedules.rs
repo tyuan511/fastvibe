@@ -56,6 +56,20 @@ fn status(s: ScheduleRunStatus) -> &'static str {
         ScheduleRunStatus::Missed => "已错过",
     }
 }
+fn status_for(s: ScheduleRunStatus, english: bool) -> &'static str {
+    if !english {
+        return status(s);
+    }
+    match s {
+        ScheduleRunStatus::Queued => "Queued",
+        ScheduleRunStatus::Running => "Running",
+        ScheduleRunStatus::Completed => "Completed",
+        ScheduleRunStatus::Failed => "Failed",
+        ScheduleRunStatus::Stopped => "Stopped",
+        ScheduleRunStatus::Interrupted => "Interrupted",
+        ScheduleRunStatus::Missed => "Missed",
+    }
+}
 fn rule_label(rule: &ScheduleRule) -> String {
     match rule {
         ScheduleRule::Once { at } => format!(
@@ -80,6 +94,36 @@ fn rule_label(rule: &ScheduleRule) -> String {
                     .unwrap_or("?"))
                 .collect::<Vec<_>>()
                 .join("、")
+        ),
+    }
+}
+fn rule_label_for(rule: &ScheduleRule, english: bool) -> String {
+    if !english {
+        return rule_label(rule);
+    }
+    match rule {
+        ScheduleRule::Once { at } => format!(
+            "Once · {}",
+            date(
+                DateTime::parse_from_rfc3339(at)
+                    .ok()
+                    .map(|d| d.timestamp_millis())
+            )
+        ),
+        ScheduleRule::Daily { time, time_zone } => format!("Daily {time} · {time_zone}"),
+        ScheduleRule::Weekly {
+            time,
+            time_zone,
+            days,
+        } => format!(
+            "Weekly {} {time} · {time_zone}",
+            days.iter()
+                .map(|d| ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+                    .get(*d as usize)
+                    .copied()
+                    .unwrap_or("?"))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     }
 }
@@ -689,7 +733,7 @@ impl Workspace {
                                     div()
                                         .text_size(px(TEXT_XS))
                                         .muted(p)
-                                        .child(rule_label(&task.definition.rule)),
+                                        .child(rule_label_for(&task.definition.rule, english)),
                                 )
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.schedules_ui.detail = Some(details.clone());
@@ -769,7 +813,7 @@ impl Workspace {
             .flex_col()
             .gap(px(12.0));
         body = body
-            .child(div().child(rule_label(&task.definition.rule)))
+            .child(div().child(rule_label_for(&task.definition.rule, english)))
             .child(div().text_size(px(TEXT_XS)).muted(p).child(
                 if english { "Each run uses a separate chat. The latest 500 global runs are kept; deleting a task does not delete its run chats." } else { "每次运行使用独立对话。保留最近 500 条全局运行历史，删除任务不会删除运行对话。" },
             ));
@@ -785,14 +829,14 @@ impl Workspace {
                     .child(if english {
                         format!(
                             "{} · {} · version {}",
-                            status(run.status),
+                            status_for(run.status, english),
                             if run.manual { "Manual" } else { "Scheduled" },
                             run.task_version
                         )
                     } else {
                         format!(
                             "{} · {} · 版本 {}",
-                            status(run.status),
+                            status_for(run.status, english),
                             if run.manual { "手动" } else { "计划" },
                             run.task_version
                         )
