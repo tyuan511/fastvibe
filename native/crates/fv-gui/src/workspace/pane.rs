@@ -301,11 +301,12 @@ impl Workspace {
             return;
         };
         self.side_pane_collapsed = false;
+        let english = self.app_settings.language == UiLanguage::English;
         let state = self.panes.entry(conversation.clone()).or_default();
         state.tabs.push(PaneTab {
             id: new_tab_id(),
             kind: PaneTabKind::Files { path: root.clone() },
-            title: "文件".into(),
+            title: if english { "Files" } else { "文件" }.into(),
         });
         state.active = state.tabs.first().map(|t| t.id.clone());
         state.expanded.insert(root.clone());
@@ -936,15 +937,28 @@ impl Workspace {
         let (at, tab) = self.pane_menu.clone()?;
         let at = super::sidebar_actions::popup_origin(at, 176.0, 180.0, window);
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let mut menu = super::settings::popover(p)
             .absolute()
             .left(at.x)
             .top(at.y)
             .w(px(176.0));
         if let Some(id) = tab {
-            for (index, label) in ["关闭标签", "关闭其他标签", "关闭所有标签"]
-                .into_iter()
-                .enumerate()
+            for (index, label) in [
+                if english { "Close tab" } else { "关闭标签" },
+                if english {
+                    "Close other tabs"
+                } else {
+                    "关闭其他标签"
+                },
+                if english {
+                    "Close all tabs"
+                } else {
+                    "关闭所有标签"
+                },
+            ]
+            .into_iter()
+            .enumerate()
             {
                 let id = id.clone();
                 menu = menu.child(
