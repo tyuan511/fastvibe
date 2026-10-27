@@ -254,6 +254,7 @@ impl Workspace {
         if self.pane_storage.is_none() || self.pane_save_pending {
             return;
         }
+        let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         self.pane_save_pending = true;
         cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -293,7 +294,11 @@ impl Workspace {
                         if let Some(storage) = this.pane_storage.as_mut() {
                             storage.invalidate();
                         }
-                        let message = format!("无法保存工作区恢复信息：{error}");
+                        let message = if english {
+                            format!("Could not save workspace recovery state: {error}")
+                        } else {
+                            format!("无法保存工作区恢复信息：{error}")
+                        };
                         if this
                             .notice
                             .as_ref()
