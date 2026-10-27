@@ -683,7 +683,10 @@ pub fn scan_opencode(db_path: &Path) -> Result<Vec<Candidate>, ImportError> {
     if !db_path.is_file() {
         return Ok(Vec::new());
     }
-    let connection = open_import_db(db_path)?;
+    let connection = match open_import_db(db_path) {
+        Ok(connection) => connection,
+        Err(_) => return Ok(Vec::new()),
+    };
     let mut query = connection.prepare(
         "SELECT id, title, directory, time_created, time_updated FROM session ORDER BY time_updated DESC",
     )?;
