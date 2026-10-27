@@ -77,7 +77,10 @@ fn init_params() -> InitializeParams {
 async fn initialized(h: &Harness) -> (Client, Notes) {
     let (c, n) = h.connect().await;
     let hello = c.call::<Initialize>(init_params()).await.unwrap();
-    assert_eq!(hello.build_fingerprint, fv_server::build_fingerprint().await);
+    assert_eq!(
+        hello.build_fingerprint,
+        fv_server::build_fingerprint().await
+    );
     assert_eq!(hello.has_running_turns, Some(false));
     (c, n)
 }

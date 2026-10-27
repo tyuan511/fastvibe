@@ -3,6 +3,7 @@
 //! beyond the [`ClientOrigin`] its connection was accepted with.
 
 mod catalog;
+mod commit_message;
 mod connection;
 pub mod context;
 mod git;

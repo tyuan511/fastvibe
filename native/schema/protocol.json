@@ -572,6 +572,28 @@
         ],
         "type": "object"
       },
+      "GitGenerateCommitMessageParams": {
+        "description": "Ask the conversation's model for a commit subject describing a repository's changes.",
+        "properties": {
+          "conversationId": {
+            "description": "Whose model writes it: the conversation the repository belongs to.",
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "includeUnstaged": {
+            "default": false,
+            "description": "Describe the whole tree (the button) rather than only what is staged (the commit path,\nwhich has staged everything just before asking).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cwd",
+          "conversationId"
+        ],
+        "type": "object"
+      },
       "GitHistoryParams": {
         "properties": {
           "cwd": {
@@ -3796,6 +3818,26 @@
           },
           "params": {
             "$ref": "#/$defs/GitCommitParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitGenerateCommitMessage",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GitGenerateCommitMessageParams"
           }
         },
         "required": [

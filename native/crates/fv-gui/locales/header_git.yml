@@ -54,3 +54,12 @@ header_git.commit:
 header_git.commit_and_push:
   zh: "提交并推送"
   en: "Commit and push"
+header_git.generate:
+  zh: "AI 生成提交信息"
+  en: "Write the commit message with AI"
+header_git.worktree:
+  zh: "隔离工作区：%{path}"
+  en: "Worktree: %{path}"
+header_git.unbind:
+  zh: "解除绑定"
+  en: "Unbind"

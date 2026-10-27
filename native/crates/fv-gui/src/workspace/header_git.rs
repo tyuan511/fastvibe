@@ -11,9 +11,13 @@ use super::gpui::{
 use super::{settings, sidebar_actions};
 use crate::ui::{self, TEXT_SM, TEXT_XS, icon, icon_button_xs};
 use fv_protocol::methods::{
-    WorkspaceGitCommit, WorkspaceGitPull, WorkspaceGitPush, WorkspaceGitStage, WorkspaceGitStatus,
+    WorkspaceGitCommit, WorkspaceGitGenerateCommitMessage, WorkspaceGitPull, WorkspaceGitPush,
+    WorkspaceGitStage, WorkspaceGitStatus,
 };
-use fv_protocol::types::{CwdParams, GitCommitParams, GitPathsParams, GitStatus, UiLanguage};
+use fv_protocol::types::{
+    CwdParams, GitCommitParams, GitGenerateCommitMessageParams, GitPathsParams, GitStatus,
+    UiLanguage,
+};
 use fv_theme::Token;
 use gpui_kit::component::input::{Textarea, TextareaState};
 use std::time::{Duration, Instant};
@@ -29,6 +33,8 @@ pub(super) enum Busy {
     Push,
     Commit,
     CommitPush,
+    /// Writing a commit subject with the model.
+    Generate,
 }
 
 #[derive(Default)]
@@ -38,6 +44,8 @@ pub(super) struct HeaderGit {
     input: Option<Entity<TextareaState>>,
     /// Set once a commit went through; `render` empties the field (it needs the window).
     clear_input: bool,
+    /// A subject the model wrote, waiting for `render` to put it in the field.
+    pending_message: Option<String>,
     busy: Option<Busy>,
     error: Option<String>,
     /// The repository the status below belongs to.
@@ -120,9 +128,13 @@ impl Workspace {
 
     /// Called from `render`, which has the window the field needs.
     pub(super) fn sync_header_git_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if std::mem::take(&mut self.header_git.clear_input)
-            && let Some(input) = &self.header_git.input
-        {
+        let Some(input) = self.header_git.input.clone() else {
+            return;
+        };
+        if let Some(message) = self.header_git.pending_message.take() {
+            self.header_git.clear_input = false;
+            input.update(cx, |state, cx| state.set_value(message, window, cx));
+        } else if std::mem::take(&mut self.header_git.clear_input) {
             input.update(cx, |state, cx| state.set_value("", window, cx));
         }
     }
@@ -153,7 +165,47 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Have the conversation's model write the subject for everything that has changed.
+    fn generate_header_git(&mut self, cx: &mut Context<Self>) {
+        if self.header_git.busy.is_some() {
+            return;
+        }
+        let (Some(cwd), Some(conversation), Some(backend)) = (
+            self.header_git.cwd.clone(),
+            self.selected.clone(),
+            self.backend.clone(),
+        ) else {
+            return;
+        };
+        self.header_git.busy = Some(Busy::Generate);
+        self.header_git.error = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = backend
+                .call::<WorkspaceGitGenerateCommitMessage>(GitGenerateCommitMessageParams {
+                    cwd: cwd.clone(),
+                    conversation_id: conversation,
+                    include_unstaged: true,
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.header_git.busy = None;
+                if this.header_git.cwd.as_deref() != Some(&cwd) {
+                    return;
+                }
+                match result {
+                    Ok(reply) => this.header_git.pending_message = Some(reply.message),
+                    Err(error) => this.header_git.error = Some(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Pull, push, or commit (everything, as the Git pane's button does), then optionally push.
+    /// An empty message is written by the model once everything is staged.
     fn run_header_git(&mut self, action: Busy, cx: &mut Context<Self>) {
         if self.header_git.busy.is_some() {
             return;
@@ -169,11 +221,7 @@ impl Workspace {
             .map(|input| input.read(cx).value().trim().to_string())
             .unwrap_or_default();
         let commits = matches!(action, Busy::Commit | Busy::CommitPush);
-        if commits && message.is_empty() {
-            self.header_git.error = Some(trs!(english, "header_git.write_a_message").to_string());
-            cx.notify();
-            return;
-        }
+        let conversation = self.selected.clone();
         self.header_git.busy = Some(action);
         self.header_git.error = None;
         cx.notify();
@@ -192,6 +240,7 @@ impl Workspace {
                         .await
                         .map(|status| (status, None))
                         .map_err(|e| e.to_string()),
+                    Busy::Generate => unreachable!("generation has its own path"),
                     Busy::Commit | Busy::CommitPush => {
                         backend
                             .call::<WorkspaceGitStage>(GitPathsParams {
@@ -201,6 +250,24 @@ impl Workspace {
                             })
                             .await
                             .map_err(|e| e.to_string())?;
+                        let message = if message.is_empty() {
+                            let conversation = conversation.ok_or_else(|| {
+                                trs!(english, "header_git.write_a_message").to_string()
+                            })?;
+                            backend
+                                .call::<WorkspaceGitGenerateCommitMessage>(
+                                    GitGenerateCommitMessageParams {
+                                        cwd: cwd.clone(),
+                                        conversation_id: conversation,
+                                        include_unstaged: false,
+                                    },
+                                )
+                                .await
+                                .map_err(|e| e.to_string())?
+                                .message
+                        } else {
+                            message
+                        };
                         let committed = backend
                             .call::<WorkspaceGitCommit>(GitCommitParams {
                                 cwd: cwd.clone(),
@@ -250,6 +317,7 @@ impl Workspace {
                                         Busy::CommitPush => {
                                             trs!(english, "header_git.committed_and_pushed")
                                         }
+                                        Busy::Generate => "",
                                     }
                                     .to_string(),
                                 );
@@ -406,17 +474,79 @@ impl Workspace {
                     }
                 }))
         };
+        let generating = busy == Some(Busy::Generate);
         let field = self.header_git.input.as_ref().map(|input| {
             div()
                 .min_h(px(32.0))
-                .px(px(8.0))
-                .py(px(6.0))
+                .pl(px(8.0))
+                .pr(px(4.0))
+                .py(px(4.0))
                 .rounded(px(8.0))
                 .border_1()
                 .border_color(p.c(Token::Border))
                 .text_size(px(TEXT_XS))
-                .child(Textarea::new(input).appearance(false).bordered(false))
+                .flex()
+                .items_start()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .py(px(2.0))
+                        .child(Textarea::new(input).appearance(false).bordered(false)),
+                )
+                .child(
+                    if generating {
+                        icon_button_xs("header-git-generate", "loading03", p)
+                    } else {
+                        icon_button_xs("header-git-generate", "sparkles", p)
+                    }
+                    .aria_label(trs!(english, "header_git.generate"))
+                    .when(busy.is_some() && !generating, |d| d.opacity(0.4))
+                    .on_click(cx.listener(|this, _, _, cx| this.generate_header_git(cx))),
+                )
         });
+        // Electron's popover ends with the isolated checkout the conversation runs in, and a way
+        // back to the project folder.
+        let worktree_row = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.threads.iter().find(|t| &t.id == id))
+            .and_then(|thread| {
+                let worktree = thread.worktree.as_ref()?;
+                let thread_id = thread.id.clone();
+                Some(
+                    div()
+                        .pl(px(22.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            ui::truncate(tr!(english, "header_git.worktree", path = worktree.path))
+                                .flex_1()
+                                .text_size(px(TEXT_XS))
+                                .text_color(muted),
+                        )
+                        .child(
+                            div()
+                                .id("header-git-unbind")
+                                .flex_none()
+                                .h(px(24.0))
+                                .px(px(6.0))
+                                .flex()
+                                .items_center()
+                                .rounded(px(6.0))
+                                .text_size(px(TEXT_XS))
+                                .cursor_pointer()
+                                .hover(move |d| d.bg(hover))
+                                .child(trs!(english, "header_git.unbind"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.header_git.menu_at = None;
+                                    this.unbind_worktree(thread_id.clone(), cx);
+                                })),
+                        ),
+                )
+            });
         let menu = settings::popover(p)
             .absolute()
             .left(at.x)
@@ -448,6 +578,7 @@ impl Workspace {
                                 false,
                             )),
                     )
+                    .children(worktree_row)
                     .children(self.header_git.error.clone().map(|error| {
                         div()
                             .text_size(px(TEXT_XS))
@@ -465,6 +596,15 @@ impl Workspace {
 
     /// The capture fixture has no server to ask, so the chip is given a status by hand.
     pub(super) fn fixture_header_git(&mut self, changed: u32) {
+        // The conversation runs in its own checkout, so the popover has that row to show.
+        if let Some(id) = self.selected.clone()
+            && let Some(thread) = self.threads.iter_mut().find(|t| t.id == id)
+        {
+            thread.worktree = Some(fv_protocol::types::ThreadWorktree {
+                path: "~/.fastvibe/wt/fastvibe-3f9a".into(),
+                branch: "feat/native-header".into(),
+            });
+        }
         self.header_git.cwd = self.header_git_cwd();
         self.header_git.status = Some(GitStatus {
             cwd: self.header_git.cwd.clone().unwrap_or_default(),

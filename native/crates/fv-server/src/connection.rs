@@ -676,6 +676,21 @@ async fn dispatch(
             &params.message,
             params.amend,
         )?),
+        ClientRequest::WorkspaceGitGenerateCommitMessage { params, .. } => {
+            let thread = state
+                .thread(&params.conversation_id)?
+                .ok_or_else(|| ErrorObject::new(code::INVALID_PARAMS, "thread not found"))?;
+            let model = state.suggestion_model(&thread);
+            let (cwd, all) = (params.cwd.clone(), params.include_unstaged);
+            let changes =
+                tokio::task::spawn_blocking(move || crate::git::change_material(&cwd, all))
+                    .await
+                    .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??;
+            let message = crate::commit_message::generate(model, &changes)
+                .await
+                .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error))?;
+            to_value(GitCommitMessage { message })
+        }
         // Network round trips: off the async thread, and bounded (see `git::sync`).
         ClientRequest::WorkspaceGitPull { params, .. } => to_value(
             tokio::task::spawn_blocking(move || {

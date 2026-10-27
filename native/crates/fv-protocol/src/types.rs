@@ -895,6 +895,25 @@ pub struct GitPathsParams {
     pub all: bool,
 }
 
+/// Ask the conversation's model for a commit subject describing a repository's changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitGenerateCommitMessageParams {
+    pub cwd: String,
+    /// Whose model writes it: the conversation the repository belongs to.
+    pub conversation_id: String,
+    /// Describe the whole tree (the button) rather than only what is staged (the commit path,
+    /// which has staged everything just before asking).
+    #[serde(default)]
+    pub include_unstaged: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitMessage {
+    pub message: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitParams {

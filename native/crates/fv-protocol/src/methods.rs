@@ -125,6 +125,7 @@ client_requests! {
     WorkspaceGitDiscard => "workspace/gitDiscard": GitPathsParams => GitStatus,
     WorkspaceGitDeleteUntracked => "workspace/gitDeleteUntracked": GitPathsParams => GitStatus,
     WorkspaceGitCommit => "workspace/gitCommit": GitCommitParams => GitStatus,
+    WorkspaceGitGenerateCommitMessage => "workspace/gitGenerateCommitMessage": GitGenerateCommitMessageParams => GitCommitMessage,
     WorkspaceGitPull => "workspace/gitPull": CwdParams => GitStatus,
     WorkspaceGitPush => "workspace/gitPush": CwdParams => GitStatus,
     TerminalStart => "terminal/start": TerminalStartParams => TerminalSession,

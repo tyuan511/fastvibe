@@ -696,6 +696,178 @@ pub fn commit(cwd: &str, message: &str, amend: bool) -> Result<GitStatus, ErrorO
     status(cwd)
 }
 
+/// Most of the patch text one file may contribute, and of all of them together.
+const PATCH_PER_FILE: usize = 6_000;
+const PATCH_TOTAL: usize = 60_000;
+/// Untracked files are shown by their first lines only.
+const NEW_FILE_LINES: usize = 40;
+
+/// What kind of file this is, for deciding whether its patch is worth the model's budget.
+fn weight(path: &str) -> (u8, Option<&'static str>) {
+    let lower = path.to_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(&lower);
+    if matches!(
+        name,
+        "pnpm-lock.yaml"
+            | "package-lock.json"
+            | "yarn.lock"
+            | "cargo.lock"
+            | "gemfile.lock"
+            | "poetry.lock"
+            | "uv.lock"
+            | "composer.lock"
+            | "bun.lockb"
+    ) {
+        return (0, Some("lock file"));
+    }
+    if lower.contains("/dist/")
+        || lower.starts_with("dist/")
+        || lower.starts_with("build/")
+        || lower.starts_with("out/")
+        || lower.starts_with("vendor/")
+        || name.ends_with(".min.js")
+        || name.ends_with(".map")
+    {
+        return (0, Some("generated"));
+    }
+    if lower.contains("test") || lower.contains("spec") {
+        return (2, None);
+    }
+    if name.ends_with(".md") || name.ends_with(".txt") || lower.starts_with("docs/") {
+        return (1, None);
+    }
+    (3, None)
+}
+
+fn clip(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n... omitted for budget ...", &text[..end])
+}
+
+/// The changes a commit message should describe, as text for a model: each file with its status
+/// and line counts, then as much patch as the budget allows, source before lock files.
+///
+/// `include_unstaged` reads the whole tree against `HEAD`; without it only the index is read,
+/// which is what a commit is about to take. Untracked files count only in the first case, since
+/// they are not in the index until something stages them.
+pub fn change_material(cwd: &str, include_unstaged: bool) -> Result<String, ErrorObject> {
+    let head = has_head(cwd);
+    // With no commit to compare against, the index is all there is.
+    let base: Vec<&str> = if include_unstaged && head {
+        vec!["HEAD"]
+    } else {
+        vec!["--cached"]
+    };
+    let mut args = vec!["diff"];
+    args.extend(&base);
+    args.extend(["--numstat", "--no-color"]);
+    let numstat = git(cwd, &args, false).map_err(failed)?;
+    struct File {
+        path: String,
+        additions: String,
+        deletions: String,
+        new: bool,
+        untracked: bool,
+    }
+    let mut files: Vec<File> = numstat
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.splitn(3, '\t');
+            let (a, d, path) = (f.next()?, f.next()?, f.next()?);
+            Some(File {
+                path: path.to_string(),
+                additions: a.to_string(),
+                deletions: d.to_string(),
+                new: false,
+                untracked: false,
+            })
+        })
+        .collect();
+    if include_unstaged {
+        let listed =
+            git(cwd, &["ls-files", "--others", "--exclude-standard"], false).map_err(failed)?;
+        for path in listed.lines().filter(|l| !l.is_empty()) {
+            files.push(File {
+                path: path.to_string(),
+                additions: "?".into(),
+                deletions: "0".into(),
+                new: true,
+                untracked: true,
+            });
+        }
+    }
+    if files.is_empty() {
+        return Err(invalid("no changes to describe"));
+    }
+    files.sort_by_key(|f| std::cmp::Reverse(weight(&f.path).0));
+
+    let mut out = format!("Changed files: {}\n", files.len());
+    for f in &files {
+        let state = if f.untracked {
+            "new, untracked"
+        } else if f.new {
+            "new"
+        } else {
+            "modified"
+        };
+        out.push_str(&format!(
+            "- {} ({state}, +{} -{})\n",
+            f.path, f.additions, f.deletions
+        ));
+    }
+    let mut budget = PATCH_TOTAL;
+    for f in &files {
+        let (_, why) = weight(&f.path);
+        if let Some(why) = why {
+            out.push_str(&format!("\n### {} — patch omitted ({why})\n", f.path));
+            continue;
+        }
+        if budget == 0 {
+            out.push_str(&format!("\n### {} — patch omitted (budget)\n", f.path));
+            continue;
+        }
+        let patch = if f.untracked {
+            let full = std::path::Path::new(cwd).join(&f.path);
+            match std::fs::read(&full) {
+                Ok(bytes) if !bytes.contains(&0) && bytes.len() < 200_000 => {
+                    String::from_utf8_lossy(&bytes)
+                        .lines()
+                        .take(NEW_FILE_LINES)
+                        .map(|l| format!("+{l}\n"))
+                        .collect::<String>()
+                }
+                _ => {
+                    out.push_str(&format!(
+                        "\n### {} — patch omitted (binary or large)\n",
+                        f.path
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            let mut diff = vec!["diff"];
+            diff.extend(&base);
+            diff.extend(["--no-color", "--unified=2", "--", f.path.as_str()]);
+            let text = git(cwd, &diff, false).map_err(failed)?;
+            if text.contains("Binary files ") || text.contains("GIT binary patch") {
+                out.push_str(&format!("\n### {} — patch omitted (binary)\n", f.path));
+                continue;
+            }
+            text
+        };
+        let patch = clip(&patch, PATCH_PER_FILE.min(budget));
+        budget = budget.saturating_sub(patch.len());
+        out.push_str(&format!("\n### {}\n{}\n", f.path, patch));
+    }
+    Ok(out)
+}
+
 /// Which way `sync` talks to the remote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sync {
