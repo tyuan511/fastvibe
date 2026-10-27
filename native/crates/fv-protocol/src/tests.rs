@@ -78,6 +78,28 @@ fn thread_events_flatten_their_body() {
 }
 
 #[test]
+fn imported_thread_source_is_optional_for_old_records() {
+    let mut thread: types::Thread = serde_json::from_value(json!({
+        "id": "t1",
+        "title": "old",
+        "cwd": null,
+        "project": null,
+        "createdAt": 1,
+        "updatedAt": 1,
+        "archived": false,
+        "unread": false,
+        "model": null,
+        "thinking": null,
+        "pinned": false,
+        "worktree": null
+    }))
+    .unwrap();
+    assert!(thread.source.is_none());
+    thread.source = Some("codex".into());
+    assert_eq!(serde_json::to_value(thread).unwrap()["source"], "codex");
+}
+
+#[test]
 fn method_names_are_unique_and_typed_markers_agree() {
     let mut names = CLIENT_METHODS.to_vec();
     names.sort_unstable();
