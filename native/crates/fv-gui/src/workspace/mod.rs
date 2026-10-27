@@ -813,6 +813,7 @@ impl Workspace {
         self.project_row_menu = None;
         if let Some(s) = &mut self.settings {
             s.default_menu = false;
+            s.default_thinking_menu = false;
             s.theme_menu = None;
             if let Some(e) = &mut s.edit {
                 e.protocol_menu = false;
@@ -896,6 +897,14 @@ impl Workspace {
     pub fn show_settings_named(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         match name {
             "providers" => self.open_settings(settings::Section::Providers, window, cx),
+            // Dev capture: the session-model menu with its reasoning flyout open.
+            "providers-thinking" => {
+                self.open_settings(settings::Section::Providers, window, cx);
+                if let Some(s) = &mut self.settings {
+                    s.default_menu = true;
+                    s.default_thinking_menu = true;
+                }
+            }
             "archived" => self.open_settings(settings::Section::Archived, window, cx),
             "add-provider" => {
                 self.open_settings(settings::Section::Providers, window, cx);

@@ -302,6 +302,8 @@ pub struct SettingsState {
     pub providers: Option<Vec<ProviderInfo>>,
     pub edit: Option<ProviderEdit>,
     pub default_menu: bool,
+    /// The 推理强度 flyout beside `default_menu`, matching Electron's submenu.
+    pub default_thinking_menu: bool,
     pub search: Entity<InputState>,
     pub add: Option<AddProvider>,
     pub add_models: Option<AddModels>,
@@ -367,6 +369,7 @@ impl Workspace {
                 providers: None,
                 edit: None,
                 default_menu: false,
+                default_thinking_menu: false,
                 theme_menu: None,
                 archived: None,
                 confirm_delete: None,
@@ -699,6 +702,7 @@ impl Workspace {
         self.defaults = defaults.clone();
         if let Some(s) = &mut self.settings {
             s.default_menu = false;
+            s.default_thinking_menu = false;
         }
         cx.notify();
         let Some(b) = self.backend.clone() else {
@@ -1758,12 +1762,24 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(s) = &mut this.settings {
                             s.default_menu = !s.default_menu;
+                            if !s.default_menu {
+                                s.default_thinking_menu = false;
+                            }
                         }
                         cx.notify();
                     })),
             )
             .when(s.default_menu, |d| {
-                d.child(ui::float(self.default_menu(cx)))
+                d.child(ui::float(self.default_menu(cx))).when(
+                    s.default_thinking_menu,
+                    |d| {
+                        // Its own float: a child of the parent popover is clipped to that
+                        // card, so the glass fill never covers the page and the text shows through.
+                        d.child(
+                            deferred(self.thinking_flyout(window, cx).occlude()).with_priority(11),
+                        )
+                    },
+                )
             });
 
         let count = providers.map(|l| l.len()).unwrap_or(0);
@@ -2574,10 +2590,17 @@ impl Workspace {
             .right(px(16.0))
             .w(px(300.0));
         let english = self.app_settings.language == UiLanguage::English;
-        menu = menu.child(menu_label(trs!(english, "settings.model"), p));
+        // Heights are fixed so the sibling flyout can align with the last row. A child of this
+        // card is clipped to it, which is why the flyout is not one.
+        menu = menu.child(
+            menu_label(trs!(english, "settings.model"), p)
+                .h(px(24.0))
+                .line_height(px(16.0)),
+        );
         if self.models.is_empty() {
             menu = menu.child(
                 div()
+                    .h(px(28.0))
                     .px(px(8.0))
                     .py(px(6.0))
                     .muted(p)
@@ -2589,7 +2612,18 @@ impl Workspace {
             let active = self.defaults.model.as_deref() == Some(m.label.as_str());
             menu = menu.child(
                 menu_item(SharedString::from(format!("dm-{}", m.label)), active, hover)
+                    .h(px(32.0))
                     .child(ui::truncate(format!("{}/{}", m.provider_name, m.model.id)).flex_1())
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            if let Some(s) = &mut this.settings {
+                                if s.default_thinking_menu {
+                                    s.default_thinking_menu = false;
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let thinking = this.defaults.thinking;
                         this.set_default(
@@ -2603,25 +2637,70 @@ impl Workspace {
             );
         }
         menu = menu.child(div().my(px(4.0)).h(px(1.0)).bg(p.c(Token::Border)));
-        menu = menu.child(menu_label(trs!(english, "settings.thinking_effort"), p));
-        menu = menu.child(
-            menu_item(
-                "default-thinking-inherit".into(),
-                self.defaults.thinking.is_none(),
-                hover,
+        menu.child(self.default_thinking_row(cx))
+    }
+
+    /// Electron's `ModelThinkingSelect`: the effort is one row; the levels are a sibling float.
+    fn default_thinking_row(&self, cx: &mut Context<Self>) -> Div {
+        let p = &self.palette;
+        let hover = p.c(Token::Accent);
+        let english = self.app_settings.language == UiLanguage::English;
+        let open = self
+            .settings
+            .as_ref()
+            .is_some_and(|s| s.default_thinking_menu);
+        let effective = self
+            .defaults
+            .model
+            .as_ref()
+            .and_then(|l| self.models.iter().find(|m| &m.label == l))
+            .map_or(self.defaults.thinking, |m| {
+                m.model.effective_thinking(self.defaults.thinking)
+            });
+        let current = effective
+            .map(|level| thinking_label_in(level, english))
+            .unwrap_or(trs!(english, "settings.follow_model_default"));
+        div().w_full().child(
+                menu_item("default-thinking".into(), open, hover)
+                    .h(px(32.0))
+                    .w_full()
+                    .justify_between()
+                    .child(trs!(english, "settings.thinking_effort"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .flex_none()
+                            .text_size(px(TEXT_XS))
+                            .text_color(p.c(Token::MutedForeground))
+                            .child(current)
+                            .child(icon("arrow-right01", 12.0, p.c(Token::MutedForeground))),
+                    )
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            if let Some(s) = &mut this.settings {
+                                if !s.default_thinking_menu {
+                                    s.default_thinking_menu = true;
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(s) = &mut this.settings {
+                            s.default_thinking_menu = !s.default_thinking_menu;
+                        }
+                        cx.notify();
+                    })),
             )
-            .child(trs!(english, "settings.follow_model_default"))
-            .on_click(cx.listener(|this, _, _, cx| {
-                let model = this.defaults.model.clone();
-                this.set_default(
-                    ModelDefaults {
-                        model,
-                        thinking: None,
-                    },
-                    cx,
-                );
-            })),
-        );
+    }
+
+    /// Levels beside the session-model menu. A sibling of that card, not a child: the card clips
+    /// anything that sticks out, and a clipped glass fill lets the page show through.
+    fn thinking_flyout(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let allowed = self
             .defaults
             .model
@@ -2636,27 +2715,87 @@ impl Workspace {
             .map_or(self.defaults.thinking, |m| {
                 m.model.effective_thinking(self.defaults.thinking)
             });
+        let flyout_w = if english { 208.0 } else { 168.0 };
+        // Menu is top 52 / right 16 / 300 wide. The last row starts after the locked heights.
+        let row_top = 4.0
+            + 24.0
+            + if self.models.is_empty() {
+                28.0
+            } else {
+                self.models.len() as f32 * 32.0
+            }
+            + 9.0;
+        let mut flyout = popover(p)
+            .absolute()
+            .top(px(52.0 + row_top - 4.0))
+            .w(px(flyout_w));
+        // Overlap the menu by 12px so the pointer can cross without hitting the catcher.
+        flyout = if self.thinking_flyout_opens_left(window, flyout_w) {
+            flyout.right(px(16.0 + 300.0 - 12.0))
+        } else {
+            flyout.right(px(16.0 - (flyout_w - 12.0)))
+        };
+        flyout = flyout.child(self.thinking_choice(
+            None,
+            trs!(english, "settings.follow_model_default"),
+            self.defaults.thinking.is_none(),
+            cx,
+        ));
         for level in LEVELS {
             if allowed.as_ref().is_some_and(|v| !v.contains(&level)) {
                 continue;
             }
-            let active = effective == Some(level);
-            menu = menu.child(
-                menu_item(SharedString::from(format!("dl-{level:?}")), active, hover)
-                    .child(thinking_label_in(level, english))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let model = this.defaults.model.clone();
-                        this.set_default(
-                            ModelDefaults {
-                                model,
-                                thinking: Some(level),
-                            },
-                            cx,
-                        )
-                    })),
-            );
+            flyout = flyout.child(self.thinking_choice(
+                Some(level),
+                thinking_label_in(level, english),
+                self.defaults.thinking.is_some() && effective == Some(level),
+                cx,
+            ));
         }
-        menu
+        flyout
+    }
+
+    /// The session-model menu sits on the right of the settings column. Open the flyout right
+    /// when the window has room, otherwise left.
+    fn thinking_flyout_opens_left(&self, window: &Window, flyout_w: f32) -> bool {
+        let width = f32::from(window.viewport_size().width);
+        let content = (width - SIDEBAR_WIDTH).max(0.0);
+        let body = content.min(768.0);
+        let body_right = SIDEBAR_WIDTH + (content - body) / 2.0 + body;
+        let menu_right = body_right - 32.0;
+        menu_right + flyout_w + 12.0 > width
+    }
+
+    fn thinking_choice(
+        &self,
+        level: Option<ThinkingLevel>,
+        label: &'static str,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let p = &self.palette;
+        let hover = p.c(Token::Accent);
+        let id = match level {
+            None => "default-thinking-inherit".to_string(),
+            Some(level) => format!("dl-{level:?}"),
+        };
+        menu_item(SharedString::from(id), false, hover)
+            .w_full()
+            .justify_between()
+            .child(label)
+            .when(selected, |d| {
+                d.child(icon("tick02", 14.0, p.c(Token::PopoverForeground)))
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let model = this.defaults.model.clone();
+                this.set_default(
+                    ModelDefaults {
+                        model,
+                        thinking: level,
+                    },
+                    cx,
+                );
+            }))
     }
 
     fn provider_row(
