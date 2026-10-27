@@ -273,6 +273,7 @@ impl Workspace {
                 return;
             }
         };
+        let english = form.english;
         let params = McpUpdateParams {
             server_id: form.id.clone(),
             expected: form.original.clone(),
@@ -282,10 +283,13 @@ impl Workspace {
         s.mcp.busy = true;
         s.mcp.notice = None;
         cx.spawn(async move |this, cx| {
-            let result = backend
-                .call::<McpUpdate>(params)
-                .await
-                .map_err(|e| format!("无法保存 MCP：{e}"));
+            let result = backend.call::<McpUpdate>(params).await.map_err(|e| {
+                if english {
+                    format!("Could not save MCP: {e}")
+                } else {
+                    format!("无法保存 MCP：{e}")
+                }
+            });
             this.update(cx, |this, cx| {
                 if result.is_ok()
                     && let Some(s) = this.settings.as_mut().filter(|s| s.mcp.session == session)
