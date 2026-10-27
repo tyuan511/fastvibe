@@ -25,3 +25,16 @@ gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 
 # Stable history positions for independent terminal clients; see vendor patch notes.
 alacritty_terminal = { path = "vendor/alacritty_terminal" }
+
+# Hash the build fingerprint at release speed even in a dev build. `sha2`/`digest` are
+# interpreted in a dev profile, and hashing the 120 MB debug server took 5 s — which the
+# first client pays for: `initialize` reports the fingerprint, so the socket answered
+# seconds after it was already listening.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.digest]
+opt-level = 3
+
+[profile.dev.package.block-buffer]
+opt-level = 3
