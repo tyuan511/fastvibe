@@ -178,7 +178,7 @@ fn input(label: &str, value: &str, window: &mut Window, cx: &mut App) -> Entity<
     e
 }
 impl Editor {
-    fn new(task: Option<ScheduledTask>, window: &mut Window, cx: &mut App) -> Self {
+    fn new(task: Option<ScheduledTask>, english: bool, window: &mut Window, cx: &mut App) -> Self {
         let timezone = zone();
         let local = now().with_timezone(&timezone.parse::<Tz>().unwrap_or(chrono_tz::UTC));
         let mut day = local
@@ -222,7 +222,11 @@ impl Editor {
         let prompt = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(4, 12)
-                .placeholder("每次运行需要完成什么")
+                .placeholder(if english {
+                    "What should each run accomplish?"
+                } else {
+                    "每次运行需要完成什么"
+                })
         });
         if let Some(task) = &task {
             prompt.update(cx, |s, cx| {
@@ -234,7 +238,7 @@ impl Editor {
             id: task.as_ref().map(|t| t.id.clone()),
             version: task.as_ref().map(|t| t.version),
             name: input(
-                "任务名称",
+                if english { "Task name" } else { "任务名称" },
                 task.as_ref()
                     .map(|t| t.definition.name.as_str())
                     .unwrap_or(""),
@@ -244,9 +248,22 @@ impl Editor {
             prompt,
             day: input("YYYY-MM-DD", &day, window, cx),
             time: input("HH:MM", &time, window, cx),
-            zone: input("时区，如 Asia/Shanghai", &tz, window, cx),
+            zone: input(
+                if english {
+                    "Time zone, e.g. Asia/Shanghai"
+                } else {
+                    "时区，如 Asia/Shanghai"
+                },
+                &tz,
+                window,
+                cx,
+            ),
             seconds: input(
-                "最长运行时间（秒）",
+                if english {
+                    "Maximum run time (seconds)"
+                } else {
+                    "最长运行时间（秒）"
+                },
                 &task
                     .as_ref()
                     .map(|t| t.definition.max_run_seconds)
@@ -455,7 +472,12 @@ impl Workspace {
         if self.schedules_ui.saving {
             return;
         }
-        self.schedules_ui.editor = Some(Editor::new(task, window, cx));
+        self.schedules_ui.editor = Some(Editor::new(
+            task,
+            self.app_settings.language == UiLanguage::English,
+            window,
+            cx,
+        ));
         self.schedules_ui.detail = None;
         self.schedules_ui.error = None;
         self.schedules_ui.notice = None;
