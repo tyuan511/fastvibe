@@ -2691,7 +2691,8 @@ impl Workspace {
             .top(px(52.0))
             .right(px(16.0))
             .w(px(300.0));
-        menu = menu.child(menu_label("模型", p));
+        let english = self.app_settings.language == UiLanguage::English;
+        menu = menu.child(menu_label(if english { "Model" } else { "模型" }, p));
         if self.models.is_empty() {
             menu = menu.child(
                 div()
@@ -2720,14 +2721,25 @@ impl Workspace {
             );
         }
         menu = menu.child(div().my(px(4.0)).h(px(1.0)).bg(p.c(Token::Border)));
-        menu = menu.child(menu_label("推理强度", p));
+        menu = menu.child(menu_label(
+            if english {
+                "Thinking effort"
+            } else {
+                "推理强度"
+            },
+            p,
+        ));
         menu = menu.child(
             menu_item(
                 "default-thinking-inherit".into(),
                 self.defaults.thinking.is_none(),
                 hover,
             )
-            .child("跟随模型默认")
+            .child(if english {
+                "Follow model default"
+            } else {
+                "跟随模型默认"
+            })
             .on_click(cx.listener(|this, _, _, cx| {
                 let model = this.defaults.model.clone();
                 this.set_default(
@@ -2760,7 +2772,18 @@ impl Workspace {
             let active = effective == Some(level);
             menu = menu.child(
                 menu_item(SharedString::from(format!("dl-{level:?}")), active, hover)
-                    .child(thinking_label(level))
+                    .child(if english {
+                        match level {
+                            ThinkingLevel::Minimal => "Minimal",
+                            ThinkingLevel::Low => "Low",
+                            ThinkingLevel::Medium => "Medium",
+                            ThinkingLevel::High => "High",
+                            ThinkingLevel::Xhigh => "Very high",
+                            ThinkingLevel::Max => "Maximum",
+                        }
+                    } else {
+                        thinking_label(level)
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let model = this.defaults.model.clone();
                         this.set_default(
