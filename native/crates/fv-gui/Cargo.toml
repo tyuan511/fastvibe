@@ -58,6 +58,10 @@ raw-window-handle = "0.6"
 
 [dev-dependencies]
 tempfile = "3"
+# Headless layout tests (see `workspace::pane::preview_scroll_tests`): GPUI's own test harness.
+# Named again only to switch on `test-support`. Going through `gpui-kit/test-support` pulls the
+# gpui-fast backend, which cannot share a lockfile with the gpui-pre one this app builds on.
+gpui-test = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
 
 [lints]
 workspace = true

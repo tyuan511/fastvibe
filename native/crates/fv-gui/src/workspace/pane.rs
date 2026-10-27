@@ -1850,6 +1850,7 @@ impl Workspace {
                     })
                 });
 
+                let shows_editor = editing && editable && editor.is_some();
                 let body: AnyElement = match (editing && editable, editor) {
                     (true, Some(editor)) => {
                         // The editor draws its own gutter, so the pane adds none: one number per
@@ -1910,13 +1911,25 @@ impl Workspace {
                 // The column takes the preview box's height, and the body takes what the header
                 // leaves. `min_h_0` on the body is what lets it shrink instead of pushing the
                 // column taller — without it a 500-line editor makes the pane as tall as the file.
+                //
+                // And the body is what scrolls, for everything that is not itself a scrollable
+                // box. A scroll container measures its *direct* children's boxes, and this column
+                // is `h_full` — so the pane's own `overflow_y_scroll` sees a child exactly as tall
+                // as the pane and finds nothing to scroll, while the Markdown or source text inside
+                // it is clipped by the body with no scroll of its own: the file simply ended at the
+                // bottom edge and the rest was unreachable. The header stays outside the scroll
+                // (the git pane's list is the same `flex_1` + `min_h_0` + `overflow_y_scroll`), and
+                // the two bodies that own their scroll — the editor, and a document drawn by a
+                // webview — must not be put inside a second one, which would measure them by their
+                // content and collapse them.
+                let body_owns_scroll = shows_editor || kind == FilePreviewKind::Html;
                 div()
                     .h_full()
                     .w_full()
                     .flex()
                     .flex_col()
                     .child(self.preview_head_with(&name, back, dirty, toggle, cx))
-                    .child(div().flex_1().min_h_0().w_full().child(body))
+                    .child(preview_body_box(body_owns_scroll).child(body))
                     .into_any_element()
             }
             FilePreview::Table {
@@ -2200,6 +2213,161 @@ impl Workspace {
             .line_height(px(20.0))
             .font_family(crate::assets::MONO_FONT)
             .child(lines)
+    }
+}
+
+/// The box a file preview's body sits in: what the header leaves, and — unless the body is
+/// itself a scrollable box — the thing that scrolls.
+///
+/// A GPUI scroll container measures its *direct* children's boxes, not what spills out of them.
+/// The preview's column is `h_full` (see `preview_body`), so the pane's own scroll container sees
+/// a child exactly as tall as itself and finds nothing to scroll; a Markdown file longer than the
+/// pane was then simply cut off at the bottom edge, with no way to reach the rest. Putting the
+/// scroll on this box — `flex_1` + `min_h_0`, so it has a definite height, over a body that sizes
+/// itself to the file — is what makes it scroll, and it is the same three lines the git pane's
+/// file list uses. The header stays outside it, so the path keeps its place.
+///
+/// `owns_scroll` is for the two bodies that fill the pane and scroll themselves: the editor (an
+/// `Input` that asks for its row count) and a document drawn by a webview. Wrapping either in a
+/// second scroll box would measure it by its content and collapse it.
+pub(crate) fn preview_body_box(owns_scroll: bool) -> Stateful<Div> {
+    div()
+        .id("pane-preview-body")
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .when(!owns_scroll, |d| d.overflow_y_scroll())
+}
+
+#[cfg(test)]
+mod preview_scroll_tests {
+    use super::preview_body_box;
+    // Explicit imports, never `use gpui_kit::*`: the Kit's glob re-exports GPUI's `test` macro
+    // too, and the `#[test]` that macro generates would then expand itself forever.
+    use gpui_kit::gpui;
+    use gpui_kit::prelude::FluentBuilder as _;
+    use gpui_kit::{
+        AppContext, Context, InteractiveElement, IntoElement, Modifiers, ParentElement,
+        PlatformInput, Render, ScrollDelta, ScrollHandle, ScrollWheelEvent,
+        StatefulInteractiveElement, Styled, TestAppContext, TouchPhase, Window, div, point, px,
+    };
+
+    /// The pane's preview column, reduced to the boxes that decide whether a file can be read to
+    /// its end: a fixed-height scroll container, an `h_full` column, a 40px header, and the body
+    /// under test with a 1200px document in it. Both handles are attached by the test, so nothing
+    /// about how the app measures its scroll is being imitated — only the layout is.
+    struct Fixture {
+        pane: ScrollHandle,
+        body: ScrollHandle,
+        owns_scroll: bool,
+        body_fills: bool,
+    }
+
+    impl Render for Fixture {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let body = div()
+                .when(self.body_fills, |d| d.size_full())
+                .when(!self.body_fills, |d| d.w_full().h(px(1200.0)));
+            div().size(px(400.0)).child(
+                div()
+                    .id("pane-preview")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.pane)
+                    .child(
+                        div()
+                            .h_full()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .child(div().h(px(40.0)).w_full().flex_none())
+                            .child(
+                                preview_body_box(self.owns_scroll)
+                                    .track_scroll(&self.body)
+                                    .child(body),
+                            ),
+                    ),
+            )
+        }
+    }
+
+    fn draw(cx: &mut TestAppContext, fixture: Fixture) -> gpui::AnyWindowHandle {
+        let window: gpui::AnyWindowHandle = cx.add_window(move |_, _| fixture).into();
+        cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
+            .expect("draw the preview fixture");
+        window
+    }
+
+    /// A real wheel gesture over the middle of the body (200, 200 is inside it in every case),
+    /// then a frame to apply it. What is asserted afterwards is the handle's own offset, so the
+    /// test asks the same question a person does: did the file move when I scrolled?
+    fn scroll_over_body(cx: &mut TestAppContext, window: gpui::AnyWindowHandle) {
+        cx.update_window(window, |_, window, cx| {
+            window.dispatch_event(
+                PlatformInput::ScrollWheel(ScrollWheelEvent {
+                    position: point(px(200.0), px(200.0)),
+                    delta: ScrollDelta::Pixels(point(px(0.0), px(-240.0))),
+                    modifiers: Modifiers::default(),
+                    touch_phase: TouchPhase::default(),
+                }),
+                cx,
+            );
+            window.draw(cx).clear(cx);
+        })
+        .expect("scroll the preview body");
+    }
+
+    /// Markdown and source text: the wheel moves the file.
+    #[gpui::test]
+    fn a_content_sized_preview_body_scrolls(cx: &mut TestAppContext) {
+        let pane = ScrollHandle::new();
+        let body = ScrollHandle::new();
+        let window = draw(
+            cx,
+            Fixture {
+                pane: pane.clone(),
+                body: body.clone(),
+                owns_scroll: false,
+                body_fills: false,
+            },
+        );
+        // 400 of pane less 40 of header: the 1200px document leaves the body 840 to give.
+        assert_eq!(
+            body.max_offset().y.abs(),
+            px(840.0),
+            "the body must be scrollable to the bottom of the file"
+        );
+        scroll_over_body(cx, window);
+        assert_eq!(body.offset().y, px(-240.0), "the wheel must move the file");
+        // The pane box above it never scrolls: the column is `h_full`, so it measures a child
+        // exactly as tall as itself and finds nothing to give. That is why the scroll could not
+        // live there, and why it silently did nothing before this was fixed.
+        assert_eq!(pane.max_offset().y, px(0.0));
+        assert_eq!(pane.offset().y, px(0.0));
+    }
+
+    /// The editor and a rendered document scroll themselves: a second scroll box around them would
+    /// measure them by their content and collapse them.
+    #[gpui::test]
+    fn a_body_that_owns_its_scroll_is_not_wrapped_in_another(cx: &mut TestAppContext) {
+        let pane = ScrollHandle::new();
+        let body = ScrollHandle::new();
+        let window = draw(
+            cx,
+            Fixture {
+                pane: pane.clone(),
+                body: body.clone(),
+                owns_scroll: true,
+                body_fills: true,
+            },
+        );
+        scroll_over_body(cx, window);
+        assert_eq!(
+            body.offset().y,
+            px(0.0),
+            "a body that owns its scroll must not be given a second one"
+        );
+        assert_eq!(pane.offset().y, px(0.0));
     }
 }
 
