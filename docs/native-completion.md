@@ -179,6 +179,7 @@ OAuth 使用真实本地 AS/MCP 服务验证 PKCE、回调归属、错误 issuer
 
 - 根目录新增 `pnpm native:fmt`、`pnpm native:check`、`pnpm native:test` 和 `pnpm native:build`，分别覆盖 Rust workspace 格式、编译、测试和 server/GUI release 构建。
 - 本机已通过 `pnpm native:fmt` 与 `pnpm native:check`；安装包签名、OfficeCLI 随包和 Windows/Linux 构建仍需对应平台环境。
+- `NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 pnpm native:test` 全 workspace 通过；未设置代理例外时唯一失败是本机代理将 localhost 夹具改写为 502，已在测试环境隔离代理后复核。
 
 ## 第四十二批：Linux 与 Windows 电脑操控
 
