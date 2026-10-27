@@ -5,7 +5,7 @@ use super::settings::{Section, outline_button};
 use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS};
 use fv_protocol::methods::ProviderModelTest;
 use fv_protocol::provider_test::*;
-use fv_protocol::types::ApiProtocol;
+use fv_protocol::types::{ApiProtocol, UiLanguage};
 use fv_theme::Token;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -147,6 +147,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let disabled = disabled || self.backend.is_none();
         let running = self
             .settings
@@ -178,9 +179,17 @@ impl Workspace {
             })
             .tooltip(move |window, cx| {
                 Tooltip::new(if running {
-                    "正在自检…"
+                    if english {
+                        "Testing…"
+                    } else {
+                        "正在自检…"
+                    }
                 } else {
-                    "自检模型"
+                    if english {
+                        "Test model"
+                    } else {
+                        "自检模型"
+                    }
                 })
                 .build(window, cx)
             })
@@ -199,15 +208,41 @@ impl Workspace {
         let n = s.model_checks.notice.as_ref()?;
         let p = &self.palette;
         let id = n.id;
+        let english = self.app_settings.language == UiLanguage::English;
         let (title, token) = match n.result.status {
-            ProviderTestStatus::Passed => ("回答与工具调用均正常", Token::Success),
-            ProviderTestStatus::Partial => ("回答正常，工具调用尚未确认", Token::Warning),
-            ProviderTestStatus::Failed => ("自检未通过", Token::Destructive),
+            ProviderTestStatus::Passed => (
+                if english {
+                    "Reply and tool call passed"
+                } else {
+                    "回答与工具调用均正常"
+                },
+                Token::Success,
+            ),
+            ProviderTestStatus::Partial => (
+                if english {
+                    "Reply passed; tool call unconfirmed"
+                } else {
+                    "回答正常，工具调用尚未确认"
+                },
+                Token::Warning,
+            ),
+            ProviderTestStatus::Failed => (
+                if english {
+                    "Self-test failed"
+                } else {
+                    "自检未通过"
+                },
+                Token::Destructive,
+            ),
         };
         let advice = if n.overloaded {
-            "自检任务已满，请稍后重试"
+            if english {
+                "All self-test slots are busy; try again later"
+            } else {
+                "自检任务已满，请稍后重试"
+            }
         } else {
-            advice(&n.result)
+            advice(&n.result, english)
         };
         let facts = match (n.result.api, n.result.first_token_ms) {
             (Some(api), Some(ms)) => format!("{} · 首字 {} ms", api_label(api), ms),
@@ -277,7 +312,11 @@ impl Workspace {
                 .when(n.result.status != ProviderTestStatus::Passed, |d| {
                     d.child(
                         outline_button("edit-checked-model", p)
-                            .child("编辑模型")
+                            .child(if english {
+                                "Edit model"
+                            } else {
+                                "编辑模型"
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if this.settings.as_ref().is_some_and(|s| {
                                     s.model_checks.notice.as_ref().is_some_and(|n| n.id == id)
@@ -307,17 +346,63 @@ fn api_label(api: ApiProtocol) -> &'static str {
         ApiProtocol::Google => "Google Generative AI",
     }
 }
-fn advice(result: &ProviderTestResult) -> &'static str {
+fn advice(result: &ProviderTestResult, english: bool) -> &'static str {
     match result.error_code {
-        Some(ProviderTestError::Auth) => "鉴权失败，请检查已保存的密钥或登录状态",
-        Some(ProviderTestError::Protocol) => "接口或参数不兼容，请检查模型协议与参数",
-        Some(ProviderTestError::RateLimit) => "请求过于频繁，请稍后重试",
-        Some(ProviderTestError::Network) => "无法连接提供方，请检查网络与地址",
-        Some(ProviderTestError::Timeout) => "提供方未在时限内完成响应",
-        Some(ProviderTestError::Model) => "模型不可用或配置已变化，请刷新后重新自检",
-        Some(ProviderTestError::Unknown) => "提供方未能完成自检，请稍后重试或检查模型配置",
+        Some(ProviderTestError::Auth) => {
+            if english {
+                "Authentication failed; check the saved key or sign-in state"
+            } else {
+                "鉴权失败，请检查已保存的密钥或登录状态"
+            }
+        }
+        Some(ProviderTestError::Protocol) => {
+            if english {
+                "The API or parameters are incompatible; check the model protocol"
+            } else {
+                "接口或参数不兼容，请检查模型协议与参数"
+            }
+        }
+        Some(ProviderTestError::RateLimit) => {
+            if english {
+                "Too many requests; try again later"
+            } else {
+                "请求过于频繁，请稍后重试"
+            }
+        }
+        Some(ProviderTestError::Network) => {
+            if english {
+                "Could not connect to the provider; check the network and URL"
+            } else {
+                "无法连接提供方，请检查网络与地址"
+            }
+        }
+        Some(ProviderTestError::Timeout) => {
+            if english {
+                "The provider did not respond in time"
+            } else {
+                "提供方未在时限内完成响应"
+            }
+        }
+        Some(ProviderTestError::Model) => {
+            if english {
+                "The model is unavailable or changed; refresh and test again"
+            } else {
+                "模型不可用或配置已变化，请刷新后重新自检"
+            }
+        }
+        Some(ProviderTestError::Unknown) => {
+            if english {
+                "The provider could not complete the self-test; check the model configuration"
+            } else {
+                "提供方未能完成自检，请稍后重试或检查模型配置"
+            }
+        }
         None if result.tools == ProviderTestTools::Unconfirmed => {
-            "普通回复正常，但未返回指定的测试工具调用"
+            if english {
+                "The reply passed, but the requested test tool call was not returned"
+            } else {
+                "普通回复正常，但未返回指定的测试工具调用"
+            }
         }
         None => "",
     }
@@ -384,7 +469,7 @@ mod tests {
         };
         s.dismiss(1);
         assert_eq!(s.notice.as_ref().unwrap().id, 2);
-        assert!(!advice(&s.notice.as_ref().unwrap().result).is_empty());
+        assert!(!advice(&s.notice.as_ref().unwrap().result, false).is_empty());
         s.dismiss(2);
         assert!(s.notice.is_none());
     }
