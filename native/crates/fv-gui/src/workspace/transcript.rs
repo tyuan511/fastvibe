@@ -581,7 +581,17 @@ impl Workspace {
                             .text_size(px(TEXT_SM))
                             .line_height(px(20.0))
                             .muted(p)
-                            .child(format!("已处理 {}", presentation::format_duration(elapsed))),
+                            .child(if language == UiLanguage::English {
+                                format!(
+                                    "Processed {}",
+                                    presentation::format_duration_localized(elapsed, language)
+                                )
+                            } else {
+                                format!(
+                                    "已处理 {}",
+                                    presentation::format_duration_localized(elapsed, language)
+                                )
+                            }),
                     ),
             );
             col = col.child(progress);
@@ -591,7 +601,17 @@ impl Workspace {
             // 用时: the work the fold hides, up to where the answer began.
             let label = match (turn.started_at, turn.process_ended_at.or(turn.completed_at)) {
                 (Some(a), Some(b)) if b >= a => {
-                    format!("用时 {}", presentation::format_duration((b - a) as u64))
+                    if language == UiLanguage::English {
+                        format!(
+                            "Took {}",
+                            presentation::format_duration_localized((b - a) as u64, language)
+                        )
+                    } else {
+                        format!(
+                            "用时 {}",
+                            presentation::format_duration_localized((b - a) as u64, language)
+                        )
+                    }
                 }
                 _ => text::processed(language).to_string(),
             };
@@ -669,10 +689,19 @@ impl Workspace {
         if !running {
             // 耗时: the whole turn, from the user's message to the last entry.
             let stamp = turn.completed_at.map(|end| {
-                let took = turn
-                    .started_at
-                    .filter(|s| end >= *s)
-                    .map(|s| format!("耗时 {}", presentation::format_duration((end - s) as u64)));
+                let took = turn.started_at.filter(|s| end >= *s).map(|s| {
+                    if language == UiLanguage::English {
+                        format!(
+                            "Duration {}",
+                            presentation::format_duration_localized((end - s) as u64, language)
+                        )
+                    } else {
+                        format!(
+                            "耗时 {}",
+                            presentation::format_duration_localized((end - s) as u64, language)
+                        )
+                    }
+                });
                 (clock(end), took)
             });
             // The answer as text, without the process the fold hides.
@@ -877,7 +906,12 @@ impl Workspace {
                 output,
                 is_error,
             } => {
-                let view = presentation::describe(name, arguments, output.is_none());
+                let view = presentation::describe_localized(
+                    name,
+                    arguments,
+                    output.is_none(),
+                    self.app_settings.language,
+                );
                 let row = self.tool_head(id, &view, *is_error, output.is_none());
                 let open = self.open_items.contains(id);
                 let detail =
@@ -1113,7 +1147,7 @@ impl Workspace {
             .text_ellipsis()
             .flex()
             .items_center();
-        for piece in presentation::run_summary(items) {
+        for piece in presentation::run_summary_localized(items, self.app_settings.language) {
             line = match piece {
                 presentation::Piece::Text(t) => line.child(SharedString::from(t)),
                 presentation::Piece::Name(n) => line.child(

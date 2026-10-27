@@ -6,7 +6,7 @@
 //! - A turn still running, one that stopped on a tool call, and a failed one show everything.
 //! - The files a turn changed are listed once, under the answer.
 
-use fv_protocol::types::Item;
+use fv_protocol::types::{Item, UiLanguage};
 
 /// One file a turn's patches touched.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,6 +333,58 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView
     }
 }
 
+/// The transcript keeps the presentation rules independent from GPUI. Localize the compact
+/// labels at the last step so callers that still need the stable Chinese helper remain intact.
+pub fn describe_localized(
+    name: &str,
+    args: &serde_json::Value,
+    running: bool,
+    language: UiLanguage,
+) -> ToolView {
+    let mut view = describe(name, args, running);
+    if language != UiLanguage::English {
+        return view;
+    }
+    let live = |done: &str, current: &str| if running { current } else { done }.to_string();
+    view.label = if name == "code_mode" {
+        live("Code mode", "Running code")
+    } else if name == "wait" {
+        if args
+            .get("terminate")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            live("Terminate script", "Terminating script")
+        } else {
+            live("Script wait", "Waiting for script")
+        }
+    } else {
+        match view.family {
+            Family::Terminal => live("Terminal", "Running"),
+            Family::Edit => live("Edit", "Editing"),
+            Family::Read => live("Read", "Reading"),
+            Family::Search => live("Search", "Searching"),
+            Family::Web => live("Web search", "Searching web"),
+            Family::Todo => live("Todo", "Updating todo"),
+            Family::Question => live("Question", "Asking"),
+            Family::Agent => live("Sub-agent", "Running sub-agent"),
+            Family::Skill => live("Skill", "Running skill"),
+            Family::Present => live("Present", "Presenting"),
+            Family::Mcp => live("Tool call", "Calling"),
+            Family::Other => live("Tool call", "Running"),
+        }
+    };
+    if view.family == Family::Edit
+        && let Some(count) = view
+            .subject
+            .strip_suffix(" 个文件")
+            .and_then(|v| v.parse::<usize>().ok())
+    {
+        view.subject = format!("{count} files");
+    }
+    view
+}
+
 /// What stays on its own line and breaks a run of tool calls.
 fn folds_into_run(name: &str) -> bool {
     !matches!(
@@ -488,6 +540,37 @@ pub fn run_summary(items: &[&Item]) -> Vec<Piece> {
     pieces
 }
 
+pub fn run_summary_localized(items: &[&Item], language: UiLanguage) -> Vec<Piece> {
+    let pieces = run_summary(items);
+    if language != UiLanguage::English {
+        return pieces;
+    }
+    pieces
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Name(name) => Piece::Name(name),
+            Piece::Text(text) => {
+                let text = text
+                    .strip_prefix("已运行 ")
+                    .map(|v| format!("Ran {v}").replace(" 个命令", " commands"))
+                    .or_else(|| text.strip_prefix("已读取 ").map(|v| format!("Read {v}")))
+                    .or_else(|| text.strip_prefix("已写入 ").map(|v| format!("Wrote {v}")))
+                    .or_else(|| {
+                        text.strip_prefix("已搜索 ")
+                            .map(|v| format!("Searched {v}"))
+                    })
+                    .or_else(|| text.strip_prefix("已调用 ").map(|v| format!("Called {v}")))
+                    .unwrap_or(text);
+                Piece::Text(
+                    text.replace(" 个文件", " files")
+                        .replace(" 次", " times")
+                        .replace(" 个工具", " tools"),
+                )
+            }
+        })
+        .collect()
+}
+
 /// The one-line description of a tool call, as the transcript's collapsed row says it.
 pub fn tool_title(name: &str, args: &serde_json::Value, running: bool) -> (String, String) {
     let field = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("");
@@ -544,6 +627,25 @@ pub fn format_duration(ms: u64) -> String {
     }
     if s > 0 || parts.is_empty() {
         parts.push(format!("{s} 秒"));
+    }
+    parts.join(" ")
+}
+
+pub fn format_duration_localized(ms: u64, language: UiLanguage) -> String {
+    if language != UiLanguage::English {
+        return format_duration(ms);
+    }
+    let total = (ms + 500) / 1000;
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    let mut parts = Vec::new();
+    if h > 0 {
+        parts.push(format!("{h}h"));
+    }
+    if m > 0 {
+        parts.push(format!("{m}m"));
+    }
+    if s > 0 || parts.is_empty() {
+        parts.push(format!("{s}s"));
     }
     parts.join(" ")
 }
