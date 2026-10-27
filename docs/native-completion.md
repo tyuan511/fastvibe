@@ -190,7 +190,7 @@ OAuth 使用真实本地 AS/MCP 服务验证 PKCE、回调归属、错误 issuer
 - 新增 `.github/workflows/native-bundles.yml`：在 macOS arm64、Linux x64 和 Windows x64 runner 上分别获取固定 OfficeCLI、构建 release bundle、执行 `native:verify` 并上传产物；工作流支持手动触发，也会在 native/交付脚本变更时运行。签名和发布仍由后续平台交付流程负责。
 - 修复 Office 进程验收夹具的 PID 读取竞态：测试现在等待 PID 文件内容可解析后再检查进程，避免把“文件已创建但尚未写入”误判成服务失败。
 
-验证：`node --check scripts/stage-native-app.mjs`、`node --check scripts/check-native-bundle.mjs`、macOS arm64 debug bundle（`--no-build`）及严格/重签模拟校验通过；`pnpm native:build` 的 macOS arm64 release 构建、release bundle 和 `native:verify` 通过；`fv-gui` 编译、90 项 GUI 测试、严格 Clippy 和 `NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 pnpm native:test` 全 workspace 回归通过（日志 `/tmp/fastvibe-native-workspace-test-i18n-bundle-final.log`）。原生 bundle 的 Windows/Linux 交叉构建、安装包签名和真实安装验收仍留在交付阶段；界面深层低频文案仍留在外围 i18n 阶段。
+验证：`node --check scripts/stage-native-app.mjs`、`node --check scripts/check-native-bundle.mjs`、actionlint、macOS arm64 debug bundle（`--no-build`）及严格/重签模拟校验通过；`pnpm native:build` 的 macOS arm64 release 构建、release bundle 和 `native:verify` 通过；`fv-gui` 编译、90 项 GUI 测试、严格 Clippy 和 `NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 pnpm native:test` 全 workspace 回归通过（最终日志 `/tmp/fastvibe-native-final-regression-fixed.log`）。原生 bundle 的 Windows/Linux 交叉构建、安装包签名和真实安装验收仍留在交付阶段；界面深层低频文案仍留在外围 i18n 阶段。
 
 ## 第四十二批：Linux 与 Windows 电脑操控
 
