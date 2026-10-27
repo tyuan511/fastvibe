@@ -2,6 +2,7 @@
 //! belongs to a window. Configuration lives in a private file, never in general app settings.
 
 mod diagnostics;
+mod elicitation;
 mod oauth;
 mod tools;
 
@@ -34,6 +35,7 @@ struct Connection {
     tools: Mutex<Vec<rmcp::model::Tool>>,
     config: McpServerConfig,
     output_dir: PathBuf,
+    askers: Arc<elicitation::Askers>,
     _stderr: Option<diagnostics::Reader>,
 }
 
@@ -761,11 +763,20 @@ impl Manager {
 struct Handler {
     info: ClientConfig,
     catalog_changes: watch::Sender<u64>,
+    askers: Arc<elicitation::Askers>,
 }
 
 impl rmcp::ClientHandler for Handler {
     fn get_info(&self) -> ClientConfig {
         self.info.clone()
+    }
+
+    async fn create_elicitation(
+        &self,
+        request: rmcp::model::ElicitRequestParams,
+        _: rmcp::service::RequestContext<RoleClient>,
+    ) -> Result<rmcp::model::ElicitResult, rmcp::ErrorData> {
+        Ok(elicitation::respond(&self.askers, request).await)
     }
 
     async fn on_tool_list_changed(&self, _: rmcp::service::NotificationContext<RoleClient>) {
@@ -783,10 +794,19 @@ async fn connect(
     http_client_builder: HttpClientBuilder,
 ) -> Result<(Connection, Running, watch::Receiver<u64>), String> {
     let (catalog_changes, updates) = watch::channel(0);
+    let askers = Arc::new(elicitation::Askers::default());
     let info = Handler {
         catalog_changes,
+        askers: askers.clone(),
         info: ClientConfig::new(
-            ClientCapabilities::default(),
+            {
+                let mut capabilities = ClientCapabilities::default();
+                capabilities.elicitation = Some(
+                    rmcp::model::ElicitationCapability::new()
+                        .with_form(rmcp::model::FormElicitationCapability::default()),
+                );
+                capabilities
+            },
             Implementation::new("fastvibe", env!("CARGO_PKG_VERSION")),
         ),
     };
@@ -881,6 +901,7 @@ async fn connect(
             tools: Mutex::new(tools),
             config,
             output_dir,
+            askers,
             _stderr: stderr,
         },
         running,

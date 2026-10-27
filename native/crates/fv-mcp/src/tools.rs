@@ -59,6 +59,11 @@ impl Tool for McpTool {
                 return ToolOutput::err("MCP 工具参数必须是对象");
             };
             let request = rmcp::model::CallToolRequestParams::new(name).with_arguments(arguments);
+            // While the call is in flight, the server may ask the user something.
+            let _asking = ctx
+                .ui
+                .clone()
+                .map(|ui| connection.askers.enter(&ctx.call_id, ui));
             let result = tokio::select! {
                 biased;
                 _ = ctx.cancel.cancelled() => return ToolOutput::err("MCP 调用已停止"),
