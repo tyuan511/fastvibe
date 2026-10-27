@@ -221,6 +221,7 @@ impl Workspace {
         );
         let revision = format!("{}:{}", view.lease, view.html_revision);
         let p = self.palette.clone();
+        let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         let mut head = div()
             .h(px(36.))
             .px(px(8.))
@@ -240,7 +241,11 @@ impl Workspace {
         if back {
             head = head.child(
                 icon_button_xs("office-back", "arrow-left01", &p)
-                    .aria_label("返回文件列表")
+                    .aria_label(if english {
+                        "Back to file list"
+                    } else {
+                        "返回文件列表"
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(pane) =
                             this.selected.as_ref().and_then(|id| this.panes.get_mut(id))
@@ -254,14 +259,22 @@ impl Workspace {
         if let Ok(url) = url::Url::from_file_path(path) {
             head = head.child(
                 icon_button_xs("office-open-external", "link-square02", &p)
-                    .aria_label("用系统应用打开")
+                    .aria_label(if english {
+                        "Open with system app"
+                    } else {
+                        "用系统应用打开"
+                    })
                     .on_click(move |_, _, cx| cx.open_url(url.as_str())),
             );
         }
         let (retry_tab, retry_path) = (tab.clone(), path.to_string());
         head = head.child(
             icon_button_xs("office-refresh", "refresh", &p)
-                .aria_label("刷新文档预览")
+                .aria_label(if english {
+                    "Refresh document preview"
+                } else {
+                    "刷新文档预览"
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.start_office(&retry_tab, &retry_path, cx)
                 })),
@@ -273,9 +286,17 @@ impl Workspace {
                     .id("office-selection")
                     .cursor_pointer()
                     .child(if selection_pending {
-                        "正在读取选中内容"
+                        if english {
+                            "Reading selection"
+                        } else {
+                            "正在读取选中内容"
+                        }
                     } else {
-                        "引用选中内容"
+                        if english {
+                            "Quote selection"
+                        } else {
+                            "引用选中内容"
+                        }
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.office_selection(&select_tab, &select_lease, window, cx)
@@ -291,7 +312,12 @@ impl Workspace {
                 let message = if render_error.is_some() && watch_error.is_some() {
                     render_error.clone().unwrap()
                 } else {
-                    "正在准备文档预览…".into()
+                    if english {
+                        "Preparing document preview…"
+                    } else {
+                        "正在准备文档预览…"
+                    }
+                    .into()
                 };
                 div()
                     .p(px(12.))
@@ -330,7 +356,7 @@ impl Workspace {
                             .px(px(8.))
                             .py(px(4.))
                             .text_size(px(TEXT_XS))
-                            .child(format!("未能更新文档快照：{error}"))
+                            .child(if english { format!("Could not update document snapshot: {error}") } else { format!("未能更新文档快照：{error}") })
                     }),
             )
             .child(div().flex_1().min_h_0().child(body))
