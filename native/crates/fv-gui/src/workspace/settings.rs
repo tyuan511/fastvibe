@@ -1,6 +1,6 @@
 //! Protocol-backed settings: providers, general preferences, personalization, archived chats,
-//! skills, MCP and memory are connected. Other sections retain their migration placeholders until
-//! their backing services are implemented.
+//! skills, MCP, memory, browser, proxy, computer control and import previews are connected.
+//! Remote and SSH sections remain reserved for the redesigned remote phase.
 
 use std::collections::HashSet;
 
