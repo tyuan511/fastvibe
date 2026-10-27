@@ -140,6 +140,13 @@
               "null"
             ]
           },
+          "keepAwake": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "lightTheme": {
             "default": null,
             "type": [
@@ -5680,6 +5687,10 @@
           },
           "glass": {
             "description": "玻璃效果: the translucent window, where the platform has a blur to show.",
+            "type": "boolean"
+          },
+          "keepAwake": {
+            "default": false,
             "type": "boolean"
           },
           "lightTheme": {

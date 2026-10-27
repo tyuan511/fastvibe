@@ -51,6 +51,7 @@ pub struct ServerState {
     pub(crate) auto_compaction: Arc<AtomicBool>,
     pub store: Store,
     pub(crate) schedules: crate::schedules::Schedules,
+    pub(crate) keep_awake: crate::keep_awake::KeepAwake,
     /// The side pane's shells. One per terminal, with its own pty and parsed screen.
     pub(crate) terminals: crate::terminal::Terminals,
     /// models.dev, as this install knows it: a model's window, output ceiling, modalities and
@@ -88,6 +89,9 @@ impl ServerState {
             return;
         }
         let mut changes = self.mcp.subscribe();
+        if let Ok(settings) = crate::settings::read(self) {
+            self.keep_awake.set(settings.keep_awake);
+        }
         self.mcp.start();
         self.memory.start_timer(self);
         crate::catalog::start(self);
@@ -126,6 +130,7 @@ impl ServerState {
             office: crate::office::Manager::new(data_dir.clone()),
             auto_compaction,
             schedules: crate::schedules::Schedules::open(store.db.clone())?,
+            keep_awake: crate::keep_awake::KeepAwake::new(),
             memory: crate::memory::Memory::open(&data_dir, &store.db)?,
             mcp: fv_mcp::Manager::open(&data_dir)?,
             services_started: AtomicBool::new(false),

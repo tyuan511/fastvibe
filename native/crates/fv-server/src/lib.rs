@@ -6,6 +6,7 @@ mod catalog;
 mod connection;
 pub mod context;
 mod git;
+mod keep_awake;
 mod listener;
 mod log;
 mod mapping;

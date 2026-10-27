@@ -127,6 +127,7 @@ fn write(state: &ServerState, settings: AppSettings) -> Result<AppSettings, Erro
         settings.auto_compaction_enabled,
         std::sync::atomic::Ordering::Release,
     );
+    state.keep_awake.set(settings.keep_awake);
     state.broadcast(ServerNotification::SettingsChanged(settings.clone()));
     Ok(settings)
 }

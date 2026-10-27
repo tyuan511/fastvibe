@@ -95,6 +95,7 @@ async fn browser_settings_validate_templates_and_persist() {
             browser_homepage: Some("https://example.com/docs".into()),
             browser_search_engine: Some("https://search.example/?q={query}".into()),
             browser_download_dir: Some("/tmp/fastvibe-downloads".into()),
+            keep_awake: Some(true),
             ..Default::default()
         })
         .await
@@ -105,6 +106,7 @@ async fn browser_settings_validate_templates_and_persist() {
         "https://search.example/?q={query}"
     );
     assert_eq!(saved.browser_download_dir, "/tmp/fastvibe-downloads");
+    assert!(saved.keep_awake);
     assert_eq!(client.call::<SettingsGet>(Empty {}).await.unwrap(), saved);
 }
 

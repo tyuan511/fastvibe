@@ -1768,6 +1768,8 @@ pub struct AppSettings {
     /// Automatically archive inactive, unpinned conversations after this many days.
     #[serde(default)]
     pub auto_archive_after_days: Option<u32>,
+    #[serde(default)]
+    pub keep_awake: bool,
 }
 
 fn default_browser_homepage() -> String {
@@ -1872,6 +1874,7 @@ impl Default for AppSettings {
             browser_search_engine: default_browser_search_engine(),
             browser_download_dir: String::new(),
             auto_archive_after_days: None,
+            keep_awake: false,
         }
     }
 }
@@ -1921,6 +1924,8 @@ pub struct AppSettingsPatch {
     pub browser_download_dir: Option<String>,
     #[serde(default)]
     pub auto_archive_after_days: Option<Option<u32>>,
+    #[serde(default)]
+    pub keep_awake: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1958,6 +1963,9 @@ impl AppSettings {
         }
         if let Some(v) = patch.auto_archive_after_days {
             self.auto_archive_after_days = v;
+        }
+        if let Some(v) = patch.keep_awake {
+            self.keep_awake = v;
         }
         if let Some(v) = patch.custom_system_prompt {
             self.custom_system_prompt = v;

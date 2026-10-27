@@ -1524,6 +1524,7 @@ impl Workspace {
         let auto_compaction_enabled = a.auto_compaction_enabled;
         let code_mode_enabled = a.code_mode_enabled;
         let auto_archive = a.auto_archive_after_days.is_some();
+        let keep_awake = a.keep_awake;
         let hover = p.c(Token::Accent);
         let mode_label = |m: ThemeMode| match m {
             ThemeMode::System => "跟随系统",
@@ -1791,6 +1792,23 @@ impl Workspace {
                                         } else {
                                             Some(30)
                                         }),
+                                        ..Default::default()
+                                    },
+                                    cx,
+                                )
+                            }),
+                        ),
+                    ))
+                    .child(setting_row(
+                        "保持唤醒",
+                        "生成回复或定时任务期间阻止 macOS 进入睡眠；其它平台会忽略此开关",
+                        true,
+                        p,
+                        switch(SharedString::from("keep-awake"), keep_awake, p).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.patch_settings(
+                                    AppSettingsPatch {
+                                        keep_awake: Some(!keep_awake),
                                         ..Default::default()
                                     },
                                     cx,
