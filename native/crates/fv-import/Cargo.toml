@@ -1,0 +1,17 @@
+[package]
+name = "fv-import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fv-core = { path = "../fv-core" }
+serde_json.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -164,6 +164,15 @@ pub struct ProxySettings {
     pub url: Entity<InputState>,
 }
 
+#[derive(Default)]
+pub struct ImportSettings {
+    pub generation: u64,
+    pub candidates: Option<Vec<ImportCandidate>>,
+    pub preview: Option<ImportReadResponse>,
+    pub busy: bool,
+    pub notice: Option<String>,
+}
+
 impl ProxySettings {
     fn new(settings: &AppSettings, window: &mut Window, cx: &mut App) -> Self {
         let url = input(window, cx, "留空使用系统网络设置", false);
@@ -221,6 +230,7 @@ pub struct SettingsState {
     pub skills: super::skills::SkillSettings,
     pub browser: BrowserSettings,
     pub proxy: ProxySettings,
+    pub import: ImportSettings,
     pub theme_menu: Option<ThemeMenu>,
     /// 归档对话: what the sidebar leaves out.
     pub archived: Option<Vec<Thread>>,
@@ -289,6 +299,7 @@ impl Workspace {
                 skills: super::skills::SkillSettings::new(window, cx),
                 browser: BrowserSettings::new(&self.app_settings, window, cx),
                 proxy: ProxySettings::new(&self.app_settings, window, cx),
+                import: ImportSettings::default(),
                 section,
                 providers: None,
                 edit: None,
@@ -331,6 +342,7 @@ impl Workspace {
         self.refresh_mcp(cx);
         self.refresh_memory(cx);
         self.refresh_usage(cx);
+        self.refresh_import(cx);
         self.refresh_about(cx);
         self.refresh_subagents(cx);
         self.refresh_roles(cx);
@@ -359,6 +371,83 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    fn refresh_import(&mut self, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        settings.import.generation = settings.import.generation.wrapping_add(1);
+        let generation = settings.import.generation;
+        settings.import.busy = true;
+        settings.import.notice = None;
+        let call = backend.call::<ImportScan>(ImportScanParams {
+            source: Some("claude-code".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                if let Some(settings) = this
+                    .settings
+                    .as_mut()
+                    .filter(|settings| settings.import.generation == generation)
+                {
+                    settings.import.busy = false;
+                    match result {
+                        Ok(response) => settings.import.candidates = Some(response.candidates),
+                        Err(error) => {
+                            settings.import.notice = Some(format!("读取导入候选失败：{error}"))
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn preview_import(&mut self, candidate: ImportCandidate, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        settings.import.generation = settings.import.generation.wrapping_add(1);
+        let generation = settings.import.generation;
+        settings.import.busy = true;
+        settings.import.preview = None;
+        settings.import.notice = None;
+        let call = backend.call::<ImportRead>(ImportReadParams {
+            source: candidate.source,
+            source_id: candidate.source_id,
+        });
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                if let Some(settings) = this
+                    .settings
+                    .as_mut()
+                    .filter(|settings| settings.import.generation == generation)
+                {
+                    settings.import.busy = false;
+                    match result {
+                        Ok(response) => settings.import.preview = Some(response),
+                        Err(error) => {
+                            settings.import.notice = Some(format!("读取导入预览失败：{error}"))
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     pub(super) fn refresh_providers(&mut self, cx: &mut Context<Self>) {
@@ -898,7 +987,7 @@ impl Workspace {
                                 Section::About => self.about_pane(cx),
                                 Section::Usage => self.usage_pane(cx),
                                 Section::Archived => self.archived_pane(s, cx).into_any_element(),
-                                Section::Import => self.import_pane(cx),
+                                Section::Import => self.import_pane(s, cx),
                                 Section::Skills => self.skills_pane(cx),
                                 Section::Mcp => self.mcp_pane(cx),
                                 Section::Subagents => self.subagents_pane(cx),
@@ -1015,18 +1104,126 @@ impl Workspace {
             )
     }
 
-    fn import_pane(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn import_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
         let open_skills =
             cx.listener(|this, _, window, cx| this.open_settings(Section::Skills, window, cx));
         let open_mcp =
             cx.listener(|this, _, window, cx| this.open_settings(Section::Mcp, window, cx));
+        let refresh = cx.listener(|this, _, _, cx| this.refresh_import(cx));
+        let mut claude = card(p)
+            .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_size(px(TEXT_SM)).child("Claude Code 会话"))
+                    .child(
+                        outline_button("refresh-import-candidates", p)
+                            .child(if s.import.busy {
+                                "读取中…"
+                            } else {
+                                "刷新"
+                            })
+                            .on_click(refresh),
+                    ),
+            )
+            .child(div().text_size(px(TEXT_XS)).muted(p).child(
+                "扫描本机 ~/.claude/projects 中的 JSONL，只读显示历史消息，预览不会写入 FastVibe。",
+            ));
+        if let Some(notice) = &s.import.notice {
+            claude = claude.child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .text_color(p.c(Token::Destructive))
+                    .child(notice.clone()),
+            );
+        }
+        match &s.import.candidates {
+            None if s.import.busy => {
+                claude = claude.child(div().text_size(px(TEXT_XS)).muted(p).child("正在查找会话…"));
+            }
+            Some(candidates) if candidates.is_empty() => {
+                claude = claude.child(
+                    div()
+                        .text_size(px(TEXT_XS))
+                        .muted(p)
+                        .child("没有找到可导入的 Claude Code 会话。"),
+                );
+            }
+            Some(candidates) => {
+                for (index, candidate) in candidates.iter().enumerate() {
+                    let selected =
+                        s.import.preview.as_ref().is_some_and(|preview| {
+                            preview.candidate.source_id == candidate.source_id
+                        });
+                    let preview_candidate = candidate.clone();
+                    claude = claude.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .when(index > 0, |d| {
+                                d.border_t_1().border_color(p.c(Token::Border))
+                            })
+                            .pt(px(if index > 0 { 8. } else { 2. }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        ui::truncate(candidate.title.clone())
+                                            .text_size(px(TEXT_SM)),
+                                    )
+                                    .child(div().text_size(px(TEXT_XS)).muted(p).child(format!(
+                                        "{} 条消息 · {}",
+                                        candidate.message_count,
+                                        candidate.cwd.as_deref().unwrap_or("未知目录")
+                                    ))),
+                            )
+                            .child(
+                                outline_button(
+                                    SharedString::from(format!("preview-import-{index}")),
+                                    p,
+                                )
+                                .child(if selected { "已预览" } else { "预览" })
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.preview_import(preview_candidate.clone(), cx)
+                                    },
+                                )),
+                            ),
+                    );
+                }
+            }
+            _ => {}
+        }
+        if let Some(preview) = &s.import.preview {
+            claude = claude.child(
+                div()
+                    .mt(px(4.))
+                    .pt(px(10.))
+                    .border_t_1()
+                    .border_color(p.c(Token::Border))
+                    .text_size(px(TEXT_XS))
+                    .child(format!(
+                        "预览：{} 条引擎消息，跳过 {} 条源记录。确认导入与写入会话仍待接通。",
+                        preview.messages.len(),
+                        preview.skipped.len()
+                    )),
+            );
+        }
         card(p)
             .p(px(16.))
             .flex()
             .flex_col()
             .gap(px(14.))
             .child(div().text_size(px(TEXT_SM)).child("导入工具与扩展"))
+            .child(claude)
             .child(
                 div().text_size(px(TEXT_SM)).muted(p).child(
                     "原生版的导入入口按数据类型分开处理，避免把第三方配置直接写入设置文件。",

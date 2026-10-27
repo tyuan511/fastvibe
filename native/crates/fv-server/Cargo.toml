@@ -23,6 +23,7 @@ fv-store = { path = "../fv-store" }
 fv-provider = { path = "../fv-provider" }
 fv-tools = { path = "../fv-tools" }
 fv-mcp = { path = "../fv-mcp" }
+fv-import = { path = "../fv-import" }
 serde.workspace = true
 serde_json.workspace = true
 base64 = "0.22"

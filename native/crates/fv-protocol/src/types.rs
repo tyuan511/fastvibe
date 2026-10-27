@@ -71,6 +71,51 @@ pub struct InitializeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct Empty {}
 
+/// A read-only source adapter available to the native import surface.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportScanParams {
+    /// Omit to scan every adapter currently available on this machine.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportCandidate {
+    pub source: String,
+    pub source_id: String,
+    pub title: String,
+    pub cwd: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub message_count: usize,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportScanResponse {
+    pub candidates: Vec<ImportCandidate>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReadParams {
+    pub source: String,
+    pub source_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReadResponse {
+    pub candidate: ImportCandidate,
+    /// Serialized engine messages. The protocol intentionally keeps the core engine crate
+    /// private; clients can inspect the stable message JSON without linking to it.
+    pub messages: Vec<serde_json::Value>,
+    pub skipped: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {

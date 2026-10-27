@@ -2433,6 +2433,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fv-import"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "fv-core",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "fv-mcp"
 version = "0.1.0"
 dependencies = [
@@ -2501,6 +2511,7 @@ dependencies = [
  "fv-client",
  "fv-core",
  "fv-env",
+ "fv-import",
  "fv-mcp",
  "fv-protocol",
  "fv-provider",

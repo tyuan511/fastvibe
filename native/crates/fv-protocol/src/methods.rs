@@ -135,6 +135,8 @@ client_requests! {
     SettingsReset => "settings/reset": Empty => AppSettings,
     DiagnosticsGet => "diagnostics/get": Empty => Diagnostics,
     AppUpdateCheck => "app/update/check": Empty => AppUpdateInfo,
+    ImportScan => "import/scan": ImportScanParams => ImportScanResponse,
+    ImportRead => "import/read": ImportReadParams => ImportReadResponse,
     StatsUsage => "stats/usage": crate::usage::UsageParams => crate::usage::UsageStats,
     SettingsSet => "settings/set": AppSettingsPatch => AppSettings,
     SkillList => "skill/list": SkillListParams => SkillListResponse,

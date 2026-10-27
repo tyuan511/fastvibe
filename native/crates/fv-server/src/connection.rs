@@ -78,6 +78,8 @@ pub async fn serve_connection<R, W>(
                             | "stats/usage"
                             | "model/catalog/refresh"
                             | "provider/model/test"
+                            | "import/scan"
+                            | "import/read"
                     )
                 )
         });
@@ -302,6 +304,7 @@ async fn dispatch(
                     "modelCatalogRefresh".into(),
                     "modelDetails".into(),
                     "providerModelTest".into(),
+                    "importPreview".into(),
                 ],
                 data_dir: state.data_dir.display().to_string(),
                 build_fingerprint: crate::build_fingerprint(),
@@ -716,6 +719,20 @@ async fn dispatch(
             })
         }
         ClientRequest::AppUpdateCheck { .. } => to_value(crate::update::check(state).await?),
+        ClientRequest::ImportScan { params, .. } => {
+            let state = state.clone();
+            let result = tokio::task::spawn_blocking(move || crate::import::scan(&state, params))
+                .await
+                .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??;
+            to_value(result)
+        }
+        ClientRequest::ImportRead { params, .. } => {
+            let state = state.clone();
+            let result = tokio::task::spawn_blocking(move || crate::import::read(&state, params))
+                .await
+                .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??;
+            to_value(result)
+        }
         ClientRequest::StatsUsage { params, .. } => {
             to_value(crate::usage::collect(state.clone(), params).await?)
         }

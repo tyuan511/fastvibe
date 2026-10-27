@@ -627,6 +627,35 @@
         ],
         "type": "string"
       },
+      "ImportReadParams": {
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "sourceId"
+        ],
+        "type": "object"
+      },
+      "ImportScanParams": {
+        "description": "A read-only source adapter available to the native import surface.",
+        "properties": {
+          "source": {
+            "default": null,
+            "description": "Omit to scan every adapter currently available on this machine.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "InitializeParams": {
         "properties": {
           "capabilities": {
@@ -3933,6 +3962,46 @@
           },
           "params": {
             "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "import/scan",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ImportScanParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "import/read",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ImportReadParams"
           }
         },
         "required": [

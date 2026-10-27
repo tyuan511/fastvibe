@@ -126,7 +126,13 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::SettingsSet { .. } => true,
             // Fetching a provider's model list makes this machine request an address the
             // caller chose: a lever a remote client does not need.
-            ClientRequest::ProviderFetchModels { .. } | ClientRequest::OfficeWatchStart{..}|ClientRequest::OfficeWatchStop{..}|ClientRequest::OfficeWatchStateGet{..}|ClientRequest::OfficeSelectionGet{..} => false,
+            ClientRequest::ProviderFetchModels { .. }
+            | ClientRequest::ImportScan { .. }
+            | ClientRequest::ImportRead { .. }
+            | ClientRequest::OfficeWatchStart { .. }
+            | ClientRequest::OfficeWatchStop { .. }
+            | ClientRequest::OfficeWatchStateGet { .. }
+            | ClientRequest::OfficeSelectionGet { .. } => false,
         },
     }
 }
