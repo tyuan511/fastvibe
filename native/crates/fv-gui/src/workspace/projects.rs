@@ -3,7 +3,7 @@
 //! it, and the agent may work in every folder.
 
 use fv_protocol::methods::{ProjectCreate, ProjectUpdate};
-use fv_protocol::types::{ProjectCreateParams, ProjectUpdateParams};
+use fv_protocol::types::{ProjectCreateParams, ProjectUpdateParams, UiLanguage};
 use fv_theme::Token;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -45,7 +45,7 @@ impl Workspace {
             ),
             None => (String::new(), Vec::new()),
         };
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("项目名称"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("项目名称 / Project name"));
         input.update(cx, |st, cx| st.set_value(name, window, cx));
         cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, _, cx| {
             if matches!(ev, InputEvent::Change)
@@ -187,6 +187,7 @@ impl Workspace {
     pub(super) fn project_dialog_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let d = self.project_dialog.as_ref()?;
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let hover = p.c(Token::Muted);
         let editing = d.editing.is_some();
         // Said only while the name is blank: that is when it matters.
@@ -232,7 +233,7 @@ impl Workspace {
                             .bg(p.c(Token::Muted))
                             .text_size(px(TEXT_XS))
                             .muted(p)
-                            .child("主")
+                            .child(if english { "Main" } else { "主" })
                             .into_any_element()
                     } else {
                         div()
@@ -252,7 +253,11 @@ impl Workspace {
                                     .cursor_pointer()
                                     .text_size(px(TEXT_XS))
                                     .hover(move |d| d.bg(hover))
-                                    .child("设为主文件夹")
+                                    .child(if english {
+                                        "Make primary folder"
+                                    } else {
+                                        "设为主文件夹"
+                                    })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if let Some(d) = &mut this.project_dialog {
                                             d.folders.retain(|f| f != &primary_of);
@@ -293,16 +298,28 @@ impl Workspace {
                 .muted(p)
                 .hover(move |d| d.bg(hover))
                 .child(icon("add01", 16.0, p.c(Token::MutedForeground)))
-                .child("添加文件夹")
+                .child(if english {
+                    "Add folder"
+                } else {
+                    "添加文件夹"
+                })
                 .on_click(cx.listener(|this, _, _, cx| this.pick_folders(cx))),
         );
 
         let body = dialog_card(p, 448.0)
             .child(dialog_head(
                 if editing {
-                    "编辑项目"
+                    if english {
+                        "Edit project"
+                    } else {
+                        "编辑项目"
+                    }
                 } else {
-                    "创建项目"
+                    if english {
+                        "Create project"
+                    } else {
+                        "创建项目"
+                    }
                 },
                 "",
                 p,
@@ -343,7 +360,11 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(div().text_size(px(TEXT_SM)).muted(p).child("源文件夹"))
+                            .child(div().text_size(px(TEXT_SM)).muted(p).child(if english {
+                                "Source folders"
+                            } else {
+                                "源文件夹"
+                            }))
                             .child(rows),
                     )
                     .when_some(d.error.clone(), |col, e| {
@@ -362,7 +383,13 @@ impl Workspace {
                     this.project_dialog = None;
                     cx.notify();
                 },
-                if editing { "确认" } else { "创建项目" },
+                if editing {
+                    if english { "Confirm" } else { "确认" }
+                } else if english {
+                    "Create project"
+                } else {
+                    "创建项目"
+                },
                 |this, _, cx| this.save_project(cx),
                 d.folders.is_empty() || d.busy,
             ));

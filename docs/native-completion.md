@@ -185,7 +185,7 @@ OAuth 使用真实本地 AS/MCP 服务验证 PKCE、回调归属、错误 issuer
 ## 第四十四批：原生 bundle 资源与工作区语言覆盖
 
 - `pnpm native:bundle` 在原生二进制旁生成可运行的 `bin/` + `Resources/` 布局。内置技能完整复制到 `Resources/skills`；OfficeCLI 只复制目标平台/架构目录，并强制带上 `LICENSE`、`NOTICE` 和版本清单。符号链接资源拒绝进入 bundle，二进制和资源文件都写入相对路径、字节数和 SHA-256 的 `native-manifest.json`。
-- 原生 GUI 的语言设置继续沿用 `AppSettings.language`，新增输入框占位、停止/排队/发送提示、模型菜单、上下文压缩、项目选择、搜索面板、会话状态、回复动作、变更卡片、终端/Git、文件/预览面板、浏览器/Office 预览、关于页、个性化 Agent 说明、长期记忆、技能页、MCP 设置页、使用统计、定时任务列表/历史/编辑器、模型详情、审批/提问面板、快捷键设置和通用外观设置的中英文映射。未迁移的低频文案仍保留中文回退，未把这一批误标成完整 i18n。
+- 原生 GUI 的语言设置继续沿用 `AppSettings.language`，新增输入框占位、停止/排队/发送提示、模型菜单、上下文压缩、项目/文件夹管理、搜索面板、会话状态、回复动作、变更卡片、终端/Git、文件/预览面板、浏览器/Office 预览、关于页、个性化 Agent 说明、长期记忆、技能页、MCP 设置页、使用统计、定时任务列表/历史/编辑器、模型详情、审批/提问面板、快捷键设置和通用外观设置的中英文映射。未迁移的低频文案仍保留中文回退，未把这一批误标成完整 i18n。
 - 新增 `pnpm native:verify -- --bundle DIR`：默认严格核对二进制和资源哈希；完成签名后使用 `--allow-resigned` 接受签名造成的二进制哈希变化，同时仍强制检查两个可执行文件、文件大小/路径和全部资源哈希，避免把重签当成绕过资源校验。
 - 新增 `.github/workflows/native-bundles.yml`：在 macOS arm64、Linux x64 和 Windows x64 runner 上分别获取固定 OfficeCLI、构建 release bundle、执行 `native:verify` 并上传产物；工作流支持手动触发，也会在 native/交付脚本变更时运行。签名和发布仍由后续平台交付流程负责。
 - 修复 Office 进程验收夹具的 PID 读取竞态：测试现在等待 PID 文件内容可解析后再检查进程，避免把“文件已创建但尚未写入”误判成服务失败。

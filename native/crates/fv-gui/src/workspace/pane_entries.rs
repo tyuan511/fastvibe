@@ -235,7 +235,7 @@ impl Workspace {
         } else {
             String::new()
         };
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder("名称"));
+        let name = cx.new(|cx| InputState::new(window, cx).placeholder("名称 / Name"));
         name.update(cx, |state, cx| state.set_value(initial, window, cx));
         cx.subscribe_in(&name, window, |this, source, event: &InputEvent, _, cx| {
             if this
@@ -418,7 +418,7 @@ impl Workspace {
                 false,
                 p.c(Token::Accent),
             )
-            .child("刷新")
+            .child(if self.app_settings.language == fv_protocol::types::UiLanguage::English { "Refresh" } else { "刷新" })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.close_menus(cx);
                 if let Some(state) = this.selected.as_ref().and_then(|id| this.panes.get_mut(id)) {
