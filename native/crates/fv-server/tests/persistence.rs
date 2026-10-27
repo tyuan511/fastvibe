@@ -55,6 +55,7 @@ async fn run(dir: &Path, name: &str, model: ScriptedModel) -> Run {
     tools.register(Read);
     let agent = AgentContext {
         context: Default::default(),
+        hooks: None,
         model: model.clone(),
         tools: Arc::new(tools),
         system: String::new(),

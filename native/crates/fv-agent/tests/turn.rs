@@ -50,6 +50,7 @@ fn agent(model: ScriptedModel, tools: Vec<Slow>) -> (AgentContext, Arc<ScriptedM
     (
         AgentContext {
             context: Default::default(),
+            hooks: None,
             model: model.clone(),
             tools: Arc::new(registry),
             system: "sys".into(),
@@ -392,6 +393,7 @@ async fn results_stay_in_call_order_even_when_they_finish_out_of_order() {
     registry.register(Varying);
     let ctx = AgentContext {
         context: Default::default(),
+        hooks: None,
         model,
         tools: Arc::new(registry),
         system: String::new(),
@@ -684,6 +686,7 @@ async fn a_steer_mid_run_is_sent_with_the_next_request_in_the_same_turn() {
     });
     let ctx = AgentContext {
         context: Default::default(),
+        hooks: None,
         model: model.clone(),
         tools: Arc::new(registry),
         system: String::new(),
@@ -725,6 +728,7 @@ async fn a_steer_that_arrives_after_the_answer_keeps_the_turn_going() {
     ]));
     let ctx = AgentContext {
         context: Default::default(),
+        hooks: None,
         model: model.clone(),
         tools: Arc::new(ToolRegistry::new()),
         system: String::new(),

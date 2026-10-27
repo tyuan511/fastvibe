@@ -64,6 +64,7 @@ async fn start(workspace: &Path) -> (tempfile::TempDir, std::path::PathBuf) {
     fv_tools::register_builtin(&mut tools);
     let agent = AgentContext {
         context: Default::default(),
+        hooks: None,
         model,
         tools: Arc::new(tools),
         system: "sys".into(),

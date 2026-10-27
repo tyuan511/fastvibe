@@ -19,6 +19,7 @@ type Notes = UnboundedReceiver<ServerNotification>;
 fn agent_with(model: Arc<dyn Model>) -> AgentContext {
     AgentContext {
         context: Default::default(),
+        hooks: None,
         model,
         tools: Arc::new(ToolRegistry::new()),
         system: String::new(),

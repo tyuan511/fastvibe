@@ -51,6 +51,7 @@ async fn start(model: Option<ScriptedModel>) -> Harness {
     tools.register(Echo);
     let agent = AgentContext {
         context: Default::default(),
+        hooks: None,
         model: match &model {
             Some(m) => m.clone(),
             None => Arc::new(NoModel),

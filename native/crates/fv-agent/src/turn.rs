@@ -24,6 +24,8 @@ pub struct AgentContext {
     /// so a change to it does not invalidate the cached prefix and it is not given the trust of
     /// the system prompt. Never persisted in the transcript.
     pub context: String,
+    /// Lifecycle hooks; absent means none.
+    pub hooks: Option<Arc<dyn crate::Hooks>>,
     pub cwd: Option<PathBuf>,
     /// Where a tool's questions go; absent when no client can answer.
     pub ui: Option<Arc<dyn crate::UserInput>>,
@@ -224,7 +226,26 @@ async fn run_turn_inner(
     cancel: &CancellationToken,
 ) -> TurnOutcome {
     refresh_memory(ctx, history, events);
+    let mut hook_context = None;
+    if let Some(hooks) = &ctx.hooks {
+        match hooks.user_prompt_submit(&user_text).await {
+            crate::PromptHook::Allow(extra) => hook_context = extra,
+            crate::PromptHook::Block(reason) => {
+                return TurnOutcome::Failed(format!("Blocked by a hook: {reason}"));
+            }
+        }
+    }
     commit(history, events, Message::User { text: user_text });
+    if let Some(extra) = hook_context.filter(|e| !e.trim().is_empty()) {
+        commit(
+            history,
+            events,
+            Message::User {
+                text: format!("<hook_context>\n{extra}\n</hook_context>"),
+            },
+        );
+    }
+    let mut stop_hook_rounds = 0u8;
     if cancel.is_cancelled() {
         return TurnOutcome::Interrupted;
     }
@@ -343,6 +364,22 @@ async fn run_turn_inner(
                     // A steer that arrived after this request was built still has to be run: it
                     // is the user's latest words and the answer above may not have seen them.
                     if ctx.steer.as_ref().is_some_and(|s| !s.is_empty()) {
+                        continue;
+                    }
+                    // A stop hook may ask for more work; a few rounds at most, so a hook that
+                    // is never satisfied cannot hold the turn forever.
+                    if let Some(hooks) = &ctx.hooks
+                        && stop_hook_rounds < 3
+                        && let Some(reason) = hooks.stop().await
+                    {
+                        stop_hook_rounds += 1;
+                        commit(
+                            history,
+                            events,
+                            Message::User {
+                                text: format!("<hook_context>\n{reason}\n</hook_context>"),
+                            },
+                        );
                         continue;
                     }
                     return TurnOutcome::Completed;
@@ -867,10 +904,29 @@ async fn execute_calls(
         let registry = ctx.tools.clone();
         let loaded = ctx.loaded.clone();
         let events = events.clone();
+        let hooks = ctx.hooks.clone();
         async move {
+            let hook_call = crate::HookToolCall {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+                cwd: cwd.clone(),
+            };
             let (content, is_error, images, audio) = match tool {
                 None => (unknown_tool(&name, &registry), true, Vec::new(), Vec::new()),
                 Some(tool) => {
+                    let mut call_arguments = arguments.clone();
+                    if let Some(hooks) = &hooks {
+                        match hooks.pre_tool_use(&hook_call).await {
+                            crate::PreToolHook::Proceed => {}
+                            crate::PreToolHook::Rewrite(updated) => call_arguments = updated,
+                            crate::PreToolHook::Block(reason) => {
+                                let content = format!("Blocked by a hook: {reason}");
+                                emit(&events, AgentEvent::ToolResult { call_id: call_id.clone(), name: name.clone(), arguments, output: content.clone(), is_error: true });
+                                return (Message::ToolResult { call_id, name, content, is_error: true }, Vec::new(), Vec::new());
+                            }
+                        }
+                    }
                     let tool_ctx = ToolCtx {
                         cancel: cancel.clone(),
                         cwd,
@@ -885,7 +941,7 @@ async fn execute_calls(
                         loaded,
                         context: Some(context),
                     };
-                    let args = arguments.clone();
+                    let args = call_arguments;
                     let run = async {
                         // Held across the call; dropped when it finishes or is stopped.
                         let _guard = if tool.orchestrates() { None } else if tool.mutates() {
@@ -902,6 +958,13 @@ async fn execute_calls(
                     }
                 }
             };
+            let mut content = content;
+            if let Some(hooks) = &hooks
+                && let Some(extra) = hooks.post_tool_use(&hook_call, &content, is_error).await
+            {
+                content.push_str("\n\n[hook] ");
+                content.push_str(&extra);
+            }
             emit(&events, AgentEvent::ToolResult { call_id: call_id.clone(), name: name.clone(), arguments, output: content.clone(), is_error });
             (Message::ToolResult { call_id, name, content, is_error }, images, audio)
         }

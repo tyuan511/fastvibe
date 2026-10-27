@@ -10,6 +10,7 @@ mod compact;
 mod compact_input;
 mod event;
 mod history;
+mod hooks;
 mod model;
 mod permissions;
 mod prompt;
@@ -26,6 +27,7 @@ pub use compact::{
 };
 pub use event::{AgentEvent, BlockKind};
 pub use history::normalize;
+pub use hooks::{HookToolCall, Hooks, PreToolHook, PromptHook};
 pub use model::{Model, ModelError, ModelEvent, ModelRequest};
 pub use permissions::{
     ApprovalKind, ApprovalPolicy, ApprovalRequest, Approver, Decision, Permissions, Policy,

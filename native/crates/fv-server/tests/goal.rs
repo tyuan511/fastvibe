@@ -29,6 +29,7 @@ async fn start(model: ScriptedModel) -> Harness {
     tools.register(fv_tools::GoalCompleteTool);
     let agent = AgentContext {
         context: Default::default(),
+        hooks: None,
         model: model.clone(),
         tools: Arc::new(tools),
         system: "sys".into(),

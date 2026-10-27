@@ -40,6 +40,7 @@ fn agent(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
     (
         AgentContext {
             context: Default::default(),
+            hooks: None,
             model: model.clone(),
             tools: Arc::new(tools),
             system: "sys".into(),

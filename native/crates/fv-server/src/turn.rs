@@ -984,7 +984,11 @@ async fn build_context(
     } else {
         format!("\n\n{personalization}")
     };
+    let hooks: Option<Arc<dyn fv_agent::Hooks>> =
+        crate::hooks::ConfigHooks::load(&state.data_dir, cwd.as_deref(), thread_id)
+            .map(|h| Arc::new(h) as Arc<dyn fv_agent::Hooks>);
     AgentContext {
+        hooks,
         model,
         tools,
         // Only what is stable for a conversation stays in the system prompt, so the provider's

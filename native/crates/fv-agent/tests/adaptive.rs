@@ -14,6 +14,7 @@ fn context(model: ScriptedModel) -> (AgentContext, Arc<ScriptedModel>) {
     (
         AgentContext {
             context: Default::default(),
+            hooks: None,
             model: model.clone(),
             tools: Default::default(),
             system: "sys".into(),

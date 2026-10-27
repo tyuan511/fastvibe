@@ -9,6 +9,7 @@ mod connection;
 pub mod context;
 mod git;
 mod goal;
+mod hooks;
 mod import;
 mod keep_awake;
 mod listener;
@@ -88,6 +89,7 @@ pub fn agent_with_builtin_tools(
     fv_tools::register_builtin(&mut tools);
     fv_agent::AgentContext {
         context: Default::default(),
+        hooks: None,
         model,
         tools: std::sync::Arc::new(tools),
         system: String::new(),

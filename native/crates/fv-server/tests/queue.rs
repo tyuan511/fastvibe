@@ -53,6 +53,7 @@ async fn start(model: ScriptedModel) -> Harness {
     tools.register(Slow);
     let agent = AgentContext {
         context: Default::default(),
+        hooks: None,
         model: model.clone(),
         tools: Arc::new(tools),
         system: "sys".into(),
@@ -398,6 +399,7 @@ async fn a_queued_prompt_survives_a_restart_and_a_pause_survives_with_it() {
     {
         let agent = AgentContext {
             context: Default::default(),
+            hooks: None,
             model: Arc::new(NoModel),
             tools: Arc::new(ToolRegistry::new()),
             system: "sys".into(),
@@ -437,6 +439,7 @@ async fn a_queued_prompt_survives_a_restart_and_a_pause_survives_with_it() {
 
     let agent = AgentContext {
         context: Default::default(),
+        hooks: None,
         model: Arc::new(NoModel),
         tools: Arc::new(ToolRegistry::new()),
         system: "sys".into(),
