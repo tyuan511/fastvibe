@@ -239,7 +239,14 @@ impl Workspace {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("选择技能文件夹".into()),
+            prompt: Some(
+                if self.app_settings.language == UiLanguage::English {
+                    "Choose skill folder"
+                } else {
+                    "选择技能文件夹"
+                }
+                .into(),
+            ),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else {
@@ -307,8 +314,20 @@ impl Workspace {
         {
             s.skills.busy = false;
             s.skills.notice = Some(match result {
-                Ok(_) => "技能已更新".into(),
-                Err(e) => format!("无法更新技能：{e}"),
+                Ok(_) => {
+                    if self.app_settings.language == UiLanguage::English {
+                        "Skill updated".into()
+                    } else {
+                        "技能已更新".into()
+                    }
+                }
+                Err(e) => {
+                    if self.app_settings.language == UiLanguage::English {
+                        format!("Could not update skill: {e}")
+                    } else {
+                        format!("无法更新技能：{e}")
+                    }
+                }
             });
         }
         self.refresh_skills(cx);
@@ -461,9 +480,11 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(SharedString::from(format!(
-                        "删除技能 {name} 及其全部资源？无法恢复。"
-                    )))
+                    .child(SharedString::from(if english {
+                        format!("Delete skill {name} and all its resources? This cannot be undone.")
+                    } else {
+                        format!("删除技能 {name} 及其全部资源？无法恢复。")
+                    }))
                     .child(
                         outline_button("confirm-remove-skill", p)
                             .child(if english {
