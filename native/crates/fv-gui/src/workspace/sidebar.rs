@@ -507,6 +507,7 @@ impl Workspace {
         } else {
             t.title.clone()
         };
+        let source = t.source.clone();
         let running = self.views.get(&t.id).is_some_and(|v| v.running);
         let hover = ui::half(p.c(Token::SidebarAccent));
         let group = SharedString::from(format!("session-{}", t.id));
@@ -629,7 +630,25 @@ impl Workspace {
         .when(lead_slot, |d| d.child(div().size(px(14.0)).flex_none()))
         .map(|d| match renaming {
             Some(input) => d.child(div().flex_1().min_w_0().child(Input::new(&input))),
-            None => d.child(ui::truncate(title).flex_1()),
+            None => d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .flex_1()
+                    .min_w_0()
+                    .when_some(source, |d, source| {
+                        d.child(
+                            div()
+                                .px(px(4.0))
+                                .rounded(px(4.0))
+                                .text_size(px(TEXT_XS))
+                                .muted(p)
+                                .child(source),
+                        )
+                    })
+                    .child(ui::truncate(title)),
+            ),
         })
         .child(
             div()

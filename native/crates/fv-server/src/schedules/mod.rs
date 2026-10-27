@@ -837,6 +837,7 @@ fn prepare_thread(state: &ServerState, row: &SavedScheduleRun, now: i64) -> Resu
         title: row.definition.name.clone(),
         cwd: Some(cwd),
         project: row.definition.project.clone(),
+        source: None,
         model: row.definition.model.clone(),
         thinking: row.definition.thinking,
         created_at: now,

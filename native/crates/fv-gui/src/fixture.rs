@@ -31,6 +31,7 @@ fn thread(id: &str, title: &str, project: Option<&str>, updated: i64) -> Thread 
         title: title.into(),
         cwd: project.map(Into::into),
         project: project.map(Into::into),
+        source: None,
         created_at: updated,
         updated_at: updated,
         archived: false,

@@ -130,6 +130,9 @@ pub struct Thread {
     pub title: String,
     pub cwd: Option<String>,
     pub project: Option<String>,
+    /// Where a conversation came from when it was imported; ordinary conversations omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub archived: bool,

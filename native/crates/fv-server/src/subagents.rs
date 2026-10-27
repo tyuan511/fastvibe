@@ -242,6 +242,7 @@ async fn spawn(
             title: crate::state::title_from(&args.message),
             cwd: parent.cwd,
             project: parent.project,
+            source: None,
             created_at: now,
             updated_at: now,
             archived: false,

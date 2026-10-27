@@ -483,6 +483,7 @@ impl ServerState {
             title: String::new(),
             cwd,
             project,
+            source: None,
             created_at: now,
             updated_at: now,
             archived: false,

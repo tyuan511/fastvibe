@@ -8,6 +8,7 @@ fn thread() -> Thread {
         title: "t".into(),
         cwd: None,
         project: None,
+        source: None,
         created_at: 0,
         updated_at: 0,
         archived: false,

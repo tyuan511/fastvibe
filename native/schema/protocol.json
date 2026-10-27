@@ -6522,6 +6522,13 @@
               "null"
             ]
           },
+          "source": {
+            "description": "Where a conversation came from when it was imported; ordinary conversations omit it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "thinking": {
             "anyOf": [
               {

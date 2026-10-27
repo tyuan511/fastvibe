@@ -9,6 +9,7 @@ fn thread(id: &str, title: &str, updated_at: i64) -> Thread {
         created_at: updated_at,
         cwd: None,
         project: None,
+        source: None,
         archived: false,
         unread: false,
         model: None,

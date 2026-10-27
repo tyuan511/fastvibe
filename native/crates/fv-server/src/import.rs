@@ -180,6 +180,7 @@ pub fn commit(
     }
     let mut imported_thread = thread.clone();
     imported_thread.title = imported.candidate.title;
+    imported_thread.source = Some(imported.candidate.source);
     imported_thread.updated_at = imported_thread
         .created_at
         .max(imported.candidate.updated_at);

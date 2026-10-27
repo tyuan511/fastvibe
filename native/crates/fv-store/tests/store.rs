@@ -11,6 +11,7 @@ fn thread(id: &str, updated_at: i64) -> Thread {
         title: format!("thread {id}"),
         cwd: Some("/tmp/p".into()),
         project: None,
+        source: None,
         created_at: 1,
         updated_at,
         archived: false,
