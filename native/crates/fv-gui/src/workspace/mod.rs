@@ -74,6 +74,12 @@ mod text {
         };
     }
 
+    /// Looks up `key` in `locales/app.yml` for `language`. Placeholders (`%{name}`) are
+    /// filled by [`rust_i18n::t!`] at the call site instead.
+    pub fn tr(language: UiLanguage, key: &str) -> String {
+        rust_i18n::t!(key, locale = locale(language)).into_owned()
+    }
+
     pub fn locale(language: UiLanguage) -> &'static str {
         match language {
             UiLanguage::Chinese => "zh",
@@ -2863,6 +2869,40 @@ mod locale_file_tests {
                 assert!(!text.trim().is_empty(), "{key} has no {lang} text");
             }
         }
+    }
+
+    #[test]
+    fn placeholders_agree_between_languages() {
+        let doc = serde_yaml_ng_free(include_str!("../../locales/app.yml"));
+        let names = |text: &str| -> Vec<String> {
+            text.split("%{")
+                .skip(1)
+                .filter_map(|r| r.split_once('}'))
+                .map(|(n, _)| n.to_string())
+                .collect()
+        };
+        for (key, value) in doc.iter().filter(|(k, _)| !k.starts_with('_')) {
+            assert_eq!(
+                names(value["zh"].as_str().unwrap()),
+                names(value["en"].as_str().unwrap()),
+                "{key} uses different placeholders per language"
+            );
+        }
+    }
+
+    #[test]
+    fn office_copy_is_unchanged() {
+        use super::text;
+        use fv_protocol::types::UiLanguage::{Chinese, English};
+        assert_eq!(text::tr(Chinese, "office.back"), "返回文件列表");
+        assert_eq!(
+            text::tr(English, "office.quote_selection"),
+            "Quote selection"
+        );
+        assert_eq!(
+            rust_i18n::t!("office.snapshot_failed", locale = "zh", error = "x"),
+            "未能更新文档快照：x"
+        );
     }
 
     /// The file is flat (`key:` then `  zh:` / `  en:`), so no YAML parser is needed.

@@ -713,6 +713,7 @@ GPUI 不带 i18n，此前文案靠手写 `if english { … } else { … }`，漏
 - 文案放在 `crates/fv-gui/locales/app.yml`，`_version: 2`，每个键下 `zh` / `en` 并排；v1 格式把文件名当语言，不能用。`lib.rs` 里 `rust_i18n::i18n!("locales", fallback = "zh")`。
 - `workspace/mod.rs` 的 `text` 模块的 18 个函数改由 `texts!` 宏生成，键为 `text.<函数名>`；返回类型由 `&'static str` 改为 `String`。语言到 locale 的映射是 `text::locale`。
 - 测试 `locale_file_tests` 直接读 yml，检查每个键 zh/en 都非空（缺英文时 `fallback = "zh"` 会静默回退成中文），并钉住几条中英文渲染结果。
+- `pane_office.rs` 的 8 条文案（返回/系统打开/刷新、引用选中、预览准备与失败提示）已迁入，键前缀 `office.`；带变量的用 `%{name}` 占位，调用点 `rust_i18n::t!(key, locale = text::locale(lang), name = v)`，无变量的用 `text::tr(lang, key)`。新增测试检查两种语言的占位符一致。
 - 其余 `if english { … }` 尚未迁移；后续按模块逐批搬进 `app.yml`，每批保持中文逐字不变。
 
 验证：`fv-gui` 92 项单测、all-targets 严格 Clippy 通过；仅代码与自动化验证，没有 computer use。

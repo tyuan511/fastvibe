@@ -1,0 +1,12 @@
+# `cargo dev` from the repository root.
+#
+# The native workspace keeps its own copy of this alias in native/.cargo/config.toml, and cargo
+# only reads the config of the directory it was started in (plus that directory's ancestors) —
+# so from here the native one is invisible and `cargo dev` was "no such command". Both spellings
+# run the same xtask, which locates the workspace from its own crate rather than from cwd.
+#
+# The manifest path is relative, as every cargo config value is: run this from the repository
+# root, not from one of its subdirectories.
+[alias]
+# Build the server and the GUI, replace a changed idle development server, then start the app.
+dev = "run -q --manifest-path native/Cargo.toml -p xtask -- dev"

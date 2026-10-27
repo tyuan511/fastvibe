@@ -1,6 +1,9 @@
 //! Project tasks, run as `cargo <alias>`.
 //!
 //!   cargo dev [-- app args]   build both, update an idle changed server, start the app
+//!
+//! Runnable from the repository root as well as from `native/`: every cargo call below names
+//! this workspace's manifest, so the invocation's directory decides nothing.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -8,8 +11,31 @@ use std::process::{Command, ExitCode};
 use fv_daemon::Daemon;
 use sha2::{Digest, Sha256};
 
-fn cargo() -> Command {
-    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+/// The native workspace root, taken from this crate's own manifest directory (a compile-time
+/// constant) rather than from the invocation's cwd. `cargo dev` is aliased both in
+/// `native/.cargo/config.toml` and in the repository root's, and a bare `cargo build` resolves
+/// its workspace by walking up from cwd — which finds no `Cargo.toml` at all when the command
+/// was typed at the root.
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("xtask lives at <workspace>/crates/xtask")
+        .to_path_buf()
+}
+
+/// A cargo command for this workspace, already pointed at its manifest and started in the
+/// workspace root. `--manifest-path` is a per-subcommand option, so it has to follow the
+/// subcommand name; `current_dir` only keeps the launched app's cwd the same wherever `cargo
+/// dev` was typed from (nothing in the app reads it).
+fn cargo(subcommand: &str) -> Command {
+    let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    command
+        .arg(subcommand)
+        .arg("--manifest-path")
+        .arg(workspace_root().join("Cargo.toml"))
+        .current_dir(workspace_root());
+    command
 }
 
 fn main() -> ExitCode {
@@ -101,8 +127,8 @@ fn prepare_server(daemon: &Daemon, built: &str) -> Result<(), String> {
 
 fn dev(app_args: Vec<String>) -> ExitCode {
     // The app looks for the server next to itself, so both must be built first.
-    let built = cargo()
-        .args(["build", "-p", "fv-server", "-p", "fv-gui"])
+    let built = cargo("build")
+        .args(["-p", "fv-server", "-p", "fv-gui"])
         .status();
     if !matches!(built, Ok(s) if s.success()) {
         return ExitCode::FAILURE;
@@ -135,8 +161,8 @@ fn dev(app_args: Vec<String>) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let status = cargo()
-        .args(["run", "-q", "-p", "fv-gui", "--bin", "fastvibe", "--"])
+    let status = cargo("run")
+        .args(["-q", "-p", "fv-gui", "--bin", "fastvibe", "--"])
         .args(app_args)
         .status();
     match status {
@@ -179,6 +205,28 @@ mod tests {
         assert_eq!(restart_needed(None, Some(false), "new"), Restart::Now);
         assert_eq!(restart_needed(None, Some(true), "new"), Restart::Busy);
         assert_eq!(restart_needed(None, None, "new"), Restart::Busy);
+    }
+
+    /// The workspace is located from the crate, so a `cargo dev` typed anywhere in the
+    /// repository builds the same thing. A wrong number of `..` would silently resolve to a
+    /// directory with no manifest, and cargo would report that instead of launching the app.
+    #[test]
+    fn the_workspace_root_holds_this_crate_and_its_manifest() {
+        let root = workspace_root();
+        assert!(
+            root.join("Cargo.toml").is_file(),
+            "no workspace manifest under {}",
+            root.display()
+        );
+        assert!(
+            root.join("crates")
+                .join("xtask")
+                .join("Cargo.toml")
+                .is_file(),
+            "xtask is not a member of {}",
+            root.display()
+        );
+        assert!(root.is_absolute(), "{} is not absolute", root.display());
     }
 
     #[test]

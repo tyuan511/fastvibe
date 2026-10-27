@@ -1,3 +1,4 @@
 [alias]
 # Build both, replace a changed idle development server, then start the app.
+# The repository root carries the same alias for invocations started there (.cargo/config.toml).
 dev = "run -q -p xtask -- dev"

@@ -54,3 +54,28 @@ text.processed:
 text.view_changes:
   zh: "查看变更"
   en: "View changes"
+
+office.back:
+  zh: "返回文件列表"
+  en: "Back to file list"
+office.open_external:
+  zh: "用系统应用打开"
+  en: "Open with system app"
+office.refresh:
+  zh: "刷新文档预览"
+  en: "Refresh document preview"
+office.reading_selection:
+  zh: "正在读取选中内容"
+  en: "Reading selection"
+office.quote_selection:
+  zh: "引用选中内容"
+  en: "Quote selection"
+office.preparing:
+  zh: "正在准备文档预览…"
+  en: "Preparing document preview…"
+office.live_unavailable:
+  zh: "实时预览不可用；已显示的页面为文档快照，可刷新重试"
+  en: "Live preview is unavailable; showing a document snapshot. Refresh to retry."
+office.snapshot_failed:
+  zh: "未能更新文档快照：%{error}"
+  en: "Could not update document snapshot: %{error}"
