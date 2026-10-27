@@ -1969,15 +1969,34 @@ impl Workspace {
         let code_mode_enabled = a.code_mode_enabled;
         let auto_archive = a.auto_archive_after_days.is_some();
         let keep_awake = a.keep_awake;
+        let english = a.language == UiLanguage::English;
         let hover = p.c(Token::Accent);
         let language_label = |language: UiLanguage| match language {
             UiLanguage::Chinese => "中文",
             UiLanguage::English => "English",
         };
         let mode_label = |m: ThemeMode| match m {
-            ThemeMode::System => "跟随系统",
-            ThemeMode::Light => "亮色",
-            ThemeMode::Dark => "暗色",
+            ThemeMode::System => {
+                if english {
+                    "System"
+                } else {
+                    "跟随系统"
+                }
+            }
+            ThemeMode::Light => {
+                if english {
+                    "Light"
+                } else {
+                    "亮色"
+                }
+            }
+            ThemeMode::Dark => {
+                if english {
+                    "Dark"
+                } else {
+                    "暗色"
+                }
+            }
         };
         let select =
             |id: &'static str, which: ThemeMenu, content: AnyElement, cx: &mut Context<Self>| {
@@ -2146,13 +2165,17 @@ impl Workspace {
                     .pl(px(4.0))
                     .text_size(px(TEXT_SM))
                     .font_weight(FontWeight::MEDIUM)
-                    .child("外观"),
+                    .child(if english { "Appearance" } else { "外观" }),
             )
             .child(
                 card(p)
                     .child(setting_row(
-                        "界面语言",
-                        "切换原生界面语言；未迁移的文案保留中文回退",
+                        if english { "Interface language" } else { "界面语言" },
+                        if english {
+                            "Switch the native interface language; untranslated copy falls back to Chinese"
+                        } else {
+                            "切换原生界面语言；未迁移的文案保留中文回退"
+                        },
                         false,
                         p,
                         div()
@@ -2163,8 +2186,12 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        "主题模式",
-                        "跟随系统时随 macOS 外观自动切换",
+                        if english { "Theme mode" } else { "主题模式" },
+                        if english {
+                            "Follow the macOS appearance when using System"
+                        } else {
+                            "跟随系统时随 macOS 外观自动切换"
+                        },
                         false,
                         p,
                         div()
@@ -2175,8 +2202,8 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        "亮色主题",
-                        "亮色模式下使用的主题",
+                        if english { "Light theme" } else { "亮色主题" },
+                        if english { "Theme used in Light mode" } else { "亮色模式下使用的主题" },
                         true,
                         p,
                         div()
@@ -2187,8 +2214,8 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        "暗色主题",
-                        "暗色模式下使用的主题",
+                        if english { "Dark theme" } else { "暗色主题" },
+                        if english { "Theme used in Dark mode" } else { "暗色模式下使用的主题" },
                         true,
                         p,
                         div()
@@ -2199,8 +2226,12 @@ impl Workspace {
                             }),
                     ))
                     .child(setting_row(
-                        "玻璃效果",
-                        "窗口背景半透明，透出桌面",
+                        if english { "Glass effect" } else { "玻璃效果" },
+                        if english {
+                            "Make the window background translucent"
+                        } else {
+                            "窗口背景半透明，透出桌面"
+                        },
                         true,
                         p,
                         switch(SharedString::from("glass"), glass, p).on_click(cx.listener(
@@ -2216,8 +2247,12 @@ impl Workspace {
                         )),
                     ))
                     .child(setting_row(
-                        "回复推荐",
-                        "回复结束后猜测你下一句，显示在输入框里，按 Tab 填入",
+                        if english { "Reply suggestions" } else { "回复推荐" },
+                        if english {
+                            "Suggest what you may say next after a reply; press Tab to insert it"
+                        } else {
+                            "回复结束后猜测你下一句，显示在输入框里，按 Tab 填入"
+                        },
                         true,
                         p,
                         switch(
@@ -2236,8 +2271,12 @@ impl Workspace {
                         })),
                     ))
                     .child(setting_row(
-                        "代码模式",
-                        "允许模型通过隔离 JavaScript 编排已有工具；使用现有权限，下个回合生效",
+                        if english { "Code mode" } else { "代码模式" },
+                        if english {
+                            "Let the model orchestrate existing tools through isolated JavaScript; applies next turn"
+                        } else {
+                            "允许模型通过隔离 JavaScript 编排已有工具；使用现有权限，下个回合生效"
+                        },
                         true,
                         p,
                         switch(SharedString::from("code-mode"), code_mode_enabled, p).on_click(
@@ -2253,8 +2292,12 @@ impl Workspace {
                         ),
                     ))
                     .child(setting_row(
-                        "自动压缩上下文",
-                        "接近上下文上限时自动整理，保留原始消息；关闭后仍可手动整理",
+                        if english { "Auto-compact context" } else { "自动压缩上下文" },
+                        if english {
+                            "Organize context near its limit while keeping the original messages"
+                        } else {
+                            "接近上下文上限时自动整理，保留原始消息；关闭后仍可手动整理"
+                        },
                         true,
                         p,
                         switch(
