@@ -261,6 +261,34 @@ enum TreeNode {
     File(Row),
 }
 
+/// Same inset as `git-change-list.tsx`: `paddingLeft: 6 + depth * 14`.
+const TREE_BASE: f32 = 6.0;
+const TREE_STEP: f32 = 14.0;
+/// The directory row's chevron, and the gap before the icon that follows it.
+const TREE_CHEVRON: f32 = 12.0;
+const TREE_ICON_GAP: f32 = 4.0;
+/// File rows draw a 2px selection border; directory rows do not. The file's padding
+/// gives that width back so the two icons share an x.
+const TREE_FILE_BORDER: f32 = 2.0;
+
+fn tree_pad(depth: usize) -> f32 {
+    TREE_BASE + depth as f32 * TREE_STEP
+}
+
+/// Left padding of a tree file, so its icon lands on the folder icon at the same depth.
+fn tree_file_pad(depth: usize) -> f32 {
+    tree_pad(depth) + TREE_CHEVRON + TREE_ICON_GAP - TREE_FILE_BORDER
+}
+
+/// Where a tree icon starts, measured from the row's left edge.
+fn tree_icon_x(depth: usize, file: bool) -> f32 {
+    if file {
+        TREE_FILE_BORDER + tree_file_pad(depth)
+    } else {
+        tree_pad(depth) + TREE_CHEVRON + TREE_ICON_GAP
+    }
+}
+
 /// Build the tree from the rows, so a deleted file still shows its directories (they exist only in
 /// the diff).
 fn build_tree(rows: &[Row]) -> Vec<TreeNode> {
@@ -1154,8 +1182,12 @@ impl Workspace {
                     }
                 } else {
                     for row in &grouped {
-                        list =
-                            list.child(self.git_row(row, selected == Some(row.path.as_str()), cx));
+                        list = list.child(self.git_row(
+                            row,
+                            selected == Some(row.path.as_str()),
+                            None,
+                            cx,
+                        ));
                     }
                 }
             }
@@ -1576,16 +1608,16 @@ impl Workspace {
                         .id(SharedString::from(format!("git-dir-{path}")))
                         .h(px(24.0))
                         .px(px(8.0))
-                        .pl(px(6.0 + depth as f32 * 14.0))
+                        .pl(px(tree_pad(depth)))
                         .flex()
                         .items_center()
-                        .gap(px(4.0))
+                        .gap(px(TREE_ICON_GAP))
                         .rounded(px(6.0))
                         .text_size(px(TEXT_XS))
                         .muted(p)
                         .cursor_pointer()
                         .hover(move |d| d.bg(hover))
-                        .child(ui::chevron(open, 12.0, p.c(Token::MutedForeground)))
+                        .child(ui::chevron(open, TREE_CHEVRON, p.c(Token::MutedForeground)))
                         .child(
                             img(crate::file_icons::folder_path(
                                 name.rsplit('/').next().unwrap_or(name),
@@ -1618,14 +1650,23 @@ impl Workspace {
             TreeNode::File(row) => {
                 // The row keeps its group letter: in the tree, `M` and `?` sit beside the same
                 // directories, and which layer a change is in is not visible from the path.
-                let _ = depth;
-                vec![self.git_row(row, selected == Some(row.path.as_str()), cx)]
+                // Depth still applies: a file with no inset sits on the left edge while its
+                // folder steps right, which reads as a broken indent.
+                vec![self.git_row(row, selected == Some(row.path.as_str()), Some(depth), cx)]
             }
         }
     }
 
     /// One row: its letter, its name, and the two writes it offers on hover.
-    fn git_row(&self, row: &Row, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+    ///
+    /// `depth` is set only in the tree. The flat list has no folders to line up under.
+    fn git_row(
+        &self,
+        row: &Row,
+        selected: bool,
+        depth: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let p = &self.palette;
         let hover = p.c(Token::Accent);
         let (path, group, letter) = (row.path.clone(), row.group, row.letter.clone());
@@ -1649,6 +1690,7 @@ impl Workspace {
             .h(px(28.0))
             .flex_none()
             .px(px(8.0))
+            .when_some(depth, |row, depth| row.pl(px(tree_file_pad(depth))))
             .flex()
             .items_center()
             .gap(px(6.0))

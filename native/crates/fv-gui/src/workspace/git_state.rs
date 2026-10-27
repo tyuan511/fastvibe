@@ -399,4 +399,24 @@ mod tests {
         navigation.step(2, false);
         assert_eq!(navigation.current, 2);
     }
+
+    #[test]
+    fn tree_file_icon_lines_up_with_the_folder_at_the_same_depth() {
+        // This file is `pane_git::state`; the inset lives on the parent module.
+        for depth in 0..8 {
+            assert_eq!(
+                super::super::tree_icon_x(depth, true),
+                super::super::tree_icon_x(depth, false),
+                "depth {depth}"
+            );
+            if depth > 0 {
+                // A child sits one step (14px) to the right of its parent folder's icon.
+                assert_eq!(
+                    super::super::tree_icon_x(depth, true)
+                        - super::super::tree_icon_x(depth - 1, false),
+                    super::super::TREE_STEP
+                );
+            }
+        }
+    }
 }
