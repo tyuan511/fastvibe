@@ -41,6 +41,7 @@ mod sidebar;
 mod sidebar_actions;
 mod skill_picker;
 mod skills;
+mod sticky;
 mod subagent_roles;
 mod subagents;
 mod transcript;
@@ -184,6 +185,8 @@ pub struct Workspace {
     compact_pending: HashSet<ThreadId>,
     input: Entity<TextareaState>,
     scroll: ScrollHandle,
+    /// Where each turn sits in the transcript, measured as it was drawn, for the pinned prompt.
+    sticky: sticky::Marks,
     /// How far through each waiting question set the user is.
     ask: HashMap<RequestId, ask::AskProgress>,
     ask_input: Entity<InputState>,
@@ -488,6 +491,7 @@ impl Workspace {
             compact_pending: HashSet::new(),
             input,
             scroll,
+            sticky: Default::default(),
             ask: HashMap::new(),
             ask_input,
             panel_focus: cx.focus_handle(),

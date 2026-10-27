@@ -59,10 +59,13 @@ raw-window-handle = "0.6"
 
 [dev-dependencies]
 tempfile = "3"
-# Headless layout tests (see `workspace::pane::preview_scroll_tests`): GPUI's own test harness.
-# Named again only to switch on `test-support`. Going through `gpui-kit/test-support` pulls the
-# gpui-fast backend, which cannot share a lockfile with the gpui-pre one this app builds on.
-gpui-test = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+# Headless layout tests (see `workspace::pane::preview_scroll_tests` and `workspace::sticky`):
+# GPUI's own test harness, which lives behind the same `test-support` feature as the optional
+# `gpui-capture` above — so it is that same dependency under that same name, and not a second one.
+# Two names for one crate make rustc refuse the build outright ("the crate fv-gui depends on crate
+# gpui-pre multiple times with different names"), which is what broke every `--features capture`
+# build, and with it `scripts/compare-ui.sh`, for as long as both spellings were listed.
+gpui-capture = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
 
 [lints]
 workspace = true

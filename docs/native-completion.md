@@ -43,6 +43,7 @@
 - [x] 外围：i18n 已收口（第四十七至五十四批）；Dock 角标、保持唤醒、自动归档和后台回合通知已接通，见第三十四至三十七批。
 - [ ] 交付：自动更新、签名打包、Windows/Linux、切换前的全范围代码验证；OfficeCLI 与原生 office 技能须随包发布，二进制重签后的运行时校验须适配并验收。
 - [x] 对齐：标题栏状态（第五十一至五十三批）、工具详情、菜单样式（第五十批）；进度文档已更新。
+- [x] 转写：滚动吸顶的用户提示词（turn-scoped sticky，含玻璃浮层色近似）；纯函数、无头 GPUI 与截图验收见第五十六批。
 - [ ] 最后实施：旧 Electron 完整数据导入，包括供应商/API Key、设置、会话、用量账本与缺少来源标识的历史副本；不提前作为其它功能的前置依赖。
 
 当前设置页中，远程访问、SSH 远程主机仍走 `not_yet()`，导入、电脑操控、浏览器控制和网络代理页已接通实际操作。关于页已显示版本、开源入口、模型目录刷新状态和安全诊断摘要；应用更新等其余操作仍待补齐。浏览器基础、主页/搜索/下载配置与本地 HTML/媒体预览已接通；辅助对话面板已复用真实子 Agent 线程。模型订阅 OAuth 已从目标中移除，MCP OAuth 继续保留。
@@ -820,4 +821,16 @@ Electron 的会话标题栏在“项目 / 标题”后面有一个仓库状态�
 
 **验证**：`fv-server` 的 6 个新单测（下载校验与镜像回退、替换不破坏原版本、tar.gz 与 zip 取成员、空文件拒绝）加 3 个走公共协议的集成测试（用一个会记录启动参数、再扮成真 MCP 对端的假驱动：参数是 `mcp --embedded --socket …`、环境里 `CUA_DRIVER_EMBEDDED=1` 和遥测关闭、工具经 `mcp_computer_*` 到达并可调用、保存 MCP 列表不丢它、关开关立刻撤走工具、开关关着没有 `computer` 工具）；`fv-gui` 的 `Host` 用假守护进程测了：参数与环境变量、不带 `RESPONSIBILITY_DISCLAIMED`、丢弃即退出、启动即死时带回它的 stderr；设置页用离屏截图看过。
 
-**没有验证的**：没有在这台机器上启动真正的驱动守护进程，也没有跑真实的点击或截图——那需要把辅助功能和屏幕录制授权给 FastVibe，应由你来操作；我也没有验证“授权后屏幕录制要重开应用才生效”在这个应用的签名下是否成立。Windows 的命名管道就绪检测、Windows 解包路径只有代码，没有在 Windows 上跑过。`--host-bundle-id` 用的是 `dev.fastvibe.desktop`（它只是驱动日志里的一个标签，不是信任依据）。`Cargo.toml` 里另一个会话加的 `gpui-test` 开发依赖和 `capture` 特性冲突（同一个包用了两个名字），带 `--features capture` 的构建过不了；我截图时临时去掉了它，没有改动提交内容。
+**没有验证的**：没有在这台机器上启动真正的驱动守护进程，也没有跑真实的点击或截图——那需要把辅助功能和屏幕录制授权给 FastVibe，应由你来操作；我也没有验证“授权后屏幕录制要重开应用才生效”在这个应用的签名下是否成立。Windows 的命名管道就绪检测、Windows 解包路径只有代码，没有在 Windows 上跑过。`--host-bundle-id` 用的是 `dev.fastvibe.desktop`（它只是驱动日志里的一个标签，不是信任依据）。`Cargo.toml` 里另一个会话加的 `gpui-test` 开发依赖和 `capture` 特性冲突（同一个包用了两个名字），带 `--features capture` 的构建过不了；我截图时临时去掉了它，没有改动提交内容。（该冲突已在第五十六批修掉：dev-dependency 改名 `gpui-capture`，与同名可选依赖合一。）
+
+## 第五十六批：转写吸顶提示词（滚动时 pin 住用户提示词）
+
+Electron 版滚动转写时把最近一条滚出视口的用户提示词 pin 在顶部（`message-list.tsx` 的 turn-scoped sticky：只在自己回合内生效、被下一回合的提示词顶起、两个回合的间隙里不 pin；玻璃下 pin 行自己不画底色、回复用 `mask-image` 在行底切断）。原生版此前完全没有这个行为。
+
+**实现**（`workspace/sticky.rs` + `workspace/transcript.rs`）：GPUI 没有 `position: sticky`，用「第二份副本」做。每个回合从「多个平级子节点」改成一个 `.relative()` wrapper（间距不变），wrapper 与提示词行各埋一个 `canvas` 度量：prepaint 的 bounds 是屏幕坐标，减 `window.element_offset()` 与滚动容器 `bounds()` 的原点即内容坐标，按回合索引写进 `Workspace.sticky: Rc<RefCell<Vec<TurnSpan>>>`（`{top, bottom, 提示词行高}`）。下一帧 `transcript()` 读上一帧的区间（`mem::take` 取走，换线程/分叉留下的旧区间自动清空），`view_top = -scroll.offset().y`，某个区间满足 `top < view_top < bottom` 就把绝对定位的提示词副本画在 `top(clamp(view_top, …, bottom - 提示词高))`，作为滚动容器最后一个孩子（最后绘制、在最上层）；该回合流内那份 `.invisible()`（`Visibility::Hidden` 只跳过 paint，度量照跑）。副本的元素 id 带 `-pin` 后缀，避免与流内副本撞 GlobalElementId；两份的按钮都可点（滚出视口的流内副本因 content mask  hit 不到）。绝对副本计入滚动容器 content_size 但撑不大它（y 恒落在自己回合区间内），不影响跟随底部。
+
+**玻璃差异（登记为近似项）**：GPUI 没有逐元素的渐变/alpha 遮罩，Electron 的「pin 行不画 + 回复 `mask-image` 切断（`GLASS_CUT_FEATHER` 16px 羽化）」无法复刻；改为整条带子铺浮层色——实色 `Token::Background`（与 Electron 的 `bg-background` 一致，视觉上隐形），玻璃 `Palette::overlay()`（96% 暗 / 98% 亮），回复在带子底边硬切断。`Palette::c()` 在实色下对玻璃专用 token 会 panic，填色必须按 `palette.glass()` 分支。
+
+**测试与验收**：`sticky.rs` 六个纯函数用例（未滚/边界不 pin、回合中段 pin、顶起时 y = bottom − 提示词高、间隙不 pin、无提示词回合不 pin）；一个无头 GPUI 用例钉住度量区间是内容坐标、滚动后不变，且滚动后 `pinned()` 给出正确位置。`cargo test -p fv-gui` 全过、`cargo fmt --check` 干净。离屏截图目检：最后一回合不够高的夹具不画带子（正确）；markdown 夹具带子贴顶、回复在带子底边切断；玻璃下带子是高密度浮层、文字清晰。
+
+**顺带修好 capture 构建**：第五十五批留下的 `gpui-test` dev-dependency 与 `capture` 特性给同一个 `gpui-pre` 包用了两个名字，任何 `--features capture` 构建都报 `the crate fv-gui depends on crate gpui-pre v0.3.9 multiple times with different names`（上一批靠截图时临时删 dev-dependency 绕过）。dev-dependency 改名 `gpui-capture`、与同名可选依赖合一后，`scripts/compare-ui.sh` 与 `--screenshot` 恢复可用，普通测试构建不受影响。

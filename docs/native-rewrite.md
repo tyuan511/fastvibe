@@ -325,6 +325,8 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
    原生浮层经 `Palette::overlay()` 加厚为 96% 暗 / 98% 亮：Electron 还有 28px 的浮层背板模糊，而原生窗口的 vibrancy
    只模糊桌面，无法消除窗口内正文的透字。菜单、对话框与组件库 tooltip 共用这一个适配后的底色；共享主题 token 保持与 Electron 一致。
    Liquid Glass 的高光边框、浮层内亮边用 GPUI 自绘（渐变描边 + 内阴影）近似，并登记为「近似项」。
+   吸顶提示词的带子同理：GPUI 没有逐元素的渐变/alpha 遮罩，Electron 版「pin 行不画底色、回复用 `mask-image` 在行底切断」
+   （`GLASS_CUT_FEATHER`）无法复刻，改为整条带子铺 `Palette::overlay()` 的浮层色、回复在带子底边硬切断，登记为「近似项」。
    窗口透明与原生阴影能否兼得需在 M1 验证（Electron 版同样为保住阴影不用 `transparent: true`）。
    窗口不在前台时 macOS 会把 vibrancy 压成灰，这一点沿用「始终 active」的处理。
 8. **设置项与持久化**：`lightTheme` / `darkTheme` / `themeMode` / `glass` / `uiFontSize` 放进新配置文件，
@@ -359,6 +361,12 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   （服务端时钟）；重开会话时由转写每行已有的时间戳还原。转写据此画「用时」（到答案开始）、悬停时的时间与「耗时」。
 - **GPUI 坑**：`Textarea` 的字号是其 size 的 0.875、且自带内边距，按 `Size::Size(16)` 设置并在外层扣掉；离屏截图只截上一帧
   场景，截图前要主动 `window.draw` 几次；`ScrollHandle::scroll_to_bottom` 要等有过布局的那一帧。
+- **吸顶提示词**（`workspace/sticky.rs`）：滚动时最近一条滚出视口的用户提示词 pin 在转写顶部（Electron 版
+  turn-scoped sticky：只在自己回合内生效、被下一回合提示词顶起、两回合的间隙里不 pin）。GPUI 没有 `position: sticky`，
+  做法是「第二份副本」：每个回合wrapper 与它的提示词行各埋一个 `canvas` 度量，prepaint _bounds 减 `window.element_offset()`
+  与滚动容器 `bounds()` 原点得内容坐标，按回合索引记进 `Workspace.sticky`；下一帧据此与当前 `scroll.offset()` 算出 pin 位，
+  把绝对定位的提示词副本画成滚动容器最后一个孩子，流内那份 `.invisible()`。副本的元素 id 带 `-pin` 后缀避免与流内副本
+  撞 GlobalElementId。纯函数与坐标换算各有单测（含一个无头 GPUI 用例钉住「滚动后区间不变」）。
 - **设置（2026-10-24）**：侧栏「设置」、composer 模型菜单的「管理模型」进入设置；左侧分组列表照 `SETTINGS_SECTIONS`。
   **模型与默认**已可用：会话模型（默认模型 + 推理强度）、供应商列表（启用开关、删除、展开改 Base URL / API 格式 / 密钥、
   模型列表的增删与同步）、自定义供应商对话框（填写地址、协议和 API Key 后拉取模型、勾选、保存；第一个供应商的第一个模型
