@@ -243,8 +243,7 @@ impl Workspace {
                                     .text_size(px(TEXT_SM))
                                     .child(truncate(agent.task.clone())),
                             )
-                            .child(
-                                div().text_size(px(TEXT_XS)).muted(p).child(format!(
+                            .child(div().text_size(px(TEXT_XS)).muted(p).child(format!(
                                     "{}{}{}",
                                     label(&agent, english),
                                     agent
@@ -261,8 +260,7 @@ impl Workspace {
                                     } else {
                                         ""
                                     }
-                                )),
-                            )
+                                )))
                             .children(agent.error.as_ref().map(|e| {
                                 div()
                                     .text_size(px(TEXT_XS))
