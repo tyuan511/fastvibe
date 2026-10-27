@@ -1,0 +1,69 @@
+name: Native bundles
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "native/**"
+      - "scripts/stage-native-app.mjs"
+      - "scripts/check-native-bundle.mjs"
+      - "scripts/fetch-officecli.mjs"
+      - "scripts/officecli.json"
+      - "resources/skills/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-bundles-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    name: Native bundle (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: mac
+            arch: arm64
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - runner: windows-2025
+            platform: win
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux WebView dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libxdo-dev
+
+      - name: Fetch pinned OfficeCLI
+        run: node scripts/fetch-officecli.mjs --platforms=${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Build and stage bundle
+        run: node scripts/stage-native-app.mjs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --profile release --bundle --output release/native/${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Verify bundle
+        run: node scripts/check-native-bundle.mjs --bundle release/native/${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Upload native bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastvibe-native-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/native/${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 14
