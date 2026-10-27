@@ -417,7 +417,9 @@ impl Workspace {
             self.web_events(id.into(), 0, rx, cx);
         }
         if self.web_views[id].address.is_none() {
-            let address = cx.new(|cx| InputState::new(window, cx).placeholder("输入网址或搜索"));
+            let address = cx.new(|cx| {
+                InputState::new(window, cx).placeholder("输入网址或搜索 / Enter a URL or search")
+            });
             let key = id.to_string();
             cx.subscribe(&address, move |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
@@ -614,7 +616,13 @@ impl Workspace {
                     .py(px(4.))
                     .text_size(px(TEXT_XS))
                     .cursor_pointer()
-                    .child("在系统浏览器中打开链接")
+                    .child(
+                        if self.app_settings.language == fv_protocol::types::UiLanguage::English {
+                            "Open link in system browser"
+                        } else {
+                            "在系统浏览器中打开链接"
+                        },
+                    )
                     .on_click(move |_, _, cx| cx.open_url(&url))
             }))
             .child(div().flex_1().min_h_0().child(surface))
@@ -703,7 +711,14 @@ impl Workspace {
                     div()
                         .id("web-retry")
                         .cursor_pointer()
-                        .child("重试")
+                        .child(
+                            if self.app_settings.language == fv_protocol::types::UiLanguage::English
+                            {
+                                "Retry"
+                            } else {
+                                "重试"
+                            },
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(view) = this.web_views.get_mut(&key) {
                                 view.surface.retry();

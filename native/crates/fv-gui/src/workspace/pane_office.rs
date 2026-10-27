@@ -201,7 +201,13 @@ impl Workspace {
         let Some(view) = self.office_views.get(&tab) else {
             return div()
                 .p(px(12.))
-                .child("尚未连接文档服务")
+                .child(
+                    if self.app_settings.language == fv_protocol::types::UiLanguage::English {
+                        "Document service is not connected"
+                    } else {
+                        "尚未连接文档服务"
+                    },
+                )
                 .into_any_element();
         };
         let (html, url, ready, render_error, watch_error, lease, selection_pending) = (
@@ -314,7 +320,7 @@ impl Workspace {
                     .py(px(4.))
                     .text_size(px(TEXT_XS))
                     .muted(&p)
-                    .child("实时预览不可用；已显示的页面为文档快照，可刷新重试")
+                    .child(if self.app_settings.language == fv_protocol::types::UiLanguage::English { "Live preview is unavailable; showing a document snapshot. Refresh to retry." } else { "实时预览不可用；已显示的页面为文档快照，可刷新重试" })
             }))
             .children(
                 render_error

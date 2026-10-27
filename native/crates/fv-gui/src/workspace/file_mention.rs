@@ -335,6 +335,7 @@ impl Workspace {
     pub(super) fn mention_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let state = self.mention.as_ref()?;
         let p = &self.palette;
+        let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         // While the files for the current query are still being read, say so rather than showing
         // the previous query's rows: a list that answers a different question is worse than none.
         let ready = state.hits_query.as_deref() == Some(state.token.as_ref()?.query.as_str());
@@ -347,7 +348,11 @@ impl Workspace {
                     .py(px(8.0))
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child("正在查找…"),
+                    .child(if english {
+                        "Searching…"
+                    } else {
+                        "正在查找…"
+                    }),
             );
         } else if state.hits.is_empty() {
             rows = rows.child(
@@ -356,7 +361,11 @@ impl Workspace {
                     .py(px(8.0))
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child("没有匹配的文件"),
+                    .child(if english {
+                        "No matching files"
+                    } else {
+                        "没有匹配的文件"
+                    }),
             );
         }
         for (index, hit) in state.hits.iter().enumerate() {

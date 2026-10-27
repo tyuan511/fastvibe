@@ -892,7 +892,11 @@ impl Workspace {
             } => {
                 let url = format!("data:{mime};base64,{data}");
                 let label = if name.is_empty() {
-                    "音频产物"
+                    if language == UiLanguage::English {
+                        "Audio artifact"
+                    } else {
+                        "音频产物"
+                    }
                 } else {
                     name.as_str()
                 };
@@ -911,7 +915,11 @@ impl Workspace {
                             .id(SharedString::from(format!("play-audio-{id}")))
                             .cursor_pointer()
                             .text_color(p.c(Token::Primary))
-                            .child("播放")
+                            .child(if language == UiLanguage::English {
+                                "Play"
+                            } else {
+                                "播放"
+                            })
                             .on_click(move |_, _, cx| cx.open_url(&url)),
                     );
                 (id.clone(), row, None)
@@ -924,7 +932,11 @@ impl Workspace {
             } => {
                 let url = format!("data:{mime};base64,{data}");
                 let label = if name.is_empty() {
-                    "图片产物"
+                    if language == UiLanguage::English {
+                        "Image artifact"
+                    } else {
+                        "图片产物"
+                    }
                 } else {
                     name.as_str()
                 };
@@ -943,7 +955,11 @@ impl Workspace {
                             .id(SharedString::from(format!("open-image-{id}")))
                             .cursor_pointer()
                             .text_color(p.c(Token::Primary))
-                            .child("查看")
+                            .child(if language == UiLanguage::English {
+                                "View"
+                            } else {
+                                "查看"
+                            })
                             .on_click(move |_, _, cx| cx.open_url(&url)),
                     );
                 (id.clone(), row, None)
@@ -1016,6 +1032,7 @@ impl Workspace {
     /// on in mono, and the directory or glob after that in fainter mono.
     fn tool_head(&self, id: &str, v: &presentation::ToolView, failed: bool, running: bool) -> Div {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let icon_el: AnyElement = if running {
             spinner(
                 SharedString::from(format!("tool-spin-{id}")),
@@ -1072,7 +1089,11 @@ impl Workspace {
                     div()
                         .flex_none()
                         .text_color(p.c(Token::Destructive))
-                        .child("执行失败"),
+                        .child(if english {
+                            "Execution failed"
+                        } else {
+                            "执行失败"
+                        }),
                 )
             })
     }
