@@ -25,6 +25,9 @@ async fn until(mut condition: impl FnMut() -> bool) {
     .await
     .unwrap();
 }
+fn pid_at(path: &Path) -> Option<i32> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
 #[tokio::test]
 async fn renders_are_deduplicated_cancel_per_owner_and_cache_tracks_the_source() {
     let dir = tempfile::tempdir().unwrap();
@@ -93,15 +96,12 @@ async fn cancelling_the_last_waiter_kills_the_renderer_and_no_partial_cache_is_p
     let (worker, path) = (manager.clone(), source.clone());
     let job = tokio::spawn(async move { worker.render_for(1, "cancel", &path).await });
     until(|| {
-        dir.path().join("pid").exists()
+        pid_at(&dir.path().join("pid")).is_some()
             && std::fs::read_dir(dir.path().join("data/office-preview"))
                 .is_ok_and(|mut rows| rows.next().is_some())
     })
     .await;
-    let pid = std::fs::read_to_string(dir.path().join("pid"))
-        .unwrap()
-        .parse::<i32>()
-        .unwrap();
+    let pid = pid_at(&dir.path().join("pid")).unwrap();
     manager.watch_stop(1, "cancel");
     assert!(job.await.unwrap().is_err());
     until(|| unsafe { libc::kill(pid, 0) != 0 }).await;
@@ -160,11 +160,8 @@ async fn office_renders_leave_stop_responsive_and_disconnect_cancels_owned_jobs(
         })
         .await
     });
-    until(|| dir.path().join("pid").exists()).await;
-    let pid = std::fs::read_to_string(dir.path().join("pid"))
-        .unwrap()
-        .parse::<i32>()
-        .unwrap();
+    until(|| pid_at(&dir.path().join("pid")).is_some()).await;
+    let pid = pid_at(&dir.path().join("pid")).unwrap();
     tokio::time::timeout(
         Duration::from_secs(1),
         client.call::<OfficeWatchStop>(OfficeLeaseParams {
