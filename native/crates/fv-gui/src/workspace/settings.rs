@@ -92,6 +92,52 @@ fn section_label(section: Section) -> &'static str {
         .unwrap_or("")
 }
 
+fn section_label_for(section: Section, language: UiLanguage) -> &'static str {
+    if language == UiLanguage::Chinese {
+        return section_label(section);
+    }
+    match section {
+        Section::General => "Preferences",
+        Section::Personalization => "Personalization",
+        Section::Shortcuts => "Shortcuts",
+        Section::Archived => "Archived chats",
+        Section::Usage => "Usage",
+        Section::Import => "Import",
+        Section::Providers => "Models & defaults",
+        Section::Subagents => "Subagents",
+        Section::Memory => "Long-term memory",
+        Section::Mcp => "MCP tools",
+        Section::Skills => "Skills",
+        Section::Computer => "Computer control",
+        Section::Browser => "Browser control",
+        Section::Proxy => "Network proxy",
+        Section::Remote => "Remote access",
+        Section::Ssh => "SSH hosts",
+        Section::About => "About",
+    }
+}
+
+fn section_group_label(group: &str, language: UiLanguage) -> &'static str {
+    if language == UiLanguage::Chinese {
+        return match group {
+            "偏好设置" => "偏好设置",
+            "工作区与数据" => "工作区与数据",
+            "模型与扩展" => "模型与扩展",
+            "系统" => "系统",
+            "关于" => "关于",
+            _ => "Settings",
+        };
+    }
+    match group {
+        "偏好设置" => "Preferences",
+        "工作区与数据" => "Workspace & data",
+        "模型与扩展" => "Models & extensions",
+        "系统" => "System",
+        "关于" => "About",
+        _ => "Settings",
+    }
+}
+
 pub fn protocol_label(p: ApiProtocol) -> &'static str {
     match p {
         ApiProtocol::Chat => "OpenAI Chat Completions (/chat/completions)",
@@ -1012,7 +1058,10 @@ impl Workspace {
                                     .text_size(px(20.0))
                                     .line_height(px(28.0))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child(section_label(s.section)),
+                                    .child(section_label_for(
+                                        s.section,
+                                        self.app_settings.language,
+                                    )),
                             )
                             .child(match s.section {
                                 Section::Providers => {
@@ -1041,6 +1090,7 @@ impl Workspace {
 
     fn settings_nav(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
+        let language = self.app_settings.language;
         let hover = ui::half(p.c(Token::SidebarAccent));
         let mut list = div().px(px(8.0)).pb(px(12.0)).flex().flex_col();
         for (gi, (group, items)) in SECTIONS.iter().enumerate() {
@@ -1052,7 +1102,7 @@ impl Workspace {
                     .text_size(px(TEXT_XS))
                     .font_weight(FontWeight::MEDIUM)
                     .muted(p)
-                    .child(*group),
+                    .child(section_group_label(group, language)),
             );
             for (section, label, glyph) in items.iter() {
                 let section = *section;
@@ -1077,7 +1127,7 @@ impl Workspace {
                             }
                         })
                         .child(icon(glyph, 14.0, p.c(Token::MutedForeground)))
-                        .child(*label)
+                        .child(section_label_for(section, language))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_settings(section, window, cx)
                         })),
