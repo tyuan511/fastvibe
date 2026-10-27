@@ -817,6 +817,7 @@ impl Workspace {
 
     fn open_pane_kind(&mut self, kind: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.pane_menu = None;
+        let english = self.app_settings.language == UiLanguage::English;
         match kind {
             "chat" => {
                 self.open_auxiliary_chat(cx);
@@ -836,7 +837,7 @@ impl Workspace {
                 state.tabs.push(PaneTab {
                     id: id.clone(),
                     kind: PaneTabKind::Files { path },
-                    title: "文件".into(),
+                    title: if english { "Files" } else { "文件" }.into(),
                 });
                 state.activate(id);
             }
@@ -846,11 +847,31 @@ impl Workspace {
                     .entry(self.selected.clone().unwrap_or_else(|| "__draft__".into()))
                     .or_default();
                 state.notice = Some(format!(
-                    "{}功能正在移植中",
+                    "{}{}",
                     match kind {
-                        "chat" => "辅助对话",
-                        "browser" => "浏览器",
-                        _ => "终端",
+                        "chat" =>
+                            if english {
+                                "Auxiliary chat"
+                            } else {
+                                "辅助对话"
+                            },
+                        "browser" =>
+                            if english {
+                                "Browser"
+                            } else {
+                                "浏览器"
+                            },
+                        _ =>
+                            if english {
+                                "Terminal"
+                            } else {
+                                "终端"
+                            },
+                    },
+                    if english {
+                        " is being ported"
+                    } else {
+                        "功能正在移植中"
                     }
                 ));
             }
@@ -1380,7 +1401,11 @@ impl Workspace {
         let p = self.palette.clone();
         let Some(root) = self.project_root_for(conversation) else {
             return self
-                .pane_placeholder("这个对话没有工作目录")
+                .pane_placeholder(if self.app_settings.language == UiLanguage::English {
+                    "This chat has no working directory"
+                } else {
+                    "这个对话没有工作目录"
+                })
                 .into_any_element();
         };
         let roots = self.project_roots_for(conversation);
@@ -1993,10 +2018,13 @@ impl Workspace {
                             .py(px(6.0))
                             .text_size(px(TEXT_XS))
                             .muted(&p)
-                            .child(SharedString::from(format!(
-                                "只显示前 {} 行，共 {total_rows} 行",
-                                rows.len()
-                            )))
+                            .child(SharedString::from(
+                                if self.app_settings.language == UiLanguage::English {
+                                    format!("Showing first {} of {total_rows} rows", rows.len())
+                                } else {
+                                    format!("只显示前 {} 行，共 {total_rows} 行", rows.len())
+                                },
+                            ))
                     }))
                     .into_any_element()
             }
@@ -2008,7 +2036,11 @@ impl Workspace {
             } => {
                 let body = self.document_body(&path, None, Some(&mime_type), None, cx);
                 let refresh = icon_button_xs("refresh-media-preview", "refresh", &p)
-                    .aria_label("刷新预览")
+                    .aria_label(if self.app_settings.language == UiLanguage::English {
+                        "Refresh preview"
+                    } else {
+                        "刷新预览"
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Some(tab) = this
                             .selected
