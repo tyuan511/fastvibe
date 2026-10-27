@@ -95,6 +95,7 @@ async fn main() {
     tools.register(Add);
     let ctx = AgentContext {
         context: Default::default(),
+        hooks: None,
         model: Arc::new(provider),
         tools: Arc::new(tools),
         system: "You are a careful assistant. Use the add tool for arithmetic.".into(),

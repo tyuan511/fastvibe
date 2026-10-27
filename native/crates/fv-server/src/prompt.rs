@@ -202,6 +202,14 @@ impl fv_agent::Approver for ThreadApprover {
                 rt.approve_for_session(key);
                 return fv_agent::Decision::Approved;
             }
+            // A reviewer may settle it before anyone is bothered.
+            if crate::guardian::enabled(&state) {
+                match crate::guardian::review(&state, &rt, &thread_id, &request).await {
+                    crate::guardian::Verdict::Approve => return fv_agent::Decision::Approved,
+                    crate::guardian::Verdict::Deny => return fv_agent::Decision::Denied,
+                    crate::guardian::Verdict::Ask => {}
+                }
+            }
             let id = RequestId::String(uuid::Uuid::new_v4().to_string());
             let kind = match request.kind {
                 fv_agent::ApprovalKind::Command { command, cwd } => {

@@ -9,6 +9,7 @@ mod connection;
 pub mod context;
 mod git;
 mod goal;
+mod guardian;
 mod hooks;
 mod import;
 mod keep_awake;

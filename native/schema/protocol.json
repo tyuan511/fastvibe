@@ -83,6 +83,13 @@
               "null"
             ]
           },
+          "autoReviewApprovals": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "browserDownloadDir": {
             "default": null,
             "type": [
@@ -668,6 +675,22 @@
         },
         "required": [
           "cwd"
+        ],
+        "type": "object"
+      },
+      "GoalSetParams": {
+        "description": "`thread/goal/set`: start pursuing an objective, replacing any goal the thread had.",
+        "properties": {
+          "objective": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "objective"
         ],
         "type": "object"
       },
@@ -1476,6 +1499,75 @@
           },
           {
             "type": "string"
+          }
+        ]
+      },
+      "ReviewTarget": {
+        "description": "What a review looks at.",
+        "oneOf": [
+          {
+            "description": "The working tree's staged, unstaged and untracked changes.",
+            "properties": {
+              "type": {
+                "const": "uncommitted",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Everything on the current branch since it left `base`.",
+            "properties": {
+              "base": {
+                "type": "string"
+              },
+              "type": {
+                "const": "base",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "base"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One commit.",
+            "properties": {
+              "sha": {
+                "type": "string"
+              },
+              "type": {
+                "const": "commit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "sha"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Whatever the user describes.",
+            "properties": {
+              "instructions": {
+                "type": "string"
+              },
+              "type": {
+                "const": "custom",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "instructions"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -2313,6 +2405,30 @@
         },
         "type": "object"
       },
+      "ThreadMode": {
+        "description": "How the agent behaves in a conversation. In plan mode it investigates and writes a plan with\nread-only tools and changes nothing.",
+        "enum": [
+          "default",
+          "plan"
+        ],
+        "type": "string"
+      },
+      "ThreadModeParams": {
+        "description": "`thread/mode/set`.",
+        "properties": {
+          "mode": {
+            "$ref": "#/$defs/ThreadMode"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "mode"
+        ],
+        "type": "object"
+      },
       "ThreadModelParams": {
         "properties": {
           "model": {
@@ -2337,6 +2453,22 @@
         },
         "required": [
           "threadId"
+        ],
+        "type": "object"
+      },
+      "ThreadReviewParams": {
+        "description": "`thread/review/start`: run a read-only review as the thread's next turn.",
+        "properties": {
+          "target": {
+            "$ref": "#/$defs/ReviewTarget"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "target"
         ],
         "type": "object"
       },
@@ -2897,6 +3029,126 @@
           },
           "params": {
             "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/goal/set",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/GoalSetParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/goal/pause",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/goal/resume",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/goal/clear",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/mode/set",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadModeParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "thread/review/start",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadReviewParams"
           }
         },
         "required": [
@@ -5968,6 +6220,11 @@
             "description": "Automatically summarize a conversation near its effective context capacity.",
             "type": "boolean"
           },
+          "autoReviewApprovals": {
+            "default": false,
+            "description": "Let the conversation's model review a command or patch that would ask for approval, and\nanswer it when the action is plainly fine or plainly not; anything unclear still asks.",
+            "type": "boolean"
+          },
           "browserDownloadDir": {
             "default": "",
             "description": "Local browser download directory. Empty uses the platform Downloads folder.",
@@ -6276,6 +6533,38 @@
         "enum": [
           "file",
           "directory"
+        ],
+        "type": "string"
+      },
+      "Goal": {
+        "description": "A long-running objective attached to one conversation.",
+        "properties": {
+          "objective": {
+            "type": "string"
+          },
+          "round": {
+            "description": "1-based number of the round the agent is on.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/$defs/GoalStatus"
+          }
+        },
+        "required": [
+          "objective",
+          "status",
+          "round"
+        ],
+        "type": "object"
+      },
+      "GoalStatus": {
+        "description": "Where a goal stands. A goal runs round after round by itself until the model declares it\ndone, the user pauses or stops it, or a round fails.",
+        "enum": [
+          "running",
+          "paused",
+          "complete"
         ],
         "type": "string"
       },
@@ -6869,6 +7158,36 @@
         "type": "object"
       },
       "ThreadEvent10": {
+        "description": "`thread/goal/changed`: the goal as it now stands; `None` means it was cleared.",
+        "properties": {
+          "goal": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Goal"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent11": {
         "description": "A turn and everything after it was dropped, because it is running again (a retry or an edit).",
         "properties": {
           "seq": {
@@ -6891,7 +7210,7 @@
         ],
         "type": "object"
       },
-      "ThreadEvent11": {
+      "ThreadEvent12": {
         "description": "回复推荐: what the user is likely to say next, offered as the composer's placeholder until they\ntype. `None` withdraws it — the guess was not worth showing, or a new run has made it stale.",
         "properties": {
           "seq": {
@@ -6917,7 +7236,7 @@
         ],
         "type": "object"
       },
-      "ThreadEvent12": {
+      "ThreadEvent13": {
         "description": "A request to the client has been answered or withdrawn (by whichever client got there\nfirst, or because the turn was stopped); every other client takes its prompt down.",
         "properties": {
           "requestId": {
@@ -7771,7 +8090,7 @@
       {
         "properties": {
           "method": {
-            "const": "turn/rewound",
+            "const": "thread/goal/changed",
             "type": "string"
           },
           "params": {
@@ -7787,7 +8106,7 @@
       {
         "properties": {
           "method": {
-            "const": "thread/suggestion/changed",
+            "const": "turn/rewound",
             "type": "string"
           },
           "params": {
@@ -7803,11 +8122,27 @@
       {
         "properties": {
           "method": {
-            "const": "serverRequest/resolved",
+            "const": "thread/suggestion/changed",
             "type": "string"
           },
           "params": {
             "$ref": "#/$defs/ThreadEvent12"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "serverRequest/resolved",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent13"
           }
         },
         "required": [

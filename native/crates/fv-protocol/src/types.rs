@@ -1910,6 +1910,10 @@ pub struct AppSettings {
     /// unless turned off, like the Electron app's `replySuggestions`.
     #[serde(default = "default_true")]
     pub reply_suggestions: bool,
+    /// Let the conversation's model review a command or patch that would ask for approval, and
+    /// answer it when the action is plainly fine or plainly not; anything unclear still asks.
+    #[serde(default)]
+    pub auto_review_approvals: bool,
     /// Automatically summarize a conversation near its effective context capacity.
     #[serde(default = "default_true")]
     pub auto_compaction_enabled: bool,
@@ -2041,6 +2045,7 @@ impl Default for AppSettings {
             sandbox_network: false,
             sidebar: SidebarSettings::default(),
             reply_suggestions: true,
+            auto_review_approvals: false,
             auto_compaction_enabled: true,
             code_mode_enabled: true,
             custom_system_prompt: String::new(),
@@ -2081,6 +2086,8 @@ pub struct AppSettingsPatch {
     pub sidebar: Option<SidebarSettingsPatch>,
     #[serde(default)]
     pub reply_suggestions: Option<bool>,
+    #[serde(default)]
+    pub auto_review_approvals: Option<bool>,
     #[serde(default)]
     pub auto_compaction_enabled: Option<bool>,
     #[serde(default)]
@@ -2231,6 +2238,9 @@ impl AppSettings {
         }
         if let Some(v) = patch.code_mode_enabled {
             self.code_mode_enabled = v;
+        }
+        if let Some(v) = patch.auto_review_approvals {
+            self.auto_review_approvals = v;
         }
         if let Some(v) = patch.auto_compaction_enabled {
             self.auto_compaction_enabled = v;
