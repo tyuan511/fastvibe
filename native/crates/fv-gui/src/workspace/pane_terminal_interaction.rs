@@ -150,6 +150,7 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 let Some(view) = this.terminals.get_mut(&tab) else {
                     return;
                 };
@@ -161,7 +162,11 @@ impl Workspace {
                     Ok(_) => this.drain_terminal_input(tab, cx),
                     Err(error) => {
                         view.input_queue.clear();
-                        view.notice = Some(format!("终端输入失败：{error}"));
+                        view.notice = Some(tr!(
+                            english,
+                            "pane_terminal_interaction.terminal_input_failed_error",
+                            error = error
+                        ));
                         cx.notify();
                     }
                 }
@@ -289,8 +294,10 @@ impl Workspace {
                 match result {
                     Ok(result) => cx.write_to_clipboard(ClipboardItem::new_string(result.text)),
                     Err(error) => {
-                        this.notice = Some(super::super::Notice::Failed(format!(
-                            "无法复制终端选择：{error}"
+                        this.notice = Some(super::super::Notice::Failed(tr!(
+                            this.english(),
+                            "pane_terminal_interaction.could_not_copy_the_terminal",
+                            error = error
                         )));
                         cx.notify();
                     }

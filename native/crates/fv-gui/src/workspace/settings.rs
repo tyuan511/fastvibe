@@ -456,6 +456,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(settings) = this
                     .settings
                     .as_mut()
@@ -465,7 +466,11 @@ impl Workspace {
                     match result {
                         Ok(response) => settings.import.candidates = Some(response.candidates),
                         Err(error) => {
-                            settings.import.notice = Some(format!("读取导入候选失败：{error}"))
+                            settings.import.notice = Some(tr!(
+                                english,
+                                "settings.could_not_read_import_candidates",
+                                error = error
+                            ))
                         }
                     }
                 }
@@ -495,6 +500,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(settings) = this
                     .settings
                     .as_mut()
@@ -504,7 +510,11 @@ impl Workspace {
                     match result {
                         Ok(response) => settings.import.preview = Some(response),
                         Err(error) => {
-                            settings.import.notice = Some(format!("读取导入预览失败：{error}"))
+                            settings.import.notice = Some(tr!(
+                                english,
+                                "settings.could_not_read_the_import",
+                                error = error
+                            ))
                         }
                     }
                 }
@@ -532,6 +542,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 match result {
                     Ok(response) => {
                         let thread_id = response.thread.id.clone();
@@ -542,7 +553,8 @@ impl Workspace {
                     Err(error) => {
                         if let Some(settings) = &mut this.settings {
                             settings.import.busy = false;
-                            settings.import.notice = Some(format!("导入失败：{error}"));
+                            settings.import.notice =
+                                Some(tr!(english, "settings.import_failed_error", error = error));
                         }
                     }
                 }
@@ -572,6 +584,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(s) = this
                     .settings
                     .as_mut()
@@ -579,7 +592,10 @@ impl Workspace {
                 {
                     match result {
                         Ok(r) => s.providers = Some(r.providers),
-                        Err(e) => s.notice = Some(format!("读取供应商失败：{e}")),
+                        Err(e) => {
+                            s.notice =
+                                Some(tr!(english, "settings.could_not_read_providers_e", e = e))
+                        }
                     }
                 }
                 cx.notify();
@@ -634,6 +650,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(s) = this
                     .settings
                     .as_mut()
@@ -648,7 +665,7 @@ impl Workspace {
                                 edit.clear_key_after_save = Some(raw);
                             }
                         }
-                        Err(e) => s.notice = Some(format!("保存失败：{e}")),
+                        Err(e) => s.notice = Some(tr!(english, "settings.save_failed_e", e = e)),
                     }
                 }
                 this.refresh_providers(cx);
@@ -701,6 +718,7 @@ impl Workspace {
     }
 
     fn toggle_provider(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let english = self.english();
         self.invalidate_provider_checks();
         let Some(s) = &mut self.settings else { return };
         if s.edit.as_ref().is_some_and(|e| e.id == id) {
@@ -722,9 +740,9 @@ impl Workspace {
             window,
             cx,
             if p.has_key {
-                "已保存，输入新密钥可更新"
+                trs!(english, "settings.saved_enter_a_new_key")
             } else {
-                "粘贴 API 密钥"
+                trs!(english, "settings.paste_the_api_key")
             },
             true,
         );
@@ -746,6 +764,7 @@ impl Workspace {
         target: impl Fn(&mut SettingsState) -> Option<&mut Picker> + 'static,
         cx: &mut Context<Self>,
     ) {
+        let english = self.english();
         let Some(owner) = self
             .settings
             .as_mut()
@@ -757,7 +776,8 @@ impl Workspace {
         let Some(b) = self.backend.clone() else {
             if let Some(picker) = self.settings.as_mut().and_then(&target) {
                 picker.models = Some(Vec::new());
-                picker.error = Some("还没有连上服务，稍后再试。".to_string());
+                picker.error =
+                    Some(trs!(english, "settings.not_connected_to_the_service").to_string());
             }
             if let Some(a) = self.settings.as_mut().and_then(|s| s.add.as_mut()) {
                 a.busy = false;
@@ -769,6 +789,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(s) = &mut this.settings {
                     let is_add = s
                         .add
@@ -780,7 +801,8 @@ impl Workspace {
                             Ok(r) => picker.models = Some(r.models),
                             Err(e) => {
                                 picker.models = Some(Vec::new());
-                                picker.error = Some(format!("无法拉取模型列表：{e}"));
+                                picker.error =
+                                    Some(tr!(english, "settings.could_not_fetch_the_model", e = e));
                             }
                         }
                     } else {
@@ -920,7 +942,10 @@ impl Workspace {
     /// 添加 N 个模型: save the new provider with the ticked models.
     fn finish_add_provider(&mut self, cx: &mut Context<Self>) {
         let Some(b) = self.backend.clone() else {
-            self.add_error("还没有连上服务，稍后再试。", cx);
+            self.add_error(
+                trs!(self.english(), "settings.not_connected_to_the_service"),
+                cx,
+            );
             return;
         };
         let Some(a) = self.settings.as_ref().and_then(|s| s.add.as_ref()) else {
@@ -939,7 +964,10 @@ impl Workspace {
             .cloned()
             .collect();
         if models.is_empty() {
-            self.add_error("至少选择一个模型", cx);
+            self.add_error(
+                trs!(self.english(), "settings.select_at_least_one_model"),
+                cx,
+            );
             return;
         }
         let (name, protocol, base_url) = (value(&a.name, cx), a.protocol, value(&a.base_url, cx));
@@ -961,6 +989,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 match result {
                     Ok(r) => {
                         if let Some(s) = &mut this.settings
@@ -990,7 +1019,7 @@ impl Workspace {
                             .filter(|a| a.name.entity_id() == owner)
                         {
                             a.busy = false;
-                            a.error = Some(format!("保存失败：{e}"));
+                            a.error = Some(tr!(english, "settings.save_failed_e", e = e));
                         }
                     }
                 }
@@ -1038,6 +1067,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(s) = this.settings.as_mut()
                     && let Some(am) = s
                         .add_models
@@ -1052,7 +1082,11 @@ impl Workspace {
                             }
                         }
                         Err(error) => {
-                            am.picker.error = Some(format!("保存失败，选择已保留：{error}"))
+                            am.picker.error = Some(tr!(
+                                english,
+                                "settings.save_failed_your_selection_was",
+                                error = error
+                            ))
                         }
                     }
                 }
@@ -1687,7 +1721,7 @@ impl Workspace {
             });
         let thinking = effective_thinking
             .map(|level| thinking_label_in(level, english))
-            .unwrap_or(trs!(english, "settings.default"));
+            .unwrap_or(trs!(english, "settings.follow_model_default"));
         let default_row = div()
             .relative()
             .px(px(16.0))
@@ -3013,6 +3047,7 @@ impl Workspace {
                         this.delete_thread(target.clone(), cx);
                     },
                     false,
+                    self.english(),
                 ));
             return Some(modal(body, &self.palette, cx, |this| {
                 if let Some(s) = &mut this.settings {
@@ -3054,6 +3089,7 @@ impl Workspace {
                     },
                     |this, _, cx| this.finish_add_models(cx),
                     am.busy,
+                    self.english(),
                 ));
             return Some(modal(body, &self.palette, cx, |this| {
                 if let Some(s) = &mut this.settings {
@@ -3119,6 +3155,7 @@ impl Workspace {
                     &tr!(english, "settings.add_n_models", n = n),
                     |this, _, cx| this.finish_add_provider(cx),
                     n == 0 || a.busy,
+                    self.english(),
                 ));
         }
 
@@ -3233,6 +3270,7 @@ impl Workspace {
                 },
                 |this, window, cx| this.confirm_add_provider(window, cx),
                 a.busy,
+                self.english(),
             ))
     }
 
@@ -3680,6 +3718,7 @@ pub(super) fn dialog_foot(
     confirm_label: &str,
     confirm: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     disabled: bool,
+    english: bool,
 ) -> Div {
     div()
         .px(px(16.0))
@@ -3693,7 +3732,7 @@ pub(super) fn dialog_foot(
         .rounded_b(px(16.0))
         .child(
             outline_button("dialog-cancel", p)
-                .child("取消")
+                .child(trs!(english, "settings.cancel"))
                 .on_click(cx.listener(move |this, _, _, cx| cancel(this, cx))),
         )
         .child(

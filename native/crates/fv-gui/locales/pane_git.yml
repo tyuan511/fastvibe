@@ -66,3 +66,21 @@ pane_git.delete:
 pane_git.cancel:
   zh: "取消"
   en: "Cancel"
+pane_git.commit_message:
+  zh: "提交信息 / Commit message"
+  en: "Commit message"
+pane_git.could_not_read_the_git:
+  zh: "无法读取 Git 状态：%{error}"
+  en: "Could not read the Git status: %{error}"
+pane_git.could_not_read_this_change:
+  zh: "无法读取这个改动：%{error}"
+  en: "Could not read this change: %{error}"
+pane_git.could_not_read_the_commit:
+  zh: "无法读取提交历史：%{error}"
+  en: "Could not read the commit history: %{error}"
+pane_git.commit_failed_error:
+  zh: "提交失败：%{error}"
+  en: "Commit failed: %{error}"
+pane_git.write_a_commit_message_first:
+  zh: "先写一句提交信息"
+  en: "Write a commit message first"

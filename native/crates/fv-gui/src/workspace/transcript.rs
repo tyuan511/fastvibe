@@ -210,6 +210,7 @@ impl Workspace {
 
     /// `NewSessionFooter`: the way back into recent work, then the composer's shortcuts.
     fn new_session_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let english = self.english();
         let p = &self.palette;
         let language = self.app_settings.language;
         let project = self.draft_project.clone();
@@ -249,13 +250,9 @@ impl Workspace {
                     .line_height(px(20.0))
                     .hover(move |d| d.bg(hover))
                     .child(ui::truncate(t.title.clone()).flex_1())
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(TEXT_XS))
-                            .muted(p)
-                            .child(SharedString::from(relative_time(t.updated_at, now))),
-                    )
+                    .child(div().flex_none().text_size(px(TEXT_XS)).muted(p).child(
+                        SharedString::from(relative_time(t.updated_at, now, english)),
+                    ))
                     .child(
                         div()
                             .invisible()
@@ -468,7 +465,7 @@ impl Workspace {
         let edit = action_button(
             SharedString::from(format!("edit-{id}")),
             "pencil-edit02",
-            "编辑",
+            trs!(self.english(), "transcript.edit"),
             p,
         )
         .on_click(cx.listener(move |this, _, window, cx| {
@@ -478,7 +475,7 @@ impl Workspace {
         let copy = action_button(
             SharedString::from(format!("copy-{id}")),
             "copy01",
-            "复制",
+            trs!(self.english(), "transcript.copy"),
             p,
         )
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -586,12 +583,18 @@ impl Workspace {
                             .child(if language == UiLanguage::English {
                                 format!(
                                     "Processed {}",
-                                    presentation::format_duration_localized(elapsed, language)
+                                    presentation::format_duration(
+                                        elapsed,
+                                        language == UiLanguage::English
+                                    )
                                 )
                             } else {
                                 format!(
                                     "已处理 {}",
-                                    presentation::format_duration_localized(elapsed, language)
+                                    presentation::format_duration(
+                                        elapsed,
+                                        language == UiLanguage::English
+                                    )
                                 )
                             }),
                     ),
@@ -606,12 +609,18 @@ impl Workspace {
                     if language == UiLanguage::English {
                         format!(
                             "Took {}",
-                            presentation::format_duration_localized((b - a) as u64, language)
+                            presentation::format_duration(
+                                (b - a) as u64,
+                                language == UiLanguage::English
+                            )
                         )
                     } else {
                         format!(
                             "用时 {}",
-                            presentation::format_duration_localized((b - a) as u64, language)
+                            presentation::format_duration(
+                                (b - a) as u64,
+                                language == UiLanguage::English
+                            )
                         )
                     }
                 }
@@ -695,12 +704,18 @@ impl Workspace {
                     if language == UiLanguage::English {
                         format!(
                             "Duration {}",
-                            presentation::format_duration_localized((end - s) as u64, language)
+                            presentation::format_duration(
+                                (end - s) as u64,
+                                language == UiLanguage::English
+                            )
                         )
                     } else {
                         format!(
                             "耗时 {}",
-                            presentation::format_duration_localized((end - s) as u64, language)
+                            presentation::format_duration(
+                                (end - s) as u64,
+                                language == UiLanguage::English
+                            )
                         )
                     }
                 });
@@ -722,7 +737,7 @@ impl Workspace {
                 if language == UiLanguage::English {
                     "Copy"
                 } else {
-                    "复制"
+                    trs!(self.english(), "transcript.copy")
                 },
                 p,
             )
@@ -908,12 +923,8 @@ impl Workspace {
                 output,
                 is_error,
             } => {
-                let view = presentation::describe_localized(
-                    name,
-                    arguments,
-                    output.is_none(),
-                    self.app_settings.language,
-                );
+                let view =
+                    presentation::describe(name, arguments, output.is_none(), self.english());
                 let row = self.tool_head(id, &view, *is_error, output.is_none());
                 let open = self.open_items.contains(id);
                 let detail =
@@ -1145,7 +1156,7 @@ impl Workspace {
             .text_ellipsis()
             .flex()
             .items_center();
-        for piece in presentation::run_summary_localized(items, self.app_settings.language) {
+        for piece in presentation::run_summary(items, self.english()) {
             line = match piece {
                 presentation::Piece::Text(t) => line.child(SharedString::from(t)),
                 presentation::Piece::Name(n) => line.child(
@@ -1359,15 +1370,11 @@ impl Workspace {
             );
         }
         if text.lines().count() > MAX_LINES {
-            lines = lines.child(
-                div()
-                    .px(px(12.0))
-                    .muted(p)
-                    .child(SharedString::from(format!(
-                        "… 还有 {} 行",
-                        text.lines().count() - MAX_LINES
-                    ))),
-            );
+            lines = lines.child(div().px(px(12.0)).muted(p).child(SharedString::from(tr!(
+                self.english(),
+                "transcript.more_lines",
+                arg1 = text.lines().count() - MAX_LINES
+            ))));
         }
         div()
             .id(SharedString::from(format!("code-{:x}", {
@@ -1590,14 +1597,14 @@ fn now_ms() -> i64 {
 }
 
 /// `formatRelativeTime`: 刚刚, N 分钟前, N 小时前, then the date.
-fn relative_time(at: i64, now: i64) -> String {
+fn relative_time(at: i64, now: i64, english: bool) -> String {
     let mins = (now - at).max(0) / 60_000;
     if mins < 1 {
-        "刚刚".into()
+        trs!(english, "transcript.just_now").into()
     } else if mins < 60 {
-        format!("{mins} 分钟前")
+        tr!(english, "transcript.mins_min_ago", mins = mins)
     } else if mins < 24 * 60 {
-        format!("{} 小时前", mins / 60)
+        tr!(english, "transcript.h_ago", arg1 = mins / 60)
     } else {
         // SAFETY: `localtime_r` writes only into the `tm` it is given.
         unsafe {

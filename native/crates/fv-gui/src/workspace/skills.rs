@@ -127,12 +127,16 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(s) = this.settings.as_mut()
                     && s.skills.generation == generation
                 {
                     match result {
                         Ok(r) => s.skills.catalog = Some(r),
-                        Err(e) => s.skills.notice = Some(format!("无法读取技能：{e}")),
+                        Err(e) => {
+                            s.skills.notice =
+                                Some(tr!(english, "skills.could_not_read_skills_e", e = e))
+                        }
                     }
                     cx.notify();
                 }
@@ -160,13 +164,17 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(s) = this.settings.as_mut()
                     && s.skills.reading == Some(request)
                 {
                     s.skills.reading = None;
                     match result {
                         Ok(r) => s.skills.preview = Some(r),
-                        Err(e) => s.skills.notice = Some(format!("无法打开技能：{e}")),
+                        Err(e) => {
+                            s.skills.notice =
+                                Some(tr!(english, "skills.could_not_open_the_skill", e = e))
+                        }
                     }
                     cx.notify();
                 }

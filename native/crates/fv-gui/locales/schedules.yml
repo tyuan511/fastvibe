@@ -186,3 +186,9 @@ schedules.manual:
 schedules.scheduled:
   zh: "计划"
   en: "Scheduled"
+schedules.save_failed_the_draft_was:
+  zh: "保存失败，草稿已保留：%{error}"
+  en: "Save failed; the draft was kept: %{error}"
+schedules.saved_edits_made_while_saving:
+  zh: "已保存，保存期间的新修改仍在草稿中。"
+  en: "Saved; edits made while saving are still in the draft."

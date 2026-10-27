@@ -36,3 +36,6 @@ sidebar.fastvibe_account_sign_in_is:
 sidebar.show_arg1_more:
   zh: "展开更多（%{arg1}）"
   en: "Show %{arg1} more"
+sidebar.resize_sidebar:
+  zh: "调整侧栏宽度"
+  en: "Resize sidebar"

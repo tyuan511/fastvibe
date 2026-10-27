@@ -6,7 +6,7 @@
 //! - A turn still running, one that stopped on a tool call, and a failed one show everything.
 //! - The files a turn changed are listed once, under the answer.
 
-use fv_protocol::types::{Item, UiLanguage};
+use fv_protocol::types::Item;
 
 /// One file a turn's patches touched.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -224,14 +224,22 @@ pub struct ToolView {
     pub context: String,
 }
 
-pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView {
+pub fn describe(name: &str, args: &serde_json::Value, running: bool, english: bool) -> ToolView {
     let family = family_of(name);
     let field = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").trim();
-    let label = |done: &str, live: &str| if running { live } else { done }.to_string();
+    // A label is a done form and a live form, `tool.<key>` and `tool.<key>_live`.
+    let label = |key: &'static str| -> String {
+        let key = if running {
+            format!("presentation.tool_{key}_live")
+        } else {
+            format!("presentation.tool_{key}")
+        };
+        crate::workspace::static_text(english, &key).to_string()
+    };
     if name == "code_mode" {
         return ToolView {
             family,
-            label: label("代码模式", "正在执行代码"),
+            label: label("code_mode"),
             subject: "JavaScript".into(),
             context: String::new(),
         };
@@ -244,9 +252,9 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)
             {
-                label("终止脚本", "正在终止脚本")
+                label("wait_terminate")
             } else {
-                label("脚本等待", "正在等待脚本")
+                label("wait")
             },
             subject: field("cell_id").chars().take(8).collect(),
             context: String::new(),
@@ -254,7 +262,7 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView
     }
     let (label, subject, context) = match family {
         Family::Terminal => (
-            label("终端", "正在执行"),
+            label("terminal"),
             field("cmd").lines().next().unwrap_or(name).to_string(),
             String::new(),
         ),
@@ -266,14 +274,17 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView
                     (n.to_string(), d.to_string())
                 }
                 [] => (name.to_string(), String::new()),
-                many => (format!("{} 个文件", many.len()), String::new()),
+                many => (
+                    tr!(english, "presentation.files", count = many.len()),
+                    String::new(),
+                ),
             };
-            (label("编辑", "正在编辑"), subject, context)
+            (label("edit"), subject, context)
         }
         Family::Read => {
             let (n, d) = split_path(field("path"));
             (
-                label("读取", "正在读取"),
+                label("read"),
                 if n.is_empty() {
                     name.to_string()
                 } else {
@@ -283,7 +294,7 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView
             )
         }
         Family::Search => (
-            label("搜索", "正在搜索"),
+            label("search"),
             ["query", "pattern", "path"]
                 .iter()
                 .map(|k| field(k))
@@ -293,7 +304,7 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView
             String::new(),
         ),
         Family::Web => (
-            label("网络搜索", "正在搜索网页"),
+            label("web"),
             if field("query").is_empty() {
                 name.to_string()
             } else {
@@ -301,29 +312,13 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView
             },
             String::new(),
         ),
-        Family::Todo => (label("待办", "正在更新待办"), String::new(), String::new()),
-        Family::Question => (label("询问", "正在询问"), String::new(), String::new()),
-        Family::Agent => (
-            label("子智能体", "子智能体运行中"),
-            name.to_string(),
-            String::new(),
-        ),
-        Family::Skill => (
-            label("技能", "正在运行技能"),
-            name.to_string(),
-            String::new(),
-        ),
-        Family::Present => (label("展示", "正在展示"), name.to_string(), String::new()),
-        Family::Mcp => (
-            label("工具调用", "正在调用"),
-            name.to_string(),
-            String::new(),
-        ),
-        Family::Other => (
-            label("工具调用", "正在运行"),
-            name.to_string(),
-            String::new(),
-        ),
+        Family::Todo => (label("todo"), String::new(), String::new()),
+        Family::Question => (label("question"), String::new(), String::new()),
+        Family::Agent => (label("agent"), name.to_string(), String::new()),
+        Family::Skill => (label("skill"), name.to_string(), String::new()),
+        Family::Present => (label("present"), name.to_string(), String::new()),
+        Family::Mcp => (label("mcp"), name.to_string(), String::new()),
+        Family::Other => (label("other"), name.to_string(), String::new()),
     };
     ToolView {
         family,
@@ -331,58 +326,6 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView
         subject,
         context,
     }
-}
-
-/// The transcript keeps the presentation rules independent from GPUI. Localize the compact
-/// labels at the last step so callers that still need the stable Chinese helper remain intact.
-pub fn describe_localized(
-    name: &str,
-    args: &serde_json::Value,
-    running: bool,
-    language: UiLanguage,
-) -> ToolView {
-    let mut view = describe(name, args, running);
-    if language != UiLanguage::English {
-        return view;
-    }
-    let live = |done: &str, current: &str| if running { current } else { done }.to_string();
-    view.label = if name == "code_mode" {
-        live("Code mode", "Running code")
-    } else if name == "wait" {
-        if args
-            .get("terminate")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
-            live("Terminate script", "Terminating script")
-        } else {
-            live("Script wait", "Waiting for script")
-        }
-    } else {
-        match view.family {
-            Family::Terminal => live("Terminal", "Running"),
-            Family::Edit => live("Edit", "Editing"),
-            Family::Read => live("Read", "Reading"),
-            Family::Search => live("Search", "Searching"),
-            Family::Web => live("Web search", "Searching web"),
-            Family::Todo => live("Todo", "Updating todo"),
-            Family::Question => live("Question", "Asking"),
-            Family::Agent => live("Sub-agent", "Running sub-agent"),
-            Family::Skill => live("Skill", "Running skill"),
-            Family::Present => live("Present", "Presenting"),
-            Family::Mcp => live("Tool call", "Calling"),
-            Family::Other => live("Tool call", "Running"),
-        }
-    };
-    if view.family == Family::Edit
-        && let Some(count) = view
-            .subject
-            .strip_suffix(" 个文件")
-            .and_then(|v| v.parse::<usize>().ok())
-    {
-        view.subject = format!("{count} files");
-    }
-    view
 }
 
 /// What stays on its own line and breaks a run of tool calls.
@@ -453,7 +396,7 @@ enum Category {
 
 /// `runSummary`: each category once, in the order it first appeared; one call names the file or
 /// query, several say how many; a failed call is not counted (its row says so when opened).
-pub fn run_summary(items: &[&Item]) -> Vec<Piece> {
+pub fn run_summary(items: &[&Item], english: bool) -> Vec<Piece> {
     let mut order: Vec<(Category, Vec<&Item>)> = Vec::new();
     for item in items {
         let Item::ToolCall { name, is_error, .. } = item else {
@@ -477,17 +420,29 @@ pub fn run_summary(items: &[&Item]) -> Vec<Piece> {
     let mut pieces = Vec::new();
     for (n, (category, batch)) in order.iter().enumerate() {
         let count = batch.len();
-        // 「已」covers the whole line: later clauses leave it off.
-        let lead = |s: &str| {
-            if n == 0 {
-                s.to_string()
-            } else {
-                s.trim_start_matches('已').to_string()
-            }
-        };
         if n > 0 {
-            pieces.push(Piece::Text("，".into()));
+            pieces.push(Piece::Text(
+                trs!(english, "presentation.run_separator").into(),
+            ));
         }
+        // 「已」/ a capital covers the whole line: later clauses use the `_later` wording.
+        let word = |base: &str| -> &'static str {
+            let key = if n == 0 {
+                format!("presentation.run_{base}")
+            } else {
+                format!("presentation.run_{base}_later")
+            };
+            crate::workspace::static_text(english, &key)
+        };
+        let counted = |base: &str| -> String {
+            let key = if n == 0 {
+                format!("presentation.run_{base}")
+            } else {
+                format!("presentation.run_{base}_later")
+            };
+            let template = crate::workspace::static_text(english, &key);
+            template.replace("%{count}", &count.to_string())
+        };
         let named = match (category, batch.as_slice()) {
             (Category::Command, _) => None,
             (
@@ -497,155 +452,53 @@ pub fn run_summary(items: &[&Item]) -> Vec<Piece> {
                         name, arguments, ..
                     },
                 ],
-            ) => {
-                let v = describe(name, arguments, false);
-                Some(v.subject)
-            }
+            ) => Some(describe(name, arguments, false, english).subject),
             _ => None,
         };
         match (category, named) {
             (Category::Command, _) => {
-                pieces.push(Piece::Text(lead(&format!("已运行 {count} 个命令"))))
+                let base = if count == 1 { "ran_one" } else { "ran" };
+                pieces.push(Piece::Text(counted(base)))
             }
             (Category::Read, Some(s)) => {
-                pieces.push(Piece::Text(lead("已读取 ")));
+                pieces.push(Piece::Text(word("read_named").into()));
                 pieces.push(Piece::Name(s));
             }
-            (Category::Read, None) => {
-                pieces.push(Piece::Text(lead(&format!("已读取 {count} 个文件"))))
-            }
+            (Category::Read, None) => pieces.push(Piece::Text(counted("read"))),
             (Category::Write, Some(s)) => {
-                pieces.push(Piece::Text(lead("已写入 ")));
+                pieces.push(Piece::Text(word("write_named").into()));
                 pieces.push(Piece::Name(s));
             }
-            (Category::Write, None) => {
-                pieces.push(Piece::Text(lead(&format!("已写入 {count} 个文件"))))
-            }
+            (Category::Write, None) => pieces.push(Piece::Text(counted("write"))),
             (Category::Search, Some(s)) => {
-                pieces.push(Piece::Text(lead("已搜索 ")));
+                pieces.push(Piece::Text(word("search_named").into()));
                 pieces.push(Piece::Name(s));
             }
-            (Category::Search, None) => {
-                pieces.push(Piece::Text(lead(&format!("已搜索 {count} 次"))))
-            }
+            (Category::Search, None) => pieces.push(Piece::Text(counted("search"))),
             (Category::Tool, Some(s)) => {
-                pieces.push(Piece::Text(lead("已调用 ")));
+                pieces.push(Piece::Text(word("tool_named").into()));
                 pieces.push(Piece::Name(s));
             }
-            (Category::Tool, None) => {
-                pieces.push(Piece::Text(lead(&format!("已调用 {count} 个工具"))))
-            }
+            (Category::Tool, None) => pieces.push(Piece::Text(counted("tool"))),
         }
     }
     pieces
 }
 
-pub fn run_summary_localized(items: &[&Item], language: UiLanguage) -> Vec<Piece> {
-    let pieces = run_summary(items);
-    if language != UiLanguage::English {
-        return pieces;
-    }
-    pieces
-        .into_iter()
-        .map(|piece| match piece {
-            Piece::Name(name) => Piece::Name(name),
-            Piece::Text(text) => {
-                let text = text
-                    .strip_prefix("已运行 ")
-                    .map(|v| format!("Ran {v}").replace(" 个命令", " commands"))
-                    .or_else(|| text.strip_prefix("已读取 ").map(|v| format!("Read {v}")))
-                    .or_else(|| text.strip_prefix("已写入 ").map(|v| format!("Wrote {v}")))
-                    .or_else(|| {
-                        text.strip_prefix("已搜索 ")
-                            .map(|v| format!("Searched {v}"))
-                    })
-                    .or_else(|| text.strip_prefix("已调用 ").map(|v| format!("Called {v}")))
-                    .unwrap_or(text);
-                Piece::Text(
-                    text.replace(" 个文件", " files")
-                        .replace(" 次", " times")
-                        .replace(" 个工具", " tools"),
-                )
-            }
-        })
-        .collect()
-}
-
-/// The one-line description of a tool call, as the transcript's collapsed row says it.
-pub fn tool_title(name: &str, args: &serde_json::Value, running: bool) -> (String, String) {
-    let field = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("");
-    let verb = |done: &str, live: &str| if running { live } else { done }.to_string();
-    match name {
-        "exec_command" => (
-            verb("已运行", "正在运行"),
-            field("cmd").lines().next().unwrap_or("").to_string(),
-        ),
-        "write_stdin" => (
-            if field("chars").is_empty() {
-                verb("已读取命令输出", "正在等待命令输出")
-            } else {
-                verb("已发送命令输入", "正在发送命令输入")
-            },
-            args.get("session_id")
-                .and_then(|id| id.as_u64())
-                .map(|id| format!("会话 {id}"))
-                .unwrap_or_default(),
-        ),
-        "apply_patch" => {
-            let files = patch_changes(field("input"));
-            let detail = match files.as_slice() {
-                [one] => split_path(&one.path).0.to_string(),
-                many => format!("{} 个文件", many.len()),
-            };
-            (verb("已编辑", "正在编辑"), detail)
-        }
-        "view_image" => (
-            verb("已查看", "正在查看"),
-            split_path(field("path")).0.to_string(),
-        ),
-        "update_plan" => (verb("已更新计划", "正在更新计划"), String::new()),
-        "request_user_input" => (verb("已提问", "正在提问"), String::new()),
-        "tool_search" => (
-            verb("已搜索工具", "正在搜索工具"),
-            field("query").to_string(),
-        ),
-        other => (verb("已调用", "正在调用"), other.to_string()),
-    }
-}
-
-/// `3 分钟 41 秒`, the app's one duration format (`formatDuration` in `lib/time.ts`): each
-/// unit that is not zero, and seconds whenever nothing else would be said.
-pub fn format_duration(ms: u64) -> String {
+/// `3 分钟 41 秒` / `3m 41s`, the app's one duration format (`formatDuration` in `lib/time.ts`):
+/// each unit that is not zero, and seconds whenever nothing else would be said.
+pub fn format_duration(ms: u64, english: bool) -> String {
     let total = (ms + 500) / 1000;
     let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
     let mut parts = Vec::new();
     if h > 0 {
-        parts.push(format!("{h} 小时"));
+        parts.push(tr!(english, "presentation.duration_hours", n = h));
     }
     if m > 0 {
-        parts.push(format!("{m} 分钟"));
+        parts.push(tr!(english, "presentation.duration_minutes", n = m));
     }
     if s > 0 || parts.is_empty() {
-        parts.push(format!("{s} 秒"));
-    }
-    parts.join(" ")
-}
-
-pub fn format_duration_localized(ms: u64, language: UiLanguage) -> String {
-    if language != UiLanguage::English {
-        return format_duration(ms);
-    }
-    let total = (ms + 500) / 1000;
-    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
-    let mut parts = Vec::new();
-    if h > 0 {
-        parts.push(format!("{h}h"));
-    }
-    if m > 0 {
-        parts.push(format!("{m}m"));
-    }
-    if s > 0 || parts.is_empty() {
-        parts.push(format!("{s}s"));
+        parts.push(tr!(english, "presentation.duration_seconds", n = s));
     }
     parts.join(" ")
 }

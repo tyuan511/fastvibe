@@ -48,3 +48,15 @@ pane.close_other_tabs:
 pane.close_all_tabs:
   zh: "关闭所有标签"
   en: "Close all tabs"
+pane.could_not_save_path_e:
+  zh: "保存「%{path}」失败：%{e}"
+  en: "Could not save \"%{path}\": %{e}"
+pane.could_not_read_this_folder:
+  zh: "无法读取这个文件夹：%{e}"
+  en: "Could not read this folder: %{e}"
+pane.could_not_read_this_file:
+  zh: "无法读取这个文件：%{e}"
+  en: "Could not read this file: %{e}"
+pane.resize_file_tree:
+  zh: "调整文件树宽度"
+  en: "Resize file tree"

@@ -90,3 +90,12 @@ mcp.save_full_configuration:
 mcp.arg1_tools_arg2:
   zh: "%{arg1} 个工具 · %{arg2}"
   en: "%{arg1} tools · %{arg2}"
+mcp.the_full_configuration_must_be:
+  zh: "完整配置需要数组：%{e}"
+  en: "The full configuration must be an array: %{e}"
+mcp.could_not_save_mcp_e:
+  zh: "无法保存 MCP：%{e}"
+  en: "Could not save MCP: %{e}"
+mcp.could_not_read_the_resource:
+  zh: "无法读取资源：%{e}"
+  en: "Could not read the resource: %{e}"

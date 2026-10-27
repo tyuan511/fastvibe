@@ -86,7 +86,7 @@ impl Workspace {
                         .w(px(8.0))
                         .cursor_col_resize()
                         .role(Role::Splitter)
-                        .aria_label("调整侧栏宽度")
+                        .aria_label(trs!(self.english(), "sidebar.resize_sidebar"))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, event: &MouseDownEvent, window, cx| {

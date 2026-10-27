@@ -114,6 +114,7 @@ impl Workspace {
     }
 
     fn save_mcp_editor(&mut self, replace: bool, cx: &mut Context<Self>) {
+        let english = self.english();
         let Some(backend) = self.backend.clone() else {
             return;
         };
@@ -129,7 +130,7 @@ impl Workspace {
             match serde_json::from_str::<Vec<McpServerConfig>>(&text) {
                 Ok(configs) => Some(configs),
                 Err(e) => {
-                    s.mcp.notice = Some(format!("完整配置需要数组：{e}"));
+                    s.mcp.notice = Some(tr!(english, "mcp.the_full_configuration_must_be", e = e));
                     cx.notify();
                     return;
                 }
@@ -148,7 +149,7 @@ impl Workspace {
                         .await
                 }
             }
-            .map_err(|e| format!("无法保存 MCP：{e}"));
+            .map_err(|e| tr!(english, "mcp.could_not_save_mcp_e", e = e));
             this.update(cx, |this, cx| this.finish_mcp(session, result, cx))
                 .ok();
         })
@@ -258,6 +259,7 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(s) = this.settings.as_mut().filter(|s| s.mcp.session == session) {
                     match result {
                         Ok(r) => {
@@ -269,7 +271,10 @@ impl Workspace {
                                     .collect(),
                             )
                         }
-                        Err(e) => s.mcp.notice = Some(format!("无法读取资源：{e}")),
+                        Err(e) => {
+                            s.mcp.notice =
+                                Some(tr!(english, "mcp.could_not_read_the_resource", e = e))
+                        }
                     }
                     cx.notify();
                 }

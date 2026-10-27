@@ -17,18 +17,7 @@ use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon};
 /// `text-[0.8rem]`: the chip's size.
 const CHIP_TEXT: f32 = 12.8;
 
-pub fn thinking_label(level: ThinkingLevel) -> &'static str {
-    match level {
-        ThinkingLevel::Minimal => "极低",
-        ThinkingLevel::Low => "低",
-        ThinkingLevel::Medium => "中",
-        ThinkingLevel::High => "高",
-        ThinkingLevel::Xhigh => "极高",
-        ThinkingLevel::Max => "最高",
-    }
-}
-
-/// [`thinking_label`] in the interface language.
+/// The label of a thinking level, in the interface language.
 pub fn thinking_label_in(level: ThinkingLevel, english: bool) -> &'static str {
     match level {
         ThinkingLevel::Minimal => trs!(english, "composer.thinking_minimal"),
@@ -103,7 +92,7 @@ impl Workspace {
         };
         let thinking_text = self
             .current_thinking()
-            .map(thinking_label)
+            .map(|level| thinking_label_in(level, english))
             .unwrap_or(trs!(english, "composer.follow_default"));
 
         // How full the model's window is: a ring that warms up as it nears the limit.
@@ -483,8 +472,8 @@ impl Workspace {
 
         let thinking_text = self
             .current_thinking()
-            .map(thinking_label)
-            .unwrap_or("跟随默认");
+            .map(|level| thinking_label_in(level, self.english()))
+            .unwrap_or(trs!(self.english(), "composer.follow_default"));
         let thinking_active = self.thinking_menu;
         list = list.child(
             div()
@@ -576,14 +565,33 @@ impl Workspace {
             .and_then(|l| self.models.iter().find(|m| m.label == l))
             .map(|m| m.model.allowed_thinking());
 
+        let english = self.english();
         let options: [(Option<ThinkingLevel>, &'static str); 7] = [
-            (None, "跟随默认"),
-            (Some(ThinkingLevel::Minimal), "极低"),
-            (Some(ThinkingLevel::Low), "低"),
-            (Some(ThinkingLevel::Medium), "中"),
-            (Some(ThinkingLevel::High), "高"),
-            (Some(ThinkingLevel::Xhigh), "极高"),
-            (Some(ThinkingLevel::Max), "最高"),
+            (None, trs!(english, "composer.follow_default")),
+            (
+                Some(ThinkingLevel::Minimal),
+                thinking_label_in(ThinkingLevel::Minimal, english),
+            ),
+            (
+                Some(ThinkingLevel::Low),
+                thinking_label_in(ThinkingLevel::Low, english),
+            ),
+            (
+                Some(ThinkingLevel::Medium),
+                thinking_label_in(ThinkingLevel::Medium, english),
+            ),
+            (
+                Some(ThinkingLevel::High),
+                thinking_label_in(ThinkingLevel::High, english),
+            ),
+            (
+                Some(ThinkingLevel::Xhigh),
+                thinking_label_in(ThinkingLevel::Xhigh, english),
+            ),
+            (
+                Some(ThinkingLevel::Max),
+                thinking_label_in(ThinkingLevel::Max, english),
+            ),
         ];
 
         let mut list = div()

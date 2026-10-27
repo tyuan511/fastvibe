@@ -1,0 +1,167 @@
+_version: 2
+
+presentation.tool_code_mode:
+  zh: "代码模式"
+  en: "Code mode"
+presentation.tool_code_mode_live:
+  zh: "正在执行代码"
+  en: "Running code"
+presentation.tool_wait_terminate:
+  zh: "终止脚本"
+  en: "Terminate script"
+presentation.tool_wait_terminate_live:
+  zh: "正在终止脚本"
+  en: "Terminating script"
+presentation.tool_wait:
+  zh: "脚本等待"
+  en: "Script wait"
+presentation.tool_wait_live:
+  zh: "正在等待脚本"
+  en: "Waiting for script"
+presentation.tool_terminal:
+  zh: "终端"
+  en: "Terminal"
+presentation.tool_terminal_live:
+  zh: "正在执行"
+  en: "Running"
+presentation.tool_edit:
+  zh: "编辑"
+  en: "Edit"
+presentation.tool_edit_live:
+  zh: "正在编辑"
+  en: "Editing"
+presentation.tool_read:
+  zh: "读取"
+  en: "Read"
+presentation.tool_read_live:
+  zh: "正在读取"
+  en: "Reading"
+presentation.tool_search:
+  zh: "搜索"
+  en: "Search"
+presentation.tool_search_live:
+  zh: "正在搜索"
+  en: "Searching"
+presentation.tool_web:
+  zh: "网络搜索"
+  en: "Web search"
+presentation.tool_web_live:
+  zh: "正在搜索网页"
+  en: "Searching web"
+presentation.tool_todo:
+  zh: "待办"
+  en: "Todo"
+presentation.tool_todo_live:
+  zh: "正在更新待办"
+  en: "Updating todo"
+presentation.tool_question:
+  zh: "询问"
+  en: "Question"
+presentation.tool_question_live:
+  zh: "正在询问"
+  en: "Asking"
+presentation.tool_agent:
+  zh: "子智能体"
+  en: "Sub-agent"
+presentation.tool_agent_live:
+  zh: "子智能体运行中"
+  en: "Running sub-agent"
+presentation.tool_skill:
+  zh: "技能"
+  en: "Skill"
+presentation.tool_skill_live:
+  zh: "正在运行技能"
+  en: "Running skill"
+presentation.tool_present:
+  zh: "展示"
+  en: "Present"
+presentation.tool_present_live:
+  zh: "正在展示"
+  en: "Presenting"
+presentation.tool_mcp:
+  zh: "工具调用"
+  en: "Tool call"
+presentation.tool_mcp_live:
+  zh: "正在调用"
+  en: "Calling"
+presentation.tool_other:
+  zh: "工具调用"
+  en: "Tool call"
+presentation.tool_other_live:
+  zh: "正在运行"
+  en: "Running"
+presentation.files:
+  zh: "%{count} 个文件"
+  en: "%{count} files"
+presentation.run_separator:
+  zh: "，"
+  en: ", "
+presentation.run_ran_one:
+  zh: "已运行 %{count} 个命令"
+  en: "Ran %{count} command"
+presentation.run_ran_one_later:
+  zh: "运行 %{count} 个命令"
+  en: "ran %{count} command"
+presentation.run_ran:
+  zh: "已运行 %{count} 个命令"
+  en: "Ran %{count} commands"
+presentation.run_ran_later:
+  zh: "运行 %{count} 个命令"
+  en: "ran %{count} commands"
+presentation.run_read_named:
+  zh: "已读取 "
+  en: "Read "
+presentation.run_read_named_later:
+  zh: "读取 "
+  en: "read "
+presentation.run_read:
+  zh: "已读取 %{count} 个文件"
+  en: "Read %{count} files"
+presentation.run_read_later:
+  zh: "读取 %{count} 个文件"
+  en: "read %{count} files"
+presentation.run_write_named:
+  zh: "已写入 "
+  en: "Wrote "
+presentation.run_write_named_later:
+  zh: "写入 "
+  en: "wrote "
+presentation.run_write:
+  zh: "已写入 %{count} 个文件"
+  en: "Wrote %{count} files"
+presentation.run_write_later:
+  zh: "写入 %{count} 个文件"
+  en: "wrote %{count} files"
+presentation.run_search_named:
+  zh: "已搜索 "
+  en: "Searched "
+presentation.run_search_named_later:
+  zh: "搜索 "
+  en: "searched "
+presentation.run_search:
+  zh: "已搜索 %{count} 次"
+  en: "Searched %{count} times"
+presentation.run_search_later:
+  zh: "搜索 %{count} 次"
+  en: "searched %{count} times"
+presentation.run_tool_named:
+  zh: "已调用 "
+  en: "Called "
+presentation.run_tool_named_later:
+  zh: "调用 "
+  en: "called "
+presentation.run_tool:
+  zh: "已调用 %{count} 个工具"
+  en: "Called %{count} tools"
+presentation.run_tool_later:
+  zh: "调用 %{count} 个工具"
+  en: "called %{count} tools"
+presentation.duration_hours:
+  zh: "%{n} 小时"
+  en: "%{n}h"
+presentation.duration_minutes:
+  zh: "%{n} 分钟"
+  en: "%{n}m"
+presentation.duration_seconds:
+  zh: "%{n} 秒"
+  en: "%{n}s"

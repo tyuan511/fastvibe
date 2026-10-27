@@ -36,3 +36,6 @@ pane_entries.working:
 pane_entries.operation_failed:
   zh: "%{error}"
   en: "Operation failed: %{error}"
+pane_entries.name:
+  zh: "名称 / Name"
+  en: "Name"

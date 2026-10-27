@@ -528,12 +528,18 @@ impl Workspace {
                         if pristine {
                             this.schedules_ui.editor = None;
                         } else {
-                            this.schedules_ui.notice =
-                                Some("已保存，保存期间的新修改仍在草稿中。".into());
+                            this.schedules_ui.notice = Some(
+                                trs!(this.english(), "schedules.saved_edits_made_while_saving")
+                                    .into(),
+                            );
                         }
                     }
                     Err(error) => {
-                        this.schedules_ui.error = Some(format!("保存失败，草稿已保留：{error}"))
+                        this.schedules_ui.error = Some(tr!(
+                            this.english(),
+                            "schedules.save_failed_the_draft_was",
+                            error = error
+                        ))
                     }
                 }
                 this.refresh_schedules(cx);
@@ -1234,7 +1240,7 @@ impl Workspace {
                     .when(e.thinking == value, |d| d.bg(p.c(Token::Accent)))
                     .child(
                         value
-                            .map(super::composer::thinking_label)
+                            .map(|level| super::composer::thinking_label_in(level, self.english()))
                             .unwrap_or(trs!(english, "schedules.default_thinking")),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1356,6 +1362,7 @@ impl Workspace {
                     if saving { "正在保存…" } else { "保存" },
                     |this, _, cx| this.save_schedule(cx),
                     saving || self.backend.is_none(),
+                    self.english(),
                 )),
             p,
             cx,

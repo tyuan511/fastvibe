@@ -1,0 +1,9 @@
+pane_office.could_not_read_the_document:
+  zh: "无法读取文档快照：%{e}"
+  en: "Could not read the document snapshot: %{e}"
+pane_office.live_preview_stopped:
+  zh: "实时预览已停止"
+  en: "Live preview stopped"
+pane_office.the_document_snapshot_is_too:
+  zh: "文档快照过大"
+  en: "The document snapshot is too large"

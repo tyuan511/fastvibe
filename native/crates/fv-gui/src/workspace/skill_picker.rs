@@ -234,10 +234,16 @@ impl Workspace {
                 if current_scope != scope {
                     return;
                 }
-                if this
-                    .skill_picker
-                    .complete(generation, result.map_err(|e| format!("无法读取技能：{e}")))
-                {
+                if this.skill_picker.complete(
+                    generation,
+                    result.map_err(|e| {
+                        tr!(
+                            this.english(),
+                            "skill_picker.could_not_read_skills_e",
+                            e = e
+                        )
+                    }),
+                ) {
                     cx.notify();
                 }
             });
@@ -270,7 +276,14 @@ impl Workspace {
                 Ok::<_, gpui_kit::component::input::InlineTokenError>(())
             });
             if let Err(e) = result {
-                self.fail(format!("无法选择技能：{e}"), cx);
+                self.fail(
+                    tr!(
+                        self.english(),
+                        "skill_picker.could_not_select_the_skill",
+                        e = e
+                    ),
+                    cx,
+                );
             }
             self.refresh_skill_picker(cx);
             cx.notify();
@@ -303,9 +316,9 @@ impl Workspace {
         let mut rows = div().flex().flex_col().gap(px(2.0));
         let message = picker.error.clone().or_else(|| {
             if picker.catalog.is_none() {
-                Some("正在加载技能…".into())
+                Some(trs!(self.english(), "skill_picker.loading_skills").into())
             } else if hits.is_empty() {
-                Some("没有匹配的技能".into())
+                Some(trs!(self.english(), "skill_picker.no_matching_skills").into())
             } else {
                 None
             }

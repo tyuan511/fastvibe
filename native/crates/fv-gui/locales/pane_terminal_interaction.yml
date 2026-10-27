@@ -1,0 +1,6 @@
+pane_terminal_interaction.could_not_copy_the_terminal:
+  zh: "无法复制终端选择：%{error}"
+  en: "Could not copy the terminal selection: %{error}"
+pane_terminal_interaction.terminal_input_failed_error:
+  zh: "终端输入失败：%{error}"
+  en: "Terminal input failed: %{error}"

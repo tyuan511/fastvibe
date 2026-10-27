@@ -656,25 +656,25 @@ impl Workspace {
                     .pb(px(6.0))
                     .text_size(px(TEXT_SM))
                     .muted(p)
-                    .child("应如何批准 FastVibe 的操作？"),
+                    .child(trs!(self.english(), "ask.how_should_fastvibe_s_actions")),
             )
             .child(item(
                 Access::Ask,
                 "hand",
-                "请求批准",
-                "在项目外编辑文件、使用网络时始终询问",
+                trs!(self.english(), "ask.ask_for_approval"),
+                trs!(self.english(), "ask.always_ask_before_editing_files"),
             ))
             .child(item(
                 Access::Auto,
                 "security-check",
-                "沙箱里直接做",
-                "命令先在沙箱中运行，被沙箱挡住后才请求批准",
+                trs!(self.english(), "ask.run_in_the_sandbox"),
+                trs!(self.english(), "ask.commands_run_in_the_sandbox"),
             ))
             .child(item(
                 Access::Full,
                 "shield-alert",
-                "完全访问权限",
-                "不受限制地访问网络和电脑上的任何文件",
+                trs!(self.english(), "ask.full_access"),
+                trs!(self.english(), "ask.unrestricted_access_to_the_network"),
             ))
     }
 
@@ -704,7 +704,7 @@ impl Workspace {
                 .text_size(px(12.8))
                 .text_color(p.c(Token::Warning))
                 .child(icon("shield-alert", 16.0, p.c(Token::Warning)))
-                .child("完全访问"),
+                .child(trs!(self.english(), "ask.full_access_2")),
             Access::Auto => base.w(px(28.0)).justify_center().child(icon(
                 "security-check",
                 16.0,

@@ -235,7 +235,9 @@ impl Workspace {
         } else {
             String::new()
         };
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder("名称 / Name"));
+        let name = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(trs!(self.english(), "pane_entries.name"))
+        });
         name.update(cx, |state, cx| state.set_value(initial, window, cx));
         cx.subscribe_in(&name, window, |this, source, event: &InputEvent, _, cx| {
             if this
@@ -535,6 +537,7 @@ impl Workspace {
                 },
                 |this, _, cx| this.submit_entry(cx),
                 d.busy || (!deleting && d.name.read(cx).value().trim().is_empty()),
+                self.english(),
             ));
         Some(modal(body, p, cx, |this| {
             if this

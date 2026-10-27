@@ -1,0 +1,12 @@
+skill_picker.could_not_read_skills_e:
+  zh: "无法读取技能：%{e}"
+  en: "Could not read skills: %{e}"
+skill_picker.could_not_select_the_skill:
+  zh: "无法选择技能：%{e}"
+  en: "Could not select the skill: %{e}"
+skill_picker.no_matching_skills:
+  zh: "没有匹配的技能"
+  en: "No matching skills"
+skill_picker.loading_skills:
+  zh: "正在加载技能…"
+  en: "Loading skills…"

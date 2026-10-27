@@ -60,3 +60,78 @@ usage.by_project:
 usage.by_chat:
   zh: "按对话"
   en: "By chat"
+usage.today_tokens_this_view:
+  zh: "%{arg1} · 本日 %{arg2} Token · 当前视图 %{arg3}"
+  en: "%{arg1} · today %{arg2} tokens · this view %{arg3}"
+usage.peak_tokens:
+  zh: "%{arg1} — %{arg2} · 峰值 %{arg3} Token"
+  en: "%{arg1} — %{arg2} · peak %{arg3} tokens"
+usage.tokens_requests:
+  zh: "%{arg1} Token · %{arg2} 次"
+  en: "%{arg1} tokens · %{arg2} requests"
+usage.other_models:
+  zh: "其它模型"
+  en: "Other models"
+usage.partial:
+  zh: "（部分）"
+  en: "(partial)"
+usage.model_usage:
+  zh: "模型用量"
+  en: "Model usage"
+usage.month_1:
+  zh: "1月"
+  en: "Jan"
+usage.month_2:
+  zh: "2月"
+  en: "Feb"
+usage.month_3:
+  zh: "3月"
+  en: "Mar"
+usage.month_4:
+  zh: "4月"
+  en: "Apr"
+usage.month_5:
+  zh: "5月"
+  en: "May"
+usage.month_6:
+  zh: "6月"
+  en: "Jun"
+usage.month_7:
+  zh: "7月"
+  en: "Jul"
+usage.month_8:
+  zh: "8月"
+  en: "Aug"
+usage.month_9:
+  zh: "9月"
+  en: "Sep"
+usage.month_10:
+  zh: "10月"
+  en: "Oct"
+usage.month_11:
+  zh: "11月"
+  en: "Nov"
+usage.month_12:
+  zh: "12月"
+  en: "Dec"
+usage.weekday_0:
+  zh: "日"
+  en: "S"
+usage.weekday_1:
+  zh: "一"
+  en: "M"
+usage.weekday_2:
+  zh: "二"
+  en: "T"
+usage.weekday_3:
+  zh: "三"
+  en: "W"
+usage.weekday_4:
+  zh: "四"
+  en: "T"
+usage.weekday_5:
+  zh: "五"
+  en: "F"
+usage.weekday_6:
+  zh: "六"
+  en: "S"

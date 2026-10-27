@@ -5,6 +5,23 @@
 
 rust_i18n::i18n!("locales", fallback = "zh");
 
+/// `tr!(english, "module.key", name = value)`: copy lives in `locales/<module>.yml`.
+/// Declared before the child modules so they can use it.
+macro_rules! tr {
+    ($english:expr, $key:literal $(, $name:ident = $value:expr)* $(,)?) => {
+        rust_i18n::t!($key, locale = if $english { "en" } else { "zh" } $(, $name = $value)*)
+            .into_owned()
+    };
+}
+
+/// Like `tr!` for copy with no placeholders, as a `&'static str`. The set of keys is
+/// fixed at compile time, so each (key, language) is leaked once.
+macro_rules! trs {
+    ($english:expr, $key:expr) => {
+        $crate::workspace::static_text($english, $key)
+    };
+}
+
 pub mod assets;
 pub mod backend;
 pub mod context_stats;

@@ -191,6 +191,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 let Some(s) = this
                     .settings
                     .as_mut()
@@ -201,7 +202,13 @@ impl Workspace {
                 s.about.loading = false;
                 match result {
                     Ok(catalog) => s.about.catalog = Some(catalog),
-                    Err(error) => s.about.error = Some(format!("读取模型目录失败：{error}")),
+                    Err(error) => {
+                        s.about.error = Some(tr!(
+                            english,
+                            "about.could_not_read_the_model",
+                            error = error
+                        ))
+                    }
                 }
                 let again = std::mem::take(&mut s.about.dirty);
                 if again {
@@ -235,6 +242,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 let Some(s) = this
                     .settings
                     .as_mut()
@@ -248,15 +256,19 @@ impl Workspace {
                         s.about.catalog = Some(update.catalog);
                         s.about.notice = Some(
                             if update.changed {
-                                "模型目录已更新"
+                                trs!(english, "about.model_catalog_updated")
                             } else {
-                                "模型目录已是最新"
+                                trs!(english, "about.model_catalog_is_up_to")
                             }
                             .into(),
                         );
                     }
                     Err(error) => {
-                        s.about.error = Some(format!("更新失败，已保留原模型目录：{error}"))
+                        s.about.error = Some(tr!(
+                            english,
+                            "about.update_failed_the_previous_catalog",
+                            error = error
+                        ))
                     }
                 }
                 let again = std::mem::take(&mut s.about.dirty);

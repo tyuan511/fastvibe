@@ -1156,6 +1156,7 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(state) = this.panes.get_mut(&conversation) {
                     match result {
                         Ok(_) => {
@@ -1191,7 +1192,14 @@ impl Workspace {
                             }
                             state.notice = None;
                         }
-                        Err(e) => state.notice = Some(format!("保存「{path}」失败：{e}")),
+                        Err(e) => {
+                            state.notice = Some(tr!(
+                                english,
+                                "pane.could_not_save_path_e",
+                                path = path,
+                                e = e
+                            ))
+                        }
                     }
                 }
                 cx.notify();
@@ -1262,7 +1270,7 @@ impl Workspace {
                         Err(e) => FilePreview::Error {
                             path: path.clone(),
                             name: String::new(),
-                            message: format!("无法读取这个文件：{e}"),
+                            message: tr!(this.english(), "pane.could_not_read_this_file", e = e),
                             reason: PreviewFailure::Unknown,
                             detail: None,
                             directory: None,
@@ -1299,6 +1307,7 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(state) = this.panes.get_mut(&conversation) {
                     if state.listing_epoch != epoch {
                         return;
@@ -1308,7 +1317,10 @@ impl Workspace {
                         Ok(listed) => {
                             state.listings.insert(path.clone(), listed.entries);
                         }
-                        Err(e) => state.notice = Some(format!("无法读取这个文件夹：{e}")),
+                        Err(e) => {
+                            state.notice =
+                                Some(tr!(english, "pane.could_not_read_this_folder", e = e))
+                        }
                     }
                 }
                 cx.notify();
@@ -1733,7 +1745,7 @@ impl Workspace {
             .w(px(8.0))
             .cursor_col_resize()
             .role(Role::Splitter)
-            .aria_label("调整文件树宽度")
+            .aria_label(trs!(self.english(), "pane.resize_file_tree"))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {

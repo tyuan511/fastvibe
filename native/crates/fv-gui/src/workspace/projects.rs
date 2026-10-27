@@ -396,6 +396,7 @@ impl Workspace {
                     },
                     |this, _, cx| this.save_project(cx),
                     d.folders.is_empty() || d.busy,
+                    self.english(),
                 ));
         Some(modal(body, p, cx, |this| this.project_dialog = None))
     }

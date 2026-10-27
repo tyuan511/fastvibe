@@ -532,7 +532,7 @@ impl Workspace {
             let editor = cx.new(|cx| {
                 TextareaState::new(window, cx)
                     .auto_grow(1, 8)
-                    .placeholder("提交信息 / Commit message")
+                    .placeholder(trs!(self.english(), "pane_git.commit_message"))
             });
             editor.update(cx, |state, cx| state.set_value(text, window, cx));
             let owner = target.clone();
@@ -591,6 +591,7 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(view) = this.git_repo_mut(&target)
                     && view.accepts_status(epoch)
                 {
@@ -599,7 +600,13 @@ impl Workspace {
                             view.status = Some(status);
                             view.notice = None;
                         }
-                        Err(error) => view.notice = Some(format!("无法读取 Git 状态：{error}")),
+                        Err(error) => {
+                            view.notice = Some(tr!(
+                                english,
+                                "pane_git.could_not_read_the_git",
+                                error = error
+                            ))
+                        }
                     }
                 }
                 cx.notify();
@@ -634,12 +641,19 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(view) = this.git_repo_mut(&target) {
                     view.finish_patch(
                         epoch,
                         result
                             .map(|patch| (path, source, patch.text))
-                            .map_err(|error| format!("无法读取这个改动：{error}")),
+                            .map_err(|error| {
+                                tr!(
+                                    english,
+                                    "pane_git.could_not_read_this_change",
+                                    error = error
+                                )
+                            }),
                     );
                 }
                 cx.notify();
@@ -675,11 +689,14 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let english = this.english();
                 if let Some(view) = this.git_repo_mut(&target) {
                     view.finish_history(
                         epoch,
                         skip,
-                        result.map_err(|error| format!("无法读取提交历史：{error}")),
+                        result.map_err(|error| {
+                            tr!(english, "pane_git.could_not_read_the_commit", error = error)
+                        }),
                     );
                 }
                 cx.notify();
@@ -739,6 +756,7 @@ impl Workspace {
     }
 
     fn git_commit(&mut self, target: &GitTarget, cx: &mut Context<Self>) {
+        let english = self.english();
         if !self.git_target_is_current(target) {
             return;
         }
@@ -754,7 +772,7 @@ impl Workspace {
         view.message = draft.clone();
         let message = draft.trim().to_string();
         if message.is_empty() {
-            view.notice = Some("先写一句提交信息".into());
+            view.notice = Some(trs!(english, "pane_git.write_a_commit_message_first").into());
             cx.notify();
             return;
         }
@@ -785,6 +803,7 @@ impl Workspace {
                 Err(error) => Err(error),
             };
             this.update(cx, |this, cx| {
+                let english = this.english();
                 let current = this.git_target_is_current(&target);
                 let mut refresh_history = false;
                 if let Some(view) = this.git_repo_mut(&target) {
@@ -802,7 +821,10 @@ impl Workspace {
                             view.invalidate_history();
                             refresh_history = current && view.show_history;
                         }
-                        Err(error) => view.notice = Some(format!("提交失败：{error}")),
+                        Err(error) => {
+                            view.notice =
+                                Some(tr!(english, "pane_git.commit_failed_error", error = error))
+                        }
                     }
                 }
                 if refresh_history {

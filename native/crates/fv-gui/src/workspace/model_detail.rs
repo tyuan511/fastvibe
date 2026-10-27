@@ -745,6 +745,7 @@ impl Workspace {
                 },
                 |this, _, cx| this.save_model_detail(false, cx),
                 busy || e.draft.base.is_none(),
+                self.english(),
             ));
         Some(modal(body, p, cx, |this| {
             if let Some(s) = &mut this.settings {

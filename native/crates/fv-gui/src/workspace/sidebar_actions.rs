@@ -400,12 +400,13 @@ impl Workspace {
                         this.sidebar_notice = None;
                         cx.notify();
                     },
-                    "知道了",
+                    trs!(self.english(), "sidebar_actions.got_it"),
                     |this, _, cx| {
                         this.sidebar_notice = None;
                         cx.notify();
                     },
                     false,
+                    self.english(),
                 )),
             p,
             cx,
@@ -428,7 +429,11 @@ impl Workspace {
                     this.refresh_threads(cx);
                 }
                 Err(e) => {
-                    this.sidebar_notice = Some(format!("无法创建分支：{e}"));
+                    this.sidebar_notice = Some(tr!(
+                        this.english(),
+                        "sidebar_actions.could_not_create_the_branch",
+                        e = e
+                    ));
                     cx.notify();
                 }
             })

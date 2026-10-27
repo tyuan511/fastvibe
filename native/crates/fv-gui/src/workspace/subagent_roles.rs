@@ -488,7 +488,7 @@ impl Workspace {
         .enumerate()
         {
             let label = value
-                .map(super::composer::thinking_label)
+                .map(|level| super::composer::thinking_label_in(level, self.english()))
                 .unwrap_or(trs!(english, "subagent_roles.inherit_thinking_level"));
             thinking = thinking.child(
                 outline_button(SharedString::from(format!("role-thinking-{i}")), p)

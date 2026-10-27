@@ -90,3 +90,15 @@ about.bundled:
 about.downloaded:
   zh: "已下载"
   en: "downloaded"
+about.update_failed_the_previous_catalog:
+  zh: "更新失败，已保留原模型目录：%{error}"
+  en: "Update failed; the previous catalog was kept: %{error}"
+about.could_not_read_the_model:
+  zh: "读取模型目录失败：%{error}"
+  en: "Could not read the model catalog: %{error}"
+about.model_catalog_is_up_to:
+  zh: "模型目录已是最新"
+  en: "Model catalog is up to date"
+about.model_catalog_updated:
+  zh: "模型目录已更新"
+  en: "Model catalog updated"

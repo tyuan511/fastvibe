@@ -30,3 +30,27 @@ ask.allow_once:
 ask.allow_for_this_chat:
   zh: "本次会话都允许"
   en: "Allow for this chat"
+ask.commands_run_in_the_sandbox:
+  zh: "命令先在沙箱中运行，被沙箱挡住后才请求批准"
+  en: "Commands run in the sandbox first; approval is requested only when the sandbox blocks one"
+ask.how_should_fastvibe_s_actions:
+  zh: "应如何批准 FastVibe 的操作？"
+  en: "How should FastVibe's actions be approved?"
+ask.always_ask_before_editing_files:
+  zh: "在项目外编辑文件、使用网络时始终询问"
+  en: "Always ask before editing files outside the project or using the network"
+ask.unrestricted_access_to_the_network:
+  zh: "不受限制地访问网络和电脑上的任何文件"
+  en: "Unrestricted access to the network and any file on this computer"
+ask.run_in_the_sandbox:
+  zh: "沙箱里直接做"
+  en: "Run in the sandbox"
+ask.full_access:
+  zh: "完全访问权限"
+  en: "Full access"
+ask.full_access_2:
+  zh: "完全访问"
+  en: "Full access"
+ask.ask_for_approval:
+  zh: "请求批准"
+  en: "Ask for approval"

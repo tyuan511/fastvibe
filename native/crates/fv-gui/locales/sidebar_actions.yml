@@ -42,3 +42,9 @@ sidebar_actions.delete:
 sidebar_actions.remove_project_arg1:
   zh: "移除项目「%{arg1}」？"
   en: "Remove project '%{arg1}'？"
+sidebar_actions.could_not_create_the_branch:
+  zh: "无法创建分支：%{e}"
+  en: "Could not create the branch: %{e}"
+sidebar_actions.got_it:
+  zh: "知道了"
+  en: "Got it"

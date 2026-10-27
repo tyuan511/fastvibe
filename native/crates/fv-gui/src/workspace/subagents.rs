@@ -62,7 +62,8 @@ impl Workspace {
             .find(|a| a.status != SubagentStatus::Closed)
             .map(|a| a.agent_id.clone())
         else {
-            self.subagents.error=Some("当前对话还没有辅助对话；让 Agent 使用 spawn_agent 创建一个子任务后即可在这里打开。".into());
+            self.subagents.error =
+                Some(trs!(self.english(), "subagents.this_chat_has_no_side").into());
             cx.notify();
             return;
         };

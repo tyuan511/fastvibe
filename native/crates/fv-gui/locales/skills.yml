@@ -57,3 +57,9 @@ skills.choose_folder:
 skills.import:
   zh: "导入"
   en: "Import"
+skills.could_not_open_the_skill:
+  zh: "无法打开技能：%{e}"
+  en: "Could not open the skill: %{e}"
+skills.could_not_read_skills_e:
+  zh: "无法读取技能：%{e}"
+  en: "Could not read skills: %{e}"

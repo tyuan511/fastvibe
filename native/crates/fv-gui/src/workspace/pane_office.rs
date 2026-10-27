@@ -103,6 +103,7 @@ impl Workspace {
                     .await;
                 let alive = this
                     .update(cx, |this, cx| {
+                        let english = this.english();
                         let Some(view) =
                             this.office_views.get_mut(&tab).filter(|v| v.lease == lease)
                         else {
@@ -110,7 +111,9 @@ impl Workspace {
                         };
                         let error = match result {
                             Ok(state) if state.phase == OfficeWatchPhase::Ready => return true,
-                            Ok(state) => state.message.unwrap_or_else(|| "实时预览已停止".into()),
+                            Ok(state) => state.message.unwrap_or_else(|| {
+                                trs!(english, "pane_office.live_preview_stopped").into()
+                            }),
                             Err(error) => error.to_string(),
                         };
                         view.watch_error = Some(error);
@@ -131,6 +134,7 @@ impl Workspace {
         .detach();
     }
     fn office_snapshot(&self, tab: &str, path: &str, lease: &str, cx: &mut Context<Self>) {
+        let english = self.english();
         let Some(backend) = self.backend.clone() else {
             return;
         };
@@ -153,9 +157,15 @@ impl Workspace {
                                 .and_then(|f| {
                                     f.take(16 * 1024 * 1024 + 1).read_to_string(&mut text)
                                 })
-                                .map_err(|e| format!("无法读取文档快照：{e}"))?;
+                                .map_err(|e| {
+                                    tr!(english, "pane_office.could_not_read_the_document", e = e)
+                                })?;
                             if text.len() > 16 * 1024 * 1024 {
-                                return Err("文档快照过大".into());
+                                return Err(trs!(
+                                    english,
+                                    "pane_office.the_document_snapshot_is_too"
+                                )
+                                .into());
                             }
                             Ok(text)
                         })

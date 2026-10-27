@@ -1,0 +1,135 @@
+mod.the_app_update_is_not:
+  zh: "应用更新尚未完成。请等待任务结束、关闭仍在运行的终端后重新打开窗口，以启用最新功能。"
+  en: "The app update is not finished yet. Wait for running tasks to end, close any running terminals, then reopen the window to use the latest features."
+mod.this_turn_s_reply_will:
+  zh: "这一轮的回复会丢弃并重新生成。工作区文件可以一起退回到这一轮开始之前。"
+  en: "This turn's reply will be discarded and generated again. Workspace files can be rolled back to how they were before this turn."
+mod.no_model_is_available_yet:
+  zh: "还没有可用的模型：先到 设置 → 模型与默认 添加供应商。"
+  en: "No model is available yet. Add a provider in Settings → Models & defaults first."
+mod.could_not_read_the_saved:
+  zh: "无法读取工作区恢复信息，原文件已保留：%{error}"
+  en: "Could not read the saved workspace layout; the original file was kept: %{error}"
+mod.workspace_rolled_back_files_restored:
+  zh: "已退回工作区：还原 %{restored} 个文件，删除 %{removed} 个"
+  en: "Workspace rolled back: %{restored} files restored, %{removed} removed"
+mod.could_not_change_the_model:
+  zh: "无法切换模型或思考强度：%{e}"
+  en: "Could not change the model or thinking level: %{e}"
+mod.a_background_chat_failed_error:
+  zh: "后台对话失败：%{error}"
+  en: "A background chat failed: %{error}"
+mod.reason_queued_instead:
+  zh: "%{reason}，已改为排队"
+  en: "%{reason}; queued instead"
+mod.could_not_create_the_isolated:
+  zh: "无法创建隔离工作区：%{e}"
+  en: "Could not create the isolated workspace: %{e}"
+mod.files_could_not_be_rolled:
+  zh: "%{count} 个文件没能退回：%{names}"
+  en: "%{count} files could not be rolled back: %{names}"
+mod.could_not_unbind_the_isolated:
+  zh: "无法解除隔离工作区：%{e}"
+  en: "Could not unbind the isolated workspace: %{e}"
+mod.could_not_compact_the_context:
+  zh: "无法压缩上下文：%{e}"
+  en: "Could not compact the context: %{e}"
+mod.could_not_send_now_e:
+  zh: "无法立即发送：%{e}"
+  en: "Could not send now: %{e}"
+mod.could_not_resend_e:
+  zh: "无法重新发送：%{e}"
+  en: "Could not resend: %{e}"
+mod.could_not_queue_the_message:
+  zh: "加入队列失败：%{e}"
+  en: "Could not queue the message: %{e}"
+mod.could_not_update_the_chat:
+  zh: "无法更新对话：%{e}"
+  en: "Could not update the chat: %{e}"
+mod.could_not_save_settings_e:
+  zh: "无法保存设置：%{e}"
+  en: "Could not save settings: %{e}"
+mod.could_not_delete_the_chat:
+  zh: "无法删除对话：%{e}"
+  en: "Could not delete the chat: %{e}"
+mod.could_not_create_a_chat:
+  zh: "无法新建对话：%{e}"
+  en: "Could not create a chat: %{e}"
+mod.could_not_remove_the_project:
+  zh: "无法移除项目：%{e}"
+  en: "Could not remove the project: %{e}"
+mod.could_not_open_the_chat:
+  zh: "无法打开对话：%{e}"
+  en: "Could not open the chat: %{e}"
+mod.show_in_file_manager:
+  zh: "在文件管理器中显示"
+  en: "Show in file manager"
+mod.could_not_retry_e:
+  zh: "无法重试：%{e}"
+  en: "Could not retry: %{e}"
+mod.could_not_steer_the_reply:
+  zh: "无法插话：%{e}"
+  en: "Could not steer the reply: %{e}"
+mod.isolated_workspace_created:
+  zh: "已创建隔离工作区"
+  en: "Isolated workspace created"
+mod.send_failed_e:
+  zh: "发送失败：%{e}"
+  en: "Send failed: %{e}"
+mod.a_background_chat_finished:
+  zh: "后台对话已完成"
+  en: "A background chat finished"
+mod.back_in_the_project_folder:
+  zh: "已回到项目目录"
+  en: "Back in the project folder"
+mod.create_isolated_workspace:
+  zh: "创建隔离工作区"
+  en: "Create isolated workspace"
+mod.roll_back_files_and_retry:
+  zh: "退回文件并重试"
+  en: "Roll back files and retry"
+mod.unbind_isolated_workspace:
+  zh: "解除隔离工作区"
+  en: "Unbind isolated workspace"
+mod.a_background_chat_stopped:
+  zh: "后台对话已停止"
+  en: "A background chat stopped"
+mod.a_background_chat_failed:
+  zh: "后台对话失败"
+  en: "A background chat failed"
+mod.retry_this_turn:
+  zh: "重试这一轮？"
+  en: "Retry this turn?"
+mod.keep_file_changes:
+  zh: "保留文件改动"
+  en: "Keep file changes"
+mod.fork:
+  zh: "创建分支"
+  en: "Fork"
+mod.unpin:
+  zh: "取消置顶"
+  en: "Unpin"
+mod.edit_project:
+  zh: "编辑项目"
+  en: "Edit project"
+mod.remove_project:
+  zh: "移除项目"
+  en: "Remove project"
+mod.rename:
+  zh: "重命名"
+  en: "Rename"
+mod.new_chat:
+  zh: "新对话"
+  en: "New chat"
+mod.cancel:
+  zh: "取消"
+  en: "Cancel"
+mod.archive:
+  zh: "归档"
+  en: "Archive"
+mod.delete:
+  zh: "删除"
+  en: "Delete"
+mod.pin:
+  zh: "置顶"
+  en: "Pin"

@@ -396,3 +396,39 @@ settings.fetched_arg1_models_select_the:
 settings.base_url:
   zh: "Base URL"
   en: "Base URL"
+settings.save_failed_your_selection_was:
+  zh: "保存失败，选择已保留：%{error}"
+  en: "Save failed; your selection was kept: %{error}"
+settings.could_not_read_the_import:
+  zh: "读取导入预览失败：%{error}"
+  en: "Could not read the import preview: %{error}"
+settings.could_not_read_import_candidates:
+  zh: "读取导入候选失败：%{error}"
+  en: "Could not read import candidates: %{error}"
+settings.not_connected_to_the_service:
+  zh: "还没有连上服务，稍后再试。"
+  en: "Not connected to the service yet; try again shortly."
+settings.saved_enter_a_new_key:
+  zh: "已保存，输入新密钥可更新"
+  en: "Saved; enter a new key to replace it"
+settings.import_failed_error:
+  zh: "导入失败：%{error}"
+  en: "Import failed: %{error}"
+settings.could_not_fetch_the_model:
+  zh: "无法拉取模型列表：%{e}"
+  en: "Could not fetch the model list: %{e}"
+settings.could_not_read_providers_e:
+  zh: "读取供应商失败：%{e}"
+  en: "Could not read providers: %{e}"
+settings.paste_the_api_key:
+  zh: "粘贴 API 密钥"
+  en: "Paste the API key"
+settings.save_failed_e:
+  zh: "保存失败：%{e}"
+  en: "Save failed: %{e}"
+settings.select_at_least_one_model:
+  zh: "至少选择一个模型"
+  en: "Select at least one model"
+settings.cancel:
+  zh: "取消"
+  en: "Cancel"

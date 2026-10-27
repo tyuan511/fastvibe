@@ -21,3 +21,21 @@ transcript.preparing_search:
 transcript.status_status:
   zh: "状态：%{status}"
   en: "Status: %{status}"
+transcript.mins_min_ago:
+  zh: "%{mins} 分钟前"
+  en: "%{mins} min ago"
+transcript.more_lines:
+  zh: "… 还有 %{arg1} 行"
+  en: "… %{arg1} more lines"
+transcript.h_ago:
+  zh: "%{arg1} 小时前"
+  en: "%{arg1} h ago"
+transcript.edit:
+  zh: "编辑"
+  en: "Edit"
+transcript.copy:
+  zh: "复制"
+  en: "Copy"
+transcript.just_now:
+  zh: "刚刚"
+  en: "Just now"

@@ -12,23 +12,6 @@ use fv_theme::Token;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::*;
 
-/// `tr!(english, "module.key", name = value)`: copy lives in `locales/<module>.yml`.
-/// Declared before the child modules so they can use it.
-macro_rules! tr {
-    ($english:expr, $key:literal $(, $name:ident = $value:expr)* $(,)?) => {
-        rust_i18n::t!($key, locale = if $english { "en" } else { "zh" } $(, $name = $value)*)
-            .into_owned()
-    };
-}
-
-/// Like `tr!` for copy with no placeholders, as a `&'static str`. The set of keys is
-/// fixed at compile time, so each (key, language) is leaked once.
-macro_rules! trs {
-    ($english:expr, $key:expr) => {
-        $crate::workspace::static_text($english, $key)
-    };
-}
-
 mod about;
 mod app_menu;
 mod ask;
@@ -67,15 +50,22 @@ use crate::theme::Palette;
 use crate::view_model::{Applied, ThreadView};
 
 /// The Electron app's Chinese copy (`locales/zh`), word for word.
-pub(crate) fn static_text(english: bool, key: &'static str) -> &'static str {
+pub(crate) fn static_text(english: bool, key: &str) -> &'static str {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<(&'static str, bool), &'static str>>> = OnceLock::new();
+    // Per language, then by key: a hit allocates nothing, and the set of keys is fixed at
+    // compile time, so what is leaked (one string per key and language) is bounded.
+    type Cache = [HashMap<String, &'static str>; 2];
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
-    cache.entry((key, english)).or_insert_with(|| {
-        let text = rust_i18n::t!(key, locale = if english { "en" } else { "zh" });
-        Box::leak(text.into_owned().into_boxed_str())
-    })
+    let table = &mut cache[usize::from(english)];
+    if let Some(text) = table.get(key) {
+        return text;
+    }
+    let text = rust_i18n::t!(key, locale = if english { "en" } else { "zh" });
+    let text: &'static str = Box::leak(text.into_owned().into_boxed_str());
+    table.insert(key.to_string(), text);
+    text
 }
 
 mod text {
@@ -352,8 +342,10 @@ impl Workspace {
                     match recovery {
                         Ok(storage) => this.restore_panes(storage),
                         Err(error) => {
-                            this.notice = Some(Notice::Failed(format!(
-                                "无法读取工作区恢复信息，原文件已保留：{error}"
+                            this.notice = Some(Notice::Failed(tr!(
+                                this.english(),
+                                "mod.could_not_read_the_saved",
+                                error = error
                             )))
                         }
                     }
@@ -629,35 +621,47 @@ impl Workspace {
         let (rename_id, pin_id, archive_id, delete_id) =
             (id.clone(), id.clone(), id.clone(), id.clone());
         let (worktree_id, unbind_id) = (id.clone(), id);
-        let menu =
-            settings::popover(p)
-                .absolute()
-                .left(at.x)
-                .top(at.y)
-                .w(px(160.0))
-                .child(
-                    item("rename", "pencil-edit02", "重命名").on_click(cx.listener(
-                        move |this, _, window, cx| this.begin_rename(rename_id.clone(), window, cx),
-                    )),
+        let menu = settings::popover(p)
+            .absolute()
+            .left(at.x)
+            .top(at.y)
+            .w(px(160.0))
+            .child(
+                item(
+                    "rename",
+                    "pencil-edit02",
+                    trs!(self.english(), "mod.rename"),
                 )
-                .child(
-                    item("pin", "pin", if pinned { "取消置顶" } else { "置顶" }).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.thread_menu = None;
-                            this.update_thread(
-                                ThreadUpdateParams {
-                                    thread_id: pin_id.clone(),
-                                    title: None,
-                                    archived: None,
-                                    pinned: Some(!pinned),
-                                },
-                                cx,
-                            )
-                        }),
-                    ),
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.begin_rename(rename_id.clone(), window, cx)
+                })),
+            )
+            .child(
+                item(
+                    "pin",
+                    "pin",
+                    if pinned {
+                        trs!(self.english(), "mod.unpin")
+                    } else {
+                        trs!(self.english(), "mod.pin")
+                    },
                 )
-                .child(item("archive", "archive04", "归档").on_click(cx.listener(
-                    move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.thread_menu = None;
+                    this.update_thread(
+                        ThreadUpdateParams {
+                            thread_id: pin_id.clone(),
+                            title: None,
+                            archived: None,
+                            pinned: Some(!pinned),
+                        },
+                        cx,
+                    )
+                })),
+            )
+            .child(
+                item("archive", "archive04", trs!(self.english(), "mod.archive")).on_click(
+                    cx.listener(move |this, _, _, cx| {
                         this.thread_menu = None;
                         this.update_thread(
                             ThreadUpdateParams {
@@ -668,35 +672,47 @@ impl Workspace {
                             },
                             cx,
                         )
-                    },
-                )))
-                .child(item("fork", "message-square-plus", "创建分支").on_click(
-                    cx.listener(move |this, _, _, cx| this.fork_thread(fork_id.clone(), cx)),
-                ))
-                // One row, because the two states are one question: is this conversation running
-                // in its own checkout, and do you want it to? The label says where it is when it
-                // is, so the row is a statement and not just a command.
-                .child(match bound.is_some() {
-                    true => item("worktree", "git-branch", "解除隔离工作区").on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.thread_menu = None;
-                            this.unbind_worktree(unbind_id.clone(), cx)
-                        },
-                    )),
-                    false => item("worktree", "git-branch", "创建隔离工作区").on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.thread_menu = None;
-                            this.create_worktree(worktree_id.clone(), cx)
-                        }),
-                    ),
-                })
-                .child(
-                    item("delete", "delete02", "删除")
-                        .text_color(p.c(Token::Destructive))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.confirm_delete_thread(delete_id.clone(), window, cx)
-                        })),
-                );
+                    }),
+                ),
+            )
+            .child(
+                item(
+                    "fork",
+                    "message-square-plus",
+                    trs!(self.english(), "mod.fork"),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.fork_thread(fork_id.clone(), cx))),
+            )
+            // One row, because the two states are one question: is this conversation running
+            // in its own checkout, and do you want it to? The label says where it is when it
+            // is, so the row is a statement and not just a command.
+            .child(match bound.is_some() {
+                true => item(
+                    "worktree",
+                    "git-branch",
+                    trs!(self.english(), "mod.unbind_isolated_workspace"),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.thread_menu = None;
+                    this.unbind_worktree(unbind_id.clone(), cx)
+                })),
+                false => item(
+                    "worktree",
+                    "git-branch",
+                    trs!(self.english(), "mod.create_isolated_workspace"),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.thread_menu = None;
+                    this.create_worktree(worktree_id.clone(), cx)
+                })),
+            })
+            .child(
+                item("delete", "delete02", trs!(self.english(), "mod.delete"))
+                    .text_color(p.c(Token::Destructive))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.confirm_delete_thread(delete_id.clone(), window, cx)
+                    })),
+            );
         Some(crate::ui::float(menu).into_any_element())
     }
 
@@ -728,26 +744,35 @@ impl Workspace {
                 cx.listener(move |this, _, _, cx| this.new_chat(Some(new_path.clone()), cx)),
             ))
             .child(
-                item("pm-reveal", "folder-root", "在文件管理器中显示").on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.close_menus(cx);
-                        cx.reveal_path(std::path::Path::new(&reveal_path));
-                    },
-                )),
+                item(
+                    "pm-reveal",
+                    "folder-root",
+                    trs!(self.english(), "mod.show_in_file_manager"),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_menus(cx);
+                    cx.reveal_path(std::path::Path::new(&reveal_path));
+                })),
             )
             .child(
-                item("pm-edit", "pencil-edit02", "编辑项目").on_click(cx.listener(
-                    move |this, _, window, cx| {
-                        this.open_project_dialog(Some(edit_path.clone()), window, cx)
-                    },
-                )),
+                item(
+                    "pm-edit",
+                    "pencil-edit02",
+                    trs!(self.english(), "mod.edit_project"),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_project_dialog(Some(edit_path.clone()), window, cx)
+                })),
             )
             .child(
-                item("pm-remove", "delete02", "移除项目").on_click(cx.listener(
-                    move |this, _, window, cx| {
-                        this.confirm_remove_project(path.clone(), window, cx)
-                    },
-                )),
+                item(
+                    "pm-remove",
+                    "delete02",
+                    trs!(self.english(), "mod.remove_project"),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.confirm_remove_project(path.clone(), window, cx)
+                })),
             );
         Some(crate::ui::float(menu).into_any_element())
     }
@@ -935,7 +960,8 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             if let Err(e) = call.await {
                 this.update(cx, |this, cx| {
-                    this.sidebar_notice = Some(format!("无法保存设置：{e}"));
+                    this.sidebar_notice =
+                        Some(tr!(this.english(), "mod.could_not_save_settings_e", e = e));
                     this.refresh_app_settings(cx);
                     cx.notify();
                 })
@@ -998,7 +1024,11 @@ impl Workspace {
             let result = call.await;
             this.update(cx, |this, cx| {
                 if let Err(e) = result {
-                    this.sidebar_notice = Some(format!("无法移除项目：{e}"));
+                    this.sidebar_notice = Some(tr!(
+                        this.english(),
+                        "mod.could_not_remove_the_project",
+                        e = e
+                    ));
                 }
                 this.refresh_projects(cx);
             })
@@ -1033,7 +1063,8 @@ impl Workspace {
             let result = call.await;
             this.update(cx, |this, cx| {
                 if let Err(e) = result {
-                    this.sidebar_notice = Some(format!("无法更新对话：{e}"));
+                    this.sidebar_notice =
+                        Some(tr!(this.english(), "mod.could_not_update_the_chat", e = e));
                 }
                 this.refresh_threads(cx);
                 this.refresh_archived(cx);
@@ -1060,7 +1091,8 @@ impl Workspace {
             let result = call.await;
             this.update(cx, |this, cx| {
                 if let Err(e) = result {
-                    this.sidebar_notice = Some(format!("无法删除对话：{e}"));
+                    this.sidebar_notice =
+                        Some(tr!(this.english(), "mod.could_not_delete_the_chat", e = e));
                 } else {
                     this.forget_pane(&id, cx);
                 }
@@ -1304,10 +1336,8 @@ impl Workspace {
                 self.refresh_usage(cx);
                 self.refresh_about(cx);
                 if version_mismatch {
-                    self.sidebar_notice = Some(
-                        "应用更新尚未完成。请等待任务结束、关闭仍在运行的终端后重新打开窗口，以启用最新功能。"
-                            .into(),
-                    );
+                    self.sidebar_notice =
+                        Some(trs!(self.english(), "mod.the_app_update_is_not").into());
                     cx.notify();
                 }
             }
@@ -1392,14 +1422,26 @@ impl Workspace {
                         self.dock_badge = self.dock_badge.saturating_add(1);
                         crate::dock::set(self.dock_badge);
                         self.sidebar_notice = Some(match event.body.status {
-                            TurnStatus::Completed => "后台对话已完成".into(),
-                            TurnStatus::Interrupted => "后台对话已停止".into(),
+                            TurnStatus::Completed => {
+                                trs!(self.english(), "mod.a_background_chat_finished").into()
+                            }
+                            TurnStatus::Interrupted => {
+                                trs!(self.english(), "mod.a_background_chat_stopped").into()
+                            }
                             TurnStatus::Failed => event
                                 .body
                                 .error
                                 .clone()
-                                .map(|error| format!("后台对话失败：{error}"))
-                                .unwrap_or_else(|| "后台对话失败".into()),
+                                .map(|error| {
+                                    tr!(
+                                        self.english(),
+                                        "mod.a_background_chat_failed_error",
+                                        error = error
+                                    )
+                                })
+                                .unwrap_or_else(|| {
+                                    trs!(self.english(), "mod.a_background_chat_failed").into()
+                                }),
                         });
                     }
                     ServerNotification::WorkspaceEntryChanged(change) => {
@@ -1433,6 +1475,7 @@ impl Workspace {
     }
 
     pub(super) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let english = self.english();
         if self.entry_dialog.is_some() || self.schedules_ui.open {
             return;
         }
@@ -1474,7 +1517,7 @@ impl Workspace {
                         });
                     });
                     this.update(cx, |this, cx| {
-                        this.fail(format!("无法重新发送：{e}"), cx);
+                        this.fail(tr!(this.english(), "mod.could_not_resend_e", e = e), cx);
                         cx.notify();
                     })
                     .ok();
@@ -1522,7 +1565,7 @@ impl Workspace {
                     {
                         None
                     }
-                    Err(e) => Some(format!("无法插话：{e}")),
+                    Err(e) => Some(tr!(english, "mod.could_not_steer_the_reply", e = e)),
                 };
                 let queued = b
                     .call::<TurnEnqueue>(TurnEnqueueParams {
@@ -1537,7 +1580,10 @@ impl Workspace {
                         });
                     });
                     this.update(cx, |this, cx| {
-                        this.fail(format!("加入队列失败：{e}"), cx);
+                        this.fail(
+                            tr!(this.english(), "mod.could_not_queue_the_message", e = e),
+                            cx,
+                        );
                         cx.notify();
                     })
                     .ok();
@@ -1545,7 +1591,10 @@ impl Workspace {
                     // Steering was refused for a reason other than "it just ended": say so, and
                     // that the words are at least queued.
                     this.update(cx, |this, cx| {
-                        this.fail(format!("{reason}，已改为排队"), cx);
+                        this.fail(
+                            tr!(this.english(), "mod.reason_queued_instead", reason = reason),
+                            cx,
+                        );
                         cx.notify();
                     })
                     .ok();
@@ -1562,7 +1611,7 @@ impl Workspace {
         };
         // Nothing can be answered without a model: say so, and keep what was typed.
         if self.models.is_empty() && !self.skip_model_check {
-            self.fail("还没有可用的模型：先到 设置 → 模型与默认 添加供应商。", cx);
+            self.fail(trs!(english, "mod.no_model_is_available_yet"), cx);
             cx.notify();
             return;
         }
@@ -1611,7 +1660,14 @@ impl Workspace {
                         .await;
                     let started = match started {
                         Ok(s) => s,
-                        Err(e) => return fail(format!("无法新建对话：{e}"), text, &this, cx),
+                        Err(e) => {
+                            return fail(
+                                tr!(english, "mod.could_not_create_a_chat", e = e),
+                                text,
+                                &this,
+                                cx,
+                            );
+                        }
                     };
                     let id = started.thread.id.clone();
                     let snapshot = b
@@ -1621,7 +1677,14 @@ impl Workspace {
                         .await;
                     let snapshot = match snapshot {
                         Ok(s) => s,
-                        Err(e) => return fail(format!("无法打开对话：{e}"), text, &this, cx),
+                        Err(e) => {
+                            return fail(
+                                tr!(english, "mod.could_not_open_the_chat", e = e),
+                                text,
+                                &this,
+                                cx,
+                            );
+                        }
                     };
                     this.update(cx, |this, cx| {
                         pane_web::promote_draft(&mut this.panes, &id);
@@ -1647,9 +1710,9 @@ impl Workspace {
                 .await;
             if let Err(e) = started {
                 let why = if no_model {
-                    "还没有可用的模型：先到 设置 → 模型与默认 添加供应商。".to_string()
+                    trs!(english, "mod.no_model_is_available_yet").to_string()
                 } else {
-                    format!("发送失败：{e}")
+                    tr!(english, "mod.send_failed_e", e = e)
                 };
                 fail(why, text, &this, cx);
             }
@@ -1676,9 +1739,12 @@ impl Workspace {
                 match result {
                     Ok(answer) => {
                         this.apply_worktree(answer.thread);
-                        this.done("已创建隔离工作区", cx);
+                        this.done(trs!(this.english(), "mod.isolated_workspace_created"), cx);
                     }
-                    Err(e) => this.fail(format!("无法创建隔离工作区：{e}"), cx),
+                    Err(e) => this.fail(
+                        tr!(this.english(), "mod.could_not_create_the_isolated", e = e),
+                        cx,
+                    ),
                 }
                 cx.notify();
             })
@@ -1704,9 +1770,12 @@ impl Workspace {
                 match result {
                     Ok(answer) => {
                         this.apply_worktree(answer.thread);
-                        this.done("已回到项目目录", cx);
+                        this.done(trs!(this.english(), "mod.back_in_the_project_folder"), cx);
                     }
-                    Err(e) => this.fail(format!("无法解除隔离工作区：{e}"), cx),
+                    Err(e) => this.fail(
+                        tr!(this.english(), "mod.could_not_unbind_the_isolated", e = e),
+                        cx,
+                    ),
                 }
                 cx.notify();
             })
@@ -1743,12 +1812,12 @@ impl Workspace {
     fn retry(&mut self, turn_id: String, window: &mut Window, cx: &mut Context<Self>) {
         let answer = window.prompt(
             PromptLevel::Info,
-            "重试这一轮？",
-            Some("这一轮的回复会丢弃并重新生成。工作区文件可以一起退回到这一轮开始之前。"),
+            trs!(self.english(), "mod.retry_this_turn"),
+            Some(trs!(self.english(), "mod.this_turn_s_reply_will")),
             &[
-                PromptButton::cancel("取消"),
-                PromptButton::ok("保留文件改动"),
-                PromptButton::ok("退回文件并重试"),
+                PromptButton::cancel(trs!(self.english(), "mod.cancel")),
+                PromptButton::ok(trs!(self.english(), "mod.keep_file_changes")),
+                PromptButton::ok(trs!(self.english(), "mod.roll_back_files_and_retry")),
             ],
             cx,
         );
@@ -1796,16 +1865,19 @@ impl Workspace {
                                 .map(|s| s.path.as_str())
                                 .take(5)
                                 .collect();
-                            this.notice = Some(Notice::Partial(format!(
-                                "{} 个文件没能退回：{}",
-                                files.skipped.len(),
-                                names.join("、")
+                            this.notice = Some(Notice::Partial(tr!(
+                                this.english(),
+                                "mod.files_could_not_be_rolled",
+                                count = files.skipped.len(),
+                                names = names.join("、")
                             )));
                         } else if rewind_files && files.had_checkpoint {
                             this.done(
-                                format!(
-                                    "已退回工作区：还原 {} 个文件，删除 {} 个",
-                                    files.restored, files.removed
+                                tr!(
+                                    this.english(),
+                                    "mod.workspace_rolled_back_files_restored",
+                                    restored = files.restored,
+                                    removed = files.removed
                                 ),
                                 cx,
                             );
@@ -1816,7 +1888,7 @@ impl Workspace {
                 }
                 Err(e) => {
                     this.update(cx, |this, cx| {
-                        this.fail(format!("无法重试：{e}"), cx);
+                        this.fail(tr!(this.english(), "mod.could_not_retry_e", e = e), cx);
                         cx.notify();
                     })
                     .ok();
@@ -1914,7 +1986,10 @@ impl Workspace {
                     });
                 });
                 this.update(cx, |this, cx| {
-                    this.fail(format!("加入队列失败：{e}"), cx);
+                    this.fail(
+                        tr!(this.english(), "mod.could_not_queue_the_message", e = e),
+                        cx,
+                    );
                     cx.notify();
                 })
                 .ok();
@@ -1953,7 +2028,7 @@ impl Workspace {
                 .await;
             if let Err(e) = result {
                 this.update(cx, |this, cx| {
-                    this.fail(format!("无法立即发送：{e}"), cx);
+                    this.fail(tr!(this.english(), "mod.could_not_send_now_e", e = e), cx);
                     cx.notify();
                 })
                 .ok();
@@ -2071,7 +2146,10 @@ impl Workspace {
                             *t = r.thread;
                         }
                     }
-                    Err(e) => this.fail(format!("无法切换模型或思考强度：{e}"), cx),
+                    Err(e) => this.fail(
+                        tr!(this.english(), "mod.could_not_change_the_model", e = e),
+                        cx,
+                    ),
                 }
                 cx.notify();
             })
@@ -2104,7 +2182,10 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 this.compact_pending.remove(&id);
                 if let Err(e) = result {
-                    this.fail(format!("无法压缩上下文：{e}"), cx);
+                    this.fail(
+                        tr!(this.english(), "mod.could_not_compact_the_context", e = e),
+                        cx,
+                    );
                 }
                 cx.notify();
             })
@@ -2725,6 +2806,11 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 impl Workspace {
+    /// Whether the interface is in English: the one question every notice and label asks.
+    pub(super) fn english(&self) -> bool {
+        self.app_settings.language == UiLanguage::English
+    }
+
     fn on_new_chat(&mut self, _: &NewChat, _: &mut Window, cx: &mut Context<Self>) {
         self.settings = None;
         self.new_chat(None, cx);
@@ -2962,6 +3048,10 @@ mod locale_file_tests {
                     for marker in [
                         "tr!(english, \"",
                         "trs!(english, \"",
+                        "tr!(self.english(), \"",
+                        "trs!(self.english(), \"",
+                        "tr!(this.english(), \"",
+                        "trs!(this.english(), \"",
                         "tr(Chinese, \"",
                         "tr(language, \"",
                     ] {

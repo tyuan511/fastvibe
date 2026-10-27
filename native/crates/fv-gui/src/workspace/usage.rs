@@ -186,7 +186,7 @@ impl Workspace {
         let mut summary = card(p).p(px(16.0)).gap(px(12.0));
         for row in [
             [
-                ("估算费用", money(m)),
+                ("估算费用", money(m, english)),
                 ("输入 Token", compact(m.input)),
                 ("输出 Token", compact(m.output)),
                 (
@@ -348,7 +348,7 @@ impl Workspace {
                     .gap(px(12.0))
                     .child(modes)
                     .child(navigation)
-                    .child(heatmap(calendar, p)),
+                    .child(heatmap(calendar, p, english)),
             );
         }
         let mut trend_head = div()
@@ -374,9 +374,9 @@ impl Workspace {
                 .p(px(16.0))
                 .gap(px(12.0))
                 .child(trend_head)
-                .child(trend(stats, s.trend, p)),
+                .child(trend(stats, s.trend, p, english)),
         )
-        .child(model_usage(stats, p))
+        .child(model_usage(stats, p, english))
         .into_any_element()
     }
 
@@ -455,7 +455,7 @@ impl Workspace {
             .children(
                 groups
                     .into_iter()
-                    .map(|(label, metrics)| usage_row(label, &metrics, p)),
+                    .map(|(label, metrics)| usage_row(label, &metrics, p, english)),
             );
         card(p)
             .p(px(16.0))
@@ -475,14 +475,14 @@ fn compact(value: u64) -> String {
         value.to_string()
     }
 }
-fn money(metrics: &UsageMetrics) -> String {
+fn money(metrics: &UsageMetrics, english: bool) -> String {
     metrics
         .cost
         .map(|c| {
             format!(
                 "${c:.4}{}",
                 if metrics.unpriced_requests > 0 {
-                    "（部分）"
+                    trs!(english, "usage.partial")
                 } else {
                     ""
                 }
@@ -504,19 +504,20 @@ fn merge(to: &mut UsageMetrics, from: &UsageMetrics) {
         to.cost = Some(if sum.is_finite() { sum } else { f64::MAX });
     }
 }
-fn usage_row(label: String, metrics: &UsageMetrics, p: &Palette) -> Div {
+fn usage_row(label: String, metrics: &UsageMetrics, p: &Palette, english: bool) -> Div {
     div()
         .flex()
         .gap(px(12.0))
         .items_center()
         .text_size(px(TEXT_XS))
         .child(div().flex_1().min_w_0().child(crate::ui::truncate(label)))
-        .child(SharedString::from(format!(
-            "{} Token · {} 次",
-            compact(metrics.tokens),
-            metrics.requests
+        .child(SharedString::from(tr!(
+            english,
+            "usage.tokens_requests",
+            arg1 = compact(metrics.tokens),
+            arg2 = metrics.requests
         )))
-        .child(SharedString::from(money(metrics)))
+        .child(SharedString::from(money(metrics, english)))
         .text_color(p.c(Token::Foreground))
 }
 
@@ -588,7 +589,7 @@ fn calendar(stats: &UsageStats, view: Activity, back: u64) -> Option<Calendar> {
         weeks,
     })
 }
-fn heatmap(calendar: Calendar, p: &Palette) -> AnyElement {
+fn heatmap(calendar: Calendar, p: &Palette, english: bool) -> AnyElement {
     let mut months: Vec<(u32, usize)> = Vec::new();
     for week in &calendar.weeks {
         let month = week[0].date.month();
@@ -609,7 +610,8 @@ fn heatmap(calendar: Calendar, p: &Palette) -> AnyElement {
                 .w(px(count as f32 * 12.0))
                 .text_size(px(10.0))
                 .child(SharedString::from(if count >= 3 {
-                    format!("{month}月")
+                    crate::workspace::static_text(english, &format!("usage.month_{month}"))
+                        .to_string()
                 } else {
                     String::new()
                 }))
@@ -620,17 +622,14 @@ fn heatmap(calendar: Calendar, p: &Palette) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(2.0))
-        .children(
-            ["日", "一", "二", "三", "四", "五", "六"]
-                .into_iter()
-                .map(|label| {
-                    div()
-                        .h(px(10.0))
-                        .line_height(px(10.0))
-                        .text_size(px(9.0))
-                        .child(label)
-                }),
-        );
+        .children((0..7).map(|day| {
+            let label = crate::workspace::static_text(english, &format!("usage.weekday_{day}"));
+            div()
+                .h(px(10.0))
+                .line_height(px(10.0))
+                .text_size(px(9.0))
+                .child(label)
+        }));
     let mut values: Vec<_> = calendar
         .weeks
         .iter()
@@ -673,9 +672,12 @@ fn heatmap(calendar: Calendar, p: &Palette) -> AnyElement {
                     .rounded(px(2.0))
                     .bg(color)
                     .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(SharedString::from(format!(
-                            "{} · 本日 {} Token · 当前视图 {}",
-                            cell.date, cell.day_tokens, cell.value
+                        gpui_kit::component::tooltip::Tooltip::new(SharedString::from(tr!(
+                            english,
+                            "usage.today_tokens_this_view",
+                            arg1 = cell.date,
+                            arg2 = cell.day_tokens,
+                            arg3 = cell.value
                         )))
                         .build(window, cx)
                     })
@@ -707,7 +709,7 @@ fn colors(p: &Palette) -> Vec<Hsla> {
     .map(|t| p.c(t))
     .to_vec()
 }
-fn trend(stats: &UsageStats, span: u64, p: &Palette) -> AnyElement {
+fn trend(stats: &UsageStats, span: u64, p: &Palette, english: bool) -> AnyElement {
     let Some(to) = stats.to.parse::<NaiveDate>().ok() else {
         return div().into_any_element();
     };
@@ -836,17 +838,18 @@ fn trend(stats: &UsageStats, span: u64, p: &Palette) -> AnyElement {
             div()
                 .text_size(px(TEXT_XS))
                 .muted(p)
-                .child(SharedString::from(format!(
-                    "{} — {} · 峰值 {} Token",
-                    dates.first().cloned().unwrap_or_default(),
-                    stats.to,
-                    compact(peak)
+                .child(SharedString::from(tr!(
+                    english,
+                    "usage.peak_tokens",
+                    arg1 = dates.first().cloned().unwrap_or_default(),
+                    arg2 = stats.to,
+                    arg3 = compact(peak)
                 ))),
         )
         .into_any_element()
 }
 
-fn model_usage(stats: &UsageStats, p: &Palette) -> AnyElement {
+fn model_usage(stats: &UsageStats, p: &Palette, english: bool) -> AnyElement {
     let mut shares: Vec<_> = stats
         .models
         .iter()
@@ -867,7 +870,7 @@ fn model_usage(stats: &UsageStats, p: &Palette) -> AnyElement {
         .fold(0u64, |sum, (_, n)| sum.saturating_add(*n));
     let other = stats.totals.metrics.tokens.saturating_sub(shown);
     if other > 0 {
-        shares.push(("其它模型".into(), other));
+        shares.push((trs!(english, "usage.other_models").into(), other));
     }
     let total = stats.totals.metrics.tokens;
     let segments = shares.clone();
@@ -936,7 +939,7 @@ fn model_usage(stats: &UsageStats, p: &Palette) -> AnyElement {
     card(p)
         .p(px(16.0))
         .gap(px(12.0))
-        .child("模型用量")
+        .child(trs!(english, "usage.model_usage"))
         .child(
             div()
                 .flex()
@@ -977,6 +980,7 @@ fn model_usage(stats: &UsageStats, p: &Palette) -> AnyElement {
                         ),
                         &m.metrics,
                         p,
+                        english,
                     )
                 })),
         )
@@ -1094,7 +1098,7 @@ mod tests {
         };
         let mut total = UsageMetrics::default();
         merge(&mut total, &unknown);
-        assert_eq!(money(&total), "—");
+        assert_eq!(money(&total, false), "—");
         assert_eq!(total, unknown);
         merge(
             &mut total,
@@ -1108,6 +1112,6 @@ mod tests {
         assert_eq!(total.tokens, 103);
         assert_eq!(total.input, 10);
         assert_eq!(total.unpriced_requests, 1);
-        assert!(money(&total).contains("部分"));
+        assert!(money(&total, false).contains("部分"));
     }
 }

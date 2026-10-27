@@ -93,11 +93,11 @@ fn a_patch_is_counted_per_file_and_a_new_file_has_no_removals() {
 
 #[test]
 fn durations_read_like_the_electron_app() {
-    assert_eq!(format_duration(0), "0 秒");
-    assert_eq!(format_duration(18_000), "18 秒");
-    assert_eq!(format_duration(120_000), "2 分钟");
-    assert_eq!(format_duration(221_000), "3 分钟 41 秒");
-    assert_eq!(format_duration(3_723_000), "1 小时 2 分钟 3 秒");
+    assert_eq!(format_duration(0, false), "0 秒");
+    assert_eq!(format_duration(18_000, false), "18 秒");
+    assert_eq!(format_duration(120_000, false), "2 分钟");
+    assert_eq!(format_duration(221_000, false), "3 分钟 41 秒");
+    assert_eq!(format_duration(3_723_000, false), "1 小时 2 分钟 3 秒");
 }
 
 #[test]
@@ -181,11 +181,90 @@ fn the_summary_names_one_file_and_counts_many() {
         named("3", "view_image", json!({"path": "/a/b/pic.png"})),
     ];
     let refs: Vec<&Item> = items.iter().collect();
-    let line: String = run_summary(&refs)
+    let line: String = run_summary(&refs, false)
         .into_iter()
         .map(|p| match p {
             Piece::Text(t) | Piece::Name(t) => t,
         })
         .collect();
     assert_eq!(line, "已运行 2 个命令，读取 pic.png");
+}
+
+#[test]
+fn the_same_summary_reads_in_english_with_a_lowercase_later_clause() {
+    use fv_gui::presentation::{Piece, run_summary};
+    let items = [
+        tool("1", true),
+        tool("2", true),
+        named("3", "view_image", json!({"path": "/a/b/pic.png"})),
+    ];
+    let refs: Vec<&Item> = items.iter().collect();
+    let line: String = run_summary(&refs, true)
+        .into_iter()
+        .map(|p| match p {
+            Piece::Text(t) | Piece::Name(t) => t,
+        })
+        .collect();
+    assert_eq!(line, "Ran 2 commands, read pic.png");
+    // One command is singular, and several files are counted rather than named.
+    let one = [tool("1", true)];
+    let refs: Vec<&Item> = one.iter().collect();
+    let line: String = run_summary(&refs, true)
+        .into_iter()
+        .map(|p| match p {
+            Piece::Text(t) | Piece::Name(t) => t,
+        })
+        .collect();
+    assert_eq!(line, "Ran 1 command");
+}
+
+#[test]
+fn durations_and_tool_labels_follow_the_language() {
+    use fv_gui::presentation::describe;
+    assert_eq!(format_duration(221_000, true), "3m 41s");
+    assert_eq!(format_duration(3_723_000, true), "1h 2m 3s");
+    let cmd = json!({"cmd": "pnpm build"});
+    assert_eq!(describe("exec_command", &cmd, false, false).label, "终端");
+    assert_eq!(
+        describe("exec_command", &cmd, false, true).label,
+        "Terminal"
+    );
+    assert_eq!(describe("exec_command", &cmd, true, true).label, "Running");
+    assert_eq!(
+        describe("exec_command", &cmd, true, false).label,
+        "正在执行"
+    );
+}
+
+#[test]
+fn every_tool_family_has_a_label_in_both_languages() {
+    // The label keys are built at run time, so the source scan in `locale_file_tests` cannot see
+    // them; a missing one would show its key on screen.
+    let samples = [
+        ("exec_command", json!({"cmd": "ls"})),
+        ("apply_patch", json!({"input": ""})),
+        ("view_image", json!({"path": "/a/b.png"})),
+        ("grep_files", json!({"pattern": "x"})),
+        ("web_search", json!({"query": "x"})),
+        ("update_plan", json!({})),
+        ("request_user_input", json!({})),
+        ("spawn_agent", json!({})),
+        ("present", json!({})),
+        ("mcp_server_tool", json!({})),
+        ("something_else", json!({})),
+        ("code_mode", json!({})),
+        ("wait", json!({})),
+        ("wait", json!({"terminate": true})),
+    ];
+    for (name, args) in &samples {
+        for running in [false, true] {
+            for english in [false, true] {
+                let label = fv_gui::presentation::describe(name, args, running, english).label;
+                assert!(
+                    !label.is_empty() && !label.starts_with("presentation."),
+                    "{name} running={running} english={english}: {label}"
+                );
+            }
+        }
+    }
 }
