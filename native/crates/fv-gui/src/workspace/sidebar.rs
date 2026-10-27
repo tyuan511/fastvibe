@@ -532,6 +532,7 @@ impl Workspace {
 
     fn session_row(&self, t: &Thread, lead_slot: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let id = t.id.clone();
         let active = self.selected.as_ref() == Some(&t.id);
         let title = if t.title.trim().is_empty() {
@@ -597,7 +598,12 @@ impl Workspace {
             .child(
                 icon_button_xs(SharedString::from(format!("pin-{}", t.id)), "pin", p)
                     .tooltip(move |window, cx| {
-                        Tooltip::new(if pinned { "取消置顶" } else { "置顶" }).build(window, cx)
+                        Tooltip::new(if pinned {
+                            if english { "Unpin" } else { "取消置顶" }
+                        } else {
+                            if english { "Pin" } else { "置顶" }
+                        })
+                        .build(window, cx)
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -748,9 +754,18 @@ impl Workspace {
                     .justify_center()
                     .rounded_full()
                     .cursor_pointer()
-                    .tooltip(|window, cx| Tooltip::new("账号").build(window, cx))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.sidebar_notice = Some("此版本暂不支持 FastVibe 账号登录。".into());
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(if english { "Account" } else { "账号" }).build(window, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.sidebar_notice = Some(
+                            if english {
+                                "FastVibe account sign-in is not available in this version."
+                            } else {
+                                "此版本暂不支持 FastVibe 账号登录。"
+                            }
+                            .into(),
+                        );
                         cx.notify();
                     }))
                     .child(icon("user02", 14.0, p.c(Token::MutedForeground))),
