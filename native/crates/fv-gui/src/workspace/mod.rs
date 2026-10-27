@@ -1320,6 +1320,20 @@ impl Workspace {
                     ServerNotification::MemoryChanged(state) => {
                         self.memory_changed(state.clone(), cx)
                     }
+                    ServerNotification::TurnCompleted(event)
+                        if self.selected.as_deref() != Some(event.thread_id.as_str()) =>
+                    {
+                        self.sidebar_notice = Some(match event.body.status {
+                            TurnStatus::Completed => "后台对话已完成".into(),
+                            TurnStatus::Interrupted => "后台对话已停止".into(),
+                            TurnStatus::Failed => event
+                                .body
+                                .error
+                                .clone()
+                                .map(|error| format!("后台对话失败：{error}"))
+                                .unwrap_or_else(|| "后台对话失败".into()),
+                        });
+                    }
                     ServerNotification::WorkspaceEntryChanged(change) => {
                         self.on_entry_changed(change, cx)
                     }
