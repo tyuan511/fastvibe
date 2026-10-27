@@ -311,6 +311,35 @@ pub struct Goal {
     pub round: u32,
 }
 
+/// `browser/request`: the agent wants to act on the conversation's browser pane, which only the
+/// desktop app has. `action` is one of `open`, `snapshot`, `click`, `type`, `press`, `scroll`,
+/// `back`, `forward`, `reload`, `text`; `args` carries that action's fields.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRequest {
+    pub thread_id: ThreadId,
+    pub call_id: String,
+    pub action: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+/// The answer to a [`BrowserRequest`]: text for the model, and whether it describes a failure.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserResponse {
+    pub output: String,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+/// `thread/notice`: a message the agent pushed to the user without waiting for a reply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadNotice {
+    pub text: String,
+}
+
 /// `thread/goal/changed`: the goal as it now stands; `None` means it was cleared.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

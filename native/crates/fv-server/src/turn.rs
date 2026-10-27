@@ -918,6 +918,9 @@ async fn build_context(
         rt.code_mode.register(&mut mcp.tools);
     }
     crate::subagents::register(state, thread_id, turn_id, &mut mcp.tools);
+    crate::board::register(state, thread_id, &mut mcp.tools);
+    crate::async_ask::register(state, thread_id, &mut mcp.tools);
+    crate::browser::register(state, thread_id, &mut mcp.tools);
     // 电脑操控: off means no desktop tools at all; on, the driver's own tools (reached through the
     // managed MCP server) replace the basic `computer` tool, which stays only as the fallback for a
     // moment where the driver is not up — and a platform with no driver build has no such moment,

@@ -15,10 +15,12 @@ use gpui_kit::*;
 mod about;
 mod app_menu;
 mod ask;
+mod browser_bridge;
 mod composer;
 mod computer;
 mod diff;
 mod file_mention;
+mod goal_tray;
 mod header_git;
 mod mcp;
 mod memory;
@@ -1380,6 +1382,9 @@ impl Workspace {
                 }
                 cx.notify();
             }
+            BackendEvent::Request(ServerRequest::Browser { id, params }) => {
+                self.browser_request(id, params, cx);
+            }
             BackendEvent::Request(ServerRequest::Approval { id, params }) => {
                 let thread = params.thread_id.clone();
                 match self.views.get_mut(&thread) {
@@ -1409,6 +1414,10 @@ impl Workspace {
                             || self.app_settings.glass != s.glass;
                         self.app_settings = s.clone();
                         self.computer_sync(cx);
+                    }
+                    ServerNotification::ThreadNotice(e) => {
+                        let text = tr!(self.english(), "goal.agent_says", text = e.body.text);
+                        self.done(text, cx);
                     }
                     ServerNotification::ProvidersChanged(_) => {
                         self.invalidate_provider_checks();
@@ -1510,6 +1519,9 @@ impl Workspace {
         }
         let text = self.input.read(cx).value().trim().to_string();
         if text.is_empty() {
+            return;
+        }
+        if self.editing_turn.is_none() && self.run_command(&text, window, cx) {
             return;
         }
         // Editing a turn is a rewrite of it: the reply it produced is discarded and the corrected

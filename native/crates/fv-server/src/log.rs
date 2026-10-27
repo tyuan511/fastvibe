@@ -61,6 +61,8 @@ pub enum LogEvent {
     QueueChanged(QueueState),
     /// The standing guess at the user's next message; `None` withdraws it.
     SuggestionChanged(Option<String>),
+    /// A message the agent pushed to the user.
+    Notice(String),
     /// The thread's goal as it now stands; `None` means it was cleared.
     GoalChanged(Option<fv_protocol::types::Goal>),
     /// That turn, and everything after it, is gone: it is about to run again. Clients drop the
@@ -263,6 +265,9 @@ impl ThreadLog {
                 ServerNotification::ThreadTokenUsageUpdated(ev!(TokenUsage { used, window }))
             }
             LogEvent::QueueChanged(queue) => ServerNotification::ThreadQueueChanged(ev!(queue)),
+            LogEvent::Notice(text) => {
+                ServerNotification::ThreadNotice(ev!(fv_protocol::types::ThreadNotice { text }))
+            }
             LogEvent::GoalChanged(goal) => {
                 ServerNotification::ThreadGoalChanged(ev!(fv_protocol::types::GoalChanged { goal }))
             }

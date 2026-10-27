@@ -7158,6 +7158,29 @@
         "type": "object"
       },
       "ThreadEvent10": {
+        "description": "`thread/notice`: a message the agent pushed to the user without waiting for a reply.",
+        "properties": {
+          "seq": {
+            "description": "Monotonic per thread.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "seq",
+          "text"
+        ],
+        "type": "object"
+      },
+      "ThreadEvent11": {
         "description": "`thread/goal/changed`: the goal as it now stands; `None` means it was cleared.",
         "properties": {
           "goal": {
@@ -7187,7 +7210,7 @@
         ],
         "type": "object"
       },
-      "ThreadEvent11": {
+      "ThreadEvent12": {
         "description": "A turn and everything after it was dropped, because it is running again (a retry or an edit).",
         "properties": {
           "seq": {
@@ -7210,7 +7233,7 @@
         ],
         "type": "object"
       },
-      "ThreadEvent12": {
+      "ThreadEvent13": {
         "description": "回复推荐: what the user is likely to say next, offered as the composer's placeholder until they\ntype. `None` withdraws it — the guess was not worth showing, or a new run has made it stale.",
         "properties": {
           "seq": {
@@ -7236,7 +7259,7 @@
         ],
         "type": "object"
       },
-      "ThreadEvent13": {
+      "ThreadEvent14": {
         "description": "A request to the client has been answered or withdrawn (by whichever client got there\nfirst, or because the turn was stopped); every other client takes its prompt down.",
         "properties": {
           "requestId": {
@@ -8090,7 +8113,7 @@
       {
         "properties": {
           "method": {
-            "const": "thread/goal/changed",
+            "const": "thread/notice",
             "type": "string"
           },
           "params": {
@@ -8106,7 +8129,7 @@
       {
         "properties": {
           "method": {
-            "const": "turn/rewound",
+            "const": "thread/goal/changed",
             "type": "string"
           },
           "params": {
@@ -8122,7 +8145,7 @@
       {
         "properties": {
           "method": {
-            "const": "thread/suggestion/changed",
+            "const": "turn/rewound",
             "type": "string"
           },
           "params": {
@@ -8138,11 +8161,27 @@
       {
         "properties": {
           "method": {
-            "const": "serverRequest/resolved",
+            "const": "thread/suggestion/changed",
             "type": "string"
           },
           "params": {
             "$ref": "#/$defs/ThreadEvent13"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "serverRequest/resolved",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ThreadEvent14"
           }
         },
         "required": [
@@ -8230,6 +8269,29 @@
           "turnId",
           "callId",
           "kind"
+        ],
+        "type": "object"
+      },
+      "BrowserRequest": {
+        "description": "`browser/request`: the agent wants to act on the conversation's browser pane, which only the\ndesktop app has. `action` is one of `open`, `snapshot`, `click`, `type`, `press`, `scroll`,\n`back`, `forward`, `reload`, `text`; `args` carries that action's fields.",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "args": {
+            "default": null
+          },
+          "callId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "callId",
+          "action"
         ],
         "type": "object"
       },
@@ -8357,6 +8419,27 @@
           },
           "params": {
             "$ref": "#/$defs/ApprovalRequestParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "An action on the browser pane; answered with a [`BrowserResponse`].",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "browser/request",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/BrowserRequest"
           }
         },
         "required": [

@@ -2,6 +2,9 @@
 //! over the same protocol (`fv-protocol`); nothing here knows which one is on the other end
 //! beyond the [`ClientOrigin`] its connection was accepted with.
 
+mod async_ask;
+mod board;
+mod browser;
 mod catalog;
 mod commit_message;
 mod computer;

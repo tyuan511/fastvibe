@@ -249,6 +249,30 @@ impl Surface {
             self.error = Some("此平台的原生网页视图尚未接通".into());
         }
     }
+    /// Whether the native view exists yet; it is made when the pane is first painted.
+    pub fn is_mounted(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.native.is_some()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
+    /// Run a script on the page; `done` receives the script's value as JSON text.
+    pub fn eval(&self, script: &str, done: impl Fn(String) + Send + 'static) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &self.native {
+            return native
+                .evaluate_script_with_callback(script, done)
+                .map_err(|e| e.to_string());
+        }
+        let _ = (script, done);
+        Err("the browser pane is not showing".into())
+    }
+
     pub fn remember_location(&mut self, url: &str) {
         if self.navigation.allows(url) {
             self.url = url.into();

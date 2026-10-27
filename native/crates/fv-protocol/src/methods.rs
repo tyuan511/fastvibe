@@ -223,6 +223,7 @@ notifications!(ServerNotification {
     ThreadStatsUpdated => "thread/stats/updated": ThreadEvent<SessionStats>,
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated": ThreadEvent<TokenUsage>,
     ThreadQueueChanged => "thread/queue/changed": ThreadEvent<QueueState>,
+    ThreadNotice => "thread/notice": ThreadEvent<ThreadNotice>,
     ThreadGoalChanged => "thread/goal/changed": ThreadEvent<GoalChanged>,
     TurnRewound => "turn/rewound": ThreadEvent<Rewound>,
     ThreadSuggestionChanged => "thread/suggestion/changed": ThreadEvent<Suggestion>,
@@ -246,12 +247,20 @@ pub enum ServerRequest {
         id: RequestId,
         params: ApprovalRequestParams,
     },
+    /// An action on the browser pane; answered with a [`BrowserResponse`].
+    #[serde(rename = "browser/request")]
+    Browser {
+        id: RequestId,
+        params: BrowserRequest,
+    },
 }
 
 impl ServerRequest {
     pub fn id(&self) -> &RequestId {
         match self {
-            ServerRequest::UserInput { id, .. } | ServerRequest::Approval { id, .. } => id,
+            ServerRequest::UserInput { id, .. }
+            | ServerRequest::Approval { id, .. }
+            | ServerRequest::Browser { id, .. } => id,
         }
     }
 
@@ -259,6 +268,7 @@ impl ServerRequest {
         match self {
             ServerRequest::UserInput { .. } => "item/question/request",
             ServerRequest::Approval { .. } => "item/approval/request",
+            ServerRequest::Browser { .. } => "browser/request",
         }
     }
 }

@@ -30,6 +30,7 @@ pub(crate) struct PendingPrompt {
 pub(crate) enum Reply {
     Answers(Option<fv_core::Answers>),
     Decision(Option<fv_protocol::types::ApprovalDecision>),
+    Browser(Option<fv_protocol::types::BrowserResponse>),
 }
 
 /// Frames queued for one connection before a slow reader starts to cost the server memory.

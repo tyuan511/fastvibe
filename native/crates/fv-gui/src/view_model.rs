@@ -25,6 +25,8 @@ pub struct ThreadView {
     /// Prompts queued behind the reply in flight, in the order they will be sent.
     pub queue: QueueState,
     pub goal: Option<fv_protocol::types::Goal>,
+    /// The latest message the agent pushed without waiting for an answer.
+    pub notice: Option<String>,
     pub mode: fv_protocol::types::ThreadMode,
     /// The run in flight, as the client last heard of it: what a steer has to name.
     pub active_turn: Option<TurnId>,
@@ -62,6 +64,7 @@ impl ThreadView {
             plan: None,
             queue: snapshot.queue,
             goal: snapshot.goal,
+            notice: None,
             mode: snapshot.mode,
             active_turn: None,
             suggestion: snapshot.suggestion,
@@ -92,6 +95,7 @@ impl ThreadView {
             N::ThreadStatsUpdated(e) => (&e.thread_id, e.seq),
             N::ThreadQueueChanged(e) => (&e.thread_id, e.seq),
             N::ThreadGoalChanged(e) => (&e.thread_id, e.seq),
+            N::ThreadNotice(e) => (&e.thread_id, e.seq),
             N::TurnRewound(e) => (&e.thread_id, e.seq),
             N::ThreadSuggestionChanged(e) => (&e.thread_id, e.seq),
             N::ServerRequestResolved(e) => (&e.thread_id, e.seq),
@@ -196,6 +200,7 @@ impl ThreadView {
             N::ThreadStatsUpdated(e) => self.stats = e.body.clone(),
             N::ThreadQueueChanged(e) => self.queue = e.body.clone(),
             N::ThreadGoalChanged(e) => self.goal = e.body.goal.clone(),
+            N::ThreadNotice(e) => self.notice = Some(e.body.text.clone()),
             // Withdrawal is `None`, and it is the event that says so: a state reply that raced it
             // must not put a stale guess back.
             N::ThreadSuggestionChanged(e) => self.suggestion = e.body.text.clone(),

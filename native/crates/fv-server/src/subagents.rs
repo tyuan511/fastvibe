@@ -76,7 +76,7 @@ pub fn list(
     }
     Ok(SubagentListResponse { agents })
 }
-fn root_id(state: &ServerState, id: &str) -> Result<String, ErrorObject> {
+pub(crate) fn root_id(state: &ServerState, id: &str) -> Result<String, ErrorObject> {
     if state.thread(id)?.is_none() {
         return Err(invalid("thread not found"));
     }

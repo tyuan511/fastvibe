@@ -263,6 +263,8 @@ impl Workspace {
             .filter(|q| !q.items.is_empty())
             .map(|q| self.queue_tray(q, cx).into_any_element());
 
+        let goal_strip = self.goal_tray(cx);
+
         div()
             .w_full()
             .max_w(px(THREAD_MAX))
@@ -322,6 +324,7 @@ impl Workspace {
             }))
             .children(editing)
             .children(self.subagent_tray(cx))
+            .children(goal_strip)
             .children(queue)
             .children((!covered).then(|| {
                 div()

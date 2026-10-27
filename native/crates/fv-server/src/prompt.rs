@@ -139,6 +139,9 @@ pub async fn resolve(state: &ServerState, id: RequestId, frame: &serde_json::Val
                 .ok()
                 .map(|r| r.decision)
         })),
+        ServerRequest::Browser { .. } => Reply::Browser(result.and_then(|result| {
+            serde_json::from_value::<types::BrowserResponse>(result.clone()).ok()
+        })),
     };
     // An error reply, or nothing usable, is `None`: the user did not answer.
     let _ = pending.answer.send(reply);

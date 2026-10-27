@@ -313,7 +313,7 @@ impl Workspace {
         }
         cx.notify();
     }
-    fn navigate_browser(&mut self, key: &str, value: &str, cx: &mut Context<Self>) {
+    pub(super) fn navigate_browser(&mut self, key: &str, value: &str, cx: &mut Context<Self>) {
         match crate::webview::address_with_search(value, &self.app_settings.browser_search_engine) {
             Ok(url) => {
                 if let Some(view) = self.web_views.get_mut(key) {
@@ -340,7 +340,7 @@ impl Workspace {
         }
         cx.notify();
     }
-    fn web_command(&mut self, key: &str, command: &str, cx: &mut Context<Self>) {
+    pub(super) fn web_command(&mut self, key: &str, command: &str, cx: &mut Context<Self>) {
         if let Some(view) = self.web_views.get_mut(key) {
             if let Err(error) = view.surface.command(command) {
                 view.notice = Some(error);

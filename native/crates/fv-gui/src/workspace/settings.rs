@@ -2102,6 +2102,7 @@ impl Workspace {
         let a = &self.app_settings;
         let reply_suggestions = a.reply_suggestions;
         let auto_compaction_enabled = a.auto_compaction_enabled;
+        let auto_review_approvals = a.auto_review_approvals;
         let code_mode_enabled = a.code_mode_enabled;
         let auto_archive = a.auto_archive_after_days.is_some();
         let keep_awake = a.keep_awake;
@@ -2409,6 +2410,26 @@ impl Workspace {
                             this.patch_settings(
                                 AppSettingsPatch {
                                     auto_compaction_enabled: Some(!auto_compaction_enabled),
+                                    ..Default::default()
+                                },
+                                cx,
+                            )
+                        })),
+                    ))
+                    .child(setting_row(
+                        trs!(english, "settings.auto_review_approvals"),
+                        trs!(english, "settings.auto_review_approvals_hint"),
+                        true,
+                        p,
+                        switch(
+                            SharedString::from("auto-review-approvals"),
+                            auto_review_approvals,
+                            p,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.patch_settings(
+                                AppSettingsPatch {
+                                    auto_review_approvals: Some(!auto_review_approvals),
                                     ..Default::default()
                                 },
                                 cx,

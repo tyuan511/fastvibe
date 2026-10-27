@@ -1,0 +1,54 @@
+goal.label:
+  zh: "目标"
+  en: "Goal"
+goal.round:
+  zh: "第 %{n} 轮"
+  en: "round %{n}"
+goal.running:
+  zh: "进行中"
+  en: "Running"
+goal.paused:
+  zh: "已暂停"
+  en: "Paused"
+goal.complete:
+  zh: "已完成"
+  en: "Complete"
+goal.pause:
+  zh: "暂停"
+  en: "Pause"
+goal.resume:
+  zh: "继续"
+  en: "Resume"
+goal.clear:
+  zh: "清除"
+  en: "Clear"
+goal.plan_mode:
+  zh: "计划模式：只读，不会修改文件"
+  en: "Plan mode: read-only, nothing is changed"
+goal.leave_plan:
+  zh: "退出"
+  en: "Leave"
+goal.need_chat:
+  zh: "先发送一条消息开始对话，再使用这个命令"
+  en: "Start the conversation with a message first, then use this command"
+goal.failed:
+  zh: "操作失败：%{e}"
+  en: "That failed: %{e}"
+goal.plan_on:
+  zh: "已进入计划模式"
+  en: "Plan mode is on"
+goal.plan_off:
+  zh: "已退出计划模式"
+  en: "Plan mode is off"
+goal.review_started:
+  zh: "已开始审查"
+  en: "Review started"
+goal.agent_says:
+  zh: "智能体：%{text}"
+  en: "Agent: %{text}"
+settings.auto_review_approvals:
+  zh: "自动审查审批"
+  en: "Auto-review approvals"
+settings.auto_review_approvals_hint:
+  zh: "需要审批的命令或补丁先由模型判断；明确安全就放行，明确有害就拒绝，拿不准仍然问你"
+  en: "A model reviews commands and patches that need approval: clear cases are settled, anything unsure still asks you"
