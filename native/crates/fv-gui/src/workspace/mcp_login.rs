@@ -49,11 +49,39 @@ impl Workspace {
         if s.mcp.login.is_some() {
             return;
         }
+        let english = self.app_settings.language == UiLanguage::English;
         s.mcp.login_form = Some(Form {
             server,
-            client_id: input("Client ID（可选，留空自动注册）", false, window, cx),
-            client_secret: input("Client Secret（可选）", true, window, cx),
-            scopes: input("权限范围（可选，以空格分隔）", false, window, cx),
+            client_id: input(
+                if english {
+                    "Client ID (optional; leave blank to register automatically)"
+                } else {
+                    "Client ID（可选，留空自动注册）"
+                },
+                false,
+                window,
+                cx,
+            ),
+            client_secret: input(
+                if english {
+                    "Client Secret (optional)"
+                } else {
+                    "Client Secret（可选）"
+                },
+                true,
+                window,
+                cx,
+            ),
+            scopes: input(
+                if english {
+                    "Scopes (optional, space separated)"
+                } else {
+                    "权限范围（可选，以空格分隔）"
+                },
+                false,
+                window,
+                cx,
+            ),
         });
         s.mcp.notice = None;
         cx.notify();
@@ -120,10 +148,24 @@ impl Workspace {
                     match result {
                         Ok(response) => {
                             s.mcp.servers = Some(response.servers);
-                            s.mcp.notice = Some("已登录，正在重新连接 MCP".into());
+                            s.mcp.notice = Some(
+                                if this.app_settings.language == UiLanguage::English {
+                                    "Signed in; reconnecting MCP"
+                                } else {
+                                    "已登录，正在重新连接 MCP"
+                                }
+                                .into(),
+                            );
                             s.mcp.login_form = None;
                         }
-                        Err(error) => s.mcp.notice = Some(format!("登录未完成：{error}")),
+                        Err(error) => {
+                            s.mcp.notice =
+                                Some(if this.app_settings.language == UiLanguage::English {
+                                    format!("Sign-in did not finish: {error}")
+                                } else {
+                                    format!("登录未完成：{error}")
+                                })
+                        }
                     }
                 }
                 this.refresh_mcp(cx);
@@ -165,7 +207,14 @@ impl Workspace {
                 if success
                     && let Some(s) = this.settings.as_mut().filter(|s| s.mcp.session == session)
                 {
-                    s.mcp.notice = Some("已退出 MCP 登录".into());
+                    s.mcp.notice = Some(
+                        if this.app_settings.language == UiLanguage::English {
+                            "Signed out of MCP"
+                        } else {
+                            "已退出 MCP 登录"
+                        }
+                        .into(),
+                    );
                 }
             })
             .ok();
@@ -182,39 +231,60 @@ impl Workspace {
             return div().into_any_element();
         };
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let mut body = card(p)
             .p(px(16.0))
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child("OAuth 登录")
+            .child(if english {
+                "OAuth sign-in"
+            } else {
+                "OAuth 登录"
+            })
             .child(Input::new(&form.client_id))
             .child(Input::new(&form.client_secret).mask_toggle())
             .child(Input::new(&form.scopes));
         if let Some(login) = &s.mcp.login {
             body = body.child(if login.url.is_some() {
-                "请在浏览器中完成授权。"
+                if english {
+                    "Complete authorization in your browser."
+                } else {
+                    "请在浏览器中完成授权。"
+                }
             } else {
-                "正在准备登录…"
+                if english {
+                    "Preparing sign-in…"
+                } else {
+                    "正在准备登录…"
+                }
             });
             if let Some(url) = &login.url {
                 let url = url.clone();
                 body = body.child(
                     outline_button("mcp-reopen-oauth", p)
-                        .child("重新打开授权页")
+                        .child(if english {
+                            "Reopen authorization page"
+                        } else {
+                            "重新打开授权页"
+                        })
                         .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
                 );
             }
         } else {
             body = body.child(
                 outline_button("mcp-start-oauth", p)
-                    .child("打开授权页")
+                    .child(if english {
+                        "Open authorization page"
+                    } else {
+                        "打开授权页"
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.start_mcp_login(cx))),
             );
         }
         body.child(
             outline_button("mcp-cancel-oauth", p)
-                .child("取消")
+                .child(if english { "Cancel" } else { "取消" })
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Some(s) = this.settings.as_mut() {
                         s.mcp.login = None;

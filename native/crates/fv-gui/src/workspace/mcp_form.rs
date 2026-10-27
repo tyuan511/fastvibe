@@ -24,6 +24,7 @@ pub(super) struct Form {
     headers: Vec<Pair>,
     enabled: bool,
     deferred: bool,
+    english: bool,
 }
 
 struct Pair {
@@ -47,10 +48,22 @@ fn input(
     })
 }
 
-fn pair(key: &str, value: &str, window: &mut Window, cx: &mut App) -> Pair {
+fn pair(key: &str, value: &str, english: bool, window: &mut Window, cx: &mut App) -> Pair {
     Pair {
-        key: input(key, "名称", false, window, cx),
-        value: input(value, "值", true, window, cx),
+        key: input(
+            key,
+            if english { "Name" } else { "名称" },
+            false,
+            window,
+            cx,
+        ),
+        value: input(
+            value,
+            if english { "Value" } else { "值" },
+            true,
+            window,
+            cx,
+        ),
     }
 }
 
@@ -58,23 +71,38 @@ fn value(input: &Entity<InputState>, cx: &App) -> String {
     input.read(cx).value().to_string()
 }
 
-fn pairs(rows: &[Pair], cx: &App) -> Result<BTreeMap<String, String>, String> {
+fn pairs(rows: &[Pair], english: bool, cx: &App) -> Result<BTreeMap<String, String>, String> {
     let mut map = BTreeMap::new();
     for row in rows {
         let key = value(&row.key, cx).trim().to_string();
         let value = value(&row.value, cx);
         if key.is_empty() {
-            return Err("请填写环境变量或请求头的名称，或删除空白行".into());
+            return Err(if english {
+                "Enter a name for each environment variable or header, or remove blank rows"
+            } else {
+                "请填写环境变量或请求头的名称，或删除空白行"
+            }
+            .into());
         }
         if map.insert(key, value).is_some() {
-            return Err("环境变量或请求头的名称不能重复".into());
+            return Err(if english {
+                "Environment variable or header names must be unique"
+            } else {
+                "环境变量或请求头的名称不能重复"
+            }
+            .into());
         }
     }
     Ok(map)
 }
 
 impl Form {
-    fn new(config: Option<McpServerConfig>, window: &mut Window, cx: &mut App) -> Self {
+    fn new(
+        config: Option<McpServerConfig>,
+        english: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
         let id = config.as_ref().map(|c| c.id.clone()).unwrap_or_else(|| {
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -87,20 +115,33 @@ impl Form {
             .map(|c| {
                 c.args
                     .iter()
-                    .map(|v| input(v, "参数", false, window, cx))
+                    .map(|v| {
+                        input(
+                            v,
+                            if english { "Argument" } else { "参数" },
+                            false,
+                            window,
+                            cx,
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
         let env = config
             .as_ref()
-            .map(|c| c.env.iter().map(|(k, v)| pair(k, v, window, cx)).collect())
+            .map(|c| {
+                c.env
+                    .iter()
+                    .map(|(k, v)| pair(k, v, english, window, cx))
+                    .collect()
+            })
             .unwrap_or_default();
         let headers = config
             .as_ref()
             .map(|c| {
                 c.headers
                     .iter()
-                    .map(|(k, v)| pair(k, v, window, cx))
+                    .map(|(k, v)| pair(k, v, english, window, cx))
                     .collect()
             })
             .unwrap_or_default();
@@ -111,7 +152,11 @@ impl Form {
             headers,
             name: input(
                 config.as_ref().map(|c| c.name.as_str()).unwrap_or(""),
-                "服务器名称",
+                if english {
+                    "Server name"
+                } else {
+                    "服务器名称"
+                },
                 false,
                 window,
                 cx,
@@ -121,7 +166,11 @@ impl Form {
                     .as_ref()
                     .and_then(|c| c.command.as_deref())
                     .unwrap_or(""),
-                "例如 npx 或可执行文件路径",
+                if english {
+                    "e.g. npx or an executable path"
+                } else {
+                    "例如 npx 或可执行文件路径"
+                },
                 false,
                 window,
                 cx,
@@ -140,6 +189,7 @@ impl Form {
             enabled: config.as_ref().is_none_or(|c| c.enabled),
             deferred: config.as_ref().is_none_or(|c| c.deferred),
             original: config,
+            english,
         }
     }
 
@@ -158,7 +208,7 @@ impl Form {
                 vec![]
             },
             env: if local {
-                pairs(&self.env, cx)?
+                pairs(&self.env, self.english, cx)?
             } else {
                 Default::default()
             },
@@ -166,7 +216,7 @@ impl Form {
             headers: if local {
                 Default::default()
             } else {
-                pairs(&self.headers, cx)?
+                pairs(&self.headers, self.english, cx)?
             },
         })
     }
@@ -196,7 +246,8 @@ impl Workspace {
         if id.is_some() && config.is_none() {
             return;
         }
-        s.mcp.form = Some(Form::new(config, window, cx));
+        let english = self.app_settings.language == UiLanguage::English;
+        s.mcp.form = Some(Form::new(config, english, window, cx));
         s.mcp.notice = None;
         cx.notify();
     }
@@ -257,21 +308,45 @@ impl Workspace {
             return div().into_any_element();
         };
         let p = &self.palette;
-        let label = |name: &'static str| div().text_size(px(TEXT_SM)).child(name);
+        let english = self.app_settings.language == UiLanguage::English;
+        let label = |zh: &'static str, en: &'static str| {
+            div()
+                .text_size(px(TEXT_SM))
+                .child(if english { en } else { zh })
+        };
         let mut body = card(p)
             .p(px(16.0))
             .flex()
             .flex_col()
             .gap(px(12.0))
             .child(if form.original.is_some() {
-                "编辑服务器"
+                if english {
+                    "Edit server"
+                } else {
+                    "编辑服务器"
+                }
             } else {
-                "添加服务器"
+                if english {
+                    "Add server"
+                } else {
+                    "添加服务器"
+                }
             })
-            .child(div().child(label("名称")).child(Input::new(&form.name)));
+            .child(
+                div()
+                    .child(label("名称", "Name"))
+                    .child(Input::new(&form.name)),
+            );
         let mut transports = div().flex().gap(px(8.0));
         for (transport, title) in [
-            (McpTransport::Stdio, "本地进程"),
+            (
+                McpTransport::Stdio,
+                if english {
+                    "Local process"
+                } else {
+                    "本地进程"
+                },
+            ),
             (McpTransport::Http, "Streamable HTTP"),
         ] {
             transports = transports.child(
@@ -302,10 +377,13 @@ impl Workspace {
             body = body
                 .child(
                     div()
-                        .child(label("启动命令"))
+                        .child(label("启动命令", "Launch command"))
                         .child(Input::new(&form.command)),
                 )
-                .child(label("参数（每行一个，按原样传给进程）"));
+                .child(label(
+                    "参数（每行一个，按原样传给进程）",
+                    "Arguments (one per line, passed as entered)",
+                ));
             for (i, arg) in form.args.iter().enumerate() {
                 body = body.child(
                     div()
@@ -314,7 +392,7 @@ impl Workspace {
                         .child(div().flex_1().child(Input::new(arg)))
                         .child(
                             outline_button(SharedString::from(format!("mcp-remove-arg-{i}")), p)
-                                .child("删除")
+                                .child(if english { "Remove" } else { "删除" })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
                                         && let Some(form) = &mut s.mcp.form
@@ -327,26 +405,45 @@ impl Workspace {
                         ),
                 );
             }
-            body = body.child(outline_button("mcp-add-arg", p).child("添加参数").on_click(
-                cx.listener(|this, _, window, cx| {
-                    if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
-                        && let Some(form) = &mut s.mcp.form
-                    {
-                        form.args.push(input("", "参数", false, window, cx));
-                    }
-                    cx.notify();
-                }),
-            ));
+            body = body.child(
+                outline_button("mcp-add-arg", p)
+                    .child(if english {
+                        "Add argument"
+                    } else {
+                        "添加参数"
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
+                            && let Some(form) = &mut s.mcp.form
+                        {
+                            form.args.push(input(
+                                "",
+                                if form.english { "Argument" } else { "参数" },
+                                false,
+                                window,
+                                cx,
+                            ));
+                        }
+                        cx.notify();
+                    })),
+            );
         } else {
             body = body.child(
                 div()
-                    .child(label("服务器地址"))
+                    .child(label("服务器地址", "Server URL"))
                     .child(Input::new(&form.url)),
             );
         }
         let local = form.transport == McpTransport::Stdio;
         let rows = if local { &form.env } else { &form.headers };
-        body = body.child(label(if local { "环境变量" } else { "请求头" }));
+        body = body.child(label(
+            if local { "环境变量" } else { "请求头" },
+            if local {
+                "Environment variables"
+            } else {
+                "Request headers"
+            },
+        ));
         for (i, row) in rows.iter().enumerate() {
             body = body.child(
                 div()
@@ -356,7 +453,7 @@ impl Workspace {
                     .child(div().flex_1().child(Input::new(&row.value).mask_toggle()))
                     .child(
                         outline_button(SharedString::from(format!("mcp-remove-pair-{i}")), p)
-                            .child("删除")
+                            .child(if english { "Remove" } else { "删除" })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
                                     && let Some(form) = &mut s.mcp.form
@@ -378,9 +475,17 @@ impl Workspace {
         body = body.child(
             outline_button("mcp-add-pair", p)
                 .child(if local {
-                    "添加环境变量"
+                    if english {
+                        "Add environment variable"
+                    } else {
+                        "添加环境变量"
+                    }
                 } else {
-                    "添加请求头"
+                    if english {
+                        "Add request header"
+                    } else {
+                        "添加请求头"
+                    }
                 })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
@@ -391,14 +496,30 @@ impl Workspace {
                         } else {
                             &mut form.headers
                         };
-                        rows.push(pair("", "", window, cx));
+                        rows.push(pair("", "", form.english, window, cx));
                     }
                     cx.notify();
                 })),
         );
         for (deferred, active, label) in [
-            (false, form.enabled, "启用服务器"),
-            (true, form.deferred, "按需搜索并加载工具"),
+            (
+                false,
+                form.enabled,
+                if english {
+                    "Enable server"
+                } else {
+                    "启用服务器"
+                },
+            ),
+            (
+                true,
+                form.deferred,
+                if english {
+                    "Search and load tools on demand"
+                } else {
+                    "按需搜索并加载工具"
+                },
+            ),
         ] {
             body = body.child(
                 outline_button(SharedString::from(format!("mcp-form-toggle-{deferred}")), p)
@@ -427,15 +548,23 @@ impl Workspace {
                 .child(
                     outline_button("mcp-save-form", p)
                         .child(if s.mcp.busy {
-                            "正在保存…"
+                            if english {
+                                "Saving…"
+                            } else {
+                                "正在保存…"
+                            }
                         } else {
-                            "保存服务器"
+                            if english {
+                                "Save server"
+                            } else {
+                                "保存服务器"
+                            }
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.save_mcp_form(cx))),
                 )
                 .child(
                     outline_button("mcp-cancel-form", p)
-                        .child("取消")
+                        .child(if english { "Cancel" } else { "取消" })
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy) {
                                 s.mcp.form = None;
