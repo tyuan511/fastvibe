@@ -192,11 +192,11 @@ OAuth 使用真实本地 AS/MCP 服务验证 PKCE、回调归属、错误 issuer
 
 ## 第四十二批：Linux 与 Windows 电脑操控
 
-- `computer` 在 Linux 下使用 `grim`、`gnome-screenshot` 或 `scrot` 截图，使用 `xdotool` 执行点击、文字输入和有限按键；缺少桌面依赖时返回明确错误。
+- `computer` 在 Linux 下使用 `grim`、`gnome-screenshot` 或 `scrot` 截图，使用 `xdotool` 执行点击、文字输入和有限按键；Windows 使用 PowerShell/System.Drawing 截图和 user32/SendKeys 动作；缺少桌面依赖时返回明确错误。Windows 动作分支已放在正确的 `perform` 路径，避免 Windows cfg 编译引用错误作用域。
 - macOS 的 Accessibility/每次确认流程保持不变；Linux 的副作用动作仍逐次经过用户确认，不通过 shell 拼接参数。
 - Windows 使用 PowerShell、System.Drawing/System.Windows.Forms 截图，并通过 user32.dll 与 SendKeys 完成点击、输入和有限按键；文本通过 UTF-16 Base64 传递，避免把用户输入拼接进脚本。
 
-验证：`fv-tools` 31 个单测、全部工具集成测试和 `fv-tools/fv-gui` 严格 clippy 通过。Linux/Windows 的真实桌面权限按要求不使用 computer use，留到跨平台交付环境验收。
+验证：`fv-tools` computer schema 用例、全包本机检查和严格 Clippy 通过。Windows 目标检查已进入 cfg 分支，但本机缺少 `x86_64-w64-mingw32-gcc`，交叉检查在 C 依赖初始化处停止；Linux/Windows 的真实桌面权限按要求不使用 computer use，留到跨平台交付环境验收。
 
 ## 第四十一批：其它 Agent 导入的第一条原生管道
 
