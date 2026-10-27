@@ -2,7 +2,7 @@
 //! draft stays local until an explicit save or reload. The server guards concurrent edits.
 
 use fv_protocol::methods::SettingsSet;
-use fv_protocol::types::AppSettingsPatch;
+use fv_protocol::types::{AppSettingsPatch, UiLanguage};
 use fv_theme::Token;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -124,7 +124,9 @@ impl PersonalizationSettings {
             editor: cx.new(|cx| {
                 TextareaState::new(window, cx)
                     .auto_grow(12, 24)
-                    .placeholder("例如：始终使用简体中文回答；修改代码前先说明计划。")
+                    .placeholder(
+                        "例如 / For example: 始终使用中文或 English；说明编辑代码前的计划。",
+                    )
             }),
             draft: Draft::new(saved),
         }
@@ -217,6 +219,7 @@ impl Workspace {
         };
         let s = &s.personalization;
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let busy = s.draft.saving.is_some();
         let enabled = !busy && !s.draft.conflict() && s.draft.current != s.draft.latest;
         let mut pane = card(p)
@@ -233,17 +236,30 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(div().text_size(px(TEXT_SM)).child("Agent 说明"))
-                            .child(
-                                div()
-                                    .text_size(px(TEXT_XS))
-                                    .muted(p)
-                                    .child("追加到所有对话的系统提示词之后。"),
-                            ),
+                            .child(div().text_size(px(TEXT_SM)).child(if english {
+                                "Agent instructions"
+                            } else {
+                                "Agent 说明"
+                            }))
+                            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
+                                "Appended after the system prompt in every conversation."
+                            } else {
+                                "追加到所有对话的系统提示词之后。"
+                            })),
                     )
                     .child(
                         outline_button("save-personalization", p)
-                            .child(if busy { "正在保存…" } else { "保存" })
+                            .child(if busy {
+                                if english {
+                                    "Saving…"
+                                } else {
+                                    "正在保存…"
+                                }
+                            } else if english {
+                                "Save"
+                            } else {
+                                "保存"
+                            })
                             .when(!enabled, |b| b.opacity(0.4))
                             .when(enabled, |b| {
                                 b.on_click(cx.listener(|this, _, _, cx| {
@@ -252,13 +268,16 @@ impl Workspace {
                             }),
                     ),
             )
-            .child(Textarea::new(&s.editor).aria_label("Agent 说明"))
-            .child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child("每轮对话都会使用；留空即停用。保存后从下一轮起生效。"),
-            );
+            .child(Textarea::new(&s.editor).aria_label(if english {
+                "Agent instructions"
+            } else {
+                "Agent 说明"
+            }))
+            .child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
+                "Used in every turn; leave empty to disable. Changes apply from the next turn."
+            } else {
+                "每轮对话都会使用；留空即停用。保存后从下一轮起生效。"
+            }));
         if s.draft.conflict() {
             pane = pane.child(
                 div()
@@ -269,7 +288,11 @@ impl Workspace {
                         div()
                             .text_size(px(TEXT_XS))
                             .text_color(p.c(Token::Destructive))
-                            .child("其他窗口已修改说明，当前草稿已保留。"),
+                            .child(if english {
+                                "Another window changed the instructions; your draft was kept."
+                            } else {
+                                "其他窗口已修改说明，当前草稿已保留。"
+                            }),
                     )
                     .child(
                         div()
@@ -277,7 +300,11 @@ impl Workspace {
                             .gap(px(8.0))
                             .child(
                                 outline_button("reload-personalization", p)
-                                    .child("载入已保存内容")
+                                    .child(if english {
+                                        "Load saved content"
+                                    } else {
+                                        "载入已保存内容"
+                                    })
                                     .when(!busy, |b| {
                                         b.on_click(cx.listener(|this, _, _, cx| {
                                             if let Some(s) = this.settings.as_mut() {
@@ -289,7 +316,11 @@ impl Workspace {
                             )
                             .child(
                                 outline_button("overwrite-personalization", p)
-                                    .child("覆盖保存")
+                                    .child(if english {
+                                        "Save anyway"
+                                    } else {
+                                        "覆盖保存"
+                                    })
                                     .when(!busy, |b| {
                                         b.on_click(cx.listener(|this, _, _, cx| {
                                             this.save_personalization(true, cx)
