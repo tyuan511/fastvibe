@@ -13,6 +13,7 @@ fn every_builtin_tool_is_registered_under_its_codex_name() {
         [
             "apply_patch",
             "code_mode",
+            "computer",
             "exec_command",
             "request_user_input",
             "update_plan",
