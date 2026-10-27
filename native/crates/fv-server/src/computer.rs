@@ -73,6 +73,24 @@ pub fn artifact(os: &str, arch: &str) -> Result<Artifact, String> {
     }
 }
 
+/// Whether the basic `computer` tool (screencapture / osascript / xdotool / PowerShell) stays in
+/// the model's tool set for this turn.
+///
+/// Off means no desktop tools at all. On, the driver's own tools replace it — except in the window
+/// where the driver is not up (a download in flight, a daemon that died, permissions not granted
+/// yet), and there the basic tool is the fallback. A platform with no driver build has no such
+/// window, and its settings pane is hidden on the same reading
+/// (`fv_protocol::types::computer_control_supported`, which `settings::section_available` filters
+/// the navigation by): a switch nobody can reach must not leave behind a tool that only a
+/// hand-edited settings file could turn on.
+pub(crate) fn keep_basic_computer_tool(
+    control_on: bool,
+    driver_running: bool,
+    supported: bool,
+) -> bool {
+    control_on && supported && !driver_running
+}
+
 fn executable_name() -> &'static str {
     if cfg!(windows) {
         "cua-driver.exe"
@@ -434,6 +452,41 @@ pub(crate) fn extract(archive: &Path, artifact: &Artifact, dest: &Path) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_basic_tool_follows_the_switch_the_driver_and_the_platform() {
+        // Off: no desktop tools at all, whatever the platform.
+        assert!(!keep_basic_computer_tool(false, false, true));
+        // On with the driver up: its own tools replace the basic one.
+        assert!(!keep_basic_computer_tool(true, true, true));
+        // On while the driver is not up yet: the basic tool is the fallback.
+        assert!(keep_basic_computer_tool(true, false, true));
+        // A platform with no driver build has no fallback, and no pane to switch it on.
+        assert!(!keep_basic_computer_tool(true, false, false));
+    }
+
+    #[test]
+    fn every_os_with_a_build_shows_the_pane() {
+        // The settings navigation hides the pane where `computer_control_supported` is false, so an
+        // OS that does have a build must never be one of those. The other direction may differ: a
+        // 32-bit Windows keeps its pane and reads the unsupported reason in it, because the shared
+        // answer is per OS while `artifact` is per OS and CPU.
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+            ("windows", "x86_64"),
+            ("windows", "aarch64"),
+        ] {
+            assert!(artifact(os, arch).is_ok(), "{os}/{arch}");
+            assert!(
+                fv_protocol::types::computer_control_supported(os),
+                "{os} has a build but no pane"
+            );
+        }
+        // And the platform that hides the pane has no build, and so no fallback tool.
+        assert!(!fv_protocol::types::computer_control_supported("linux"));
+        assert!(artifact("linux", "x86_64").is_err());
+    }
 
     #[test]
     fn only_macos_and_windows_have_a_build() {

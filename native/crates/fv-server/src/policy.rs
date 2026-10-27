@@ -34,6 +34,10 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::TurnQueueRemove { .. }
             | ClientRequest::TurnQueueSendNow { .. }
             | ClientRequest::TurnQueueResume { .. }
+            | ClientRequest::ThreadGoalSet { .. }
+            | ClientRequest::ThreadGoalPause { .. }
+            | ClientRequest::ThreadGoalResume { .. }
+            | ClientRequest::ThreadGoalClear { .. }
             | ClientRequest::ThreadUpdate { .. }
             | ClientRequest::ThreadFork { .. }
             | ClientRequest::ThreadDelete { .. }

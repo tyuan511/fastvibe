@@ -243,6 +243,45 @@ pub struct ThreadResumeResponse {
     /// still offers it.
     #[serde(default)]
     pub suggestion: Option<String>,
+    /// The conversation's long-running goal, when it has one.
+    #[serde(default)]
+    pub goal: Option<Goal>,
+}
+
+/// Where a goal stands. A goal runs round after round by itself until the model declares it
+/// done, the user pauses or stops it, or a round fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum GoalStatus {
+    Running,
+    Paused,
+    Complete,
+}
+
+/// A long-running objective attached to one conversation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Goal {
+    pub objective: String,
+    pub status: GoalStatus,
+    /// 1-based number of the round the agent is on.
+    pub round: u32,
+}
+
+/// `thread/goal/changed`: the goal as it now stands; `None` means it was cleared.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalChanged {
+    #[serde(default)]
+    pub goal: Option<Goal>,
+}
+
+/// `thread/goal/set`: start pursuing an objective, replacing any goal the thread had.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalSetParams {
+    pub thread_id: ThreadId,
+    pub objective: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2041,6 +2080,18 @@ pub struct Diagnostics {
     pub threads: usize,
     pub mcp_servers: usize,
     pub memory_enabled: bool,
+}
+
+/// Whether this OS has a desktop-control driver build at all.
+///
+/// One reading for both halves of the feature, so they cannot disagree about a platform: the
+/// settings navigation hides the pane where this is `false`, and the server withholds the basic
+/// `computer` fallback tool there too — a pane nobody can reach must not leave behind a tool that
+/// only a hand-edited setting could switch on. `ComputerStatus::supported` is the same answer
+/// narrowed by CPU as well; a platform this function admits but no build exists for keeps its pane
+/// and reports the reason in it instead of disappearing.
+pub fn computer_control_supported(os: &str) -> bool {
+    matches!(os, "macos" | "windows")
 }
 
 /// Where the desktop-control driver stands on this machine.

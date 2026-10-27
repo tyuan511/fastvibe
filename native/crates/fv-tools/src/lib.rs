@@ -15,6 +15,7 @@ mod paths;
 mod request_user_input;
 mod tool_search;
 mod truncate;
+mod goal_complete;
 mod update_plan;
 mod view_image;
 mod web_search;
@@ -28,6 +29,7 @@ pub use exec_sessions::ExecSessions;
 pub use request_user_input::RequestUserInputTool;
 pub use tool_search::ToolSearchTool;
 pub use truncate::truncate_middle;
+pub use goal_complete::{GoalCompleteTool, NAME as GOAL_COMPLETE_TOOL};
 pub use update_plan::UpdatePlanTool;
 pub use view_image::ViewImageTool;
 pub use write_stdin::WriteStdinTool;
@@ -37,6 +39,7 @@ pub fn register_builtin(registry: &mut ToolRegistry) {
     registry
         .register(ApplyPatchTool)
         .register(UpdatePlanTool)
+        .register(GoalCompleteTool)
         .register(RequestUserInputTool)
         .register(ViewImageTool)
         .register(ComputerTool)

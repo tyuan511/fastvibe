@@ -82,6 +82,7 @@ impl UnixServer {
             .db
             .recover_subagents()
             .map_err(|e| ListenError::Io(std::io::Error::other(e)))?;
+        crate::goal::pause_all_on_start(&server.state);
         server.state.schedules.recovery_complete();
         Ok(server)
     }

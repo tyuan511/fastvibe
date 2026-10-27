@@ -61,6 +61,8 @@ pub enum LogEvent {
     QueueChanged(QueueState),
     /// The standing guess at the user's next message; `None` withdraws it.
     SuggestionChanged(Option<String>),
+    /// The thread's goal as it now stands; `None` means it was cleared.
+    GoalChanged(Option<fv_protocol::types::Goal>),
     /// That turn, and everything after it, is gone: it is about to run again. Clients drop the
     /// turns from that id on, which is what makes a retry show one turn rather than two.
     Rewound {
@@ -261,6 +263,11 @@ impl ThreadLog {
                 ServerNotification::ThreadTokenUsageUpdated(ev!(TokenUsage { used, window }))
             }
             LogEvent::QueueChanged(queue) => ServerNotification::ThreadQueueChanged(ev!(queue)),
+            LogEvent::GoalChanged(goal) => {
+                ServerNotification::ThreadGoalChanged(ev!(fv_protocol::types::GoalChanged {
+                    goal
+                }))
+            }
             LogEvent::SuggestionChanged(text) => {
                 // The runtime's own copy is what a client that connects later reads, so the
                 // event and the snapshot can never disagree about what is standing.

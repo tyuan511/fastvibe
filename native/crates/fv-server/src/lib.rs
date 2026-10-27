@@ -8,6 +8,7 @@ mod computer;
 mod connection;
 pub mod context;
 mod git;
+mod goal;
 mod import;
 mod keep_awake;
 mod listener;

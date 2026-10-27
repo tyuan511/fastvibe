@@ -230,6 +230,7 @@ pub fn theme_conversation() -> Fixture {
         seq: 0,
         running: false,
         queue: QueueState::default(),
+        goal: None,
         suggestion: None,
     };
     Fixture {

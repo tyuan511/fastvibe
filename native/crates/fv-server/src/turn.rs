@@ -248,6 +248,8 @@ pub(crate) async fn drain_queue(
     // 「立即」 is the one stop that is *about* the queue: it interrupted the run in order to send
     // the prompt the user picked, so that prompt goes next instead of the queue stopping.
     let sending_now = rt.preferred().is_some();
+    // A running goal settles first: it may pause on this outcome, finish, or want another round.
+    let goal_round = crate::goal::after_turn(state, rt, thread_id, status, sending_now).await;
     match status {
         TurnStatus::Failed => {
             crate::queue::pause(state, rt, thread_id, QueuePauseReason::Failed);
@@ -269,6 +271,14 @@ pub(crate) async fn drain_queue(
         }
         None => crate::queue::take_next(state, rt, thread_id),
     };
+    let taken = taken.or_else(|| {
+        // Nothing the user lined up: the goal's next round goes, if it has one.
+        goal_round.map(|text| fv_store::QueuedPrompt {
+            id: uuid::Uuid::new_v4().to_string(),
+            text,
+            at: crate::state::now_ms(),
+        })
+    });
     let Some(row) = taken else {
         return false;
     };
@@ -316,6 +326,24 @@ pub(crate) async fn start_next(state: Arc<ServerState>, rt: Arc<ThreadRuntime>, 
         cancel,
         true,
     );
+}
+
+/// Start a turn with `text` on an idle thread; the prompt is put in the queue if the thread
+/// was claimed in the meantime.
+pub(crate) async fn start_text(
+    state: Arc<ServerState>,
+    rt: Arc<ThreadRuntime>,
+    thread_id: &str,
+    text: String,
+) {
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    let Some(cancel) = rt.begin(&state, &turn_id).await else {
+        if crate::queue::enqueue(&state, &rt, thread_id, text).is_ok() {
+            crate::queue::publish(&state, &rt, thread_id).await;
+        }
+        return;
+    };
+    spawn_turn_inner(state, rt, thread_id.to_string(), turn_id, text, cancel, true);
 }
 
 /// Run one queued prompt as the thread's next turn, exactly as `turn/start` would.
@@ -871,12 +899,14 @@ async fn build_context(
     }
     crate::subagents::register(state, thread_id, turn_id, &mut mcp.tools);
     // 电脑操控: off means no desktop tools at all; on, the driver's own tools (reached through the
-    // managed MCP server) replace the basic `computer` tool, which stays only as the fallback for
-    // a platform or a moment where the driver is not up.
+    // managed MCP server) replace the basic `computer` tool, which stays only as the fallback for a
+    // moment where the driver is not up — and a platform with no driver build has no such moment,
+    // and no settings pane to switch it on either.
     let desktop = crate::settings::read(state)
         .map(|s| s.computer_control)
         .unwrap_or(false);
-    if !desktop || state.computer_status().running {
+    let status = state.computer_status();
+    if !crate::computer::keep_basic_computer_tool(desktop, status.running, status.supported) {
         mcp.tools.retain(|name| name != "computer");
     }
     if !crate::settings::read(state)
@@ -898,6 +928,11 @@ async fn build_context(
     if let Some(ceiling) = &ceiling {
         mcp.tools
             .retain(|name| ceiling.iter().any(|allowed| allowed == name));
+    }
+    let goal = crate::goal::read(state, thread_id)
+        .filter(|g| g.status == fv_protocol::types::GoalStatus::Running);
+    if goal.is_none() {
+        mcp.tools.retain(|name| name != fv_tools::GOAL_COMPLETE_TOOL);
     }
     let loaded = rt.loaded_tools();
     // Explicit role/ancestor grants must work without granting tool_search as well.
@@ -965,7 +1000,10 @@ async fn build_context(
                 discovered,
                 mcp.instructions,
                 state.schedules.instructions(thread_id)
-            );
+            ) + &goal
+                .as_ref()
+                .map(|g| format!("\n\n{}", crate::goal::instructions(g)))
+                .unwrap_or_default();
             let body = body.trim();
             if body.is_empty() {
                 String::new()
