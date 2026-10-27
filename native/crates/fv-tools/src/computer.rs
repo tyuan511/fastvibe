@@ -20,7 +20,7 @@ impl Tool for ComputerTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "computer".into(),
-            description: "Inspect or control the user's macOS desktop. Screenshot is read-only; click, type and key require explicit approval and Accessibility permission.".into(),
+            description: "Inspect or control the user's desktop on macOS or Linux. Screenshot is read-only; click, type and key require explicit approval and the platform's desktop automation permission.".into(),
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -102,7 +102,7 @@ async fn screenshot(ctx: ToolCtx) -> ToolOutput {
     if !ctx.vision {
         return ToolOutput::err("computer screenshot requires image input support");
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         return ToolOutput::err("computer control is currently supported on macOS only");
     }
@@ -127,10 +127,39 @@ async fn screenshot(ctx: ToolCtx) -> ToolOutput {
             Err(error) => ToolOutput::err(format!("unable to start screencapture: {error}")),
         }
     }
+    #[cfg(target_os = "linux")]
+    {
+        let commands = [
+            ("grim", vec!["-"]),
+            ("gnome-screenshot", vec!["-f", "-"]),
+            ("scrot", vec!["-o", "-"]),
+        ];
+        for (program, args) in commands {
+            let Ok(output) = tokio::process::Command::new(program)
+                .args(args)
+                .output()
+                .await
+            else {
+                continue;
+            };
+            if output.status.success() && !output.stdout.is_empty() {
+                let data = base64::engine::general_purpose::STANDARD.encode(output.stdout);
+                return ToolOutput::ok("Desktop screenshot captured.").with_images(vec![
+                    ImagePart {
+                        mime: "image/png".into(),
+                        source: ImageSource::Base64 { data },
+                    },
+                ]);
+            }
+        }
+        ToolOutput::err(
+            "unable to capture the Linux desktop: install grim, gnome-screenshot or scrot",
+        )
+    }
 }
 
 async fn perform(action: Args) -> ToolOutput {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = action;
         return ToolOutput::err("computer control is currently supported on macOS only");
@@ -172,6 +201,60 @@ async fn perform(action: Args) -> ToolOutput {
                 String::from_utf8_lossy(&output.stderr).trim()
             )),
             Err(error) => ToolOutput::err(format!("unable to start osascript: {error}")),
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let (program, args): (&str, Vec<String>) = match action {
+            Args::Click { x, y } => (
+                "xdotool",
+                vec![
+                    "mousemove".into(),
+                    "--sync".into(),
+                    x.to_string(),
+                    y.to_string(),
+                    "click".into(),
+                    "1".into(),
+                ],
+            ),
+            Args::Type { text } => (
+                "xdotool",
+                vec![
+                    "type".into(),
+                    "--clearmodifiers".into(),
+                    "--delay".into(),
+                    "0".into(),
+                    "--".into(),
+                    text,
+                ],
+            ),
+            Args::Key { key } => {
+                let key = match key.as_str() {
+                    "return" => "Return",
+                    "escape" => "Escape",
+                    "tab" => "Tab",
+                    "delete" => "BackSpace",
+                    "up" => "Up",
+                    "down" => "Down",
+                    "left" => "Left",
+                    "right" => "Right",
+                    _ => return ToolOutput::err("unsupported Linux key"),
+                };
+                ("xdotool", vec!["key".into(), key.into()])
+            }
+            Args::Screenshot => return ToolOutput::err("screenshot is read-only"),
+        };
+        match tokio::process::Command::new(program)
+            .args(args)
+            .output()
+            .await
+        {
+            Ok(output) if output.status.success() => ToolOutput::ok("Computer action completed."),
+            Ok(output) => ToolOutput::err(format!(
+                "Linux computer action failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(error) => ToolOutput::err(format!("unable to start xdotool: {error}")),
         }
     }
 }
