@@ -567,10 +567,19 @@ impl Workspace {
             );
             let mut traits = div().flex().flex_wrap().gap(px(12.0));
             for (kind, label) in [
-                (None, "推理"),
-                (Some(ModelInput::Image), "图片"),
-                (Some(ModelInput::Video), "视频"),
-                (Some(ModelInput::File), "文件"),
+                (None, if english { "Reasoning" } else { "推理" }),
+                (
+                    Some(ModelInput::Image),
+                    if english { "Images" } else { "图片" },
+                ),
+                (
+                    Some(ModelInput::Video),
+                    if english { "Video" } else { "视频" },
+                ),
+                (
+                    Some(ModelInput::File),
+                    if english { "Files" } else { "文件" },
+                ),
             ] {
                 let active = kind.map_or(e.form.reasoning, |k| e.form.input.contains(&k));
                 traits = traits.child(
@@ -617,7 +626,18 @@ impl Workspace {
                         .when(!enabled, |d| d.opacity(0.45))
                         .when(enabled, |d| d.cursor_pointer())
                         .child(checkbox(active, p))
-                        .child(thinking_label(level))
+                        .child(if english {
+                            match level {
+                                ThinkingLevel::Minimal => "Minimal",
+                                ThinkingLevel::Low => "Low",
+                                ThinkingLevel::Medium => "Medium",
+                                ThinkingLevel::High => "High",
+                                ThinkingLevel::Xhigh => "Very high",
+                                ThinkingLevel::Max => "Maximum",
+                            }
+                        } else {
+                            thinking_label(level)
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(e) =
                                 this.settings.as_mut().and_then(|s| s.model_edit.as_mut())
@@ -644,10 +664,23 @@ impl Workspace {
                     .text_size(px(TEXT_XS))
                     .muted(p);
                 if let Some(price) = detail.price {
-                    prices = prices.child(price_row("基础价格", price));
+                    prices = prices.child(price_row(
+                        if english {
+                            "Base price"
+                        } else {
+                            "基础价格"
+                        },
+                        price,
+                    ));
                     for tier in &detail.price_tiers {
-                        prices = prices
-                            .child(price_row(&format!("超过 {} Tokens", tier.over), tier.price));
+                        prices = prices.child(price_row(
+                            &if english {
+                                format!("Over {} tokens", tier.over)
+                            } else {
+                                format!("超过 {} Tokens", tier.over)
+                            },
+                            tier.price,
+                        ));
                     }
                 } else {
                     prices = prices.child(if english { "Unknown" } else { "未知" });
