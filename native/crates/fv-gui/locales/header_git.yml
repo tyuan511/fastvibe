@@ -12,3 +12,45 @@ header.new_chat:
 header.expand_side_pane:
   zh: "展开侧边面板"
   en: "Expand side panel"
+header_git.commit_message:
+  zh: "提交信息"
+  en: "Commit message"
+header_git.write_a_message:
+  zh: "先写一句提交信息"
+  en: "Write a commit message first"
+header_git.committed_push_failed:
+  zh: "已提交，但推送失败：%{error}"
+  en: "Committed, but the push failed: %{error}"
+header_git.pulled:
+  zh: "已拉取"
+  en: "Pulled"
+header_git.pushed:
+  zh: "已推送"
+  en: "Pushed"
+header_git.committed:
+  zh: "已提交"
+  en: "Committed"
+header_git.committed_and_pushed:
+  zh: "已提交并推送"
+  en: "Committed and pushed"
+header_git.pull:
+  zh: "拉取"
+  en: "Pull"
+header_git.push:
+  zh: "推送"
+  en: "Push"
+header_git.changed_count:
+  zh: "%{count} 个改动"
+  en: "%{count} changed"
+header_git.clean:
+  zh: "没有改动"
+  en: "Clean"
+header_git.staged_count:
+  zh: "%{count} 个已暂存"
+  en: "%{count} staged"
+header_git.commit:
+  zh: "提交"
+  en: "Commit"
+header_git.commit_and_push:
+  zh: "提交并推送"
+  en: "Commit and push"

@@ -696,6 +696,94 @@ pub fn commit(cwd: &str, message: &str, amend: bool) -> Result<GitStatus, ErrorO
     status(cwd)
 }
 
+/// Which way `sync` talks to the remote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sync {
+    Pull,
+    Push,
+}
+
+/// Longest a pull or push may take before it is killed, as in the Electron app.
+const SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `git pull --ff-only` or `git push`, then the repository's status.
+///
+/// A pull never merges or rebases: when the branches have diverged it fails and says so, rather
+/// than leaving a conflicted tree behind a button that looked harmless. Nothing may wait for a
+/// person — no terminal prompt, and ssh is told not to ask — and a transfer that stalls is killed
+/// after [`SYNC_TIMEOUT`], taking its children with it.
+pub fn sync(cwd: &str, direction: Sync) -> Result<GitStatus, ErrorObject> {
+    if cwd.is_empty() || cwd.contains('\0') {
+        return Err(invalid("invalid repository path"));
+    }
+    let verb = match direction {
+        Sync::Pull => "pull",
+        Sync::Push => "push",
+    };
+    let mut command = Command::new("git");
+    command.args(["-C", cwd, verb]);
+    if direction == Sync::Pull {
+        command.arg("--ff-only");
+    }
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_PAGER", "cat")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Its own process group, so the timeout can end ssh and the credential helpers too.
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|e| failed(format!("cannot run git: {e}")))?;
+    let mut stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut text = String::new();
+        if let Some(stream) = stderr.as_mut() {
+            let _ = stream.take(64 * 1024).read_to_string(&mut text);
+        }
+        text
+    });
+    let started = std::time::Instant::now();
+    let exit = loop {
+        match child.try_wait() {
+            Ok(Some(exit)) => break Some(exit),
+            Ok(None) if started.elapsed() >= SYNC_TIMEOUT => {
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Err(e) => return Err(failed(format!("cannot wait for git: {e}"))),
+        }
+    };
+    let err = reader.join().unwrap_or_default().trim().to_string();
+    match exit {
+        None => Err(failed(format!(
+            "git {verb} timed out after {} seconds",
+            SYNC_TIMEOUT.as_secs()
+        ))),
+        Some(exit) if exit.success() => status(cwd),
+        Some(_) => Err(failed(if err.is_empty() {
+            format!("git {verb} failed")
+        } else {
+            err
+        })),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -891,5 +979,98 @@ mod tests {
         );
         assert_eq!(second.tips, vec![tip.clone()]);
         assert_eq!(second.tips, vec![tip.clone()]);
+    }
+
+    /// A bare "origin" and two clones of it, `a` and `b`, with one commit pushed.
+    fn remote_pair() -> (tempfile::TempDir, String, String) {
+        let root = tempfile::tempdir().unwrap();
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        let origin = root.path().join("origin.git");
+        std::fs::create_dir(&origin).unwrap();
+        git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+        let a = root.path().join("a");
+        let b = root.path().join("b");
+        for (dir, name) in [(&a, "a"), (&b, "b")] {
+            std::fs::create_dir(dir).unwrap();
+            git(dir, &["init", "-q", "-b", "main"]);
+            git(dir, &["remote", "add", "origin", origin.to_str().unwrap()]);
+            git(dir, &["config", "user.name", name]);
+            git(dir, &["config", "user.email", "t@t"]);
+        }
+        std::fs::write(a.join("f.txt"), "one\n").unwrap();
+        git(&a, &["add", "."]);
+        git(&a, &["commit", "-qm", "one"]);
+        git(&a, &["push", "-q", "-u", "origin", "main"]);
+        git(&b, &["pull", "-q", "origin", "main"]);
+        git(&b, &["branch", "--set-upstream-to=origin/main"]);
+        let (a, b) = (a.display().to_string(), b.display().to_string());
+        (root, a, b)
+    }
+
+    fn commit_file(dir: &str, name: &str, body: &str) {
+        std::fs::write(std::path::Path::new(dir).join(name), body).unwrap();
+        stage(dir, &[], true).unwrap();
+        commit(dir, &format!("add {name}"), false).unwrap();
+    }
+
+    #[test]
+    fn push_publishes_and_pull_fast_forwards() {
+        let (_root, a, b) = remote_pair();
+        commit_file(&a, "two.txt", "two\n");
+        assert_eq!(status(&a).unwrap().ahead, 1);
+        let pushed = sync(&a, Sync::Push).unwrap();
+        assert_eq!(pushed.ahead, 0, "push leaves nothing ahead");
+        let pulled = sync(&b, Sync::Pull).unwrap();
+        assert_eq!(pulled.behind, 0);
+        assert!(std::path::Path::new(&b).join("two.txt").exists());
+    }
+
+    #[test]
+    fn a_pull_of_diverged_branches_fails_and_changes_nothing() {
+        let (_root, a, b) = remote_pair();
+        commit_file(&a, "from_a.txt", "a\n");
+        sync(&a, Sync::Push).unwrap();
+        commit_file(&b, "from_b.txt", "b\n");
+        let before = git(&b, &["rev-parse", "HEAD"], false).unwrap();
+        let error = sync(&b, Sync::Pull).unwrap_err();
+        assert!(!error.message.is_empty());
+        assert_eq!(
+            git(&b, &["rev-parse", "HEAD"], false).unwrap(),
+            before,
+            "no merge commit"
+        );
+        assert!(
+            status(&b).unwrap().files.is_empty(),
+            "no conflicted tree left behind"
+        );
+    }
+
+    #[test]
+    fn a_rejected_push_reports_git_and_a_bad_path_is_refused() {
+        let (_root, a, b) = remote_pair();
+        commit_file(&a, "x.txt", "x\n");
+        sync(&a, Sync::Push).unwrap();
+        commit_file(&b, "y.txt", "y\n");
+        assert!(
+            sync(&b, Sync::Push).is_err(),
+            "behind the remote: not a fast-forward"
+        );
+        assert!(sync("", Sync::Pull).is_err());
     }
 }

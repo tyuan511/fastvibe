@@ -3811,6 +3811,46 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "workspace/gitPull",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CwdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "workspace/gitPush",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/CwdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "terminal/start",
             "type": "string"
           },

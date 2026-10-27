@@ -74,6 +74,8 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::WorkspaceGitDiscard { .. }
             | ClientRequest::WorkspaceGitDeleteUntracked { .. }
             | ClientRequest::WorkspaceGitCommit { .. }
+            | ClientRequest::WorkspaceGitPull { .. }
+            | ClientRequest::WorkspaceGitPush { .. }
             // A terminal is a shell the whole machine can be driven from. A client with the
             // password can already ask the agent to run commands, so this is the same trust — but
             // it must be a decision, and this is it.

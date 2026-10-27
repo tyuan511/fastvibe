@@ -45,15 +45,35 @@ pub use state::ServerState;
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Captured once at process startup, never from a replacement executable on disk.
-pub fn build_fingerprint() -> Option<String> {
+///
+/// The read starts at boot (`warm_build_fingerprint`), but the hashing runs in the
+/// background: a debug binary is over 100 MB, and hashing it inline kept the socket
+/// from binding until seconds into startup — past the daemon's start timeout whenever
+/// the machine was busy.
+pub async fn build_fingerprint() -> Option<String> {
     use sha2::{Digest, Sha256};
-    static STARTED_WITH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    static STARTED_WITH: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
     STARTED_WITH
-        .get_or_init(|| {
-            let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
-            Some(format!("{:x}", Sha256::digest(bytes)))
+        .get_or_init(|| async {
+            tokio::task::spawn_blocking(|| {
+                let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
+                Some(format!("{:x}", Sha256::digest(bytes)))
+            })
+            .await
+            .ok()
+            .flatten()
         })
+        .await
         .clone()
+}
+
+/// Begins capturing [build_fingerprint] without waiting for it. Call once, at the top of
+/// the process: what matters is that the executable is read as this process started with
+/// it, not that the digest is ready before the first client.
+pub fn warm_build_fingerprint() {
+    tokio::spawn(async {
+        let _ = build_fingerprint().await;
+    });
 }
 
 /// The agent every server runs: the given model, and all of the built-in tools. `main` and the

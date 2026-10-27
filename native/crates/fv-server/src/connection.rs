@@ -308,7 +308,7 @@ async fn dispatch(
                     "importPreview".into(),
                 ],
                 data_dir: state.data_dir.display().to_string(),
-                build_fingerprint: crate::build_fingerprint(),
+                build_fingerprint: crate::build_fingerprint().await,
                 has_running_turns: Some(state.has_running_turns()),
             })
         }
@@ -676,6 +676,21 @@ async fn dispatch(
             &params.message,
             params.amend,
         )?),
+        // Network round trips: off the async thread, and bounded (see `git::sync`).
+        ClientRequest::WorkspaceGitPull { params, .. } => to_value(
+            tokio::task::spawn_blocking(move || {
+                crate::git::sync(&params.cwd, crate::git::Sync::Pull)
+            })
+            .await
+            .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??,
+        ),
+        ClientRequest::WorkspaceGitPush { params, .. } => to_value(
+            tokio::task::spawn_blocking(move || {
+                crate::git::sync(&params.cwd, crate::git::Sync::Push)
+            })
+            .await
+            .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??,
+        ),
         ClientRequest::TerminalStart { params, .. } => to_value(state.terminals.start(
             &params.cwd,
             params.cols,

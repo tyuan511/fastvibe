@@ -763,6 +763,7 @@ impl Workspace {
             || self.entry_menu.is_some()
             || self.sidebar_menu.is_some()
             || self.thread_menu.is_some()
+            || self.header_git.menu_at.is_some()
             || self.project_row_menu.is_some()
             || self.settings.as_ref().is_some_and(|s| {
                 s.default_menu
@@ -783,6 +784,7 @@ impl Workspace {
         self.approval_menu = false;
         self.project_menu = false;
         self.thread_menu = None;
+        self.header_git.menu_at = None;
         self.project_row_menu = None;
         if let Some(s) = &mut self.settings {
             s.default_menu = false;
@@ -2186,6 +2188,7 @@ impl Render for Workspace {
         }
         self.sync_terminal_focus(window, cx);
         self.sync_header_git(cx);
+        self.sync_header_git_input(window, cx);
         let english = self.app_settings.language == UiLanguage::English;
         if english != self.menu_english {
             self.menu_english = english;
@@ -2394,6 +2397,7 @@ impl Render for Workspace {
         root.children(self.pane_menu_view(window, cx))
             .children(self.entry_menu_view(window, cx))
             .children(self.sidebar_menu_view(window, cx))
+            .children(self.header_git_menu_view(window, cx))
             .children(self.sidebar_notice_view(cx))
             .children(self.thread_menu_view(window, cx))
             .children(self.project_dialog_view(cx))

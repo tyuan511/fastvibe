@@ -25,6 +25,8 @@ struct Args {
     context_menu: bool,
     /// Dev only: open a project row's right-click menu.
     project_menu: bool,
+    /// Dev only: open the header repository chip's popover.
+    git_menu: bool,
     /// Dev only: open every fold and tool call.
     expand: bool,
     /// Dev only: start with the ⌘K search open.
@@ -57,6 +59,7 @@ fn parse_args() -> Args {
         thinking_menu: false,
         context_menu: false,
         project_menu: false,
+        git_menu: false,
         expand: false,
         palette: false,
         search: None,
@@ -87,6 +90,7 @@ fn parse_args() -> Args {
             "--thinking-menu" => a.thinking_menu = true,
             "--context-menu" => a.context_menu = true,
             "--project-menu" => a.project_menu = true,
+            "--git-menu" => a.git_menu = true,
             "--expand" => a.expand = true,
             "--palette" => a.palette = true,
             "--search" => a.search = it.next(),
@@ -137,6 +141,7 @@ fn main() {
             let thinking_menu = args.thinking_menu;
             let context_menu = args.context_menu;
             let project_menu = args.project_menu;
+            let git_menu = args.git_menu;
             let expand = args.expand;
             let palette_open = args.palette;
             let search = args.search.clone();
@@ -309,6 +314,9 @@ fn main() {
                 }
                 if project_menu {
                     ws.update(cx, |ws, cx| ws.show_project_row_menu(cx));
+                }
+                if git_menu {
+                    ws.update(cx, |ws, cx| ws.show_header_git_menu(window, cx));
                 }
                 if let Some(section) = settings.as_deref() {
                     ws.update(cx, |ws, cx| ws.show_settings_named(section, window, cx));

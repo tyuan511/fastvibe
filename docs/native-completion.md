@@ -746,8 +746,28 @@ GPUI 不带 i18n，此前文案靠手写 `if english { … } else { … }`，漏
 Electron 的会话标题栏在“项目 / 标题”后面有一个仓库状态按钮（分支图标、分支名、`+N -M`，干净时是对勾），原生版没有。
 
 - 新增 `workspace/header_git.rs`：对当前会话项目的主文件夹读 `workspace/gitStatus`，切换会话时立即重读，之后每 5 秒刷新一次（代理在窗口之外改文件，没有可订阅的事件）。读失败时保留上一次的状态，不让按钮闪没；不在仓库里、或还没有结果时不画，与 Electron 一致。
-- 点击打开右侧的 Git 面板（暂存、提交和审查都在那里）。Electron 的气泡里还有拉取/推送和提交框；协议里没有 pull/push 方法，所以这两项和气泡本身仍未做。
+- 点击打开右侧的 Git 面板（暂存、提交和审查都在那里）。Electron 的气泡里还有拉取/推送和提交框，见第五十二批。
 - 标题栏里原来写死中文的三个无障碍标签（展开侧边栏、新对话、展开侧边面板）改走 locale 文件。
 - capture 夹具给按钮塞了一个手写状态，截图对照过：分支图标、分支名、绿色 `+8`、红色 `-0` 的位置和 Electron 一致。
 
 验证：`fv-gui` 全部单测、all-targets 严格 Clippy 通过；离屏截图目检了标题栏。工具详情的对齐这批没有动，清单里的“对齐”保持未勾选。
+
+## 第五十二批：拉取 / 推送与标题栏气泡
+
+协议新增 `workspace/gitPull`、`workspace/gitPush`（参数 `CwdParams`，返回新的 `GitStatus`），标题栏按钮改成带气泡的版本。
+
+**服务端**（`fv-server/src/git.rs` 的 `sync`）
+- 拉取是 `git pull --ff-only`，推送是 `git push`，与 Electron 一致。分叉时拉取直接失败并说明原因，不合并、不变基，也不会留下冲突的工作区。
+- 不能等人：`GIT_TERMINAL_PROMPT=0`，stdin 为空，没设 `GIT_SSH_COMMAND` 时用 `ssh -o BatchMode=yes`，所以要密码的远程直接报错而不是挂住。
+- 60 秒超时，到点杀掉整个进程组（ssh 和凭据助手一起），不遗留子进程。handler 在 `spawn_blocking` 里跑，不占异步线程。
+- 远程策略里归为允许（与 `gitCommit` 同一理由）；`schema/protocol.json` 已重新生成。
+- 测试：`git::tests` 三个真实仓库用例（一个裸 origin 加两个克隆）——推送后 ahead 归零、另一克隆快进拉取、分叉拉取失败且 HEAD 不变且工作区干净、落后时推送被拒；`tests/git_projects.rs` 再走一遍公共协议。
+
+**标题栏气泡**（`workspace/header_git.rs`）
+- 点击按钮在按钮下方弹出：分支名 + 拉取/推送图标（进行中变成加载图标，其余按钮变淡），改动摘要行（`N 个改动 +a -d`、已暂存数、↓落后 ↑领先，点它打开 Git 面板），提交信息框，「提交」（暂存全部后提交，与 Git 面板的按钮一致）和「提交并推送」。
+- 提交后推送失败时提示“已提交，但推送失败：…”，提交本身保留；成功后关闭气泡并给出提示，输入框清空，已打开的 Git 面板同步刷新。
+- 同一时刻只做一件事；提交信息为空时提示而不发请求。气泡并入统一的 `any_menu_open` / `close_menus`，点别处或 Esc 关闭。
+- 没做：Electron 里提交信息为空时的 AI 生成（原生协议里没有这个方法）和隔离工作区的解除绑定行。
+- 开发开关 `--git-menu` 配合 `--fixture theme` 可截图查看。
+
+验证：`fv-gui` 95 项、`fv-protocol`、`fv-server` 测试与 all-targets 严格 Clippy 通过；气泡用离屏截图目检过布局。没有连真实远程（SSH、凭据助手）验证，只用本地裸仓库。

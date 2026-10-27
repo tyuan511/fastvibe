@@ -189,9 +189,12 @@ impl Daemon {
 
     async fn start(&self) -> Result<(), DaemonError> {
         let environment = fv_env::initialize().await;
+        // Truncated per attempt: the tail is only ever read when this attempt failed, and
+        // an appended log would answer with the previous server's last words.
         let log = OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(true)
             .open(self.log_file())?;
         let mut command = Command::new(&self.server_bin);
         command

@@ -83,8 +83,9 @@ fn main() {
 }
 
 async fn run() {
-    // Read before accepting clients: a later build may atomically replace this path.
-    let _ = fv_server::build_fingerprint();
+    // Start reading the executable now, before a later build can replace this path; the
+    // hash itself finishes in the background so it never delays the socket.
+    fv_server::warm_build_fingerprint();
     let mut data_dir = None;
     let mut listen = Listen::Unix;
     let mut echo = false;
