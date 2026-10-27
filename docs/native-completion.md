@@ -188,7 +188,7 @@ OAuth 使用真实本地 AS/MCP 服务验证 PKCE、回调归属、错误 issuer
 - 原生 GUI 的语言设置继续沿用 `AppSettings.language`，新增输入框占位、停止/排队/发送提示、模型菜单、搜索面板、会话状态、压缩/工作状态、回复动作、变更卡片、终端和 Git 面板的中英文映射。未迁移的低频文案仍保留中文回退，未把这一批误标成完整 i18n。
 - 新增 `pnpm native:verify -- --bundle DIR`：默认严格核对二进制和资源哈希；完成签名后使用 `--allow-resigned` 接受签名造成的二进制哈希变化，同时仍强制检查两个可执行文件、文件大小/路径和全部资源哈希，避免把重签当成绕过资源校验。
 
-验证：`node --check scripts/stage-native-app.mjs`、`node --check scripts/check-native-bundle.mjs`、macOS arm64 debug bundle（`--no-build`）及严格/重签模拟校验通过；`fv-gui` 编译、90 项 GUI 测试、严格 Clippy 和 `NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 pnpm native:test` 全 workspace 回归通过（日志 `/tmp/fastvibe-native-workspace-test-i18n-bundle-final.log`）。原生 bundle 的 Windows/Linux 交叉构建、安装包签名和真实安装验收仍留在交付阶段；界面深层低频文案仍留在外围 i18n 阶段。
+验证：`node --check scripts/stage-native-app.mjs`、`node --check scripts/check-native-bundle.mjs`、macOS arm64 debug bundle（`--no-build`）及严格/重签模拟校验通过；`pnpm native:build` 的 macOS arm64 release 构建、release bundle 和 `native:verify` 通过；`fv-gui` 编译、90 项 GUI 测试、严格 Clippy 和 `NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 pnpm native:test` 全 workspace 回归通过（日志 `/tmp/fastvibe-native-workspace-test-i18n-bundle-final.log`）。原生 bundle 的 Windows/Linux 交叉构建、安装包签名和真实安装验收仍留在交付阶段；界面深层低频文案仍留在外围 i18n 阶段。
 
 ## 第四十二批：Linux 与 Windows 电脑操控
 
