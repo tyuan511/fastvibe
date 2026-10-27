@@ -16,6 +16,7 @@ mod listener;
 mod log;
 mod mapping;
 pub mod memory;
+mod mode;
 mod model_detail;
 pub mod office;
 mod policy;

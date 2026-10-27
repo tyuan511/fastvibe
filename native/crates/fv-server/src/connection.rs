@@ -377,6 +377,7 @@ async fn dispatch(
                 queue,
                 suggestion,
                 goal: crate::goal::read(state, &params.thread_id),
+                mode: crate::mode::read(state, &params.thread_id),
             })
         }
         ClientRequest::ThreadUnsubscribe { params, .. } => {
@@ -1012,6 +1013,15 @@ async fn dispatch(
             if !rt.is_running() {
                 crate::turn::start_next(state.clone(), rt.clone(), &params.thread_id).await;
             }
+            to_value(Empty {})
+        }
+        ClientRequest::ThreadModeSet { params, .. } => {
+            crate::mode::set(state, &params.thread_id, params.mode);
+            to_value(Empty {})
+        }
+        ClientRequest::ThreadReviewStart { params, .. } => {
+            let rt = state.runtime(&params.thread_id);
+            crate::mode::start_review(state, &rt, &params.thread_id, &params.target).await?;
             to_value(Empty {})
         }
         ClientRequest::ThreadGoalSet { params, .. } => {

@@ -58,6 +58,8 @@ pub struct ThreadRuntime {
     pub(crate) budget: Arc<fv_agent::ContextBudget>,
     pub(crate) exec_sessions: Arc<fv_tools::ExecSessions>,
     pub(crate) code_mode: Arc<fv_tools::CodeMode>,
+    /// The next turn is a review: read-only, once.
+    review_pending: std::sync::atomic::AtomicBool,
     inner: Mutex<Inner>,
     delivery: tokio::sync::Mutex<()>,
 }
@@ -72,6 +74,7 @@ impl ThreadRuntime {
             budget: Default::default(),
             exec_sessions: Arc::new(fv_tools::ExecSessions::default()),
             code_mode: Arc::new(fv_tools::CodeMode::default()),
+            review_pending: std::sync::atomic::AtomicBool::new(false),
             inner: Mutex::new(Inner {
                 log: ThreadLog::new(thread_id),
                 history: Vec::new(),
@@ -111,6 +114,7 @@ impl ThreadRuntime {
             budget: Default::default(),
             exec_sessions: Arc::new(fv_tools::ExecSessions::default()),
             code_mode: Arc::new(fv_tools::CodeMode::default()),
+            review_pending: std::sync::atomic::AtomicBool::new(false),
             inner: Mutex::new(Inner {
                 log,
                 history: fv_core::effective_history(&history),
@@ -209,6 +213,17 @@ impl ThreadRuntime {
 
     pub fn completion(&self) -> Option<(fv_protocol::types::TurnStatus, Option<String>)> {
         self.inner.lock().unwrap().completion.clone()
+    }
+
+    pub fn set_review_pending(&self) {
+        self.review_pending
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether the turn being built is a review; asking uses it up.
+    pub fn take_review(&self) -> bool {
+        self.review_pending
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
     }
 
     pub fn is_running(&self) -> bool {

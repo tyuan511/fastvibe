@@ -82,6 +82,8 @@ client_requests! {
     ThreadGoalPause => "thread/goal/pause": ThreadIdParams => Empty,
     ThreadGoalResume => "thread/goal/resume": ThreadIdParams => Empty,
     ThreadGoalClear => "thread/goal/clear": ThreadIdParams => Empty,
+    ThreadModeSet => "thread/mode/set": ThreadModeParams => Empty,
+    ThreadReviewStart => "thread/review/start": ThreadReviewParams => Empty,
     ThreadUpdate => "thread/update": ThreadUpdateParams => ThreadStartResponse,
     ThreadFork => "thread/fork": ThreadIdParams => ThreadStartResponse,
     ThreadDelete => "thread/delete": ThreadIdParams => Empty,

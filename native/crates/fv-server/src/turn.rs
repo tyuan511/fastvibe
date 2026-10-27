@@ -768,6 +768,7 @@ fn permissions_for(
     thread_id: &str,
     turn_id: &str,
     withdrawn: &mpsc::UnboundedSender<fv_protocol::RequestId>,
+    look_only: bool,
 ) -> Arc<fv_agent::Permissions> {
     use fv_protocol::types as wire;
     let settings = crate::settings::read(state).unwrap_or_default();
@@ -794,8 +795,8 @@ fn permissions_for(
         wire::ApprovalPolicy::OnRequest => fv_agent::ApprovalPolicy::OnRequest,
         wire::ApprovalPolicy::Never => fv_agent::ApprovalPolicy::Never,
     };
-    let read_only_role =
-        crate::subagents::roles::of_thread(state, thread_id).is_some_and(|r| r.read_only);
+    let read_only_role = look_only
+        || crate::subagents::roles::of_thread(state, thread_id).is_some_and(|r| r.read_only);
     let mode = if read_only_role {
         fv_agent::SandboxMode::ReadOnly
     } else {
@@ -857,7 +858,18 @@ async fn build_context(
         })
         .map(|text| format!("\n\n{text}"))
         .unwrap_or_default();
-    let permissions = permissions_for(state, rt, thread.as_ref(), thread_id, turn_id, &withdrawn);
+    // Plan mode, and a turn started as a review, may look but not change anything.
+    let plan_mode = crate::mode::read(state, thread_id) == fv_protocol::types::ThreadMode::Plan;
+    let look_only = rt.take_review() || plan_mode;
+    let permissions = permissions_for(
+        state,
+        rt,
+        thread.as_ref(),
+        thread_id,
+        turn_id,
+        &withdrawn,
+        look_only,
+    );
     let context_state = state.clone();
     let context_cwd = cwd.clone();
     let other_folders = thread
@@ -943,6 +955,10 @@ async fn build_context(
         mcp.tools
             .retain(|name| name != fv_tools::GOAL_COMPLETE_TOOL);
     }
+    if look_only {
+        mcp.tools
+            .retain(|name| crate::subagents::roles::READ_ONLY_TOOLS.contains(&name));
+    }
     let loaded = rt.loaded_tools();
     // Explicit role/ancestor grants must work without granting tool_search as well.
     // Load only tools that survived BOTH restrictions in this per-turn snapshot.
@@ -1014,7 +1030,11 @@ async fn build_context(
                 discovered,
                 mcp.instructions,
                 state.schedules.instructions(thread_id)
-            ) + &goal
+            ) + &(if plan_mode {
+                format!("\n\n{}", crate::mode::PLAN_INSTRUCTIONS)
+            } else {
+                String::new()
+            }) + &goal
                 .as_ref()
                 .map(|g| format!("\n\n{}", crate::goal::instructions(g)))
                 .unwrap_or_default();

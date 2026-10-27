@@ -25,6 +25,7 @@ pub struct ThreadView {
     /// Prompts queued behind the reply in flight, in the order they will be sent.
     pub queue: QueueState,
     pub goal: Option<fv_protocol::types::Goal>,
+    pub mode: fv_protocol::types::ThreadMode,
     /// The run in flight, as the client last heard of it: what a steer has to name.
     pub active_turn: Option<TurnId>,
     /// 回复推荐: the guess at the user's next message, offered as the composer's placeholder.
@@ -61,6 +62,7 @@ impl ThreadView {
             plan: None,
             queue: snapshot.queue,
             goal: snapshot.goal,
+            mode: snapshot.mode,
             active_turn: None,
             suggestion: snapshot.suggestion,
             questions: Vec::new(),

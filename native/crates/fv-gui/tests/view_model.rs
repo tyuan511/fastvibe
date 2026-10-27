@@ -30,6 +30,7 @@ fn view(seq: u64, turns: Vec<Turn>) -> ThreadView {
         running: false,
         queue: QueueState::default(),
         goal: None,
+        mode: Default::default(),
         suggestion: None,
     })
 }
@@ -295,6 +296,7 @@ fn stats_restore_with_the_snapshot_and_only_new_sequenced_updates_replace_them()
         running: false,
         queue: QueueState::default(),
         goal: None,
+        mode: Default::default(),
         suggestion: None,
     });
     assert_eq!(v.stats, initial);

@@ -231,6 +231,7 @@ pub fn theme_conversation() -> Fixture {
         running: false,
         queue: QueueState::default(),
         goal: None,
+        mode: Default::default(),
         suggestion: None,
     };
     Fixture {

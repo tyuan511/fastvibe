@@ -246,6 +246,49 @@ pub struct ThreadResumeResponse {
     /// The conversation's long-running goal, when it has one.
     #[serde(default)]
     pub goal: Option<Goal>,
+    /// Whether the conversation is in plan mode.
+    #[serde(default)]
+    pub mode: ThreadMode,
+}
+
+/// How the agent behaves in a conversation. In plan mode it investigates and writes a plan with
+/// read-only tools and changes nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadMode {
+    #[default]
+    Default,
+    Plan,
+}
+
+/// `thread/mode/set`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadModeParams {
+    pub thread_id: ThreadId,
+    pub mode: ThreadMode,
+}
+
+/// What a review looks at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum ReviewTarget {
+    /// The working tree's staged, unstaged and untracked changes.
+    Uncommitted,
+    /// Everything on the current branch since it left `base`.
+    Base { base: String },
+    /// One commit.
+    Commit { sha: String },
+    /// Whatever the user describes.
+    Custom { instructions: String },
+}
+
+/// `thread/review/start`: run a read-only review as the thread's next turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadReviewParams {
+    pub thread_id: ThreadId,
+    pub target: ReviewTarget,
 }
 
 /// Where a goal stands. A goal runs round after round by itself until the model declares it
