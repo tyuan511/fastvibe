@@ -281,26 +281,34 @@ impl Workspace {
         };
         let s = &settings.mcp;
         let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
         let mut pane = div()
             .flex()
             .flex_col()
             .gap(px(16.0))
             .child(
                 outline_button("add-mcp-form", p)
-                    .child("添加服务器")
+                    .child(if english {
+                        "Add server"
+                    } else {
+                        "添加服务器"
+                    })
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_mcp_form(None, window, cx)),
                     ),
             )
-            .child(
-                div()
-                    .text_size(px(TEXT_SM))
-                    .muted(p)
-                    .child("连接本地或远程 MCP 服务器，为对话添加工具和资源。"),
-            )
+            .child(div().text_size(px(TEXT_SM)).muted(p).child(if english {
+                "Connect local or remote MCP servers to add tools and resources to chats."
+            } else {
+                "连接本地或远程 MCP 服务器，为对话添加工具和资源。"
+            }))
             .child(
                 outline_button("refresh-mcp", p)
-                    .child("刷新状态")
+                    .child(if english {
+                        "Refresh status"
+                    } else {
+                        "刷新状态"
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.refresh_mcp(cx))),
             );
         if let Some(notice) = &s.notice {
@@ -312,11 +320,11 @@ impl Workspace {
         }
         if let Some(servers) = &s.servers {
             if servers.is_empty() {
-                pane = pane.child(
-                    card(p)
-                        .p(px(16.0))
-                        .child("还没有 MCP 服务器，点击添加服务器或导入配置。"),
-                );
+                pane = pane.child(card(p).p(px(16.0)).child(if english {
+                    "No MCP servers yet. Add a server or import a configuration."
+                } else {
+                    "还没有 MCP 服务器，点击添加服务器或导入配置。"
+                }));
             }
             for server in servers {
                 let id = server.config.id.clone();
@@ -329,13 +337,17 @@ impl Workspace {
                 let authorize = id.clone();
                 let forget = id.clone();
                 let state = if !server.config.enabled {
-                    "已停用"
+                    if english { "Disabled" } else { "已停用" }
                 } else if server.connected {
-                    "已连接"
+                    if english { "Connected" } else { "已连接" }
                 } else if server.connecting {
-                    "正在连接…"
+                    if english {
+                        "Connecting…"
+                    } else {
+                        "正在连接…"
+                    }
                 } else {
-                    "未连接"
+                    if english { "Disconnected" } else { "未连接" }
                 };
                 let mut row = card(p)
                     .p(px(16.0))
@@ -354,11 +366,11 @@ impl Workspace {
                         div()
                             .text_size(px(TEXT_XS))
                             .muted(p)
-                            .child(SharedString::from(format!(
-                                "{} 个工具 · {}",
-                                server.tools.len(),
-                                id
-                            ))),
+                            .child(SharedString::from(if english {
+                                format!("{} tools · {}", server.tools.len(), id)
+                            } else {
+                                format!("{} 个工具 · {}", server.tools.len(), id)
+                            })),
                     )
                     .child(
                         div()
@@ -367,7 +379,7 @@ impl Workspace {
                             .gap(px(8.0))
                             .child(
                                 outline_button(SharedString::from(format!("edit-mcp-{id}")), p)
-                                    .child("编辑")
+                                    .child(if english { "Edit" } else { "编辑" })
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.open_mcp_form(Some(&edit), window, cx)
                                     })),
@@ -375,9 +387,9 @@ impl Workspace {
                             .child(
                                 outline_button(SharedString::from(format!("toggle-mcp-{id}")), p)
                                     .child(if server.config.enabled {
-                                        "停用"
+                                        if english { "Disable" } else { "停用" }
                                     } else {
-                                        "启用"
+                                        if english { "Enable" } else { "启用" }
                                     })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.change_mcp(&toggle, false, cx)
@@ -388,7 +400,7 @@ impl Workspace {
                                     SharedString::from(format!("reconnect-mcp-{id}")),
                                     p,
                                 )
-                                .child("重新连接")
+                                .child(if english { "Reconnect" } else { "重新连接" })
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| this.reconnect_mcp(reconnect.clone(), cx),
                                 )),
@@ -398,7 +410,7 @@ impl Workspace {
                                     SharedString::from(format!("resources-mcp-{id}")),
                                     p,
                                 )
-                                .child("资源")
+                                .child(if english { "Resources" } else { "资源" })
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         this.show_mcp_resources(resources.clone(), cx)
@@ -410,7 +422,7 @@ impl Workspace {
                                     SharedString::from(format!("diagnostics-mcp-{id}")),
                                     p,
                                 )
-                                .child("诊断")
+                                .child(if english { "Diagnostics" } else { "诊断" })
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         if let Some(s) = this.settings.as_mut() {
@@ -429,7 +441,7 @@ impl Workspace {
                             )
                             .child(
                                 outline_button(SharedString::from(format!("remove-mcp-{id}")), p)
-                                    .child("删除")
+                                    .child(if english { "Delete" } else { "删除" })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if let Some(s) = this.settings.as_mut() {
                                             s.mcp.remove = Some(remove.clone());
@@ -467,9 +479,17 @@ impl Workspace {
                                     p,
                                 )
                                 .child(if server.oauth_credentials {
-                                    "重新登录 OAuth"
+                                    if english {
+                                        "Reauthorize OAuth"
+                                    } else {
+                                        "重新登录 OAuth"
+                                    }
                                 } else {
-                                    "OAuth 登录"
+                                    if english {
+                                        "OAuth login"
+                                    } else {
+                                        "OAuth 登录"
+                                    }
                                 })
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
@@ -483,7 +503,7 @@ impl Workspace {
                                         SharedString::from(format!("forget-mcp-{id}")),
                                         p,
                                     )
-                                    .child("退出登录")
+                                    .child(if english { "Log out" } else { "退出登录" })
                                     .on_click(cx.listener(
                                         move |this, _, _, cx| {
                                             this.forget_mcp_login(forget.clone(), cx)
@@ -496,7 +516,11 @@ impl Workspace {
                 pane = pane.child(row);
             }
         } else {
-            pane = pane.child("正在读取 MCP 配置…");
+            pane = pane.child(if english {
+                "Loading MCP configuration…"
+            } else {
+                "正在读取 MCP 配置…"
+            });
         }
         if let Some(id) = &s.remove {
             let id = id.clone();
@@ -506,17 +530,25 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child("删除这个 MCP 服务器配置？")
+                    .child(if english {
+                        "Delete this MCP server configuration?"
+                    } else {
+                        "删除这个 MCP 服务器配置？"
+                    })
                     .child(
                         outline_button("confirm-remove-mcp", p)
-                            .child("确认删除")
+                            .child(if english {
+                                "Confirm delete"
+                            } else {
+                                "确认删除"
+                            })
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.change_mcp(&id, true, cx)),
                             ),
                     )
                     .child(
                         outline_button("cancel-remove-mcp", p)
-                            .child("取消")
+                            .child(if english { "Cancel" } else { "取消" })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(s) = this.settings.as_mut() {
                                     s.mcp.remove = None;
@@ -546,10 +578,18 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap(px(10.0))
-                .child("添加或编辑配置")
+                .child(if english {
+                    "Add or edit configuration"
+                } else {
+                    "添加或编辑配置"
+                })
                 .child(
                     outline_button("edit-mcp-configs", p)
-                        .child("编辑现有配置")
+                        .child(if english {
+                            "Edit current configuration"
+                        } else {
+                            "编辑现有配置"
+                        })
                         .on_click(cx.listener(|this, _, window, cx| this.edit_mcp(window, cx))),
                 )
                 .child(Textarea::new(&s.editor))
@@ -559,7 +599,11 @@ impl Workspace {
                         .gap(px(8.0))
                         .child(
                             outline_button("import-mcp-configs", p)
-                                .child("导入或更新")
+                                .child(if english {
+                                    "Import or update"
+                                } else {
+                                    "导入或更新"
+                                })
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.save_mcp_editor(false, cx)),
                                 ),
@@ -567,9 +611,17 @@ impl Workspace {
                         .child(
                             outline_button("save-mcp-configs", p)
                                 .child(if s.busy {
-                                    "正在保存…"
+                                    if english {
+                                        "Saving…"
+                                    } else {
+                                        "正在保存…"
+                                    }
                                 } else {
-                                    "保存完整配置"
+                                    if english {
+                                        "Save full configuration"
+                                    } else {
+                                        "保存完整配置"
+                                    }
                                 })
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.save_mcp_editor(true, cx)),
