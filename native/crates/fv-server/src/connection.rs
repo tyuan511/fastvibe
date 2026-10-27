@@ -715,6 +715,7 @@ async fn dispatch(
                 memory_enabled: state.memory.state().config.enabled,
             })
         }
+        ClientRequest::AppUpdateCheck { .. } => to_value(crate::update::check(state).await?),
         ClientRequest::StatsUsage { params, .. } => {
             to_value(crate::usage::collect(state.clone(), params).await?)
         }

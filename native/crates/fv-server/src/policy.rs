@@ -100,6 +100,7 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::SettingsGet { .. }
             | ClientRequest::SettingsReset { .. }
             | ClientRequest::DiagnosticsGet { .. }
+            | ClientRequest::AppUpdateCheck { .. }
             | ClientRequest::StatsUsage { .. }
             | ClientRequest::SkillList { .. }
             | ClientRequest::MemoryRead { .. }

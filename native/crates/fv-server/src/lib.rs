@@ -29,6 +29,7 @@ mod subagents;
 mod suggestion;
 mod terminal;
 mod turn;
+mod update;
 mod usage;
 mod workspace;
 mod workspace_entries;

@@ -1947,6 +1947,15 @@ pub struct Diagnostics {
     pub memory_enabled: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateInfo {
+    pub current_version: String,
+    pub latest_version: Option<String>,
+    pub release_url: Option<String>,
+    pub notes: Option<String>,
+}
+
 impl AppSettings {
     pub fn apply(&mut self, patch: AppSettingsPatch) {
         if let Some(v) = patch.send_on_enter {

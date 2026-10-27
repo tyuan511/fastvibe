@@ -3,7 +3,9 @@ use super::Workspace;
 use super::settings::{Section, card, outline_button};
 use crate::ui::{Muted as _, TEXT_SM, TEXT_XS};
 use fv_protocol::catalog::ModelCatalogInfo;
-use fv_protocol::methods::{DiagnosticsGet, ModelCatalogGet, ModelCatalogRefresh, SettingsReset};
+use fv_protocol::methods::{
+    AppUpdateCheck, DiagnosticsGet, ModelCatalogGet, ModelCatalogRefresh, SettingsReset,
+};
 use fv_protocol::types::Empty;
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -24,6 +26,8 @@ pub struct AboutSettings {
     dirty: bool,
     diagnostics: Option<fv_protocol::types::Diagnostics>,
     diagnostics_loading: bool,
+    update: Option<fv_protocol::types::AppUpdateInfo>,
+    update_loading: bool,
 }
 impl Default for AboutSettings {
     fn default() -> Self {
@@ -38,10 +42,46 @@ impl Default for AboutSettings {
             dirty: false,
             diagnostics: None,
             diagnostics_loading: false,
+            update: None,
+            update_loading: false,
         }
     }
 }
 impl Workspace {
+    fn check_update(&mut self, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        if settings.about.update_loading {
+            return;
+        }
+        settings.about.update_loading = true;
+        let session = settings.about.session;
+        let call = backend.call::<AppUpdateCheck>(Empty {});
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            this.update(cx, |this, cx| {
+                if let Some(settings) = this
+                    .settings
+                    .as_mut()
+                    .filter(|settings| settings.about.session == session)
+                {
+                    settings.about.update_loading = false;
+                    match result {
+                        Ok(update) => settings.about.update = Some(update),
+                        Err(error) => settings.about.error = Some(format!("检查更新失败：{error}")),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn load_diagnostics(&mut self, cx: &mut Context<Self>) {
         let Some(backend) = self.backend.clone() else {
             return;
@@ -259,12 +299,28 @@ impl Workspace {
         let refreshing = s.refreshing;
         let diagnostics = s.diagnostics.clone();
         let diagnostics_loading = s.diagnostics_loading;
+        let update = s.update.clone();
+        let update_loading = s.update_loading;
         div().flex().flex_col().gap(px(20.0))
             .child(div().flex().items_center().gap(px(12.0))
                 .child(div().text_size(px(24.0)).font_weight(FontWeight::BOLD).child("FastVibe"))
                 .child(div().text_size(px(TEXT_SM)).muted(p)
                     .child(format!("v{}", env!("CARGO_PKG_VERSION")))))
             .child(div().text_size(px(TEXT_SM)).muted(p).child("代码、办公与智能体协作工作区"))
+            .child(card(p).p(px(16.0)).flex().items_center().justify_between()
+                .child(div().flex().flex_col().gap(px(4.0))
+                    .child(div().text_size(px(TEXT_SM)).child("应用更新"))
+                    .child(div().text_size(px(TEXT_XS)).muted(p).child(match update.as_ref().and_then(|u| u.latest_version.as_deref()) {
+                        Some(version) if update.as_ref().is_some_and(|u| u.current_version != version) => format!("发现新版本 v{version}"),
+                        Some(_) => "当前已是最新版本".into(),
+                        None => "从 GitHub 检查最新发布版本".into(),
+                    })))
+                .child(outline_button("check-app-update", p)
+                    .child(if update_loading { "检查中…" } else { "检查更新" })
+                    .when(!update_loading, |button| button.on_click(cx.listener(|this, _, _, cx| this.check_update(cx)))))
+            .when_some(update.and_then(|u| u.release_url), |d, url| d.child(
+                outline_button("open-release", p).child("打开发布页").on_click(move |_, _, cx| cx.open_url(&url))
+            )))
             .child(card(p).p(px(16.0)).flex().items_center().justify_between()
                 .child(div().text_size(px(TEXT_SM)).child("tyuan511/fastvibe"))
                 .child(outline_button("about-repository", p).child("开源仓库")
