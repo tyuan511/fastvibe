@@ -400,6 +400,7 @@ impl Workspace {
             return;
         };
         self.terminals.insert(id.clone(), TerminalView::default());
+        let english = self.app_settings.language == UiLanguage::English;
         // A grid of 80×24 is the terminal's own default; the pane reports its real size as soon as
         // it is laid out, which is one frame later.
         let (cols, rows) = (80u16, 24u16);
@@ -449,7 +450,11 @@ impl Workspace {
                         this.terminals.insert(
                             id.clone(),
                             TerminalView {
-                                notice: Some(format!("无法打开终端：{e}")),
+                                notice: Some(if english {
+                                    format!("Could not open terminal: {e}")
+                                } else {
+                                    format!("无法打开终端：{e}")
+                                }),
                                 ..Default::default()
                             },
                         );
@@ -467,6 +472,7 @@ impl Workspace {
         let Some(b) = self.backend.clone() else {
             return;
         };
+        let english = self.app_settings.language == UiLanguage::English;
         let Some(view) = self.terminals.get_mut(&tab_id) else {
             return;
         };
@@ -554,7 +560,11 @@ impl Workspace {
                             visible && !exited
                         }
                         Err(e) => {
-                            view.notice = Some(format!("无法读取原终端会话：{e}"));
+                            view.notice = Some(if english {
+                                format!("Could not read the terminal session: {e}")
+                            } else {
+                                format!("无法读取原终端会话：{e}")
+                            });
                             cx.notify();
                             false
                         }
@@ -581,6 +591,7 @@ impl Workspace {
         let Some(backend) = self.backend.clone() else {
             return;
         };
+        let english = self.app_settings.language == UiLanguage::English;
         let Some(view) = self.terminals.get_mut(tab_id) else {
             return;
         };
@@ -619,7 +630,11 @@ impl Workspace {
                 view.resizing = false;
                 if let Err(error) = result {
                     view.last_size_sent = None;
-                    view.notice = Some(format!("无法调整终端尺寸：{error}"));
+                    view.notice = Some(if english {
+                        format!("Could not resize terminal: {error}")
+                    } else {
+                        format!("无法调整终端尺寸：{error}")
+                    });
                     cx.notify();
                     return;
                 }
