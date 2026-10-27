@@ -46,6 +46,7 @@ pub struct ModelConfig {
     pub web_search: bool,
     /// The context window in tokens, when known; conversations are summarized before it fills.
     pub context_window: Option<u32>,
+    pub proxy_url: Option<String>,
 }
 
 impl ModelConfig {
@@ -69,6 +70,7 @@ impl ModelConfig {
             images: true,
             web_search: false,
             context_window: None,
+            proxy_url: None,
         }
     }
 }

@@ -160,6 +160,20 @@ pub struct BrowserSettings {
     pub download_dir: Entity<InputState>,
 }
 
+pub struct ProxySettings {
+    pub url: Entity<InputState>,
+}
+
+impl ProxySettings {
+    fn new(settings: &AppSettings, window: &mut Window, cx: &mut App) -> Self {
+        let url = input(window, cx, "留空使用系统网络设置", false);
+        url.update(cx, |state, cx| {
+            state.set_value(settings.proxy_url.clone(), window, cx)
+        });
+        Self { url }
+    }
+}
+
 impl BrowserSettings {
     fn new(settings: &AppSettings, window: &mut Window, cx: &mut App) -> Self {
         Self {
@@ -206,6 +220,7 @@ pub struct SettingsState {
     pub mcp: super::mcp::McpSettings,
     pub skills: super::skills::SkillSettings,
     pub browser: BrowserSettings,
+    pub proxy: ProxySettings,
     pub theme_menu: Option<ThemeMenu>,
     /// 归档对话: what the sidebar leaves out.
     pub archived: Option<Vec<Thread>>,
@@ -273,6 +288,7 @@ impl Workspace {
                 mcp: super::mcp::McpSettings::new(window, cx),
                 skills: super::skills::SkillSettings::new(window, cx),
                 browser: BrowserSettings::new(&self.app_settings, window, cx),
+                proxy: ProxySettings::new(&self.app_settings, window, cx),
                 section,
                 providers: None,
                 edit: None,
@@ -889,6 +905,7 @@ impl Workspace {
                                 Section::Memory => self.memory_pane(cx),
                                 Section::Browser => self.browser_pane(s, cx),
                                 Section::Computer => self.computer_pane(cx),
+                                Section::Proxy => self.proxy_pane(s, cx),
                                 _ => self.not_yet().into_any_element(),
                             }),
                     ),
@@ -1169,6 +1186,48 @@ impl Workspace {
                     .muted(p)
                     .child("首次使用需要在系统设置 → 隐私与安全性 → 辅助功能中允许 FastVibe；拒绝权限时动作会返回可读错误。"),
             )
+            .into_any_element()
+    }
+
+    fn save_proxy(&mut self, cx: &mut Context<Self>) {
+        let Some(settings) = self.settings.as_ref() else {
+            return;
+        };
+        self.patch_settings(
+            AppSettingsPatch {
+                proxy_url: Some(value(&settings.proxy.url, cx)),
+                ..Default::default()
+            },
+            cx,
+        );
+    }
+
+    fn proxy_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> AnyElement {
+        let p = &self.palette;
+        card(p)
+            .p(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_size(px(TEXT_SM)).child("网络代理"))
+                    .child(
+                        outline_button("save-proxy", p)
+                            .child("保存")
+                            .on_click(cx.listener(|this, _, _, cx| this.save_proxy(cx))),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child("用于模型请求、模型目录刷新和模型列表读取。支持 HTTP(S) 与 SOCKS 代理；留空使用系统默认。"),
+            )
+            .child(Input::new(&s.proxy.url).small())
             .into_any_element()
     }
 

@@ -68,6 +68,13 @@ pub fn set(state: &ServerState, mut patch: AppSettingsPatch) -> Result<AppSettin
     {
         return Err(invalid("autoArchiveAfterDays must be between 1 and 3650"));
     }
+    if let Some(proxy) = patch.proxy_url.as_mut() {
+        *proxy = proxy.trim().to_string();
+        if !proxy.is_empty() {
+            reqwest::Proxy::all(proxy.as_str())
+                .map_err(|_| invalid("proxyUrl must be a valid HTTP(S) or SOCKS proxy URL"))?;
+        }
+    }
     let _guard = state.settings_lock.lock().unwrap();
     let mut settings = read(state)?;
     if let Some(expected) = &patch.expected_custom_system_prompt {

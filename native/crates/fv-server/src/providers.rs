@@ -402,7 +402,7 @@ pub fn resolve(
                 provider.name
             )
         })?;
-    let config = model_config(
+    let mut config = model_config(
         &state.catalog.snapshot(),
         label,
         &provider,
@@ -410,6 +410,10 @@ pub fn resolve(
         &key,
         thinking,
     );
+    config.proxy_url = crate::settings::read(state)
+        .ok()
+        .map(|settings| settings.proxy_url)
+        .filter(|proxy| !proxy.is_empty());
     GenaiModel::new(config)
         .map(|m| Arc::new(m) as Arc<dyn Model>)
         .map_err(|e| e.message)

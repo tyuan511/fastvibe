@@ -1770,6 +1770,9 @@ pub struct AppSettings {
     pub auto_archive_after_days: Option<u32>,
     #[serde(default)]
     pub keep_awake: bool,
+    /// Optional HTTP(S)/SOCKS proxy used for model and catalog requests.
+    #[serde(default)]
+    pub proxy_url: String,
 }
 
 fn default_browser_homepage() -> String {
@@ -1875,6 +1878,7 @@ impl Default for AppSettings {
             browser_download_dir: String::new(),
             auto_archive_after_days: None,
             keep_awake: false,
+            proxy_url: String::new(),
         }
     }
 }
@@ -1926,6 +1930,8 @@ pub struct AppSettingsPatch {
     pub auto_archive_after_days: Option<Option<u32>>,
     #[serde(default)]
     pub keep_awake: Option<bool>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1966,6 +1972,9 @@ impl AppSettings {
         }
         if let Some(v) = patch.keep_awake {
             self.keep_awake = v;
+        }
+        if let Some(v) = patch.proxy_url {
+            self.proxy_url = v;
         }
         if let Some(v) = patch.custom_system_prompt {
             self.custom_system_prompt = v;

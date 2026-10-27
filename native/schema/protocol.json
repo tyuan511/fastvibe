@@ -154,6 +154,13 @@
               "null"
             ]
           },
+          "proxyUrl": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "replySuggestions": {
             "default": null,
             "type": [
@@ -5694,6 +5701,11 @@
             "type": "boolean"
           },
           "lightTheme": {
+            "type": "string"
+          },
+          "proxyUrl": {
+            "default": "",
+            "description": "Optional HTTP(S)/SOCKS proxy used for model and catalog requests.",
             "type": "string"
           },
           "replySuggestions": {

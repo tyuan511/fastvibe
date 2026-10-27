@@ -61,7 +61,16 @@ impl GenaiModel {
                 })
             },
         );
+        let reqwest_client = if let Some(proxy) = &config.proxy_url {
+            reqwest::Client::builder()
+                .proxy(reqwest::Proxy::all(proxy).map_err(|e| ModelError::fatal(e.to_string()))?)
+                .build()
+                .map_err(|e| ModelError::fatal(e.to_string()))?
+        } else {
+            reqwest::Client::new()
+        };
         let client = Client::builder()
+            .with_reqwest(reqwest_client)
             .with_service_target_resolver(resolver)
             .build()
             .map_err(|e| ModelError::fatal(format!("Could not set up the model client: {e}")))?;

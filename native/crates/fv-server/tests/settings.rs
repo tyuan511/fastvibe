@@ -96,6 +96,7 @@ async fn browser_settings_validate_templates_and_persist() {
             browser_search_engine: Some("https://search.example/?q={query}".into()),
             browser_download_dir: Some("/tmp/fastvibe-downloads".into()),
             keep_awake: Some(true),
+            proxy_url: Some("http://127.0.0.1:8888".into()),
             ..Default::default()
         })
         .await
@@ -107,6 +108,7 @@ async fn browser_settings_validate_templates_and_persist() {
     );
     assert_eq!(saved.browser_download_dir, "/tmp/fastvibe-downloads");
     assert!(saved.keep_awake);
+    assert_eq!(saved.proxy_url, "http://127.0.0.1:8888");
     assert_eq!(client.call::<SettingsGet>(Empty {}).await.unwrap(), saved);
 }
 
