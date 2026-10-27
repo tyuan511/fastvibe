@@ -252,6 +252,13 @@ pub enum Item {
         mime: String,
         data: String,
     },
+    /// An image returned by a tool, carried as bounded base64 for the transcript viewer.
+    Image {
+        id: ItemId,
+        name: String,
+        mime: String,
+        data: String,
+    },
     Error {
         id: ItemId,
         message: String,
@@ -1749,6 +1756,23 @@ pub struct AppSettings {
     pub send_on_enter: bool,
     #[serde(default)]
     pub shortcuts: crate::shortcuts::ShortcutOverrides,
+    /// Browser home page. `about:blank` is the default and HTTP(S) URLs are accepted.
+    #[serde(default = "default_browser_homepage")]
+    pub browser_homepage: String,
+    /// Search URL template containing `{query}`.
+    #[serde(default = "default_browser_search_engine")]
+    pub browser_search_engine: String,
+    /// Local browser download directory. Empty uses the platform Downloads folder.
+    #[serde(default)]
+    pub browser_download_dir: String,
+}
+
+fn default_browser_homepage() -> String {
+    "about:blank".into()
+}
+
+fn default_browser_search_engine() -> String {
+    "https://www.google.com/search?q={query}".into()
 }
 
 /// How much of the machine a command may touch.
@@ -1841,6 +1865,9 @@ impl Default for AppSettings {
             custom_system_prompt: String::new(),
             send_on_enter: true,
             shortcuts: Default::default(),
+            browser_homepage: default_browser_homepage(),
+            browser_search_engine: default_browser_search_engine(),
+            browser_download_dir: String::new(),
         }
     }
 }
@@ -1882,6 +1909,12 @@ pub struct AppSettingsPatch {
     pub shortcuts: Option<crate::shortcuts::ShortcutOverrides>,
     #[serde(default)]
     pub shortcut: Option<crate::shortcuts::ShortcutEdit>,
+    #[serde(default)]
+    pub browser_homepage: Option<String>,
+    #[serde(default)]
+    pub browser_search_engine: Option<String>,
+    #[serde(default)]
+    pub browser_download_dir: Option<String>,
 }
 
 impl AppSettings {
@@ -1894,6 +1927,15 @@ impl AppSettings {
         }
         if let Some(v) = patch.shortcut {
             crate::shortcuts::apply_edit(&mut self.shortcuts, v);
+        }
+        if let Some(v) = patch.browser_homepage {
+            self.browser_homepage = v;
+        }
+        if let Some(v) = patch.browser_search_engine {
+            self.browser_search_engine = v;
+        }
+        if let Some(v) = patch.browser_download_dir {
+            self.browser_download_dir = v;
         }
         if let Some(v) = patch.custom_system_prompt {
             self.custom_system_prompt = v;

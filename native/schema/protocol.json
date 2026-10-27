@@ -74,6 +74,27 @@
               "null"
             ]
           },
+          "browserDownloadDir": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "browserHomepage": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "browserSearchEngine": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "codeModeEnabled": {
             "default": null,
             "type": [
@@ -5570,6 +5591,21 @@
             "description": "Automatically summarize a conversation near its effective context capacity.",
             "type": "boolean"
           },
+          "browserDownloadDir": {
+            "default": "",
+            "description": "Local browser download directory. Empty uses the platform Downloads folder.",
+            "type": "string"
+          },
+          "browserHomepage": {
+            "default": "about:blank",
+            "description": "Browser home page. `about:blank` is the default and HTTP(S) URLs are accepted.",
+            "type": "string"
+          },
+          "browserSearchEngine": {
+            "default": "https://www.google.com/search?q={query}",
+            "description": "Search URL template containing `{query}`.",
+            "type": "string"
+          },
           "codeModeEnabled": {
             "default": true,
             "description": "JavaScript orchestration. Changes take effect at the next turn boundary.",
@@ -5884,6 +5920,35 @@
               },
               "type": {
                 "const": "audio",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "name",
+              "mime",
+              "data"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "An image returned by a tool, carried as bounded base64 for the transcript viewer.",
+            "properties": {
+              "data": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "const": "image",
                 "type": "string"
               }
             },

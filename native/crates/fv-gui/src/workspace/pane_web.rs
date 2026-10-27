@@ -124,7 +124,15 @@ impl Workspace {
         }
     }
     pub(super) fn open_browser_tab(&mut self, owner: &str, url: &str, cx: &mut Context<Self>) {
-        let url = match crate::webview::address(url) {
+        let requested = if url == "about:blank" {
+            &self.app_settings.browser_homepage
+        } else {
+            url
+        };
+        let url = match crate::webview::address_with_search(
+            requested,
+            &self.app_settings.browser_search_engine,
+        ) {
             Ok(url) => url,
             Err(_) => return,
         };
@@ -249,7 +257,7 @@ impl Workspace {
         cx.notify();
     }
     fn navigate_browser(&mut self, key: &str, value: &str, cx: &mut Context<Self>) {
-        match crate::webview::address(value) {
+        match crate::webview::address_with_search(value, &self.app_settings.browser_search_engine) {
             Ok(url) => {
                 if let Some(view) = self.web_views.get_mut(key) {
                     match view.surface.navigate(&url) {
@@ -339,7 +347,11 @@ impl Workspace {
             self.web_views.insert(
                 id.into(),
                 ContentView {
-                    surface: Surface::browser(url.into(), tx),
+                    surface: Surface::browser(
+                        url.into(),
+                        tx,
+                        crate::webview::download_directory(&self.app_settings.browser_download_dir),
+                    ),
                     signature: 0,
                     url: url.into(),
                     address: None,

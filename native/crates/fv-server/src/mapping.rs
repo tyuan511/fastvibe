@@ -174,6 +174,33 @@ impl EventMapper {
                         })
                     })
                     .collect(),
+                fv_core::Message::ToolImages {
+                    call_id,
+                    name,
+                    images,
+                } => images
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, image)| {
+                        let data = match image.source {
+                            fv_core::ImageSource::Base64 { data } => data,
+                            fv_core::ImageSource::File { path } => {
+                                use base64::Engine;
+                                base64::engine::general_purpose::STANDARD
+                                    .encode(std::fs::read(path).ok()?)
+                            }
+                        };
+                        Some(LogEvent::ItemCompleted {
+                            turn_id: turn_id.clone(),
+                            item: Item::Image {
+                                id: format!("{call_id}:image:{index}"),
+                                name: name.clone(),
+                                mime: image.mime,
+                                data,
+                            },
+                        })
+                    })
+                    .collect(),
                 _ => Vec::new(),
             },
             AgentEvent::CompactionStarted { id } => vec![LogEvent::ItemStarted {

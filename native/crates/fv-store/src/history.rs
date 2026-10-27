@@ -89,7 +89,32 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
                 }
             }
             // Pictures a tool returned; the tool's item already shows what it did.
-            Message::ToolImages { .. } | Message::MemoryContext { .. } => {}
+            Message::ToolImages {
+                call_id,
+                name,
+                images,
+            } => {
+                let Some(turn) = turns.last_mut() else {
+                    continue;
+                };
+                use base64::Engine;
+                for (index, image) in images.iter().enumerate() {
+                    let data = match &image.source {
+                        fv_core::ImageSource::Base64 { data } => data.clone(),
+                        fv_core::ImageSource::File { path } => match std::fs::read(path) {
+                            Ok(bytes) => base64::engine::general_purpose::STANDARD.encode(bytes),
+                            Err(_) => continue,
+                        },
+                    };
+                    turn.items.push(Item::Image {
+                        id: format!("{call_id}:image:{index}"),
+                        name: name.clone(),
+                        mime: image.mime.clone(),
+                        data,
+                    });
+                }
+            }
+            Message::MemoryContext { .. } => {}
             Message::ToolAudio {
                 call_id,
                 name,

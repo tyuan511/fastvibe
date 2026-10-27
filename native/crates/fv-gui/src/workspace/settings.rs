@@ -8,6 +8,7 @@ use fv_protocol::methods::*;
 use fv_protocol::types::Empty;
 use fv_protocol::types::*;
 use fv_theme::Token;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -153,6 +154,36 @@ pub struct AddModels {
     pub picker: Picker,
 }
 
+pub struct BrowserSettings {
+    pub homepage: Entity<InputState>,
+    pub search_engine: Entity<InputState>,
+    pub download_dir: Entity<InputState>,
+}
+
+impl BrowserSettings {
+    fn new(settings: &AppSettings, window: &mut Window, cx: &mut App) -> Self {
+        Self {
+            homepage: input(window, cx, "about:blank 或 https://…", false),
+            search_engine: input(window, cx, "https://…/?q={query}", false),
+            download_dir: input(window, cx, "留空使用 ~/Downloads", false),
+        }
+        .with_values(settings, window, cx)
+    }
+
+    fn with_values(self, settings: &AppSettings, window: &mut Window, cx: &mut App) -> Self {
+        self.homepage.update(cx, |state, cx| {
+            state.set_value(settings.browser_homepage.clone(), window, cx)
+        });
+        self.search_engine.update(cx, |state, cx| {
+            state.set_value(settings.browser_search_engine.clone(), window, cx)
+        });
+        self.download_dir.update(cx, |state, cx| {
+            state.set_value(settings.browser_download_dir.clone(), window, cx)
+        });
+        self
+    }
+}
+
 /// Which 外观 list is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeMenu {
@@ -174,6 +205,7 @@ pub struct SettingsState {
     pub memory: super::memory::MemorySettings,
     pub mcp: super::mcp::McpSettings,
     pub skills: super::skills::SkillSettings,
+    pub browser: BrowserSettings,
     pub theme_menu: Option<ThemeMenu>,
     /// 归档对话: what the sidebar leaves out.
     pub archived: Option<Vec<Thread>>,
@@ -240,6 +272,7 @@ impl Workspace {
                 memory: Default::default(),
                 mcp: super::mcp::McpSettings::new(window, cx),
                 skills: super::skills::SkillSettings::new(window, cx),
+                browser: BrowserSettings::new(&self.app_settings, window, cx),
                 section,
                 providers: None,
                 edit: None,
@@ -854,6 +887,7 @@ impl Workspace {
                                 Section::Mcp => self.mcp_pane(cx),
                                 Section::Subagents => self.subagents_pane(cx),
                                 Section::Memory => self.memory_pane(cx),
+                                Section::Browser => self.browser_pane(s, cx),
                                 _ => self.not_yet().into_any_element(),
                             }),
                     ),
@@ -1039,6 +1073,74 @@ impl Workspace {
                 .muted(p)
                 .child("这一页还在移植中。"),
         )
+    }
+
+    fn save_browser(&mut self, cx: &mut Context<Self>) {
+        let Some(s) = self.settings.as_ref() else {
+            return;
+        };
+        let browser = &s.browser;
+        self.patch_settings(
+            AppSettingsPatch {
+                browser_homepage: Some(value(&browser.homepage, cx)),
+                browser_search_engine: Some(value(&browser.search_engine, cx)),
+                browser_download_dir: Some(value(&browser.download_dir, cx)),
+                ..Default::default()
+            },
+            cx,
+        );
+    }
+
+    fn browser_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> AnyElement {
+        let p = &self.palette;
+        card(p)
+            .p(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(14.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(div().text_size(px(TEXT_SM)).child("浏览器控制"))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_XS))
+                                    .muted(p)
+                                    .child("设置新标签页、地址栏搜索和下载位置。网页仍在隔离的原生 WebView 中运行。"),
+                            ),
+                    )
+                    .child(
+                        outline_button("save-browser-settings", p)
+                            .child("保存")
+                            .on_click(cx.listener(|this, _, _, cx| this.save_browser(cx))),
+                    ),
+            )
+            .child(div().text_size(px(TEXT_XS)).muted(p).child("主页"))
+            .child(Input::new(&s.browser.homepage).small())
+            .child(div().text_size(px(TEXT_XS)).muted(p).child("搜索地址模板"))
+            .child(Input::new(&s.browser.search_engine).small())
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child("模板必须包含 {query}，例如 https://www.google.com/search?q={query}。"),
+            )
+            .child(div().text_size(px(TEXT_XS)).muted(p).child("下载目录"))
+            .child(Input::new(&s.browser.download_dir).small())
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child("留空使用当前用户的 Downloads 目录；填写时必须是绝对路径。"),
+            )
+            .into_any_element()
     }
 
     fn providers_pane(

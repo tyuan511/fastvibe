@@ -853,6 +853,38 @@ impl Workspace {
                     );
                 (id.clone(), row, None)
             }
+            Item::Image {
+                id,
+                name,
+                mime,
+                data,
+            } => {
+                let url = format!("data:{mime};base64,{data}");
+                let label = if name.is_empty() {
+                    "图片产物"
+                } else {
+                    name.as_str()
+                };
+                let row = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(icon("image01", 16.0, p.c(Token::MutedForeground)))
+                    .child(
+                        div()
+                            .text_color(p.c(Token::Foreground))
+                            .child(format!("{label} · {mime}")),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("open-image-{id}")))
+                            .cursor_pointer()
+                            .text_color(p.c(Token::Primary))
+                            .child("查看")
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    );
+                (id.clone(), row, None)
+            }
             _ => return div(),
         };
         self.fold_row(id, header, body, false, cx)

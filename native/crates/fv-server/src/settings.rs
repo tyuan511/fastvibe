@@ -36,6 +36,32 @@ pub fn set(state: &ServerState, mut patch: AppSettingsPatch) -> Result<AppSettin
     if let Some(ShortcutEdit::Set { binding, .. }) = &mut patch.shortcut {
         *binding = Chord::parse(binding).map_err(invalid)?.serialize();
     }
+    if let Some(homepage) = patch.browser_homepage.as_mut() {
+        *homepage = homepage.trim().to_string();
+        if homepage != "about:blank" && fv_core::safe_web_url(homepage).is_none() {
+            return Err(invalid(
+                "browserHomepage must be about:blank or an HTTP(S) URL",
+            ));
+        }
+    }
+    if let Some(search) = patch.browser_search_engine.as_mut() {
+        *search = search.trim().to_string();
+        if !search.contains("{query}")
+            || fv_core::safe_web_url(&search.replace("{query}", "x")).is_none()
+        {
+            return Err(invalid(
+                "browserSearchEngine must be an HTTP(S) URL containing {query}",
+            ));
+        }
+    }
+    if let Some(dir) = patch.browser_download_dir.as_mut() {
+        *dir = dir.trim().to_string();
+        if !dir.is_empty() && !std::path::Path::new(dir).is_absolute() {
+            return Err(invalid(
+                "browserDownloadDir must be an absolute path or empty",
+            ));
+        }
+    }
     let _guard = state.settings_lock.lock().unwrap();
     let mut settings = read(state)?;
     if let Some(expected) = &patch.expected_custom_system_prompt {

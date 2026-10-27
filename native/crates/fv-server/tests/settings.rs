@@ -75,6 +75,40 @@ async fn settings_start_at_their_defaults_change_by_field_and_reach_every_client
 }
 
 #[tokio::test]
+async fn browser_settings_validate_templates_and_persist() {
+    let data = tempfile::tempdir().unwrap();
+    let agent = fv_server::agent_with_builtin_tools(Arc::new(ScriptedModel::new([])));
+    let state = Arc::new(ServerState::new(data.path().to_path_buf(), agent).unwrap());
+    let sock = data.path().join("s.sock");
+    tokio::spawn(UnixServer::bind(state, &sock).await.unwrap().run());
+    let (client, _) = connect(&sock).await;
+    let error = client
+        .call::<SettingsSet>(AppSettingsPatch {
+            browser_search_engine: Some("https://search.example/".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("{query}"));
+    let saved = client
+        .call::<SettingsSet>(AppSettingsPatch {
+            browser_homepage: Some("https://example.com/docs".into()),
+            browser_search_engine: Some("https://search.example/?q={query}".into()),
+            browser_download_dir: Some("/tmp/fastvibe-downloads".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(saved.browser_homepage, "https://example.com/docs");
+    assert_eq!(
+        saved.browser_search_engine,
+        "https://search.example/?q={query}"
+    );
+    assert_eq!(saved.browser_download_dir, "/tmp/fastvibe-downloads");
+    assert_eq!(client.call::<SettingsGet>(Empty {}).await.unwrap(), saved);
+}
+
+#[tokio::test]
 async fn a_thread_can_be_renamed_archived_pinned_and_deleted_for_good() {
     use fv_agent::testing::Reply;
     use fv_protocol::methods::{ThreadDelete, ThreadList, ThreadStart, ThreadUpdate, TurnStart};

@@ -273,6 +273,7 @@ pub fn item_id(item: &Item) -> &str {
         | Item::Reasoning { id, .. }
         | Item::ToolCall { id, .. }
         | Item::Audio { id, .. }
+        | Item::Image { id, .. }
         | Item::Error { id, .. }
         | Item::ContextCompaction { id } => id,
     }

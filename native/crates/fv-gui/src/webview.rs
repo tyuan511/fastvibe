@@ -2,6 +2,7 @@
 //! main thread. A document view has no application bridge or browser profile access.
 use crate::web_content::{Document, DocumentServer};
 use gpui_kit::{Bounds, Pixels, Window};
+use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Clone, Debug)]
@@ -29,6 +30,10 @@ impl Navigation {
     }
 }
 pub fn address(value: &str) -> Result<String, String> {
+    address_with_search(value, "https://www.google.com/search?q={query}")
+}
+
+pub fn address_with_search(value: &str, search_engine: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() || value == "about:blank" {
         return Ok("about:blank".into());
@@ -61,9 +66,22 @@ pub fn address(value: &str) -> Result<String, String> {
         return fv_core::safe_web_url(&format!("{scheme}://{value}"))
             .ok_or_else(|| "网页地址无效".into());
     }
-    let mut url = url::Url::parse("https://www.google.com/search").unwrap();
-    url.query_pairs_mut().append_pair("q", value);
-    Ok(url.into())
+    if !search_engine.contains("{query}") {
+        return Err("搜索引擎地址必须包含 {query}".into());
+    }
+    let encoded = url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
+    let target = search_engine.replace("{query}", &encoded);
+    fv_core::safe_web_url(&target).ok_or_else(|| "搜索引擎地址无效".into())
+}
+
+pub fn download_directory(configured: &str) -> PathBuf {
+    if !configured.trim().is_empty() {
+        return PathBuf::from(configured.trim());
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Downloads"))
+        .unwrap_or_else(|| PathBuf::from("Downloads"))
 }
 /// Native child views cannot be painted underneath a GPUI overlay. Hide instead of
 /// cropping/reflowing the page when an animated pane or an ancestor clips its viewport.
@@ -94,19 +112,21 @@ pub struct Surface {
     events: UnboundedSender<WebEvent>,
     // Retaining the server keeps its exact file grant alive only as long as this view.
     _document: Option<DocumentServer>,
+    download_dir: Option<PathBuf>,
     #[cfg(target_os = "macos")]
     native: Option<wry::WebView>,
     visible: bool,
     bounds: Option<Bounds<Pixels>>,
 }
 impl Surface {
-    pub fn browser(url: String, events: UnboundedSender<WebEvent>) -> Self {
+    pub fn browser(url: String, events: UnboundedSender<WebEvent>, download_dir: PathBuf) -> Self {
         Self {
             error: None,
             url,
             navigation: Navigation::Browser,
             events,
             _document: None,
+            download_dir: Some(download_dir),
             #[cfg(target_os = "macos")]
             native: None,
             visible: false,
@@ -122,6 +142,7 @@ impl Surface {
             navigation: Navigation::Document(server.url.clone()),
             events,
             _document: Some(server),
+            download_dir: None,
             #[cfg(target_os = "macos")]
             native: None,
             visible: false,
@@ -145,6 +166,7 @@ impl Surface {
             url,
             events,
             _document: None,
+            download_dir: None,
             #[cfg(target_os = "macos")]
             native: None,
             visible: false,
@@ -292,6 +314,7 @@ impl Surface {
         let page_events = self.events.clone();
         let page_navigation = self.navigation.clone();
         let download_events = self.events.clone();
+        let download_dir = self.download_dir.clone();
         let browser = matches!(self.navigation, Navigation::Browser);
         let mut builder = wry::WebViewBuilder::new()
             .with_url(&self.url)
@@ -337,9 +360,21 @@ impl Surface {
                     wry::PageLoadEvent::Started
                 )));
             })
-            .with_download_started_handler(move |_, _| {
-                let _ = download_events.send(WebEvent::Notice("请在系统浏览器中下载文件".into()));
-                false
+            .with_download_started_handler(move |_, path| {
+                let Some(dir) = download_dir.as_ref() else {
+                    return false;
+                };
+                if std::fs::create_dir_all(dir).is_err() {
+                    let _ = download_events.send(WebEvent::Notice("无法创建下载目录".into()));
+                    return false;
+                }
+                let name = path
+                    .file_name()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("download"));
+                *path = dir.join(name);
+                let _ = download_events
+                    .send(WebEvent::Notice(format!("已开始下载：{}", path.display())));
+                true
             })
             .with_permission_handler(|_| wry::PermissionResponse::Deny)
             .with_on_web_content_process_terminate_handler(move || {
@@ -371,6 +406,11 @@ mod tests {
                 .unwrap()
                 .contains("q=native+app+docs")
         );
+        assert_eq!(
+            address_with_search("native app docs", "https://search.example/?q={query}").unwrap(),
+            "https://search.example/?q=native+app+docs"
+        );
+        assert!(address_with_search("docs", "https://example.com/search").is_err());
         for url in [
             "file:///etc/passwd",
             "javascript:alert(1)",

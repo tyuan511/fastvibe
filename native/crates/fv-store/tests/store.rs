@@ -258,6 +258,7 @@ fn history_becomes_turns_with_tool_results_filled_in() {
             Item::AgentMessage { .. } => "agent",
             Item::ToolCall { .. } => "tool",
             Item::Audio { .. } => "audio",
+            Item::Image { .. } => "image",
             Item::Error { .. } => "error",
             Item::ContextCompaction { .. } => "compaction",
         })
