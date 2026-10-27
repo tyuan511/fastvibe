@@ -175,6 +175,11 @@ OAuth 使用真实本地 AS/MCP 服务验证 PKCE、回调归属、错误 issuer
 
 完整目标保持进行中，未勾选项不代表已完成。
 
+## 第四十三批：原生构建入口
+
+- 根目录新增 `pnpm native:fmt`、`pnpm native:check`、`pnpm native:test` 和 `pnpm native:build`，分别覆盖 Rust workspace 格式、编译、测试和 server/GUI release 构建。
+- 本机已通过 `pnpm native:fmt` 与 `pnpm native:check`；安装包签名、OfficeCLI 随包和 Windows/Linux 构建仍需对应平台环境。
+
 ## 第四十二批：Linux 与 Windows 电脑操控
 
 - `computer` 在 Linux 下使用 `grim`、`gnome-screenshot` 或 `scrot` 截图，使用 `xdotool` 执行点击、文字输入和有限按键；缺少桌面依赖时返回明确错误。
