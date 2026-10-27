@@ -1232,20 +1232,53 @@ impl Workspace {
             {
                 col = col.child(self.code_block(query, false));
             }
-            col = col.child(div().text_size(px(TEXT_XS)).muted(p).child(format!(
-                    "状态：{}",
-                    match arguments
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                    {
-                        "completed" => "已完成",
-                        "failed" => "失败",
-                        "interrupted" => "已中断",
-                        "searching" => "搜索中",
-                        _ => "准备搜索",
+            let english = self.app_settings.language == UiLanguage::English;
+            let status = match arguments
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+            {
+                "completed" => {
+                    if english {
+                        "Completed"
+                    } else {
+                        "已完成"
                     }
-                )));
+                }
+                "failed" => {
+                    if english {
+                        "Failed"
+                    } else {
+                        "失败"
+                    }
+                }
+                "interrupted" => {
+                    if english {
+                        "Interrupted"
+                    } else {
+                        "已中断"
+                    }
+                }
+                "searching" => {
+                    if english {
+                        "Searching"
+                    } else {
+                        "搜索中"
+                    }
+                }
+                _ => {
+                    if english {
+                        "Preparing search"
+                    } else {
+                        "准备搜索"
+                    }
+                }
+            };
+            col = col.child(div().text_size(px(TEXT_XS)).muted(p).child(if english {
+                format!("Status: {status}")
+            } else {
+                format!("状态：{status}")
+            }));
             if let Some(sources) = arguments.get("sources").and_then(|v| v.as_array()) {
                 for (index, source) in sources.iter().enumerate() {
                     let Some(url) = source
