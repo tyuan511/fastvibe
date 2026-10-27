@@ -19,6 +19,10 @@ pub struct Layout {
     pub width: f32,
     pub maximized: bool,
     pub panes: BTreeMap<String, Pane>,
+    #[serde(default)]
+    pub browser_bookmarks: Vec<Bookmark>,
+    #[serde(default)]
+    pub browser_history: Vec<HistoryEntry>,
 }
 
 impl Default for Layout {
@@ -30,8 +34,23 @@ impl Default for Layout {
             width: 380.0,
             maximized: false,
             panes: BTreeMap::new(),
+            browser_bookmarks: Vec::new(),
+            browser_history: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub title: String,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub title: String,
+    pub url: String,
+    pub visited_at: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -280,6 +299,33 @@ mod tests {
             assert!(Storage::open(path.clone()).is_err());
             assert_eq!(std::fs::read(&path).unwrap(), bytes);
         }
+    }
+
+    #[test]
+    fn browser_library_roundtrips_and_old_layouts_default_empty() {
+        let old: Layout = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "selected": null,
+            "collapsed": true,
+            "width": 380.0,
+            "maximized": false,
+            "panes": {}
+        }))
+        .unwrap();
+        assert!(old.browser_bookmarks.is_empty() && old.browser_history.is_empty());
+        let mut current = Layout::default();
+        current.browser_bookmarks.push(super::Bookmark {
+            title: "Docs".into(),
+            url: "https://example.com".into(),
+        });
+        current.browser_history.push(super::HistoryEntry {
+            title: "Docs".into(),
+            url: "https://example.com".into(),
+            visited_at: 7,
+        });
+        let restored: Layout =
+            serde_json::from_value(serde_json::to_value(&current).unwrap()).unwrap();
+        assert_eq!(restored, current);
     }
 
     #[test]

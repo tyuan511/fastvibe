@@ -184,6 +184,8 @@ pub struct Workspace {
     panes: HashMap<String, pane::PaneState>,
     pane_storage: Option<crate::pane_layout::Storage>,
     pane_save_pending: bool,
+    browser_bookmarks: Vec<crate::pane_layout::Bookmark>,
+    browser_history: Vec<crate::pane_layout::HistoryEntry>,
     /// The terminal tabs, by tab id: their pty, the frame on screen, and the size last reported.
     terminals: HashMap<String, pane_terminal::TerminalView>,
     /// The keyboard focus a terminal needs before it can take keys.
@@ -465,6 +467,8 @@ impl Workspace {
             panes: HashMap::new(),
             pane_storage: None,
             pane_save_pending: false,
+            browser_bookmarks: Vec::new(),
+            browser_history: Vec::new(),
             terminals: HashMap::new(),
             terminal_focus: cx.focus_handle(),
             terminal_copy_epoch: 0,

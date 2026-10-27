@@ -192,6 +192,8 @@ impl Workspace {
 
     pub(in crate::workspace) fn restore_panes(&mut self, storage: Storage) {
         let layout = storage.last.clone();
+        self.browser_bookmarks = layout.browser_bookmarks.clone();
+        self.browser_history = layout.browser_history.clone();
         self.side_pane_collapsed = layout.collapsed;
         self.side_pane_width =
             finite_width(layout.width, super::DEFAULT_WIDTH).max(super::MIN_WIDTH);
@@ -240,6 +242,8 @@ impl Workspace {
             collapsed: self.side_pane_collapsed,
             width: self.side_pane_width,
             maximized: self.side_pane_maximized,
+            browser_bookmarks: self.browser_bookmarks.clone(),
+            browser_history: self.browser_history.clone(),
             panes,
             ..Default::default()
         }

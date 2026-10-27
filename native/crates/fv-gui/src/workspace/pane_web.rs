@@ -5,11 +5,12 @@ use super::{
     pane::{PaneTab, PaneTabKind, new_tab_id},
 };
 use crate::{
-    ui::{Muted as _, TEXT_XS, icon_button_xs},
+    ui::{self, Muted as _, TEXT_XS, icon_button_xs},
     web_content::Document,
     webview::{Surface, WebEvent},
 };
 use fv_protocol::types::{FilePreview, FilePreviewKind};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::{
     component::{
         Sizable as _,
@@ -55,6 +56,49 @@ pub(super) fn promote_draft(
     }
 }
 impl Workspace {
+    fn record_browser_history(&mut self, url: &str, cx: &mut Context<Self>) {
+        if url == "about:blank" || fv_core::safe_web_url(url).is_none() {
+            return;
+        }
+        if self
+            .browser_history
+            .last()
+            .is_some_and(|entry| entry.url == url)
+        {
+            return;
+        }
+        self.browser_history.push(crate::pane_layout::HistoryEntry {
+            title: url.to_string(),
+            url: url.to_string(),
+            visited_at: chrono::Utc::now().timestamp_millis(),
+        });
+        if self.browser_history.len() > 500 {
+            let excess = self.browser_history.len() - 500;
+            self.browser_history.drain(..excess);
+        }
+        self.schedule_pane_save(cx);
+    }
+
+    fn toggle_browser_bookmark(&mut self, url: &str, title: &str, cx: &mut Context<Self>) {
+        if let Some(index) = self.browser_bookmarks.iter().position(|b| b.url == url) {
+            self.browser_bookmarks.remove(index);
+        } else if fv_core::safe_web_url(url).is_some() {
+            self.browser_bookmarks.push(crate::pane_layout::Bookmark {
+                title: if title.trim().is_empty() {
+                    url.to_string()
+                } else {
+                    title.chars().take(160).collect()
+                },
+                url: url.to_string(),
+            });
+            if self.browser_bookmarks.len() > 200 {
+                self.browser_bookmarks.remove(0);
+            }
+        }
+        self.schedule_pane_save(cx);
+        cx.notify();
+    }
+
     pub(super) fn native_views_allowed(&self) -> bool {
         !self.side_pane_collapsed
             && !self.web_drag_blocked
@@ -188,6 +232,12 @@ impl Workspace {
         .detach();
     }
     fn web_event(&mut self, key: &str, event: WebEvent, cx: &mut Context<Self>) {
+        let history_url = match &event {
+            WebEvent::Location(url) if self.web_views.get(key).is_some_and(|view| view.browser) => {
+                Some(url.clone())
+            }
+            _ => None,
+        };
         let Some(view) = self.web_views.get_mut(key) else {
             return;
         };
@@ -253,6 +303,9 @@ impl Workspace {
                 }
             }
             _ => (),
+        }
+        if let Some(url) = history_url {
+            self.record_browser_history(&url, cx);
         }
         cx.notify();
     }
@@ -389,6 +442,17 @@ impl Workspace {
         }
         let loading = view.loading;
         let current = view.url.clone();
+        let title = self
+            .browser_history
+            .iter()
+            .rev()
+            .find(|entry| entry.url == current)
+            .map(|entry| entry.title.clone())
+            .unwrap_or_else(|| current.clone());
+        let bookmarked = self
+            .browser_bookmarks
+            .iter()
+            .any(|entry| entry.url == current);
         let notice = view.notice.clone();
         let p = self.palette.clone();
         let mut toolbar = div()
@@ -425,21 +489,62 @@ impl Workspace {
             );
         }
         toolbar = toolbar.child(div().flex_1().min_w_0().child(Input::new(&address).small()));
+        let external_url = current.clone();
         toolbar = toolbar.child(
             icon_button_xs("browser-external", "link-square02", &p)
                 .aria_label("在系统浏览器中打开")
                 .on_click(move |_, _, cx| {
-                    if let Some(url) = fv_core::safe_web_url(&current) {
+                    if let Some(url) = fv_core::safe_web_url(&external_url) {
                         cx.open_url(&url);
                     }
                 }),
         );
+        let bookmark_url = current.clone();
+        let bookmark_title = title;
+        toolbar = toolbar.child(
+            icon_button_xs(
+                "browser-bookmark",
+                if bookmarked { "star01" } else { "star02" },
+                &p,
+            )
+            .aria_label(if bookmarked {
+                "取消收藏"
+            } else {
+                "收藏此页"
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_browser_bookmark(&bookmark_url, &bookmark_title, cx);
+            })),
+        );
+        let mut library = div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .overflow_x_scrollbar();
+        for bookmark in self.browser_bookmarks.iter().rev().take(8) {
+            let url = bookmark.url.clone();
+            let key = id.to_string();
+            library = library.child(
+                div()
+                    .id(SharedString::from(format!("browser-bookmark-{key}-{url}")))
+                    .cursor_pointer()
+                    .text_size(px(TEXT_XS))
+                    .child(ui::truncate(bookmark.title.clone()).max_w(px(140.0)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.navigate_browser(&key, &url, cx);
+                    })),
+            );
+        }
         let surface = self.web_surface(id, cx);
         div()
             .size_full()
             .flex()
             .flex_col()
             .child(toolbar)
+            .child(library)
             .children(notice.map(|text| {
                 div()
                     .px(px(8.))
