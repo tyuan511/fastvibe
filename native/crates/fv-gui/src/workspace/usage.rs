@@ -229,7 +229,7 @@ impl Workspace {
                 .text_size(px(TEXT_XS))
                 .muted(p)
                 .child(SharedString::from(format!(
-                    "缓存读取 {} · 写入 {} · 命中 {}；按当前模型目录估算，可能与账单不同。",
+                    "缓存读取 {} · 写入 {} · 命中 {}；按当前模型目录估算 Token 费用，不含托管搜索等额外费用，可能与账单不同。",
                     compact(m.cache_read),
                     compact(m.cache_write),
                     if m.input > 0 || m.cache_read > 0 || m.cache_write > 0 {

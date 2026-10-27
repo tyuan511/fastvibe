@@ -170,6 +170,7 @@ impl Workspace {
         );
     }
     pub(super) fn new_chat(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        self.schedules_ui.open = false;
         self.navigation.visit(self.selected.clone(), None);
         self.selected = None;
         self.draft_project = project;
@@ -183,6 +184,7 @@ impl Workspace {
         if let Some(id) = self.navigation.step(forward, |id| {
             threads.iter().any(|t| t.id == id && !t.archived)
         }) {
+            self.schedules_ui.open = false;
             self.selected = id.clone();
             self.search_target = None;
             self.search_jump_pending = false;

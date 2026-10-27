@@ -94,6 +94,7 @@ pub fn item_id(item: &Item) -> &str {
         | Item::AgentMessage { id, .. }
         | Item::Reasoning { id, .. }
         | Item::ToolCall { id, .. }
+        | Item::Audio { id, .. }
         | Item::Error { id, .. }
         | Item::ContextCompaction { id } => id,
     }
@@ -187,7 +188,13 @@ impl ThreadLog {
             LogEvent::ItemCompleted { turn_id, item } => {
                 let at = Some(now_ms());
                 if let Some(t) = self.turn_mut(&turn_id) {
-                    if matches!(item, Item::ToolCall { .. }) {
+                    if matches!(
+                        item,
+                        Item::ToolCall {
+                            output: Some(_),
+                            ..
+                        }
+                    ) {
                         t.process_ended_at = at;
                     }
                     match t.items.iter_mut().find(|i| item_id(i) == item_id(&item)) {

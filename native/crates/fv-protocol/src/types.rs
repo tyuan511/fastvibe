@@ -244,6 +244,14 @@ pub enum Item {
         output: Option<String>,
         is_error: bool,
     },
+    /// Audio returned by a tool. `data` is base64 so the same item works over the local and
+    /// remote transports without an extra media endpoint.
+    Audio {
+        id: ItemId,
+        name: String,
+        mime: String,
+        data: String,
+    },
     Error {
         id: ItemId,
         message: String,
@@ -1293,6 +1301,9 @@ pub struct ModelInfo {
     /// Whether it can look at images.
     #[serde(default = "default_true")]
     pub supports_images: bool,
+    /// Opt-in capability of this custom endpoint/model; effective only with Responses.
+    #[serde(default)]
+    pub web_search: bool,
     #[serde(default)]
     pub context_window: Option<u32>,
     #[serde(default)]
@@ -1728,6 +1739,9 @@ pub struct AppSettings {
     /// Automatically summarize a conversation near its effective context capacity.
     #[serde(default = "default_true")]
     pub auto_compaction_enabled: bool,
+    /// JavaScript orchestration. Changes take effect at the next turn boundary.
+    #[serde(default = "default_true")]
+    pub code_mode_enabled: bool,
     /// User-authored suffix of each conversation's system instructions. Empty disables it.
     #[serde(default)]
     pub custom_system_prompt: String,
@@ -1823,6 +1837,7 @@ impl Default for AppSettings {
             sidebar: SidebarSettings::default(),
             reply_suggestions: true,
             auto_compaction_enabled: true,
+            code_mode_enabled: true,
             custom_system_prompt: String::new(),
             send_on_enter: true,
             shortcuts: Default::default(),
@@ -1855,6 +1870,8 @@ pub struct AppSettingsPatch {
     #[serde(default)]
     pub auto_compaction_enabled: Option<bool>,
     #[serde(default)]
+    pub code_mode_enabled: Option<bool>,
+    #[serde(default)]
     pub custom_system_prompt: Option<String>,
     /// Optional compare-and-set guard for editors. Omit for an unconditional update.
     #[serde(default)]
@@ -1880,6 +1897,9 @@ impl AppSettings {
         }
         if let Some(v) = patch.custom_system_prompt {
             self.custom_system_prompt = v;
+        }
+        if let Some(v) = patch.code_mode_enabled {
+            self.code_mode_enabled = v;
         }
         if let Some(v) = patch.auto_compaction_enabled {
             self.auto_compaction_enabled = v;
@@ -2039,4 +2059,31 @@ pub struct ProjectUpdateParams {
     #[serde(default)]
     pub name: Option<String>,
     pub folders: Vec<String>,
+}
+
+/// Hosted provider activity uses ordinary tool rows, but never enters local dispatch.
+pub fn hosted_search_item(
+    id: String,
+    metadata: serde_json::Value,
+    terminal: bool,
+    failed: bool,
+) -> Item {
+    let query = metadata
+        .pointer("/action/query")
+        .cloned()
+        .or_else(|| metadata.pointer("/action/queries/0").cloned())
+        .or_else(|| metadata.pointer("/action/url").cloned())
+        .unwrap_or(serde_json::Value::Null);
+    let mut arguments = metadata.clone();
+    if let Some(object) = arguments.as_object_mut() {
+        object.insert("hosted".into(), serde_json::Value::Bool(true));
+        object.insert("query".into(), query);
+    }
+    Item::ToolCall {
+        id,
+        name: "web_search".into(),
+        arguments,
+        output: terminal.then(|| metadata.to_string()),
+        is_error: failed,
+    }
 }

@@ -119,6 +119,7 @@ async fn a_plain_answer_streams_blocks_then_completes() {
         .iter()
         .map(|e| match e {
             AgentEvent::ContextBudgetChanged { .. } => "budget",
+            AgentEvent::HostedSearch(_) => "hosted-search",
             AgentEvent::BlockStarted {
                 kind: BlockKind::Thinking,
                 ..
@@ -132,6 +133,8 @@ async fn a_plain_answer_streams_blocks_then_completes() {
             AgentEvent::BlockDone { .. } => "done",
             AgentEvent::MessageDone(_) => "message",
             AgentEvent::ToolResult { .. } => "result",
+            AgentEvent::NestedToolStarted { .. } => "nested-start",
+            AgentEvent::NestedToolFinished { .. } => "nested-finish",
             AgentEvent::Committed(_) => "committed",
             AgentEvent::CompactionStarted { .. }
             | AgentEvent::CompactionDone { .. }
@@ -573,6 +576,7 @@ fn normalize_fills_gaps_and_drops_strays() {
                 call_id, is_error, ..
             } => format!("result:{call_id}:{is_error}"),
             Message::ToolImages { call_id, .. } => format!("images:{call_id}"),
+            Message::ToolAudio { call_id, .. } => format!("audio:{call_id}"),
             Message::Compaction { .. } => "compaction".into(),
             Message::MemoryContext { .. } => "memory".into(),
         })
@@ -743,5 +747,75 @@ async fn a_steer_that_arrives_after_the_answer_keeps_the_turn_going() {
             .any(|m| matches!(m, Message::User { text } if text == "stay on it")),
         "{:?}",
         requests[0].messages
+    );
+}
+
+#[tokio::test]
+async fn cancelled_hosted_search_keeps_order_sources_and_a_terminal_activity_without_local_results()
+{
+    use fv_agent::{ModelEvent, testing::Step};
+    use fv_core::{SearchStatus, UrlCitation, WebSearchCall, WebSource};
+    let search = WebSearchCall {
+        id: "hosted-one".into(),
+        status: SearchStatus::Searching,
+        action: json!({"type":"search","query":"native docs"}),
+        sources: vec![WebSource {
+            url: "https://example.com/native".into(),
+            title: "Native docs".into(),
+        }],
+    };
+    let script = vec![
+        Step::Event(ModelEvent::Text("Let me search. ".into())),
+        Step::Event(ModelEvent::HostedSearch(search)),
+        Step::Event(ModelEvent::Text("Result".into())),
+        Step::Event(ModelEvent::Citations(vec![UrlCitation {
+            start_index: 15,
+            end_index: 21,
+            url: "https://example.com/native".into(),
+            title: "Native docs".into(),
+        }])),
+        Step::Hang,
+    ];
+    let (ctx, _) = agent(ScriptedModel::new([script]), vec![]);
+    let cancel = CancellationToken::new();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let worker_cancel = cancel.clone();
+    let job = tokio::spawn(async move {
+        let mut history = Vec::new();
+        let outcome = run_turn(&ctx, &mut history, "go".into(), &tx, &worker_cancel).await;
+        (outcome, history)
+    });
+    let mut events = Vec::new();
+    while let Some(e) = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+    {
+        if matches!(&e,AgentEvent::BlockDelta{delta,..} if delta=="Result") {
+            events.push(e);
+            break;
+        }
+        events.push(e);
+    }
+    // Let the next ready annotation reach the agent before requesting interruption.
+    tokio::task::yield_now().await;
+    cancel.cancel();
+    while let Some(e) = rx.recv().await {
+        events.push(e);
+    }
+    let (outcome, history) = job.await.unwrap();
+    assert_eq!(outcome, TurnOutcome::Interrupted);
+    let Message::Assistant(reply) = history.last().unwrap() else {
+        panic!("partial reply missing")
+    };
+    assert!(
+        matches!(reply.content[1],ContentBlock::HostedSearch(ref c) if c.status==SearchStatus::Interrupted)
+    );
+    assert!(reply.text().contains("https://example.com/native"));
+    assert_eq!(reply.tool_calls().count(), 0);
+    assert!(results(&history).is_empty());
+    assert!(
+        events.iter().any(
+            |e| matches!(e,AgentEvent::HostedSearch(c) if c.status==SearchStatus::Interrupted)
+        )
     );
 }

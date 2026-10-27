@@ -23,18 +23,23 @@ mod model_detail;
 mod palette;
 mod pane;
 mod pane_git;
+mod pane_office;
 mod pane_terminal;
+mod pane_web;
 mod panel_motion;
 mod personalization;
 mod projects;
 mod provider_test;
 mod queue_tray;
+mod schedules;
 pub mod settings;
 mod shortcuts;
 mod sidebar;
 mod sidebar_actions;
 mod skill_picker;
 mod skills;
+mod subagent_roles;
+mod subagents;
 mod transcript;
 mod usage;
 
@@ -104,6 +109,12 @@ impl Notice {
 }
 
 pub struct Workspace {
+    web_views: HashMap<String, pane_web::ContentView>,
+    web_drag_blocked: bool,
+    office_views: HashMap<String, pane_office::OfficeView>,
+    subagents: subagents::Subagents,
+    subagent_roles: subagent_roles::RoleSettings,
+    schedules_ui: schedules::ScheduleUi,
     palette: Palette,
     backend: Option<Backend>,
     status: Status,
@@ -395,6 +406,12 @@ impl Workspace {
         let scroll = ScrollHandle::new();
         let search_anchor = ScrollAnchor::for_handle(scroll.clone());
         let this = Self {
+            web_views: HashMap::new(),
+            web_drag_blocked: false,
+            office_views: HashMap::new(),
+            subagents: Default::default(),
+            subagent_roles: Default::default(),
+            schedules_ui: Default::default(),
             palette,
             backend: None,
             status: Status::Connecting,
@@ -1057,10 +1074,13 @@ impl Workspace {
 
     fn refresh_all(&mut self, cx: &mut Context<Self>) {
         self.refresh_app_settings(cx);
+        self.refresh_subagents(cx);
+        self.refresh_schedules(cx);
         // Settings may have been opened before the server answered.
         if self.settings.is_some() {
             self.refresh_providers(cx);
             self.refresh_archived(cx);
+            self.refresh_roles(cx);
         }
         self.refresh_threads(cx);
         self.refresh_projects(cx);
@@ -1118,6 +1138,7 @@ impl Workspace {
     }
 
     fn select(&mut self, id: ThreadId, cx: &mut Context<Self>) {
+        self.schedules_ui.open = false;
         if self
             .search_target
             .as_ref()
@@ -1130,6 +1151,8 @@ impl Workspace {
             .visit(self.selected.clone(), Some(id.clone()));
         self.cancel_terminal_compositions(cx);
         self.selected = Some(id.clone());
+        self.subagents.open = None;
+        self.refresh_subagents(cx);
         self.close_menus(cx);
         // A pending edit belongs to the conversation it was started in; switching away abandons
         // it rather than silently rewriting a turn in the chat the user just opened. The words
@@ -1277,7 +1300,13 @@ impl Workspace {
                         self.refresh_skills(cx);
                         self.invalidate_skill_picker(cx);
                     }
-                    ServerNotification::McpChanged(_) => self.refresh_mcp(cx),
+                    ServerNotification::SubagentRolesChanged(_) => self.refresh_roles(cx),
+                    ServerNotification::SubagentsChanged(_) => self.refresh_subagents(cx),
+                    ServerNotification::SchedulesChanged(_) => self.refresh_schedules(cx),
+                    ServerNotification::McpChanged(_) => {
+                        self.refresh_mcp(cx);
+                        self.refresh_roles(cx);
+                    }
                     ServerNotification::ModelCatalogChanged(_) => {
                         self.invalidate_provider_checks();
                         self.refresh_about(cx);
@@ -1318,7 +1347,7 @@ impl Workspace {
     }
 
     pub(super) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.entry_dialog.is_some() {
+        if self.entry_dialog.is_some() || self.schedules_ui.open {
             return;
         }
         let text = self.input.read(cx).value().trim().to_string();
@@ -1509,6 +1538,7 @@ impl Workspace {
                         Err(e) => return fail(format!("无法打开对话：{e}"), text, &this, cx),
                     };
                     this.update(cx, |this, cx| {
+                        pane_web::promote_draft(&mut this.panes, &id);
                         this.navigation
                             .visit(this.selected.clone(), Some(id.clone()));
                         this.selected = Some(id.clone());
@@ -2034,6 +2064,8 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.web_drag_blocked = cx.has_active_drag();
+        self.prepare_web_views(cx);
         self.sync_personalization_editor(window, cx);
         self.sync_model_editor(window, cx);
         self.sync_provider_key_clear(window, cx);
@@ -2114,10 +2146,10 @@ impl Render for Workspace {
         self.focus_pending(window, cx);
         // The handle only knows the content's height after a layout, so the jump to the end
         // waits for a frame that has one.
-        if self.stick_to_bottom && self.scroll.max_offset().y > px(0.0) {
+        if !self.schedules_ui.open && self.stick_to_bottom && self.scroll.max_offset().y > px(0.0) {
             self.scroll.scroll_to_bottom();
             self.stick_to_bottom = false;
-        } else if self.stick_to_bottom {
+        } else if !self.schedules_ui.open && self.stick_to_bottom {
             cx.notify();
         }
         if self.search_jump_pending {
@@ -2192,6 +2224,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_go_forward))
             .on_action(cx.listener(Self::on_accept_suggestion))
             .on_action(cx.listener(Self::on_save_preview))
+            .on_action(cx.listener(Self::on_browser_address))
+            .on_action(cx.listener(Self::on_browser_reload))
             .on_action(cx.listener(Self::on_mention_up))
             .on_action(cx.listener(Self::on_mention_down))
             .on_action(cx.listener(Self::on_mention_dismiss))
@@ -2203,13 +2237,22 @@ impl Render for Workspace {
         let root = if self.settings.is_some() {
             root.child(self.settings_view(window, cx))
         } else {
-            let pane = self.side_pane(window, cx);
+            let pane = if self.schedules_ui.open {
+                None
+            } else {
+                self.side_pane(window, cx)
+            };
+            let content = if self.schedules_ui.open {
+                self.schedules_page(cx)
+            } else {
+                self.main(window, cx).into_any_element()
+            };
             root.child(
                 div()
                     .size_full()
                     .flex()
                     .child(self.sidebar(window, cx))
-                    .child(self.main(window, cx))
+                    .child(content)
                     .children(pane),
             )
         };
@@ -2233,6 +2276,7 @@ impl Render for Workspace {
             )
             .with_priority(5)
         });
+        self.prepare_web_views(cx);
         root.children(self.pane_menu_view(window, cx))
             .children(self.entry_menu_view(window, cx))
             .children(self.sidebar_menu_view(window, cx))
@@ -2243,6 +2287,7 @@ impl Render for Workspace {
             .children(self.palette_view(cx))
             .children(self.project_row_menu_view(window, cx))
             .children(self.settings_dialogs(cx))
+            .children(self.schedule_dialog(cx))
             .children(self.provider_check_notice(cx))
             .children(catcher)
     }
@@ -2264,6 +2309,8 @@ actions!(
         GoForward,
         AcceptSuggestion,
         SavePreview,
+        BrowserAddress,
+        BrowserReload,
         MentionUp,
         MentionDown,
         MentionDismiss,
@@ -2544,6 +2591,8 @@ pub fn bind_keys(cx: &mut App) {
         // the same key has to work while the pointer is in the tree.
         KeyBinding::new("cmd-s", SavePreview, None),
         KeyBinding::new("ctrl-s", SavePreview, None),
+        KeyBinding::new("secondary-l", BrowserAddress, None),
+        KeyBinding::new("secondary-r", BrowserReload, None),
     ]);
     // Composer menu keys and empty-draft Tab match at the input's depth; otherwise the
     // input's own cursor/indent actions and global Escape would take precedence.
@@ -2553,17 +2602,44 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys(pane_terminal::passthrough_bindings());
     cx.on_action(|_: &Quit, cx| cx.quit());
 
-    cx.set_menus(vec![Menu {
-        name: "FastVibe".into(),
-        items: vec![
-            MenuItem::action("新对话", NewChat),
-            MenuItem::action("搜索…", OpenSearch),
-            MenuItem::action("设置…", OpenSettings),
-            MenuItem::separator(),
-            MenuItem::action("退出 FastVibe", Quit),
-        ],
-        disabled: false,
-    }]);
+    cx.set_menus(vec![
+        Menu {
+            name: "FastVibe".into(),
+            items: vec![
+                MenuItem::action("新对话", NewChat),
+                MenuItem::action("搜索…", OpenSearch),
+                MenuItem::action("设置…", OpenSettings),
+                MenuItem::separator(),
+                MenuItem::action("退出 FastVibe", Quit),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "浏览器".into(),
+            items: vec![
+                MenuItem::action("地址栏", BrowserAddress),
+                MenuItem::action("重新加载", BrowserReload),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "编辑".into(),
+            items: vec![
+                MenuItem::os_action("撤销", gpui_kit::component::input::Undo, OsAction::Undo),
+                MenuItem::os_action("重做", gpui_kit::component::input::Redo, OsAction::Redo),
+                MenuItem::separator(),
+                MenuItem::os_action("剪切", gpui_kit::component::input::Cut, OsAction::Cut),
+                MenuItem::os_action("复制", gpui_kit::component::input::Copy, OsAction::Copy),
+                MenuItem::os_action("粘贴", gpui_kit::component::input::Paste, OsAction::Paste),
+                MenuItem::os_action(
+                    "全选",
+                    gpui_kit::component::input::SelectAll,
+                    OsAction::SelectAll,
+                ),
+            ],
+            disabled: false,
+        },
+    ]);
 }
 
 impl Workspace {
@@ -2634,6 +2710,9 @@ impl Workspace {
 
     /// ⌘S: write the pane's open file back.
     fn on_save_preview(&mut self, _: &SavePreview, _: &mut Window, cx: &mut Context<Self>) {
+        if self.schedules_ui.open {
+            return;
+        }
         self.save_preview(cx);
     }
 
@@ -2658,6 +2737,9 @@ impl Workspace {
     }
 
     fn on_dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dismiss_schedule(cx) {
+            return;
+        }
         // Esc closes one thing per press, and an edit in the composer is the most immediate of
         // them: the words stay, they just stop replacing a turn the user already sent.
         if self.editing() {

@@ -214,12 +214,9 @@ impl Workspace {
                             }),
                         ),
                     )
-                    .child(nav("tasks", "clock01", text::TASKS).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.sidebar_notice = Some("此版本暂不支持创建或运行定时任务。".into());
-                            cx.notify();
-                        },
-                    ))),
+                    .child(nav("tasks", "clock01", text::TASKS).on_click(
+                        cx.listener(|this, _, window, cx| this.open_schedules(window, cx)),
+                    )),
             )
     }
 

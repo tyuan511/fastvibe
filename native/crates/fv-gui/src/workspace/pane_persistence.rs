@@ -74,6 +74,7 @@ impl PaneState {
                         }
                     }
                     PaneTabKind::Git => saved::TabKind::Git,
+                    PaneTabKind::Browser { url } => saved::TabKind::Browser { url: url.clone() },
                     PaneTabKind::Terminal => saved::TabKind::Terminal {
                         session: session(&tab.id),
                     },
@@ -130,6 +131,9 @@ impl PaneState {
                     PaneTabKind::Files { path }
                 }
                 saved::TabKind::Git => PaneTabKind::Git,
+                saved::TabKind::Browser { url } => PaneTabKind::Browser {
+                    url: fv_core::safe_web_url(&url).unwrap_or_else(|| "about:blank".into()),
+                },
                 saved::TabKind::Terminal { session } => {
                     terminals.push((id.clone(), session));
                     PaneTabKind::Terminal
@@ -165,6 +169,10 @@ impl Workspace {
         self.git_views.remove(conversation);
         if let Some(pane) = self.panes.remove(conversation) {
             for tab in pane.tabs {
+                self.close_office(&tab.id, cx);
+                self.web_views.remove(&tab.id);
+                self.web_views
+                    .remove(&super::super::pane_web::preview_key(&tab.id));
                 if let Some(view) = self.terminals.remove(&tab.id)
                     && let (Some(session), Some(backend)) = (view.session, self.backend.clone())
                 {
@@ -371,7 +379,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaneState, saved};
+    use super::{PaneState, PaneTabKind, saved};
     use fv_protocol::types::{FilePreview, FilePreviewKind, TerminalSession};
 
     #[test]
@@ -447,6 +455,46 @@ mod tests {
         let (mut again, _) = PaneState::recovered(saved);
         again.activate(again.tabs[1].id.clone());
         assert_eq!(again.draft.as_deref(), Some("draft B"));
+    }
+
+    #[test]
+    fn browser_recovery_keeps_order_owner_and_address_without_serializing_a_native_view() {
+        let pane = saved::Pane {
+            tabs: vec![
+                saved::Tab {
+                    id: "web-1".into(),
+                    title: "Docs".into(),
+                    kind: saved::TabKind::Browser {
+                        url: "https://example.com/docs#native".into(),
+                    },
+                },
+                saved::Tab {
+                    id: "web-2".into(),
+                    title: "Invalid".into(),
+                    kind: saved::TabKind::Browser {
+                        url: "file:///private/secret".into(),
+                    },
+                },
+            ],
+            active: Some("web-1".into()),
+            expanded: Vec::new(),
+            tree_width: 224.,
+        };
+        let bytes = serde_json::to_vec(&pane).unwrap();
+        let (state, terminals) = PaneState::recovered(serde_json::from_slice(&bytes).unwrap());
+        assert!(terminals.is_empty());
+        assert!(
+            matches!(&state.active_tab().unwrap().kind,PaneTabKind::Browser{url}if url=="https://example.com/docs#native")
+        );
+        assert!(matches!(&state.tabs[1].kind,PaneTabKind::Browser{url}if url=="about:blank"));
+        let saved = state.saved_layout(|_| unreachable!(), |_| None);
+        assert_eq!(saved.tabs.len(), 2);
+        assert_eq!(saved.tabs[0].title, "Docs");
+        assert!(
+            !String::from_utf8(serde_json::to_vec(&saved).unwrap())
+                .unwrap()
+                .contains("private/secret")
+        );
     }
 
     #[test]

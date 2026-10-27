@@ -62,11 +62,28 @@ impl UnixServer {
         }
         let listener = UnixListener::bind(path)?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        Ok(Self {
+        let server = Self {
             listener,
             path: path.to_path_buf(),
             state,
-        })
+        };
+        // Recover only after claiming the listener. A second launch must not relabel the
+        // first server's live children as interrupted before discovering it is already up.
+        // A scheduled run may own live children. Acquire its process lease before
+        // recovering either catalog, even if another process chose a different socket.
+        server
+            .state
+            .schedules
+            .recover(&server.state)
+            .map_err(|e| ListenError::Io(std::io::Error::other(e.message)))?;
+        server
+            .state
+            .store
+            .db
+            .recover_subagents()
+            .map_err(|e| ListenError::Io(std::io::Error::other(e)))?;
+        server.state.schedules.recovery_complete();
+        Ok(server)
     }
 
     pub fn path(&self) -> &Path {

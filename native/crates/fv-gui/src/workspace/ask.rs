@@ -73,6 +73,9 @@ impl Workspace {
     /// The request the open conversation is waiting on: a command to allow before a question,
     /// since it holds a tool call.
     pub(super) fn pending(&self) -> Option<Pending<'_>> {
+        if self.schedules_ui.open {
+            return None;
+        }
         let view = self.selected.as_ref().and_then(|id| self.views.get(id))?;
         view.approvals
             .first()

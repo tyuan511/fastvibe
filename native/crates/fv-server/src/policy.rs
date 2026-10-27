@@ -3,13 +3,20 @@ use fv_protocol::types::ClientOrigin;
 
 /// Whether a connection of this origin may call this method.
 ///
-/// Local (the owner's own unix socket) and Ssh (ssh already authenticated them) may call
-/// everything. A remote origin gets the allowlist below. The `match` is exhaustive on purpose:
+/// Local (the owner's own unix socket) may call everything. SSH is also authenticated,
+/// but local Office preview leases name a loopback view on this machine and stay local. A remote origin gets the allowlist below. The `match` is exhaustive on purpose:
 /// a method added to the protocol does not compile until someone decides who may call it,
 /// where a denylist would have exposed it by default.
 pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
     match origin {
-        ClientOrigin::Local | ClientOrigin::Ssh => true,
+        ClientOrigin::Local => true,
+        ClientOrigin::Ssh => !matches!(
+            request,
+            ClientRequest::OfficeWatchStart { .. }
+                | ClientRequest::OfficeWatchStop { .. }
+                | ClientRequest::OfficeWatchStateGet { .. }
+                | ClientRequest::OfficeSelectionGet { .. }
+        ),
         ClientOrigin::Lan | ClientOrigin::Official => match request {
             ClientRequest::Initialize { .. }
             | ClientRequest::ThreadList { .. }
@@ -51,6 +58,7 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::ProjectUpdate { .. }
             | ClientRequest::ProjectRemove { .. }
             | ClientRequest::WorkspaceReadDir { .. }
+            | ClientRequest::OfficeRender { .. }
             | ClientRequest::WorkspacePreview { .. }
             | ClientRequest::WorkspaceSearchFiles { .. }
             | ClientRequest::WorkspaceWriteFile { .. }
@@ -75,6 +83,20 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::TerminalRead { .. }
             | ClientRequest::TerminalCopy { .. }
             | ClientRequest::TerminalKill { .. }
+            | ClientRequest::ScheduleList { .. }
+            | ClientRequest::ScheduleUpsert { .. }
+            | ClientRequest::ScheduleDelete { .. }
+            | ClientRequest::ScheduleRunNow { .. }
+            | ClientRequest::ScheduleStop { .. }
+            | ClientRequest::ScheduleHistory { .. }
+            | ClientRequest::SubagentRoleList { .. }
+            | ClientRequest::SubagentRoleUpsert { .. }
+            | ClientRequest::SubagentRoleDelete { .. }
+            | ClientRequest::SubagentList { .. }
+            | ClientRequest::SubagentClose { .. }
+            | ClientRequest::SubagentResume { .. }
+            | ClientRequest::SubagentConfigGet { .. }
+            | ClientRequest::SubagentConfigSet { .. }
             | ClientRequest::SettingsGet { .. }
             | ClientRequest::StatsUsage { .. }
             | ClientRequest::SkillList { .. }
@@ -101,7 +123,7 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::SettingsSet { .. } => true,
             // Fetching a provider's model list makes this machine request an address the
             // caller chose: a lever a remote client does not need.
-            ClientRequest::ProviderFetchModels { .. } => false,
+            ClientRequest::ProviderFetchModels { .. } | ClientRequest::OfficeWatchStart{..}|ClientRequest::OfficeWatchStop{..}|ClientRequest::OfficeWatchStateGet{..}|ClientRequest::OfficeSelectionGet{..} => false,
         },
     }
 }

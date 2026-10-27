@@ -283,6 +283,8 @@ impl Workspace {
         self.refresh_memory(cx);
         self.refresh_usage(cx);
         self.refresh_about(cx);
+        self.refresh_subagents(cx);
+        self.refresh_roles(cx);
         cx.notify();
     }
 
@@ -847,8 +849,10 @@ impl Workspace {
                                 Section::About => self.about_pane(cx),
                                 Section::Usage => self.usage_pane(cx),
                                 Section::Archived => self.archived_pane(s, cx).into_any_element(),
+                                Section::Import => self.import_pane(cx),
                                 Section::Skills => self.skills_pane(cx),
                                 Section::Mcp => self.mcp_pane(cx),
+                                Section::Subagents => self.subagents_pane(cx),
                                 Section::Memory => self.memory_pane(cx),
                                 _ => self.not_yet().into_any_element(),
                             }),
@@ -957,6 +961,72 @@ impl Workspace {
                             .border_color(p.c(Token::SidebarBorder)),
                     ),
             )
+    }
+
+    fn import_pane(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = &self.palette;
+        let open_skills =
+            cx.listener(|this, _, window, cx| this.open_settings(Section::Skills, window, cx));
+        let open_mcp =
+            cx.listener(|this, _, window, cx| this.open_settings(Section::Mcp, window, cx));
+        card(p)
+            .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(div().text_size(px(TEXT_SM)).child("导入工具与扩展"))
+            .child(
+                div().text_size(px(TEXT_SM)).muted(p).child(
+                    "原生版的导入入口按数据类型分开处理，避免把第三方配置直接写入设置文件。",
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(div().text_size(px(TEXT_SM)).child("技能文件夹"))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_XS))
+                                    .muted(p)
+                                    .child("导入本地 SKILL.md 与附属资源，并保留来源范围。"),
+                            ),
+                    )
+                    .child(
+                        outline_button("open-import-skills", p)
+                            .child("打开技能导入")
+                            .on_click(open_skills),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(div().text_size(px(TEXT_SM)).child("MCP 配置"))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_XS))
+                                    .muted(p)
+                                    .child("粘贴 mcpServers/servers JSON，逐项校验后更新配置。"),
+                            ),
+                    )
+                    .child(
+                        outline_button("open-import-mcp", p)
+                            .child("打开 MCP 导入")
+                            .on_click(open_mcp),
+                    ),
+            )
+            .into_any_element()
     }
 
     fn not_yet(&self) -> impl IntoElement {
@@ -1350,6 +1420,7 @@ impl Workspace {
         let a = &self.app_settings;
         let reply_suggestions = a.reply_suggestions;
         let auto_compaction_enabled = a.auto_compaction_enabled;
+        let code_mode_enabled = a.code_mode_enabled;
         let hover = p.c(Token::Accent);
         let mode_label = |m: ThemeMode| match m {
             ThemeMode::System => "跟随系统",
@@ -1565,6 +1636,23 @@ impl Workspace {
                                 cx,
                             )
                         })),
+                    ))
+                    .child(setting_row(
+                        "代码模式",
+                        "允许模型通过隔离 JavaScript 编排已有工具；使用现有权限，下个回合生效",
+                        true,
+                        p,
+                        switch(SharedString::from("code-mode"), code_mode_enabled, p).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.patch_settings(
+                                    AppSettingsPatch {
+                                        code_mode_enabled: Some(!code_mode_enabled),
+                                        ..Default::default()
+                                    },
+                                    cx,
+                                )
+                            }),
+                        ),
                     ))
                     .child(setting_row(
                         "自动压缩上下文",

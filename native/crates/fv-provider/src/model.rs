@@ -101,6 +101,9 @@ impl Model for GenaiModel {
         self.config.max_output_tokens
     }
 
+    fn supports_web_search(&self) -> bool {
+        self.config.web_search && self.config.protocol == Protocol::OpenAiResponses
+    }
     fn supports_images(&self) -> bool {
         self.config.images
     }
@@ -127,17 +130,37 @@ impl Model for GenaiModel {
         let model_id = self.config.model_id.clone();
         let max_retries = self.config.max_retries;
         let images_ok = self.config.images;
-        let chat = Arc::new(to_chat_request(&request, &label, images_ok));
-
-        let opened = open_with_retry(client, model_id, chat, options, max_retries);
-        stream::once(opened)
+        let mut chat = to_chat_request(&request, &label, images_ok);
+        if self.supports_web_search() && request.tools.iter().any(|t| t.name == "web_search") {
+            chat.tools
+                .get_or_insert_with(Vec::new)
+                .push(genai::chat::Tool::new_web_search());
+            options=options.with_extra_body(serde_json::json!({"include":["reasoning.encrypted_content","web_search_call.action.sources"]}));
+        }
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let capture = (self.config.protocol == Protocol::OpenAiResponses)
+            .then(|| Arc::new(crate::web_search::Capture::new(tx)));
+        if let Some(capture) = &capture {
+            options = options.with_raw_frame_sink_arc(capture.clone());
+        }
+        let chat = Arc::new(chat);
+        let opened = open_with_retry(
+            client,
+            model_id,
+            chat,
+            options,
+            max_retries,
+            capture.clone(),
+        );
+        let normal = stream::once(opened)
             .flat_map(move |opened| match opened {
                 Ok((prefix, rest)) => {
                     translate(stream::iter(prefix).chain(rest), label.clone()).boxed()
                 }
                 Err(e) => stream::once(async move { Err(e) }).boxed(),
             })
-            .boxed()
+            .boxed();
+        hosted_events(normal.boxed(), rx, capture).boxed()
     }
 }
 
@@ -155,6 +178,7 @@ async fn open_with_retry(
     chat: Arc<genai::chat::ChatRequest>,
     options: ChatOptions,
     max_retries: u32,
+    capture: Option<Arc<crate::web_search::Capture>>,
 ) -> Result<Opened, ModelError> {
     let mut attempt = 0;
     loop {
@@ -180,7 +204,12 @@ async fn open_with_retry(
                 }
             }
         };
-        if !failed.error.retryable || attempt >= max_retries {
+        if !failed.error.retryable
+            || attempt >= max_retries
+            || capture
+                .as_ref()
+                .is_some_and(|c| c.activity.load(std::sync::atomic::Ordering::Acquire))
+        {
             return Err(failed.error);
         }
         tokio::time::sleep(backoff(attempt, failed.retry_after)).await;
@@ -254,4 +283,33 @@ fn translate(
             std::future::ready(Some(stream::iter(events)))
         })
         .flatten()
+}
+
+fn hosted_events(
+    normal: BoxStream<'static, Result<ModelEvent, ModelError>>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<ModelEvent>,
+    capture: Option<Arc<crate::web_search::Capture>>,
+) -> impl Stream<Item = Result<ModelEvent, ModelError>> {
+    stream::unfold(
+        (normal, rx, capture, false, None),
+        |(mut normal, mut rx, capture, mut ended, mut pending)| async move {
+            loop {
+                if let Ok(event) = rx.try_recv() {
+                    return Some((Ok(event), (normal, rx, capture, ended, pending)));
+                }
+                if let Some(mut event) = pending.take() {
+                    if let Ok(ModelEvent::Done(reply)) = &mut event
+                        && let Some(capture) = &capture
+                    {
+                        capture.decorate(reply);
+                    }
+                    return Some((event, (normal, rx, capture, ended, None)));
+                }
+                if ended {
+                    return None;
+                }
+                tokio::select! {biased;Some(event)=rx.recv()=>return Some((Ok(event),(normal,rx,capture,false,None))),event=normal.next()=>{if let Some(event)=event{pending=Some(event);}else{ended=true;}}}
+            }
+        },
+    )
 }

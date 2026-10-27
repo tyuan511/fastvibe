@@ -31,7 +31,7 @@ fn the_database_is_private_versioned_and_reopens_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fastvibe.db");
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 4);
+    assert_eq!(db.schema_version().unwrap(), 6);
     db.put_thread(&thread("a", 5)).unwrap();
     assert_eq!(mode(&path), 0o600);
     // The write-ahead log files are written by SQLite; they must not be wider than the database.
@@ -43,7 +43,7 @@ fn the_database_is_private_versioned_and_reopens_cleanly() {
     }
     drop(db);
     let again = Db::open(&path).unwrap();
-    assert_eq!(again.schema_version().unwrap(), 4);
+    assert_eq!(again.schema_version().unwrap(), 6);
     assert_eq!(again.get_thread("a").unwrap().unwrap().title, "thread a");
 }
 
@@ -56,7 +56,7 @@ fn a_database_from_a_newer_build_is_refused_untouched() {
     match Db::open(&path) {
         Err(StoreError::TooNew {
             found: 99,
-            known: 4,
+            known: 6,
         }) => {}
         other => panic!("{:?}", other.err()),
     }
@@ -257,6 +257,7 @@ fn history_becomes_turns_with_tool_results_filled_in() {
             Item::Reasoning { .. } => "reasoning",
             Item::AgentMessage { .. } => "agent",
             Item::ToolCall { .. } => "tool",
+            Item::Audio { .. } => "audio",
             Item::Error { .. } => "error",
             Item::ContextCompaction { .. } => "compaction",
         })
@@ -374,7 +375,7 @@ fn a_database_from_before_providers_is_upgraded_in_place() {
     drop(conn);
 
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 4);
+    assert_eq!(db.schema_version().unwrap(), 6);
     let t = db.get_thread("old").unwrap().expect("the old conversation");
     assert_eq!(
         (t.title.as_str(), t.model, t.thinking),
@@ -522,4 +523,74 @@ fn restored_turns_carry_when_they_started_worked_and_ended() {
     assert_eq!(turns[0].completed_at, Some(4_000));
     assert_eq!(turns[1].started_at, Some(9_000));
     assert_eq!(turns[1].completed_at, None);
+}
+
+#[test]
+fn child_catalog_is_atomic_hidden_and_global_history_is_bounded() {
+    use fv_protocol::subagents::{Subagent, SubagentStatus};
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("catalog.db")).unwrap();
+    for root in ["root-a", "root-b"] {
+        db.put_thread(&thread(root, 0)).unwrap();
+    }
+    for i in 0..102 {
+        let root = if i % 2 == 0 { "root-a" } else { "root-b" };
+        let id = format!("c{i:03}");
+        db.create_subagent(
+            &thread(&id, i),
+            &Subagent {
+                agent_id: id,
+                parent_thread_id: root.into(),
+                root_thread_id: root.into(),
+                depth: 1,
+                role: None,
+                fork_context: false,
+                tool_ceiling: None,
+                task: "task".into(),
+                status: SubagentStatus::Completed,
+                waiting_for_input: false,
+                result: "result".into(),
+                error: None,
+                updated_at: i,
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(db.list_threads(true).unwrap().len(), 2);
+    assert_eq!(db.list_threads_including_children(true).unwrap().len(), 104);
+    let recent = db.recent_subagents().unwrap();
+    assert_eq!(recent.len(), 100);
+    assert_eq!(recent[0].agent_id, "c101");
+    assert_eq!(recent[99].agent_id, "c002");
+    assert_eq!(db.subagents(Some("root-a")).unwrap().len(), 51);
+    assert!(db.subagent("c000").unwrap().is_some());
+    let existing = db.subagent("c000").unwrap().unwrap();
+    assert!(
+        db.create_subagent(&thread("rollback", 0), &existing)
+            .is_err()
+    );
+    assert!(db.get_thread("rollback").unwrap().is_none());
+    db.delete_thread("c000").unwrap();
+    assert!(db.subagent("c000").unwrap().is_none());
+}
+
+#[test]
+fn late_queue_mutations_cannot_recreate_rows_after_thread_deletion() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("queue.db")).unwrap();
+    db.put_thread(&thread("a", 0)).unwrap();
+    let row = fv_store::QueuedPrompt {
+        id: "queued".into(),
+        text: "work".into(),
+        at: 0,
+    };
+    db.push_queued("a", &row).unwrap();
+    db.set_queue_pause("a", Some("stopped")).unwrap();
+    assert_eq!(db.queue("a").unwrap().len(), 1);
+    db.delete_thread("a").unwrap();
+    db.push_queued("a", &row).unwrap();
+    db.set_queue_pause("a", Some("stopped")).unwrap();
+    db.requeue_front("a", &row).unwrap();
+    assert!(db.queue("a").unwrap().is_empty());
+    assert!(db.queue_pause("a").unwrap().is_none());
 }

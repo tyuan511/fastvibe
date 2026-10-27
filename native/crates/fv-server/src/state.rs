@@ -41,6 +41,7 @@ pub const OUTBOUND_CAPACITY: usize = 256;
 /// means in every call, and subscribes to the ones it wants. What must outlive the process (the
 /// catalog, the transcripts) is in `store`; the rest is rebuilt from it when a thread is opened.
 pub struct ServerState {
+    pub office: crate::office::Manager,
     pub data_dir: PathBuf,
     pub agent: AgentContext,
     pub context: crate::context::ContextLoader,
@@ -49,6 +50,7 @@ pub struct ServerState {
     pub(crate) services_started: AtomicBool,
     pub(crate) auto_compaction: Arc<AtomicBool>,
     pub store: Store,
+    pub(crate) schedules: crate::schedules::Schedules,
     /// The side pane's shells. One per terminal, with its own pty and parsed screen.
     pub(crate) terminals: crate::terminal::Terminals,
     /// models.dev, as this install knows it: a model's window, output ceiling, modalities and
@@ -58,6 +60,8 @@ pub struct ServerState {
     connections: Mutex<HashMap<ConnId, mpsc::Sender<Message>>>,
     runtimes: Mutex<HashMap<ThreadId, Arc<ThreadRuntime>>>,
     prompts: Mutex<HashMap<fv_protocol::RequestId, PendingPrompt>>,
+    pub(crate) subagents_lock: Mutex<()>,
+    pub(crate) subagent_changes: tokio::sync::watch::Sender<u64>,
     pub(crate) settings_lock: Mutex<()>,
     pub(crate) providers_lock: Mutex<()>,
     pub(crate) model_checks: std::sync::Arc<tokio::sync::Semaphore>,
@@ -87,6 +91,7 @@ impl ServerState {
         self.mcp.start();
         self.memory.start_timer(self);
         crate::catalog::start(self);
+        crate::schedules::Schedules::start(self);
         let weak = Arc::downgrade(self);
         tokio::spawn(async move {
             while changes.changed().await.is_ok() {
@@ -107,20 +112,24 @@ impl ServerState {
             crate::settings::read_db(&store.db)?.auto_compaction_enabled,
         ));
         Ok(Self {
+            office: crate::office::Manager::new(data_dir.clone()),
             auto_compaction,
+            schedules: crate::schedules::Schedules::open(store.db.clone())?,
             memory: crate::memory::Memory::open(&data_dir, &store.db)?,
             mcp: fv_mcp::Manager::open(&data_dir)?,
             services_started: AtomicBool::new(false),
             context: crate::context::ContextLoader::new(&data_dir),
-            data_dir,
+            data_dir: data_dir.clone(),
             agent,
             store,
             catalog,
             catalog_applied: tokio::sync::Mutex::new((0, catalog_signature)),
-            terminals: crate::terminal::Terminals::default(),
+            terminals: crate::terminal::Terminals::for_runtime(data_dir.clone()),
             connections: Mutex::default(),
             runtimes: Mutex::default(),
             prompts: Mutex::default(),
+            subagents_lock: Mutex::new(()),
+            subagent_changes: tokio::sync::watch::channel(0).0,
             settings_lock: Mutex::new(()),
             providers_lock: Mutex::new(()),
             model_checks: std::sync::Arc::new(tokio::sync::Semaphore::new(
@@ -153,6 +162,7 @@ impl ServerState {
     }
 
     pub(crate) fn unregister(&self, id: ConnId) {
+        self.office.disconnected(id);
         self.mcp.auth_disconnected(id);
         self.connections.lock().unwrap().remove(&id);
         let runtimes: Vec<_> = self.runtimes.lock().unwrap().values().cloned().collect();
@@ -191,11 +201,10 @@ impl ServerState {
         };
         // The thread is drawn in full; the model is sent only what follows the last summary.
         // Give restoration the full transcript, so usage before compaction still counts.
-        let rt = Arc::new(ThreadRuntime::restored(
-            thread_id.to_string(),
-            history.clone(),
-            turns,
-        ));
+        let mut runtime = ThreadRuntime::restored(thread_id.to_string(), history.clone(), turns);
+        runtime.exec_sessions =
+            Arc::new(fv_tools::ExecSessions::for_runtime(self.data_dir.clone()));
+        let rt = Arc::new(runtime);
         // The bill is re-derived from that transcript at today's prices, so an edited provider
         // or a corrected catalog applies to history a client has not looked at yet.
         rt.reprice(&self.catalog.snapshot(), &history);
@@ -208,6 +217,10 @@ impl ServerState {
     /// Write a message to the thread's transcript. A failure is reported, not fatal: the turn
     /// carries on, and the message is still in memory for the next request.
     pub fn persist(&self, thread_id: &str, message: &fv_core::Message) {
+        let _gate = self.subagents_lock.lock().unwrap();
+        if !self.thread(thread_id).is_ok_and(|t| t.is_some()) {
+            return;
+        }
         // Pictures go to files; the transcript line keeps their paths.
         let message = match self.store.images.externalize(thread_id, message) {
             Ok(m) => m,
@@ -329,10 +342,30 @@ impl ServerState {
     /// Remove a thread for good: a run in progress is stopped, then its record, transcript and
     /// pictures go. A thread that is already gone is not an error.
     pub fn delete_thread(&self, id: &str) -> Result<(), ErrorObject> {
-        if let Some(rt) = self.runtimes.lock().unwrap().remove(id) {
-            rt.exec_sessions.close();
-            rt.interrupt();
+        let _gate = self.subagents_lock.lock().unwrap();
+        // The ownership tree is separate from the ordinary sidebar catalog.
+        let children = if self.thread(id)?.is_some() {
+            crate::subagents::descendants(self, id)?
+        } else {
+            Vec::new()
+        };
+        for child in children.into_iter().rev() {
+            self.delete_thread_only(&child)?;
         }
+        self.delete_thread_only(id)?;
+        self.subagent_changes
+            .send_modify(|n| *n = n.wrapping_add(1));
+        self.broadcast(ServerNotification::SubagentsChanged(
+            fv_protocol::types::Empty {},
+        ));
+        Ok(())
+    }
+
+    fn delete_thread_only(&self, id: &str) -> Result<(), ErrorObject> {
+        if let Some(rt) = self.runtimes.lock().unwrap().remove(id) {
+            rt.retire();
+        }
+        self.checkpoints.lock().unwrap().remove(id);
         self.store.transcripts.delete(id).map_err(internal)?;
         self.store.images.delete(id).map_err(internal)?;
         self.store.db.delete_thread(id).map_err(internal)?;
@@ -345,19 +378,33 @@ impl ServerState {
     /// A restart may replace the server only when no conversation has work in flight,
     /// including commands that yielded and outlived their launching turn, and pane PTYs.
     pub fn has_running_turns(&self) -> bool {
-        self.model_checks.available_permits() < crate::provider_test::CHECK_LIMIT
+        self.schedules.busy()
+            || self.office.has_running()
+            || self.model_checks.available_permits() < crate::provider_test::CHECK_LIMIT
             || self.terminals.has_running()
-            || self
-                .runtimes
-                .lock()
-                .unwrap()
-                .values()
-                .any(|runtime| runtime.is_running() || runtime.exec_sessions.has_running())
+            || self.runtimes.lock().unwrap().values().any(|runtime| {
+                runtime.is_running()
+                    || runtime.exec_sessions.has_running()
+                    || runtime.code_mode.has_running()
+            })
+    }
+
+    pub fn schedules_recover(&self) -> Result<(), ErrorObject> {
+        self.schedules.recover(self)
+    }
+
+    pub fn schedules_recovery_complete(&self) {
+        self.schedules.recovery_complete();
+    }
+
+    pub async fn shutdown_schedules(&self) {
+        self.schedules.shutdown(self).await;
     }
 
     pub fn close_command_sessions(&self) {
         for runtime in self.runtimes.lock().unwrap().values() {
             runtime.exec_sessions.close();
+            runtime.code_mode.cancel_all();
         }
     }
 
@@ -425,13 +472,20 @@ impl ServerState {
                 answer: tx,
             },
         );
+        crate::subagents::changed(self);
+        self.schedules.prompt_changed(self);
         rx
     }
 
     /// Remove a prompt. Whoever gets it owns delivering its answer (or withdrawing it), so an
     /// answer and a cancellation arriving together cannot both act.
     pub(crate) fn take_prompt(&self, id: &fv_protocol::RequestId) -> Option<PendingPrompt> {
-        self.prompts.lock().unwrap().remove(id)
+        let pending = self.prompts.lock().unwrap().remove(id);
+        if pending.is_some() {
+            crate::subagents::changed(self);
+            self.schedules.prompt_changed(self);
+        }
+        pending
     }
 
     /// The prompts still waiting in a thread.
@@ -485,7 +539,7 @@ fn internal(e: impl std::fmt::Display) -> ErrorObject {
 }
 
 /// A sidebar title from the first prompt: its first line, shortened.
-fn title_from(prompt: &str) -> String {
+pub(crate) fn title_from(prompt: &str) -> String {
     let line = prompt
         .lines()
         .map(str::trim)

@@ -325,3 +325,6 @@ mod tests {
         assert!(!values.contains_key(OsStr::new("LC_CTYPE")));
     }
 }
+
+mod office;
+pub use office::{OfficeInstall, office_install, snapshot_for};

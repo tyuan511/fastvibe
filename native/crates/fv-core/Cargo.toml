@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+url = "2"
 
 [lints]
 workspace = true

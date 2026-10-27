@@ -54,6 +54,7 @@ pub struct Tab {
 pub enum TabKind {
     File { path: String, file: File },
     Git,
+    Browser { url: String },
     Terminal { session: Option<TerminalSession> },
 }
 

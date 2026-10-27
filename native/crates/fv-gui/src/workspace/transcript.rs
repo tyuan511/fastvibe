@@ -821,6 +821,38 @@ impl Workspace {
                     open.then(|| self.tool_detail(name, arguments, output.as_deref(), *is_error));
                 (id.clone(), row, detail)
             }
+            Item::Audio {
+                id,
+                name,
+                mime,
+                data,
+            } => {
+                let url = format!("data:{mime};base64,{data}");
+                let label = if name.is_empty() {
+                    "音频产物"
+                } else {
+                    name.as_str()
+                };
+                let row = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(icon("play", 16.0, p.c(Token::MutedForeground)))
+                    .child(
+                        div()
+                            .text_color(p.c(Token::Foreground))
+                            .child(format!("{label} · {mime}")),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("play-audio-{id}")))
+                            .cursor_pointer()
+                            .text_color(p.c(Token::Primary))
+                            .child("播放")
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    );
+                (id.clone(), row, None)
+            }
             _ => return div(),
         };
         self.fold_row(id, header, body, false, cx)
@@ -1036,7 +1068,65 @@ impl Workspace {
         is_error: bool,
     ) -> Div {
         let p = &self.palette;
+        if name == "web_search" && arguments.get("hosted").and_then(|v| v.as_bool()) == Some(true) {
+            let mut col = div().flex().flex_col().gap(px(6.0));
+            let action = &arguments["action"];
+            if let Some(queries) = action.get("queries").and_then(|v| v.as_array()) {
+                for q in queries.iter().filter_map(|v| v.as_str()) {
+                    col = col.child(self.code_block(q, false));
+                }
+            } else if let Some(query) = action
+                .get("query")
+                .or_else(|| action.get("url"))
+                .and_then(|v| v.as_str())
+            {
+                col = col.child(self.code_block(query, false));
+            }
+            col = col.child(div().text_size(px(TEXT_XS)).muted(p).child(format!(
+                    "状态：{}",
+                    match arguments
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                    {
+                        "completed" => "已完成",
+                        "failed" => "失败",
+                        "interrupted" => "已中断",
+                        "searching" => "搜索中",
+                        _ => "准备搜索",
+                    }
+                )));
+            if let Some(sources) = arguments.get("sources").and_then(|v| v.as_array()) {
+                for (index, source) in sources.iter().enumerate() {
+                    let Some(url) = source
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .and_then(fv_core::safe_web_url)
+                    else {
+                        continue;
+                    };
+                    let title = source
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&url)
+                        .to_string();
+                    col = col.child(
+                        div()
+                            .id(SharedString::from(format!("web-source-{index}-{url}")))
+                            .cursor_pointer()
+                            .text_color(p.c(Token::Primary))
+                            .child(title)
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    );
+                }
+            }
+            return col;
+        }
         let asked = match name {
+            "code_mode" => arguments
+                .get("code")
+                .and_then(|v| v.as_str())
+                .map(|code| self.code_block(code, false)),
             "exec_command" => arguments
                 .get("cmd")
                 .and_then(|v| v.as_str())

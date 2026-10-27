@@ -46,6 +46,19 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
                 for block in &a.content {
                     let id = format!("{}i{}", turn.id, turn.items.len());
                     match block {
+                        ContentBlock::HostedSearch(call) => {
+                            turn.items.push(fv_protocol::types::hosted_search_item(
+                                call.id.clone(),
+                                serde_json::to_value(call).unwrap(),
+                                true,
+                                matches!(
+                                    call.status,
+                                    fv_core::SearchStatus::Failed
+                                        | fv_core::SearchStatus::Interrupted
+                                ),
+                            ));
+                        }
+                        ContentBlock::Citations { .. } => (),
                         ContentBlock::Text { text } if !text.is_empty() => {
                             turn.items.push(Item::AgentMessage {
                                 id,
@@ -77,6 +90,31 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
             }
             // Pictures a tool returned; the tool's item already shows what it did.
             Message::ToolImages { .. } | Message::MemoryContext { .. } => {}
+            Message::ToolAudio {
+                call_id,
+                name,
+                audio,
+            } => {
+                let Some(turn) = turns.last_mut() else {
+                    continue;
+                };
+                use base64::Engine;
+                for (index, clip) in audio.iter().enumerate() {
+                    let data = match &clip.source {
+                        fv_core::AudioSource::Base64 { data } => data.clone(),
+                        fv_core::AudioSource::File { path } => match std::fs::read(path) {
+                            Ok(bytes) => base64::engine::general_purpose::STANDARD.encode(bytes),
+                            Err(_) => continue,
+                        },
+                    };
+                    turn.items.push(Item::Audio {
+                        id: format!("{call_id}:audio:{index}"),
+                        name: name.clone(),
+                        mime: clip.mime.clone(),
+                        data,
+                    });
+                }
+            }
             // A divider where the conversation was summarized. The messages before it are
             // still in the transcript, and still drawn: only the model stops seeing them.
             Message::Compaction { .. } => {

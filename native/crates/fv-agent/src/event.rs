@@ -12,6 +12,7 @@ pub enum BlockKind {
 /// tool call's block id is the call id the model gave it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentEvent {
+    HostedSearch(fv_core::WebSearchCall),
     ContextBudgetChanged {
         used: u64,
         window: u64,
@@ -45,6 +46,20 @@ pub enum AgentEvent {
     },
     CompactionFailed {
         id: String,
+    },
+    NestedToolStarted {
+        parent_id: String,
+        call_id: String,
+        name: String,
+        arguments: Value,
+    },
+    NestedToolFinished {
+        parent_id: String,
+        call_id: String,
+        name: String,
+        arguments: Value,
+        output: String,
+        is_error: bool,
     },
     ToolResult {
         call_id: String,

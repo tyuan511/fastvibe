@@ -4,8 +4,10 @@
 //! syntax colours taken from the theme's own `--code-*` tokens.
 
 use fv_theme::Token;
-use gpui_kit::base::text::{MarkdownNode, markdown_ast};
-use gpui_kit::base::{TextView, TextViewStyle};
+use gpui_kit::base::text::{
+    InlineElement, InlineRenderContext, MarkdownExtensions, MarkdownNode, markdown_ast,
+};
+use gpui_kit::base::{MarkdownPlugin, TextView, TextViewStyle};
 use gpui_kit::component::highlighter::HighlightTheme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -263,6 +265,141 @@ fn list_marker(ordered: bool, number: u32, depth: usize) -> String {
     }
 }
 
+#[derive(Clone)]
+struct Formula {
+    source: String,
+    block: bool,
+}
+
+/// A dependency-free TeX presentation layer for the native renderer. It keeps the
+/// TeX source in the node for accessibility/copying and normalizes the common
+/// constructs users expect in chat. Unsupported commands remain visible verbatim.
+fn pretty_formula(source: &str) -> String {
+    let mut value = source.trim().replace(r"\,", " ").replace(r"\!", "");
+    for (from, to) in [
+        (r"\alpha", "α"),
+        (r"\beta", "β"),
+        (r"\gamma", "γ"),
+        (r"\delta", "δ"),
+        (r"\lambda", "λ"),
+        (r"\mu", "μ"),
+        (r"\pi", "π"),
+        (r"\sigma", "σ"),
+        (r"\phi", "φ"),
+        (r"\omega", "ω"),
+        (r"\infty", "∞"),
+        (r"\times", "×"),
+        (r"\cdot", "·"),
+        (r"\leq", "≤"),
+        (r"\geq", "≥"),
+        (r"\neq", "≠"),
+        (r"\to", "→"),
+        (r"\sum", "∑"),
+        (r"\prod", "∏"),
+        (r"\sqrt", "√"),
+    ] {
+        value = value.replace(from, to);
+    }
+    // Braced powers are the most common inline construct; use Unicode superscripts
+    // where the exponent is short and leave longer expressions readable.
+    for (from, to) in [("^2", "²"), ("^3", "³"), ("^n", "ⁿ"), ("^T", "ᵀ")] {
+        value = value.replace(from, to);
+    }
+    value.replace("\\{", "{").replace("\\}", "}")
+}
+
+struct MathInlinePlugin;
+impl MarkdownPlugin for MathInlinePlugin {
+    fn name(&self) -> &str {
+        "chat-math-inline"
+    }
+    fn parse(
+        &self,
+        node: &markdown_ast::Node,
+        _: &gpui_kit::base::text::MarkdownParseContext<'_>,
+    ) -> Option<MarkdownNode> {
+        match node {
+            markdown_ast::Node::InlineMath(math) => Some(
+                MarkdownNode::new(
+                    self.name(),
+                    Formula {
+                        source: math.value.clone(),
+                        block: false,
+                    },
+                )
+                .text(pretty_formula(&math.value)),
+            ),
+            _ => None,
+        }
+    }
+    fn render_inline(
+        &self,
+        node: &MarkdownNode,
+        context: &InlineRenderContext,
+        _: &mut Window,
+        _: &mut App,
+    ) -> Option<InlineElement> {
+        let formula = node
+            .data::<Formula>()
+            .map(|f| {
+                debug_assert!(!f.block);
+                pretty_formula(&f.source)
+            })
+            .unwrap_or_else(|| node.as_text().into());
+        Some(
+            InlineElement::new(
+                div()
+                    .px(px(2.))
+                    .font_family(crate::assets::MONO_FONT)
+                    .text_color(Hsla::blue())
+                    .text_size(context.font_size())
+                    .child(formula),
+            )
+            .with_baseline(context.font_size() * 0.8),
+        )
+    }
+}
+fn math_extensions(p: &Palette) -> MarkdownExtensions {
+    let block_palette = p.clone();
+    MarkdownExtensions::default()
+        .block_parser(|node, _| match node {
+            markdown_ast::Node::Math(math) => Some(
+                MarkdownNode::new(
+                    "chat-math-block",
+                    Formula {
+                        source: math.value.clone(),
+                        block: true,
+                    },
+                )
+                .text(pretty_formula(&math.value)),
+            ),
+            _ => None,
+        })
+        .block_renderer("chat-math-block", move |node, _, _| {
+            let formula = node
+                .data::<Formula>()
+                .map(|f| {
+                    debug_assert!(f.block);
+                    pretty_formula(&f.source)
+                })
+                .unwrap_or_else(|| node.as_text().into());
+            div()
+                .w_full()
+                .my(px(8.))
+                .px(px(14.))
+                .py(px(10.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(block_palette.c(Token::Border))
+                .bg(block_palette.c(Token::Muted).opacity(0.35))
+                .text_size(px(16.))
+                .font_family(crate::assets::MONO_FONT)
+                .text_center()
+                .child(formula)
+        })
+        .plugin(MathInlinePlugin)
+}
+
 /// Keep native text selection/highlighting, with Electron's full-width code toolbar.
 pub fn view(id: SharedString, source: SharedString, p: &Palette) -> TextView {
     view_at(id, source, p, ListDepth::default())
@@ -273,6 +410,7 @@ fn view_at(id: SharedString, source: SharedString, p: &Palette, depth: ListDepth
     let list_palette = p.clone();
     let table_palette = p.clone();
     TextView::markdown(id, source)
+        .markdown_extensions(math_extensions(p))
         .style(style(p))
         .markdown_block_parser(|node, context| {
             if let markdown_ast::Node::List(list) = node {
@@ -552,7 +690,27 @@ fn view_at(id: SharedString, source: SharedString, p: &Palette, depth: ListDepth
 
 #[cfg(test)]
 mod tests {
-    use super::{dedent_block, highlight_theme, list_marker};
+    use super::{Formula, dedent_block, highlight_theme, list_marker, pretty_formula};
+
+    #[test]
+    fn formulas_normalize_common_symbols_without_executing_or_fetching_content() {
+        assert_eq!(
+            pretty_formula(r"\alpha^2 + \sqrt{x} \leq \infty"),
+            "α² + √{x} ≤ ∞"
+        );
+        assert_eq!(pretty_formula("$HOME/.config"), "$HOME/.config");
+        assert_eq!(pretty_formula(r"\unknown{raw}"), r"\unknown{raw}");
+    }
+
+    #[test]
+    fn formula_nodes_keep_raw_source_for_copy_and_accessibility() {
+        let formula = Formula {
+            source: r"\frac{a}{b}".into(),
+            block: false,
+        };
+        assert_eq!(pretty_formula(&formula.source), r"\frac{a}{b}");
+        assert!(!formula.block);
+    }
 
     #[test]
     fn repainting_the_editor_gutter_does_not_change_the_canvas_colour() {

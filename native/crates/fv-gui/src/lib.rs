@@ -18,4 +18,6 @@ pub mod theme;
 pub mod ui;
 pub mod vibrancy;
 pub mod view_model;
+pub mod web_content;
+pub mod webview;
 pub mod workspace;

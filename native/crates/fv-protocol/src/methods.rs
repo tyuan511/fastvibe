@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Rpc;
 use crate::jsonrpc::RequestId;
+use crate::office::*;
 use crate::types::*;
 
 macro_rules! client_requests {
@@ -104,6 +105,11 @@ client_requests! {
     ProjectUpdate => "project/update": ProjectUpdateParams => ProjectInfo,
     ProjectRemove => "project/remove": ProjectPathParams => ProjectListResponse,
     WorkspaceReadDir => "workspace/readDir": ReadDirParams => ReadDirResponse,
+    OfficeRender => "office/render": OfficeWatchParams => OfficeRenderResponse,
+    OfficeWatchStart => "office/watchStart": OfficeWatchParams => OfficeWatchState,
+    OfficeWatchStop => "office/watchStop": OfficeLeaseParams => Empty,
+    OfficeWatchStateGet => "office/watchState": OfficeLeaseParams => OfficeWatchState,
+    OfficeSelectionGet => "office/selection": OfficeLeaseParams => OfficeSelection,
     WorkspacePreview => "workspace/preview": PreviewParams => FilePreview,
     WorkspaceSearchFiles => "workspace/searchFiles": SearchFilesParams => SearchFilesResponse,
     WorkspaceWriteFile => "workspace/writeFile": WriteFileParams => Empty,
@@ -148,6 +154,20 @@ client_requests! {
     McpResources => "mcp/resources": McpResourceListParams => McpResourceResponse,
     McpResourceTemplates => "mcp/resourceTemplates": McpResourceListParams => McpResourceResponse,
     McpReadResource => "mcp/readResource": McpResourceParams => McpResourceResponse,
+    ScheduleList => "schedule/list": Empty => crate::schedules::ScheduleSnapshot,
+    ScheduleUpsert => "schedule/upsert": crate::schedules::ScheduleUpsertParams => crate::schedules::ScheduledTask,
+    ScheduleDelete => "schedule/delete": crate::schedules::ScheduleDeleteParams => Empty,
+    ScheduleRunNow => "schedule/runNow": crate::schedules::ScheduleIdParams => crate::schedules::ScheduledRun,
+    ScheduleStop => "schedule/stop": crate::schedules::ScheduleIdParams => Empty,
+    ScheduleHistory => "schedule/history": crate::schedules::ScheduleHistoryParams => crate::schedules::ScheduleHistory,
+    SubagentRoleList => "subagent/role/list": Empty => crate::subagents::SubagentRolesResponse,
+    SubagentRoleUpsert => "subagent/role/upsert": crate::subagents::SubagentRoleUpsertParams => crate::subagents::SubagentRolesResponse,
+    SubagentRoleDelete => "subagent/role/delete": crate::subagents::SubagentRoleDeleteParams => crate::subagents::SubagentRolesResponse,
+    SubagentList => "subagent/list": crate::subagents::SubagentListParams => crate::subagents::SubagentListResponse,
+    SubagentClose => "subagent/close": crate::subagents::SubagentIdParams => crate::subagents::Subagent,
+    SubagentResume => "subagent/resume": crate::subagents::SubagentIdParams => crate::subagents::Subagent,
+    SubagentConfigGet => "subagent/config/get": Empty => crate::subagents::SubagentConfig,
+    SubagentConfigSet => "subagent/config/set": crate::subagents::SubagentConfig => crate::subagents::SubagentConfig,
     SkillRemove => "skill/remove": SkillNameParams => Empty,
 }
 
@@ -165,6 +185,9 @@ notifications!(ServerNotification {
     ModelCatalogChanged => "model/catalog/changed": Empty,
     UsageChanged => "stats/usageChanged": Empty,
     SkillsChanged => "skills/changed": Empty,
+    SubagentRolesChanged => "subagent/rolesChanged": Empty,
+    SchedulesChanged => "schedule/changed": Empty,
+    SubagentsChanged => "subagent/changed": Empty,
     MemoryChanged => "memory/changed": MemoryState,
     McpChanged => "mcp/changed": Empty,
     WorkspaceEntryChanged => "workspace/entryChanged": WorkspaceEntryChange,

@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use futures_util::StreamExt;
 use futures_util::future::join_all;
+use futures_util::{FutureExt, StreamExt};
 use fv_core::{AssistantMessage, ContentBlock, Message, StopReason};
 use serde_json::Value;
 use tokio::sync::{RwLock, mpsc};
@@ -127,7 +127,15 @@ pub(crate) fn model_request(ctx: &AgentContext, history: &[Message]) -> ModelReq
     ModelRequest {
         system: format!("{memory_instructions}{}", ctx.system),
         messages: request_messages(ctx, history),
-        tools: ctx.tools.specs_for(&ctx.loaded),
+        tools: ctx
+            .tools
+            .specs_for(&ctx.loaded)
+            .into_iter()
+            .filter(|s| {
+                !ctx.tools.get(&s.name).is_some_and(|t| t.hosted())
+                    || ctx.model.supports_web_search()
+            })
+            .collect(),
         max_output_tokens: None,
     }
 }
@@ -181,6 +189,18 @@ fn commit(history: &mut Vec<Message>, events: &Events, message: Message) {
 /// tool call that was made has its result (an "aborted" one if it was stopped), and a reply cut
 /// short by a stop is kept as far as it got.
 pub async fn run_turn(
+    ctx: &AgentContext,
+    history: &mut Vec<Message>,
+    user_text: String,
+    events: &Events,
+    cancel: &CancellationToken,
+) -> TurnOutcome {
+    let result = run_turn_inner(ctx, history, user_text, events, cancel).await;
+    ctx.tools.finish_turn().await;
+    result
+}
+
+async fn run_turn_inner(
     ctx: &AgentContext,
     history: &mut Vec<Message>,
     user_text: String,
@@ -311,11 +331,12 @@ pub async fn run_turn(
                     }
                     return TurnOutcome::Completed;
                 }
-                let results = execute_calls(ctx, calls, &lock, events, cancel).await;
+                let results = execute_calls(ctx, calls, history.len(), &lock, events, cancel).await;
                 // Results first, in call order; then any pictures they returned, as providers
                 // want them (a tool message must not be separated from its call).
                 let mut pictures = Vec::new();
-                for (result, images) in results {
+                let mut audio = Vec::new();
+                for (result, images, clips) in results {
                     if let Message::ToolResult { call_id, name, .. } = &result
                         && !images.is_empty()
                     {
@@ -325,9 +346,21 @@ pub async fn run_turn(
                             images,
                         });
                     }
+                    if let Message::ToolResult { call_id, name, .. } = &result
+                        && !clips.is_empty()
+                    {
+                        audio.push(Message::ToolAudio {
+                            call_id: call_id.clone(),
+                            name: name.clone(),
+                            audio: clips,
+                        });
+                    }
                     commit(history, events, result);
                 }
                 for message in pictures {
+                    commit(history, events, message);
+                }
+                for message in audio {
                     commit(history, events, message);
                 }
             }
@@ -399,27 +432,32 @@ async fn sample(
         let next = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
-                blocks.close();
-                return Sampled::Aborted(blocks.partial());
+                return Sampled::Aborted(blocks.aborted());
             }
             next = stream.next() => next,
         };
         match next {
             None => {
-                blocks.close();
                 return Sampled::Failed {
-                    partial: blocks.partial(),
+                    partial: blocks.aborted(),
                     error: "The model's response ended before it was complete.".into(),
                     overflow: false,
                 };
             }
             Some(Err(e)) => {
-                blocks.close();
                 return Sampled::Failed {
-                    partial: blocks.partial(),
+                    partial: blocks.aborted(),
                     error: e.message,
                     overflow: e.overflow,
                 };
+            }
+            Some(Ok(ModelEvent::HostedSearch(call))) => blocks.hosted(call),
+            Some(Ok(ModelEvent::Citations(citations))) => {
+                for c in citations {
+                    if !blocks.citations.contains(&c) {
+                        blocks.citations.push(c);
+                    }
+                }
             }
             Some(Ok(ModelEvent::Text(d))) => blocks.delta(Open::Text, d),
             Some(Ok(ModelEvent::Thinking(d))) => blocks.delta(Open::Thinking, d),
@@ -449,6 +487,10 @@ struct Blocks<'a> {
     /// Tool calls announced while streaming: call id → (name, argument text so far).
     calls: HashMap<String, (String, String)>,
     done: Vec<ContentBlock>,
+    rendered: Vec<(String, ContentBlock)>,
+    hosted: std::collections::BTreeMap<String, fv_core::WebSearchCall>,
+    citations: Vec<fv_core::UrlCitation>,
+    text_since_hosted: bool,
 }
 
 impl<'a> Blocks<'a> {
@@ -458,10 +500,17 @@ impl<'a> Blocks<'a> {
             open: None,
             calls: HashMap::new(),
             done: Vec::new(),
+            rendered: Vec::new(),
+            hosted: Default::default(),
+            citations: Vec::new(),
+            text_since_hosted: false,
         }
     }
 
     fn delta(&mut self, kind: Open, delta: String) {
+        if kind == Open::Text {
+            self.text_since_hosted = true;
+        }
         if self.open.as_ref().is_some_and(|(_, k, _)| *k != kind) {
             self.close();
         }
@@ -503,10 +552,39 @@ impl<'a> Blocks<'a> {
                 },
             };
             self.done.push(block.clone());
+            self.rendered.push((id.clone(), block.clone()));
             emit(self.events, AgentEvent::BlockDone { id, block });
         }
     }
 
+    fn hosted(&mut self, call: fv_core::WebSearchCall) {
+        if self.hosted.get(&call.id) == Some(&call) {
+            return;
+        }
+        if !self.hosted.contains_key(&call.id) {
+            self.close();
+            self.text_since_hosted = false;
+        }
+        if let Some(block) = self
+            .done
+            .iter_mut()
+            .find(|b| matches!(b, ContentBlock::HostedSearch(old) if old.id == call.id))
+        {
+            *block = ContentBlock::HostedSearch(call.clone());
+        } else {
+            self.done.push(ContentBlock::HostedSearch(call.clone()));
+        }
+        self.hosted.insert(call.id.clone(), call.clone());
+        emit(self.events, AgentEvent::HostedSearch(call));
+    }
+    fn aborted(&mut self) -> Option<AssistantMessage> {
+        self.close();
+        let partial = self.partial();
+        if let Some(reply) = &partial {
+            self.finish(reply);
+        }
+        partial
+    }
     fn tool_start(&mut self, id: String, name: String) {
         self.close();
         emit(
@@ -529,6 +607,85 @@ impl<'a> Blocks<'a> {
     /// The model's complete message arrived: it is the truth, whatever the deltas said.
     fn finish(&mut self, message: &AssistantMessage) {
         self.close();
+        for block in &message.content {
+            if let ContentBlock::HostedSearch(call) = block {
+                self.hosted(call.clone());
+            }
+        }
+        // Complete provider content is authoritative, including citation-rendered text
+        // and Responses endpoints which send final text but omit deltas.
+        for thinking in [false, true] {
+            let select = |b: &ContentBlock| {
+                matches!(b, ContentBlock::Thinking { .. }) == thinking
+                    && matches!(b, ContentBlock::Text { .. } | ContentBlock::Thinking { .. })
+            };
+            let final_blocks = message
+                .content
+                .iter()
+                .filter(|b| select(b))
+                .cloned()
+                .collect::<Vec<_>>();
+            let existing = self
+                .rendered
+                .iter()
+                .filter(|(_, b)| select(b))
+                .cloned()
+                .collect::<Vec<_>>();
+            let reuse = if !thinking && !self.hosted.is_empty() && !self.text_since_hosted {
+                existing.len()
+            } else {
+                existing.len().saturating_sub(final_blocks.len())
+            };
+            for (index, block) in final_blocks.iter().enumerate() {
+                let id = existing
+                    .get(index + reuse)
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                if existing.get(index + reuse).is_none() {
+                    emit(
+                        self.events,
+                        AgentEvent::BlockStarted {
+                            id: id.clone(),
+                            kind: if thinking {
+                                BlockKind::Thinking
+                            } else {
+                                BlockKind::Text
+                            },
+                        },
+                    );
+                }
+                if existing
+                    .get(index + reuse)
+                    .is_none_or(|(_, old)| old != block)
+                {
+                    emit(
+                        self.events,
+                        AgentEvent::BlockDone {
+                            id,
+                            block: block.clone(),
+                        },
+                    );
+                }
+            }
+            for (id, _) in existing.into_iter().take(reuse) {
+                emit(
+                    self.events,
+                    AgentEvent::BlockDone {
+                        id,
+                        block: if thinking {
+                            ContentBlock::Thinking {
+                                text: String::new(),
+                                signature: None,
+                            }
+                        } else {
+                            ContentBlock::Text {
+                                text: String::new(),
+                            }
+                        },
+                    },
+                );
+            }
+        }
         let announced: HashSet<String> = self.calls.keys().cloned().collect();
         for block in &message.content {
             if let ContentBlock::ToolCall { id, name, .. } = block {
@@ -555,12 +712,47 @@ impl<'a> Blocks<'a> {
     /// What had arrived, as a message; `None` when nothing had. Tool calls cut off mid-arguments
     /// are left out: they never ran and their arguments are not valid.
     fn partial(&self) -> Option<AssistantMessage> {
-        if self.done.is_empty() {
+        if self.done.is_empty() && self.hosted.is_empty() {
             return None;
+        }
+        let mut content = self.done.clone();
+        if !self.citations.is_empty() {
+            let joined = content
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::Text { text } = b {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<String>();
+            let rendered = fv_core::citation_markdown(&joined, &self.citations);
+            let mut last = true;
+            for b in content.iter_mut().rev() {
+                if let ContentBlock::Text { text } = b {
+                    *text = if last {
+                        last = false;
+                        rendered.clone()
+                    } else {
+                        String::new()
+                    };
+                }
+            }
+            content.push(ContentBlock::Citations {
+                citations: self.citations.clone(),
+            });
+        }
+        for block in &mut content {
+            if let ContentBlock::HostedSearch(call) = block
+                && !call.status.terminal()
+            {
+                call.status = fv_core::SearchStatus::Interrupted;
+            }
         }
         Some(AssistantMessage {
             duration_ms: None,
-            content: self.done.clone(),
+            content,
             stop: StopReason::Aborted,
             usage: Default::default(),
             model: None,
@@ -571,10 +763,11 @@ impl<'a> Blocks<'a> {
 async fn execute_calls(
     ctx: &AgentContext,
     calls: Vec<(String, String, Value)>,
+    history_len: usize,
     lock: &Arc<RwLock<()>>,
     events: &Events,
     cancel: &CancellationToken,
-) -> Vec<(Message, Vec<fv_core::ImagePart>)> {
+) -> Vec<(Message, Vec<fv_core::ImagePart>, Vec<fv_core::AudioPart>)> {
     // `join_all` polls in order, so locks are requested in call order; the lock is fair, so a
     // write queued behind earlier reads waits for them and later reads wait for it.
     let runs = calls.into_iter().map(|(call_id, name, arguments)| {
@@ -590,13 +783,16 @@ async fn execute_calls(
         let loaded = ctx.loaded.clone();
         let events = events.clone();
         async move {
-            let (content, is_error, images) = match tool {
-                None => (unknown_tool(&name, &registry), true, Vec::new()),
+            let (content, is_error, images, audio) = match tool {
+                None => (unknown_tool(&name, &registry), true, Vec::new(), Vec::new()),
                 Some(tool) => {
                     let tool_ctx = ToolCtx {
                         cancel: cancel.clone(),
                         cwd,
                         call_id: call_id.clone(),
+                        history_len,
+                        history_call_id: call_id.clone(),
+                        nested: Some(Arc::new(NestedDispatcher { lock: lock.clone(), events: events.clone() })),
                         ui,
                         permissions,
                         vision,
@@ -606,22 +802,22 @@ async fn execute_calls(
                     let args = arguments.clone();
                     let run = async {
                         // Held across the call; dropped when it finishes or is stopped.
-                        let _guard = if tool.mutates() {
-                            Guard::Write(lock.write_owned().await)
+                        let _guard = if tool.orchestrates() { None } else if tool.mutates() {
+                            Some(Guard::Write(lock.write_owned().await))
                         } else {
-                            Guard::Read(lock.read_owned().await)
+                            Some(Guard::Read(lock.read_owned().await))
                         };
                         tool.call(tool_ctx, args).await
                     };
                     tokio::select! {
                         biased;
-                        _ = cancel.cancelled() => ("Stopped by the user before it finished.".to_string(), true, Vec::new()),
-                        out = run => (out.content, out.is_error, out.images),
+                        _ = cancel.cancelled() => ("Stopped by the user before it finished.".to_string(), true, Vec::new(), Vec::new()),
+                        out = run => (out.content, out.is_error, out.images, out.audio),
                     }
                 }
             };
             emit(&events, AgentEvent::ToolResult { call_id: call_id.clone(), name: name.clone(), arguments, output: content.clone(), is_error });
-            (Message::ToolResult { call_id, name, content, is_error }, images)
+            (Message::ToolResult { call_id, name, content, is_error }, images, audio)
         }
     });
     join_all(runs).await
@@ -638,5 +834,67 @@ fn unknown_tool(name: &str, registry: &ToolRegistry) -> String {
         format!("Tool `{name}` is not loaded yet. Find it with tool_search first.")
     } else {
         format!("Unknown tool: {name}")
+    }
+}
+
+struct NestedDispatcher {
+    lock: Arc<RwLock<()>>,
+    events: Events,
+}
+impl crate::NestedTools for NestedDispatcher {
+    fn call(
+        &self,
+        ctx: ToolCtx,
+        name: String,
+        arguments: Value,
+    ) -> futures_util::future::BoxFuture<'static, crate::ToolOutput> {
+        let lock = self.lock.clone();
+        let events = self.events.clone();
+        Box::pin(async move {
+            let parent_id = ctx.history_call_id.clone();
+            let call_id = ctx.call_id.clone();
+            emit(
+                &events,
+                AgentEvent::NestedToolStarted {
+                    parent_id: parent_id.clone(),
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                },
+            );
+            let tool = ctx
+                .registry
+                .get(&name)
+                .filter(|t| t.enabled(&ctx.registry) && !t.orchestrates() && !t.hosted());
+            let cancel = ctx.cancel.clone();
+            let run = async {
+                match tool {
+                    None => crate::ToolOutput::err(format!(
+                        "Tool `{name}` is unavailable or cannot be nested."
+                    )),
+                    Some(tool) => {
+                        let _guard = if tool.mutates() {
+                            Guard::Write(lock.write_owned().await)
+                        } else {
+                            Guard::Read(lock.read_owned().await)
+                        };
+                        tool.call(ctx, arguments.clone()).await
+                    }
+                }
+            };
+            let out = tokio::select! {biased;_ = cancel.cancelled()=>crate::ToolOutput::err("Stopped before the nested call finished."),out=std::panic::AssertUnwindSafe(run).catch_unwind()=>out.unwrap_or_else(|_|crate::ToolOutput::err("Nested tool failed internally."))};
+            emit(
+                &events,
+                AgentEvent::NestedToolFinished {
+                    parent_id,
+                    call_id,
+                    name,
+                    arguments,
+                    output: out.content.clone(),
+                    is_error: out.is_error,
+                },
+            );
+            out
+        })
     }
 }

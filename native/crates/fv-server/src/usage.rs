@@ -21,7 +21,7 @@ pub async fn collect(
     tokio::task::spawn_blocking(move || {
         state.store.transcripts.capture_usage()?;
         let records = state.store.db.usage_records()?;
-        let threads = state.store.db.list_threads(true)?;
+        let threads = state.store.db.list_threads_including_children(true)?;
         let providers = state.store.db.list_providers()?;
         Ok::<_, fv_store::StoreError>(aggregate(
             &records,

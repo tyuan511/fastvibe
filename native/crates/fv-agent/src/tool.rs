@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use fv_core::{Answers, ImagePart, Question};
+use fv_core::{Answers, AudioPart, ImagePart, Question};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -21,6 +21,7 @@ pub struct ToolOutput {
     pub is_error: bool,
     /// Pictures the model should see along with the text.
     pub images: Vec<ImagePart>,
+    pub audio: Vec<AudioPart>,
 }
 
 impl ToolOutput {
@@ -29,11 +30,16 @@ impl ToolOutput {
             content: content.into(),
             is_error: false,
             images: Vec::new(),
+            audio: Vec::new(),
         }
     }
 
     pub fn with_images(mut self, images: Vec<ImagePart>) -> Self {
         self.images = images;
+        self
+    }
+    pub fn with_audio(mut self, audio: Vec<AudioPart>) -> Self {
+        self.audio = audio;
         self
     }
 
@@ -42,6 +48,7 @@ impl ToolOutput {
             content: content.into(),
             is_error: true,
             images: Vec::new(),
+            audio: Vec::new(),
         }
     }
 }
@@ -54,12 +61,19 @@ pub trait UserInput: Send + Sync {
     -> BoxFuture<'static, Option<Answers>>;
 }
 
+#[derive(Clone)]
 pub struct ToolCtx {
     /// Fires when the user stops the turn; a tool that spawns something long should kill it.
     pub cancel: CancellationToken,
     pub cwd: Option<PathBuf>,
     /// The id the model gave this call.
     pub call_id: String,
+    /// Active messages through the assistant that invoked this batch. A fork can wait for
+    /// exactly this persisted boundary without confusing reused tool-call IDs.
+    pub history_len: usize,
+    /// Outermost provider call, used as a durable history boundary for nested delegation.
+    pub history_call_id: String,
+    pub nested: Option<Arc<dyn NestedTools>>,
     /// Present when a client is there to answer questions.
     pub ui: Option<Arc<dyn UserInput>>,
     /// What the tools may do, and how to ask when they may not; absent means no limits.
@@ -79,6 +93,9 @@ impl ToolCtx {
             cancel,
             cwd,
             call_id: String::new(),
+            history_len: 0,
+            history_call_id: String::new(),
+            nested: None,
             ui: None,
             permissions: None,
             vision: true,
@@ -86,6 +103,11 @@ impl ToolCtx {
             loaded: LoadedTools::default(),
         }
     }
+}
+
+/// The same per-turn dispatcher, execution gate and event stream as direct tools.
+pub trait NestedTools: Send + Sync {
+    fn call(&self, ctx: ToolCtx, name: String, arguments: Value) -> BoxFuture<'static, ToolOutput>;
 }
 
 pub trait Tool: Send + Sync {
@@ -99,6 +121,21 @@ pub trait Tool: Send + Sync {
 
     /// A deferred tool is not described to the model until it has been found with
     /// `tool_search`. For tools there are too many of to list in every request.
+    /// An orchestrator delegates locking to its nested calls rather than taking a gate
+    /// that those calls would deadlock trying to acquire.
+    fn hosted(&self) -> bool {
+        false
+    }
+
+    fn orchestrates(&self) -> bool {
+        false
+    }
+
+    /// Dispose owned work before a turn is considered finished, including cancellation.
+    fn finish_turn(&self) -> BoxFuture<'static, ()> {
+        Box::pin(async {})
+    }
+
     fn deferred(&self) -> bool {
         false
     }
@@ -152,6 +189,17 @@ impl ToolRegistry {
         self
     }
 
+    /// Restrict a per-turn snapshot. Omitted tools cannot be found through tool_search.
+    pub fn retain(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        self.tools.retain(|name, _| keep(name));
+    }
+
+    pub async fn finish_turn(&self) {
+        for tool in self.tools.values() {
+            tool.finish_turn().await;
+        }
+    }
+
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
     }
@@ -174,6 +222,11 @@ impl ToolRegistry {
 
     pub fn has_deferred(&self) -> bool {
         self.tools.values().any(|t| t.deferred())
+    }
+
+    /// Every installed tool, including temporarily disabled ones, for capability editors.
+    pub fn all_specs(&self) -> Vec<ToolSpec> {
+        self.tools.values().map(|tool| tool.spec()).collect()
     }
 
     /// The deferred tools, for `tool_search` to look through.

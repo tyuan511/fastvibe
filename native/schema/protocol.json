@@ -74,6 +74,13 @@
               "null"
             ]
           },
+          "codeModeEnabled": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "customSystemPrompt": {
             "default": null,
             "type": [
@@ -846,6 +853,13 @@
         ],
         "type": "object"
       },
+      "MissedPolicy": {
+        "enum": [
+          "runLatest",
+          "skip"
+        ],
+        "type": "string"
+      },
       "ModelDefaults": {
         "properties": {
           "model": {
@@ -943,6 +957,11 @@
               "array",
               "null"
             ]
+          },
+          "webSearch": {
+            "default": false,
+            "description": "Opt-in capability of this custom endpoint/model; effective only with Responses.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -958,6 +977,39 @@
           "file"
         ],
         "type": "string"
+      },
+      "OfficeLeaseParams": {
+        "properties": {
+          "leaseId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "leaseId"
+        ],
+        "type": "object"
+      },
+      "OfficeWatchParams": {
+        "properties": {
+          "cwd": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "leaseId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "leaseId"
+        ],
+        "type": "object"
       },
       "PreviewParams": {
         "description": "`workspace/preview`: what the pane draws for one file.",
@@ -1307,6 +1359,210 @@
           }
         ]
       },
+      "ScheduleDefinition": {
+        "properties": {
+          "maxRunSeconds": {
+            "default": 3600,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "missedPolicy": {
+            "$ref": "#/$defs/MissedPolicy",
+            "default": "runLatest"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "rule": {
+            "$ref": "#/$defs/ScheduleRule"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "prompt",
+          "rule"
+        ],
+        "type": "object"
+      },
+      "ScheduleDeleteParams": {
+        "properties": {
+          "expectedVersion": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "expectedVersion"
+        ],
+        "type": "object"
+      },
+      "ScheduleHistoryParams": {
+        "properties": {
+          "limit": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "default": 0,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "type": "object"
+      },
+      "ScheduleIdParams": {
+        "properties": {
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "type": "object"
+      },
+      "ScheduleRule": {
+        "oneOf": [
+          {
+            "properties": {
+              "at": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "once",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "at"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "daily",
+                "type": "string"
+              },
+              "time": {
+                "type": "string"
+              },
+              "timeZone": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "time",
+              "timeZone"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Sunday = 0, Saturday = 6.",
+            "properties": {
+              "days": {
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "weekly",
+                "type": "string"
+              },
+              "time": {
+                "type": "string"
+              },
+              "timeZone": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "time",
+              "timeZone",
+              "days"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ScheduleUpsertParams": {
+        "properties": {
+          "definition": {
+            "$ref": "#/$defs/ScheduleDefinition"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "expectedVersion": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "taskId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "definition",
+          "enabled"
+        ],
+        "type": "object"
+      },
       "SearchFilesParams": {
         "description": "`workspace/searchFiles`: the `@` menu's rows.",
         "properties": {
@@ -1556,6 +1812,140 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "SubagentConfig": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "maxAgents": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxDepth": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "maxAgents",
+          "maxDepth"
+        ],
+        "type": "object"
+      },
+      "SubagentIdParams": {
+        "properties": {
+          "agentId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "type": "object"
+      },
+      "SubagentListParams": {
+        "properties": {
+          "threadId": {
+            "default": null,
+            "description": "Omit for the 100 most recent children across roots; a child id selects its root.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SubagentRole": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "readOnly": {
+            "description": "Further restrict the inherited filesystem sandbox; never allows escalation.",
+            "type": "boolean"
+          },
+          "systemPrompt": {
+            "type": "string"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "description": "None grants all eligible tools; Some([]) grants none.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "systemPrompt",
+          "readOnly"
+        ],
+        "type": "object"
+      },
+      "SubagentRoleDeleteParams": {
+        "properties": {
+          "expected": {
+            "$ref": "#/$defs/SubagentRole"
+          }
+        },
+        "required": [
+          "expected"
+        ],
+        "type": "object"
+      },
+      "SubagentRoleUpsertParams": {
+        "properties": {
+          "expected": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SubagentRole"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None creates a new role. An edit must name the exact role the editor read."
+          },
+          "role": {
+            "$ref": "#/$defs/SubagentRole"
+          }
+        },
+        "required": [
+          "role"
         ],
         "type": "object"
       },
@@ -2914,6 +3304,106 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "office/render",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/OfficeWatchParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "office/watchStart",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/OfficeWatchParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "office/watchStop",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/OfficeLeaseParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "office/watchState",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/OfficeLeaseParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "office/selection",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/OfficeLeaseParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "workspace/preview",
             "type": "string"
           },
@@ -3794,6 +4284,286 @@
             "$ref": "#/$defs/RequestId"
           },
           "method": {
+            "const": "schedule/list",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "schedule/upsert",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ScheduleUpsertParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "schedule/delete",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ScheduleDeleteParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "schedule/runNow",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ScheduleIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "schedule/stop",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ScheduleIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "schedule/history",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/ScheduleHistoryParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "subagent/role/list",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "subagent/role/upsert",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SubagentRoleUpsertParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "subagent/role/delete",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SubagentRoleDeleteParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "subagent/list",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SubagentListParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "subagent/close",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SubagentIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "subagent/resume",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SubagentIdParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "subagent/config/get",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "subagent/config/set",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/SubagentConfig"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
             "const": "skill/remove",
             "type": "string"
           },
@@ -4010,6 +4780,11 @@
               "array",
               "null"
             ]
+          },
+          "webSearch": {
+            "default": false,
+            "description": "Opt-in capability of this custom endpoint/model; effective only with Responses.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -4114,6 +4889,110 @@
       "priceTiers"
     ],
     "title": "ModelDetail",
+    "type": "object"
+  },
+  "officeRender": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "size": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "version": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "size",
+      "version"
+    ],
+    "title": "OfficeRenderResponse",
+    "type": "object"
+  },
+  "officeSelection": {
+    "$defs": {
+      "OfficeSelectionItem": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "items": {
+        "items": {
+          "$ref": "#/$defs/OfficeSelectionItem"
+        },
+        "type": "array"
+      },
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "items",
+      "text"
+    ],
+    "title": "OfficeSelection",
+    "type": "object"
+  },
+  "officeWatch": {
+    "$defs": {
+      "OfficeWatchPhase": {
+        "enum": [
+          "starting",
+          "ready",
+          "stopped",
+          "error"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "message": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "path": {
+        "type": "string"
+      },
+      "phase": {
+        "$ref": "#/$defs/OfficeWatchPhase"
+      },
+      "url": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "phase",
+      "path"
+    ],
+    "title": "OfficeWatchState",
     "type": "object"
   },
   "providerTestResult": {
@@ -4227,6 +5106,455 @@
     "title": "ProviderTestResult",
     "type": "object"
   },
+  "scheduleHistory": {
+    "$defs": {
+      "ScheduleRunStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "failed",
+          "stopped",
+          "interrupted",
+          "missed"
+        ],
+        "type": "string"
+      },
+      "ScheduledRun": {
+        "properties": {
+          "endedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "manual": {
+            "type": "boolean"
+          },
+          "result": {
+            "description": "Bounded preview; the conversation is the complete output.",
+            "type": "string"
+          },
+          "scheduledAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "startedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/$defs/ScheduleRunStatus"
+          },
+          "stopping": {
+            "type": "boolean"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "taskName": {
+            "type": "string"
+          },
+          "taskVersion": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waitingForInput": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "taskId",
+          "taskName",
+          "taskVersion",
+          "scheduledAt",
+          "manual",
+          "status",
+          "stopping",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "offset": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "runs": {
+        "items": {
+          "$ref": "#/$defs/ScheduledRun"
+        },
+        "type": "array"
+      },
+      "total": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "runs",
+      "total",
+      "offset"
+    ],
+    "title": "ScheduleHistory",
+    "type": "object"
+  },
+  "schedules": {
+    "$defs": {
+      "MissedPolicy": {
+        "enum": [
+          "runLatest",
+          "skip"
+        ],
+        "type": "string"
+      },
+      "ScheduleDefinition": {
+        "properties": {
+          "maxRunSeconds": {
+            "default": 3600,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "missedPolicy": {
+            "$ref": "#/$defs/MissedPolicy",
+            "default": "runLatest"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "rule": {
+            "$ref": "#/$defs/ScheduleRule"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "prompt",
+          "rule"
+        ],
+        "type": "object"
+      },
+      "ScheduleRule": {
+        "oneOf": [
+          {
+            "properties": {
+              "at": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "once",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "at"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "daily",
+                "type": "string"
+              },
+              "time": {
+                "type": "string"
+              },
+              "timeZone": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "time",
+              "timeZone"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Sunday = 0, Saturday = 6.",
+            "properties": {
+              "days": {
+                "items": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "weekly",
+                "type": "string"
+              },
+              "time": {
+                "type": "string"
+              },
+              "timeZone": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "time",
+              "timeZone",
+              "days"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ScheduleRunStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "failed",
+          "stopped",
+          "interrupted",
+          "missed"
+        ],
+        "type": "string"
+      },
+      "ScheduledRun": {
+        "properties": {
+          "endedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "manual": {
+            "type": "boolean"
+          },
+          "result": {
+            "description": "Bounded preview; the conversation is the complete output.",
+            "type": "string"
+          },
+          "scheduledAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "startedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/$defs/ScheduleRunStatus"
+          },
+          "stopping": {
+            "type": "boolean"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "taskName": {
+            "type": "string"
+          },
+          "taskVersion": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waitingForInput": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "taskId",
+          "taskName",
+          "taskVersion",
+          "scheduledAt",
+          "manual",
+          "status",
+          "stopping",
+          "result"
+        ],
+        "type": "object"
+      },
+      "ScheduledTask": {
+        "properties": {
+          "createdAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "definition": {
+            "$ref": "#/$defs/ScheduleDefinition"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lastRunAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lastStatus": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScheduleRunStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nextRunAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "description": "Changes when the definition/enabled state changes, including consuming a one-off.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "definition",
+          "enabled",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ThinkingLevel": {
+        "description": "How hard the model is asked to think. There is deliberately no \"off\".",
+        "enum": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "active": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ScheduledRun"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "queued": {
+        "items": {
+          "$ref": "#/$defs/ScheduledRun"
+        },
+        "type": "array"
+      },
+      "revision": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "tasks": {
+        "items": {
+          "$ref": "#/$defs/ScheduledTask"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "revision",
+      "tasks",
+      "queued"
+    ],
+    "title": "ScheduleSnapshot",
+    "type": "object"
+  },
   "serverNotification": {
     "$defs": {
       "AppSettings": {
@@ -4240,6 +5568,11 @@
           "autoCompactionEnabled": {
             "default": true,
             "description": "Automatically summarize a conversation near its effective context capacity.",
+            "type": "boolean"
+          },
+          "codeModeEnabled": {
+            "default": true,
+            "description": "JavaScript orchestration. Changes take effect at the next turn boundary.",
             "type": "boolean"
           },
           "customSystemPrompt": {
@@ -4531,6 +5864,35 @@
               "name",
               "arguments",
               "isError"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Audio returned by a tool. `data` is base64 so the same item works over the local and\nremote transports without an extra media endpoint.",
+            "properties": {
+              "data": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "const": "audio",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "id",
+              "name",
+              "mime",
+              "data"
             ],
             "type": "object"
           },
@@ -5539,6 +6901,54 @@
       {
         "properties": {
           "method": {
+            "const": "subagent/rolesChanged",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "schedule/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
+            "const": "subagent/changed",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "method": {
             "const": "memory/changed",
             "type": "string"
           },
@@ -6041,6 +7451,316 @@
       }
     ],
     "title": "ServerRequest"
+  },
+  "subagentConfig": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "maxAgents": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "maxDepth": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "enabled",
+      "maxAgents",
+      "maxDepth"
+    ],
+    "title": "SubagentConfig",
+    "type": "object"
+  },
+  "subagentList": {
+    "$defs": {
+      "Subagent": {
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "depth": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "forkContext": {
+            "default": false,
+            "type": "boolean"
+          },
+          "parentThreadId": {
+            "type": "string"
+          },
+          "result": {
+            "description": "A bounded preview. Read the child thread for its complete transcript.",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SubagentRole"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Immutable role snapshot for all turns of this child, including after restart."
+          },
+          "rootThreadId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/SubagentStatus"
+          },
+          "task": {
+            "type": "string"
+          },
+          "toolCeiling": {
+            "default": null,
+            "description": "An ancestor's tool grant is a ceiling even when this child chooses another role.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "waitingForInput": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agentId",
+          "parentThreadId",
+          "rootThreadId",
+          "depth",
+          "task",
+          "status",
+          "result",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "SubagentRole": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "readOnly": {
+            "description": "Further restrict the inherited filesystem sandbox; never allows escalation.",
+            "type": "boolean"
+          },
+          "systemPrompt": {
+            "type": "string"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "description": "None grants all eligible tools; Some([]) grants none.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "systemPrompt",
+          "readOnly"
+        ],
+        "type": "object"
+      },
+      "SubagentStatus": {
+        "enum": [
+          "idle",
+          "running",
+          "completed",
+          "interrupted",
+          "failed",
+          "closed"
+        ],
+        "type": "string"
+      },
+      "ThinkingLevel": {
+        "description": "How hard the model is asked to think. There is deliberately no \"off\".",
+        "enum": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "agents": {
+        "items": {
+          "$ref": "#/$defs/Subagent"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "agents"
+    ],
+    "title": "SubagentListResponse",
+    "type": "object"
+  },
+  "subagentRoles": {
+    "$defs": {
+      "SubagentRole": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "readOnly": {
+            "description": "Further restrict the inherited filesystem sandbox; never allows escalation.",
+            "type": "boolean"
+          },
+          "systemPrompt": {
+            "type": "string"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThinkingLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "description": "None grants all eligible tools; Some([]) grants none.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "systemPrompt",
+          "readOnly"
+        ],
+        "type": "object"
+      },
+      "SubagentToolChoice": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "readOnlyAllowed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "readOnlyAllowed"
+        ],
+        "type": "object"
+      },
+      "ThinkingLevel": {
+        "description": "How hard the model is asked to think. There is deliberately no \"off\".",
+        "enum": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "roles": {
+        "items": {
+          "$ref": "#/$defs/SubagentRole"
+        },
+        "type": "array"
+      },
+      "tools": {
+        "items": {
+          "$ref": "#/$defs/SubagentToolChoice"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "roles",
+      "tools"
+    ],
+    "title": "SubagentRolesResponse",
+    "type": "object"
   },
   "userInputResponse": {
     "$defs": {

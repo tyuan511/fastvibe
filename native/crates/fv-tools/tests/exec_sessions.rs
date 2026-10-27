@@ -290,7 +290,30 @@ async fn a_policy_restriction_blocks_input_to_an_old_full_access_process_but_all
         json!({"session_id":session,"chars":"\u{3}"}),
     )
     .await;
-    assert!(!stopped.content.contains("Process running"));
+    // Ctrl-C is a signal, and the API may yield before the child is reaped. A
+    // policy restriction must still allow both interrupting and collecting it.
+    let stopped = if stopped.content.contains("Process running") {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            call(
+                &tools,
+                "write_stdin",
+                restricted(),
+                json!({"session_id":session}),
+            ),
+        )
+        .await
+        .unwrap()
+    } else {
+        stopped
+    };
+    assert!(
+        stopped.content.contains("Process exited")
+            || stopped.content.contains("terminated by signal"),
+        "{}",
+        stopped.content
+    );
+    assert!(!dir.path().join("forbidden").exists());
 }
 
 #[tokio::test]

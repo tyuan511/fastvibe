@@ -39,6 +39,21 @@ impl EventMapper {
     pub fn map(&mut self, event: AgentEvent) -> Vec<LogEvent> {
         let turn_id = self.turn_id.clone();
         match event {
+            AgentEvent::HostedSearch(call) => {
+                let terminal = call.status.terminal();
+                let failed = matches!(
+                    call.status,
+                    fv_core::SearchStatus::Failed | fv_core::SearchStatus::Interrupted
+                );
+                let id = call.id.clone();
+                let item = fv_protocol::types::hosted_search_item(
+                    id,
+                    serde_json::to_value(&call).unwrap(),
+                    terminal,
+                    failed,
+                );
+                vec![LogEvent::ItemCompleted { turn_id, item }]
+            }
             AgentEvent::ContextBudgetChanged { used, window } => {
                 self.window = window;
                 vec![LogEvent::TokenUsage { used, window }]
@@ -92,6 +107,7 @@ impl EventMapper {
                 None => Vec::new(),
             },
             AgentEvent::BlockDone { id, block } => match block {
+                ContentBlock::HostedSearch(_) | ContentBlock::Citations { .. } => Vec::new(),
                 ContentBlock::Text { text } => {
                     vec![LogEvent::ItemCompleted {
                         turn_id,
@@ -131,6 +147,33 @@ impl EventMapper {
                 fv_core::Message::User { .. }
                 | fv_core::Message::Assistant(_)
                 | fv_core::Message::Compaction { .. } => vec![LogEvent::StatsMessage(message)],
+                fv_core::Message::ToolAudio {
+                    call_id,
+                    name,
+                    audio,
+                } => audio
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, clip)| {
+                        let data = match clip.source {
+                            fv_core::AudioSource::Base64 { data } => data,
+                            fv_core::AudioSource::File { path } => {
+                                use base64::Engine;
+                                base64::engine::general_purpose::STANDARD
+                                    .encode(std::fs::read(path).ok()?)
+                            }
+                        };
+                        Some(LogEvent::ItemCompleted {
+                            turn_id: turn_id.clone(),
+                            item: Item::Audio {
+                                id: format!("{call_id}:audio:{index}"),
+                                name: name.clone(),
+                                mime: clip.mime,
+                                data,
+                            },
+                        })
+                    })
+                    .collect(),
                 _ => Vec::new(),
             },
             AgentEvent::CompactionStarted { id } => vec![LogEvent::ItemStarted {
@@ -144,6 +187,51 @@ impl EventMapper {
                     turn_id,
                     item: Item::ContextCompaction { id },
                 }]
+            }
+            AgentEvent::NestedToolStarted {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => vec![LogEvent::ItemStarted {
+                turn_id,
+                item: Item::ToolCall {
+                    id: call_id,
+                    name,
+                    arguments,
+                    output: None,
+                    is_error: false,
+                },
+            }],
+            AgentEvent::NestedToolFinished {
+                call_id,
+                name,
+                arguments,
+                output,
+                is_error,
+                ..
+            } => {
+                let mut out = vec![LogEvent::ItemCompleted {
+                    turn_id: turn_id.clone(),
+                    item: Item::ToolCall {
+                        id: call_id,
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                        output: Some(output),
+                        is_error,
+                    },
+                }];
+                if name == "update_plan"
+                    && !is_error
+                    && let Some((explanation, plan)) = plan_from(&arguments)
+                {
+                    out.push(LogEvent::PlanUpdated {
+                        turn_id,
+                        explanation,
+                        plan,
+                    });
+                }
+                out
             }
             AgentEvent::ToolResult {
                 call_id,

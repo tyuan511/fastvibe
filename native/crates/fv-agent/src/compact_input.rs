@@ -216,6 +216,7 @@ fn serialize(messages: &[Message]) -> String {
             Message::Assistant(a) => {
                 for block in &a.content {
                     match block {
+                        ContentBlock::HostedSearch(_) | ContentBlock::Citations { .. } => (),
                         ContentBlock::Text { text } => {
                             out.push_str(&format!("\nASSISTANT:\n{text}\n"))
                         }
@@ -258,6 +259,12 @@ fn serialize(messages: &[Message]) -> String {
                         out.push_str(&format!("Image file: {path}\n"));
                     }
                 }
+            }
+            Message::ToolAudio { call_id, audio, .. } => {
+                out.push_str(&format!(
+                    "\nAUDIO FROM {call_id}: {} clip(s).\n",
+                    audio.len()
+                ));
             }
             Message::MemoryContext { .. } => (),
         }

@@ -219,6 +219,7 @@ async fn output(
         content,
         is_error: failed || !artifacts_ok,
         images,
+        audio: Vec::new(),
     }
 }
 

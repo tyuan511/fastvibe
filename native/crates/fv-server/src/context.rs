@@ -109,6 +109,7 @@ impl ContextLoader {
             builtins.push(bin.join("../Resources/skills"));
             builtins.push(bin.join("skills"));
         }
+        builtins.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/skills"));
         builtins.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/skills"));
         Self::with_roots(
             data_dir,

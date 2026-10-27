@@ -128,9 +128,14 @@ pub struct PaneTab {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PaneTabKind {
     /// A file the user opened from the tree, a chip or the resources list.
-    Files { path: String },
+    Files {
+        path: String,
+    },
     /// A terminal in the conversation's working directory.
     Terminal,
+    Browser {
+        url: String,
+    },
     /// 变更: git's two layers, one file's patch, and the commit box.
     Git,
 }
@@ -364,6 +369,7 @@ impl Workspace {
                 PaneTabKind::Files { .. } => "folder01",
                 PaneTabKind::Git => "git-compare",
                 PaneTabKind::Terminal => "terminal",
+                PaneTabKind::Browser { .. } => "chrome",
             };
             strip = strip.child(
                 div()
@@ -449,7 +455,17 @@ impl Workspace {
                     ),
             );
         }
-        let body = match self.panes.get(&conversation).and_then(|s| s.active_tab()) {
+        let active_tab = self
+            .panes
+            .get(&conversation)
+            .and_then(|s| s.active_tab())
+            .cloned();
+        let body = match active_tab.as_ref() {
+            Some(PaneTab {
+                id,
+                kind: PaneTabKind::Browser { url },
+                ..
+            }) => self.browser_body(id, url, window, cx),
             Some(PaneTab {
                 kind: PaneTabKind::Files { .. },
                 ..
@@ -740,8 +756,15 @@ impl Workspace {
     fn open_pane_kind(&mut self, kind: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.pane_menu = None;
         match kind {
+            "chat" => {
+                self.open_auxiliary_chat(cx);
+            }
             "git" => self.open_git_tab(window, cx),
             "terminal" => self.open_terminal_tab(cx),
+            "browser" => {
+                let owner = self.selected.clone().unwrap_or_else(|| "__draft__".into());
+                self.open_browser_tab(&owner, "about:blank", cx);
+            }
             "files" => {
                 let conversation = self.selected.clone().unwrap_or_else(|| "__draft__".into());
                 let path = self.project_root_for(&conversation).unwrap_or_default();
@@ -802,6 +825,9 @@ impl Workspace {
 
     fn close_pane_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let conversation = self.selected.clone().unwrap_or_else(|| "__draft__".into());
+        self.close_office(id, cx);
+        self.web_views.remove(id);
+        self.web_views.remove(&super::pane_web::preview_key(id));
         if let Some(view) = self.terminals.remove(id)
             && let (Some(session), Some(backend)) = (view.session, self.backend.clone())
         {
@@ -1313,6 +1339,18 @@ impl Workspace {
         // below it — so the tree is what the pane shows until the user widens it.
         let side_by_side = self.side_pane_width_side_by_side();
         let showing_file = preview.is_some() && !side_by_side;
+        let editing = self.panes.get(conversation).is_some_and(|s| s.editing);
+        let intrinsic_scroll = matches!(
+            &preview,
+            Some(FilePreview::Media { .. } | FilePreview::Office { .. })
+        ) || matches!(
+            &preview,
+            Some(FilePreview::Text {
+                kind: FilePreviewKind::Html,
+                ..
+            })
+        ) || (editing
+            && preview.as_ref().is_some_and(|p| editable_text(p).is_some()));
         let preview_body = self.preview_body(preview, cx);
 
         // The rows are elements, so the two branches below can each put them in their own scroll
@@ -1478,7 +1516,7 @@ impl Workspace {
                         .flex_1()
                         .min_w_0()
                         .h_full()
-                        .overflow_y_scroll()
+                        .when(!intrinsic_scroll, |d| d.overflow_y_scroll())
                         .child(preview_body),
                 )
         } else if showing_file {
@@ -1493,6 +1531,7 @@ impl Workspace {
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
+                    .when(!intrinsic_scroll, |d| d.overflow_y_scroll())
                     .child(preview_body),
             )
         } else {
@@ -1714,7 +1753,7 @@ impl Workspace {
     }
 
     fn preview_body(&mut self, preview: Option<FilePreview>, cx: &mut Context<Self>) -> AnyElement {
-        let p = &self.palette;
+        let p = self.palette.clone();
         // In the narrow layout the preview owns the pane, so its header carries 返回.
         let back = !self.side_pane_width_side_by_side();
         let Some(preview) = preview else {
@@ -1779,6 +1818,9 @@ impl Workspace {
                             )
                             .into_any_element()
                     }
+                    _ if kind == FilePreviewKind::Html => {
+                        self.document_body(&path, Some(&text), None, None, cx)
+                    }
                     _ if kind == FilePreviewKind::Markdown => div()
                         .px(px(14.0))
                         .py(px(10.0))
@@ -1787,7 +1829,7 @@ impl Workspace {
                         .child(crate::markdown::view(
                             SharedString::from(format!("pane-md-{path}")),
                             SharedString::from(text.clone()),
-                            p,
+                            &p,
                         ))
                         .into_any_element(),
                     _ => self.code_view(&text).into_any_element(),
@@ -1797,7 +1839,7 @@ impl Workspace {
                     icon_button_xs(
                         "pane-source-toggle",
                         if editing { "view" } else { "source-code" },
-                        p,
+                        &p,
                     )
                     .aria_label(if editing { "预览" } else { "查看源码" })
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1867,7 +1909,7 @@ impl Workspace {
                             .px(px(12.0))
                             .py(px(6.0))
                             .text_size(px(TEXT_XS))
-                            .muted(p)
+                            .muted(&p)
                             .child(SharedString::from(format!(
                                 "只显示前 {} 行，共 {total_rows} 行",
                                 rows.len()
@@ -1875,52 +1917,70 @@ impl Workspace {
                     }))
                     .into_any_element()
             }
-            FilePreview::Media { name, size, .. } => {
+            FilePreview::Media {
+                path,
+                name,
+                mime_type,
+                ..
+            } => {
+                let body = self.document_body(&path, None, Some(&mime_type), None, cx);
+                let refresh = icon_button_xs("refresh-media-preview", "refresh", &p)
+                    .aria_label("刷新预览")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(tab) = this
+                            .selected
+                            .as_ref()
+                            .and_then(|id| this.panes.get(id))
+                            .and_then(|p| p.active.as_ref())
+                        {
+                            this.web_views.remove(&super::pane_web::preview_key(tab));
+                        }
+                        this.load_preview(path.clone(), window, cx);
+                    }));
                 div()
+                    .size_full()
                     .flex()
                     .flex_col()
-                    .child(self.preview_head(&name, back, cx))
-                    .child(div().p(px(12.0)).muted(p).text_size(px(TEXT_SM)).child(
-                        SharedString::from(format!("{} · {}", name, super::format_bytes(size))),
-                    ))
+                    .child(self.preview_head_with(&name, back, false, Some(refresh), cx))
+                    .child(div().flex_1().min_h_0().child(body))
                     .into_any_element()
             }
-            FilePreview::Office { name, format, .. } => div()
+            FilePreview::Office {
+                path, name, format, ..
+            } => self.office_body(&path, &name, format, back, cx),
+            FilePreview::Binary { name, size, .. } => div()
                 .flex()
                 .flex_col()
                 .child(self.preview_head(&name, back, cx))
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .muted(p)
-                        .text_size(px(TEXT_SM))
-                        .child(SharedString::from(format!("{} 文档，{format:?}", name))),
-                )
+                .child(div().p(px(12.0)).muted(&p).text_size(px(TEXT_SM)).child(
+                    SharedString::from(format!(
+                        "这是二进制文件，无法预览（{}）",
+                        super::format_bytes(size)
+                    )),
+                ))
                 .into_any_element(),
-            FilePreview::Binary { name, size, .. } => {
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(self.preview_head(&name, back, cx))
-                    .child(div().p(px(12.0)).muted(p).text_size(px(TEXT_SM)).child(
-                        SharedString::from(format!(
-                            "这是二进制文件，无法预览（{}）",
-                            super::format_bytes(size)
-                        )),
-                    ))
-                    .into_any_element()
-            }
-            FilePreview::Unsupported { name, format, .. } => div()
+            FilePreview::Unsupported {
+                path, name, format, ..
+            } => div()
                 .flex()
                 .flex_col()
                 .child(self.preview_head(&name, back, cx))
                 .child(
                     div()
                         .p(px(12.0))
-                        .muted(p)
+                        .muted(&p)
                         .text_size(px(TEXT_SM))
                         .child(SharedString::from(format!("{format} 无法预览"))),
                 )
+                .children(url::Url::from_file_path(&path).ok().map(|url| {
+                    div()
+                        .id("unsupported-open-external")
+                        .px(px(12.))
+                        .text_size(px(TEXT_SM))
+                        .cursor_pointer()
+                        .child("用系统应用打开")
+                        .on_click(move |_, _, cx| cx.open_url(url.as_str()))
+                }))
                 .into_any_element(),
             FilePreview::Error {
                 name,
@@ -1943,13 +2003,13 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .muted(p)
+                            .muted(&p)
                             .text_size(px(TEXT_XS))
                             .child(SharedString::from(name)),
                     )
                     .children(directory.clone().into_iter().map(|dir| {
                         div()
-                            .muted(p)
+                            .muted(&p)
                             .text_size(px(TEXT_XS))
                             .child(SharedString::from(dir))
                     }))
@@ -1957,7 +2017,7 @@ impl Workspace {
                         div()
                             .text_size(px(TEXT_XS))
                             .font_family(crate::assets::MONO_FONT)
-                            .muted(p)
+                            .muted(&p)
                             .child(SharedString::from(detail))
                     }))
                     .into_any_element()

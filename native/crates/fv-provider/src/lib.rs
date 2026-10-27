@@ -15,6 +15,7 @@ mod models_list;
 mod pricing;
 mod probe;
 mod url;
+mod web_search;
 
 pub use models_dev::{
     Catalog, CatalogService, CatalogStats, CatalogUpdate, InputModality, ModelMeta, Price,

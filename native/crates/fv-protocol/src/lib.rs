@@ -12,8 +12,11 @@ pub mod catalog;
 pub mod jsonrpc;
 pub mod methods;
 pub mod models;
+pub mod office;
 pub mod provider_test;
+pub mod schedules;
 pub mod shortcuts;
+pub mod subagents;
 pub mod types;
 pub mod usage;
 

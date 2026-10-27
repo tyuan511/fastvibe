@@ -58,7 +58,10 @@ pub async fn serve_connection<R, W>(
                 && matches!(
                     frame.get("method").and_then(Value::as_str),
                     Some(
-                        "mcp/resources"
+                        "office/render"
+                            | "office/watchStart"
+                            | "office/selection"
+                            | "mcp/resources"
                             | "mcp/resourceTemplates"
                             | "mcp/readResource"
                             | "mcp/auth/begin"
@@ -153,6 +156,7 @@ pub async fn serve_connection<R, W>(
 
     resource_reads.abort_all();
     while resource_reads.join_next().await.is_some() {}
+    resource_reads.shutdown().await;
     state.unregister(conn);
     drop(tx);
     let _ = writer_task.await;
@@ -282,6 +286,12 @@ async fn dispatch(
                     "mcpConfigEdit".into(),
                     "mcpOAuth".into(),
                     "execSessions".into(),
+                    "subagents".into(),
+                    "subagentRoles".into(),
+                    "schedules".into(),
+                    "codeMode".into(),
+                    "hostedWebSearch".into(),
+                    "officePreview".into(),
                     "workspaceEntries".into(),
                     "terminalInteraction".into(),
                     "memory".into(),
@@ -344,6 +354,11 @@ async fn dispatch(
             // Questions still waiting for an answer are put to this client too, after the reply.
             for request in state.pending_prompts(&params.thread_id) {
                 followups.push(crate::prompt::request_frame(&request));
+            }
+            for child in crate::subagents::descendants(state, &params.thread_id)? {
+                for request in state.pending_prompts(&child) {
+                    followups.push(crate::prompt::request_frame(&request));
+                }
             }
             let rt = state.runtime(&params.thread_id);
             let queue = crate::queue::state_for(state, &rt, &params.thread_id);
@@ -489,6 +504,44 @@ async fn dispatch(
             state.delete_thread(&params.thread_id)?;
             to_value(Empty {})
         }
+        ClientRequest::ScheduleList { .. } => to_value(state.schedules.snapshot_live(state)),
+        ClientRequest::ScheduleHistory { params, .. } => {
+            to_value(state.schedules.history(state, params)?)
+        }
+        ClientRequest::ScheduleUpsert { params, .. } => {
+            to_value(state.schedules.upsert(state, params).await?)
+        }
+        ClientRequest::ScheduleDelete { params, .. } => {
+            state.schedules.delete(state, params).await?;
+            to_value(Empty {})
+        }
+        ClientRequest::ScheduleRunNow { params, .. } => {
+            to_value(state.schedules.run_now(state, &params.task_id).await?)
+        }
+        ClientRequest::ScheduleStop { params, .. } => {
+            state.schedules.stop(state, &params.task_id).await?;
+            to_value(Empty {})
+        }
+        ClientRequest::SubagentRoleList { .. } => to_value(crate::subagents::roles::list(state)?),
+        ClientRequest::SubagentRoleUpsert { params, .. } => {
+            to_value(crate::subagents::roles::upsert(state, params)?)
+        }
+        ClientRequest::SubagentRoleDelete { params, .. } => {
+            to_value(crate::subagents::roles::delete(state, params)?)
+        }
+        ClientRequest::SubagentList { params, .. } => {
+            to_value(crate::subagents::list(state, params.thread_id.as_deref())?)
+        }
+        ClientRequest::SubagentClose { params, .. } => {
+            to_value(crate::subagents::close(state, &params.agent_id)?)
+        }
+        ClientRequest::SubagentResume { params, .. } => {
+            to_value(crate::subagents::resume(state, &params.agent_id)?)
+        }
+        ClientRequest::SubagentConfigGet { .. } => to_value(crate::subagents::config(state)?),
+        ClientRequest::SubagentConfigSet { params, .. } => {
+            to_value(crate::subagents::configure(state, params)?)
+        }
         ClientRequest::ProjectList { .. } => to_value(crate::projects::list(state)?),
         ClientRequest::ProjectCreate { params, .. } => {
             to_value(crate::projects::create(state, params)?)
@@ -503,6 +556,43 @@ async fn dispatch(
             let path = crate::workspace::resolve(params.cwd.as_deref(), &params.path);
             to_value(crate::workspace::read_dir(&path.display().to_string())?)
         }
+        ClientRequest::OfficeRender { params, .. } => {
+            let path = crate::workspace::resolve(params.cwd.as_deref(), &params.path);
+            to_value(
+                state
+                    .office
+                    .render_for(conn, &params.lease_id, &path)
+                    .await
+                    .map_err(|e| ErrorObject::new(code::INVALID_PARAMS, e))?,
+            )
+        }
+        ClientRequest::OfficeWatchStart { params, .. } => {
+            let path = crate::workspace::resolve(params.cwd.as_deref(), &params.path);
+            to_value(
+                state
+                    .office
+                    .watch_start(conn, &params.lease_id, &path)
+                    .await
+                    .map_err(|e| ErrorObject::new(code::INVALID_PARAMS, e))?,
+            )
+        }
+        ClientRequest::OfficeWatchStop { params, .. } => {
+            state.office.watch_stop(conn, &params.lease_id);
+            to_value(fv_protocol::types::Empty {})
+        }
+        ClientRequest::OfficeWatchStateGet { params, .. } => to_value(
+            state
+                .office
+                .watch_state(conn, &params.lease_id)
+                .map_err(|e| ErrorObject::new(code::INVALID_PARAMS, e))?,
+        ),
+        ClientRequest::OfficeSelectionGet { params, .. } => to_value(
+            state
+                .office
+                .selection(conn, &params.lease_id)
+                .await
+                .map_err(|e| ErrorObject::new(code::INVALID_PARAMS, e))?,
+        ),
         ClientRequest::WorkspacePreview { params, .. } => {
             let path = crate::workspace::resolve(params.cwd.as_deref(), &params.path);
             to_value(crate::workspace::preview(&path.display().to_string()))
@@ -792,6 +882,8 @@ async fn dispatch(
             }
         }
         ClientRequest::TurnInterrupt { params, .. } => {
+            state.schedules.interrupt(&params.thread_id);
+            crate::subagents::interrupt_tree(state, &params.thread_id);
             // Stopping a thread that is not running is not an error: the user's intent is met.
             state.runtime(&params.thread_id).interrupt();
             to_value(Empty {})

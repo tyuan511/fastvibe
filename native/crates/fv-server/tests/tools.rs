@@ -135,10 +135,18 @@ async fn a_turn_can_write_read_and_run_in_the_threads_directory() {
         names,
         [
             "apply_patch",
+            "close_agent",
+            "code_mode",
             "exec_command",
+            "list_agents",
             "request_user_input",
+            "resume_agent",
+            "send_input",
+            "spawn_agent",
             "update_plan",
             "view_image",
+            "wait",
+            "wait_agent",
             "write_stdin"
         ]
     );

@@ -96,6 +96,9 @@ impl ThreadView {
             | N::ProvidersChanged(_)
             | N::SkillsChanged(_)
             | N::McpChanged(_)
+            | N::SubagentsChanged(_)
+            | N::SchedulesChanged(_)
+            | N::SubagentRolesChanged(_)
             | N::MemoryChanged(_)
             | N::WorkspaceEntryChanged(_)
             | N::ModelCatalogChanged(_)
@@ -140,7 +143,14 @@ impl ThreadView {
             }
             N::ItemCompleted(e) => {
                 if let Some(t) = self.turn_mut(&e.body.turn_id) {
-                    if matches!(e.body.item, Item::ToolCall { .. }) && e.body.at.is_some() {
+                    if matches!(
+                        e.body.item,
+                        Item::ToolCall {
+                            output: Some(_),
+                            ..
+                        }
+                    ) && e.body.at.is_some()
+                    {
                         t.process_ended_at = e.body.at;
                     }
                     match t
@@ -195,6 +205,9 @@ impl ThreadView {
             | N::ProvidersChanged(_)
             | N::SkillsChanged(_)
             | N::McpChanged(_)
+            | N::SubagentsChanged(_)
+            | N::SchedulesChanged(_)
+            | N::SubagentRolesChanged(_)
             | N::MemoryChanged(_)
             | N::WorkspaceEntryChanged(_)
             | N::SettingsChanged(_) => {}
@@ -259,6 +272,7 @@ pub fn item_id(item: &Item) -> &str {
         | Item::AgentMessage { id, .. }
         | Item::Reasoning { id, .. }
         | Item::ToolCall { id, .. }
+        | Item::Audio { id, .. }
         | Item::Error { id, .. }
         | Item::ContextCompaction { id } => id,
     }

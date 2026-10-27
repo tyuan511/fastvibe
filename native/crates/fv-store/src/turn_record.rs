@@ -15,6 +15,7 @@ pub struct RecordedError {
 #[derive(Clone, Debug)]
 pub(crate) struct TurnRecord {
     pub id: String,
+    pub tools: Vec<(String, Item)>,
     pub start: usize,
     pub end: usize,
     pub started_at: i64,
@@ -58,6 +59,27 @@ impl Loaded {
                 if part.process_ended_at.is_some() {
                     turn.process_ended_at = part.process_ended_at;
                 }
+            }
+            // Group nested activity under the provider call that launched it. These rows
+            // are UI history only and never become model-visible tool messages.
+            for (parent, item) in record.tools.iter().rev() {
+                let Some(at) = turn
+                    .items
+                    .iter()
+                    .position(|i| matches!(i,Item::ToolCall{id,..}if id==parent))
+                else {
+                    continue;
+                };
+                let mut item = item.clone();
+                if let Item::ToolCall {
+                    output, is_error, ..
+                } = &mut item
+                    && output.is_none()
+                {
+                    *output = Some("Interrupted before the nested tool finished.".into());
+                    *is_error = true;
+                }
+                turn.items.insert(at + 1, item);
             }
             renumber(&mut turn);
             if record.status == TurnStatus::Failed
@@ -106,7 +128,7 @@ fn renumber(turn: &mut Turn) {
             | Item::ContextCompaction { id }
             | Item::Error { id, .. } => *id = format!("{}i{i}", turn.id),
             // Tool ids come from the provider; the corresponding result names the same id.
-            Item::ToolCall { .. } => {}
+            Item::ToolCall { .. } | Item::Audio { .. } => {}
         }
     }
 }

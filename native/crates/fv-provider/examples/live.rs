@@ -138,6 +138,9 @@ async fn main() {
                     println!("  tool {name}({arguments}) -> {output} (error: {is_error})");
                 }
                 AgentEvent::Committed(_)
+                | AgentEvent::HostedSearch(_)
+                | AgentEvent::NestedToolStarted { .. }
+                | AgentEvent::NestedToolFinished { .. }
                 | AgentEvent::CompactionStarted { .. }
                 | AgentEvent::CompactionDone { .. }
                 | AgentEvent::CompactionFailed { .. } => {}

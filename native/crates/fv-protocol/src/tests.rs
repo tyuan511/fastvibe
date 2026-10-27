@@ -115,6 +115,14 @@ fn schema_matches_committed_snapshot() {
         "message": schemars::schema_for!(Message),
         "providerTestResult": schemars::schema_for!(crate::provider_test::ProviderTestResult),
         "modelDetail": schemars::schema_for!(crate::models::ModelDetail),
+        "subagentList": schemars::schema_for!(crate::subagents::SubagentListResponse),
+        "subagentConfig": schemars::schema_for!(crate::subagents::SubagentConfig),
+        "subagentRoles": schemars::schema_for!(crate::subagents::SubagentRolesResponse),
+        "schedules": schemars::schema_for!(crate::schedules::ScheduleSnapshot),
+        "scheduleHistory": schemars::schema_for!(crate::schedules::ScheduleHistory),
+        "officeRender": schemars::schema_for!(crate::office::OfficeRenderResponse),
+        "officeWatch": schemars::schema_for!(crate::office::OfficeWatchState),
+        "officeSelection": schemars::schema_for!(crate::office::OfficeSelection),
     });
     let text = serde_json::to_string_pretty(&schema).unwrap() + "\n";
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../schema/protocol.json");
@@ -254,4 +262,20 @@ fn sidebar_preferences_accept_old_settings_and_merge_only_the_named_sections() {
     assert_eq!(sidebar.width, 200.0);
     assert_eq!(sidebar.order["pinned"], ["a"]);
     assert_eq!(sidebar.order["chats"], ["b"]);
+}
+
+#[test]
+fn code_mode_defaults_on_for_old_settings_and_can_be_explicitly_disabled() {
+    let mut value = serde_json::to_value(types::AppSettings::default()).unwrap();
+    value.as_object_mut().unwrap().remove("codeModeEnabled");
+    let mut settings: types::AppSettings = serde_json::from_value(value).unwrap();
+    assert!(settings.code_mode_enabled);
+    settings.apply(serde_json::from_value(serde_json::json!({"codeModeEnabled":false})).unwrap());
+    let saved = serde_json::to_value(&settings).unwrap();
+    assert_eq!(saved["codeModeEnabled"], false);
+    assert!(
+        !serde_json::from_value::<types::AppSettings>(saved)
+            .unwrap()
+            .code_mode_enabled
+    );
 }

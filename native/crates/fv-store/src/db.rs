@@ -97,6 +97,22 @@ const MIGRATIONS: &[&str] = &[
          data TEXT NOT NULL
      );
      CREATE INDEX usage_ledger_at ON usage_ledger(at);",
+    // 5: child threads share transcripts and usage, but have their own catalog and ownership.
+    "CREATE TABLE subagents (
+         agent_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+         parent_id TEXT NOT NULL,
+         root_id TEXT NOT NULL,
+         data TEXT NOT NULL
+     );
+     CREATE INDEX subagents_root ON subagents(root_id);",
+    // 6: schedules and immutable run snapshots.
+    "CREATE TABLE scheduled_tasks(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+     CREATE TABLE scheduled_runs(id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,position INTEGER NOT NULL UNIQUE,status TEXT NOT NULL,data TEXT NOT NULL);
+     CREATE INDEX scheduled_runs_task ON scheduled_runs(task_id,position DESC);
+     CREATE UNIQUE INDEX scheduled_one_active ON scheduled_runs((1)) WHERE status='running';
+     CREATE UNIQUE INDEX scheduled_one_queued ON scheduled_runs(task_id) WHERE status='queued';
+     CREATE TABLE schedule_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);",
+
 ];
 
 /// A provider as stored: everything but its key.
@@ -159,11 +175,29 @@ impl Db {
     }
 
     pub fn list_threads(&self, include_archived: bool) -> Result<Vec<Thread>, StoreError> {
+        self.query_threads(include_archived, false)
+    }
+
+    /// Accounting must still resolve a child thread instead of labelling its usage deleted.
+    pub fn list_threads_including_children(
+        &self,
+        include_archived: bool,
+    ) -> Result<Vec<Thread>, StoreError> {
+        self.query_threads(include_archived, true)
+    }
+
+    fn query_threads(
+        &self,
+        include_archived: bool,
+        include_children: bool,
+    ) -> Result<Vec<Thread>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT data FROM conversations WHERE (?1 OR archived = 0) ORDER BY updated_at DESC, id",
+            "SELECT data FROM conversations WHERE (?1 OR archived = 0) AND (?2 OR NOT EXISTS (SELECT 1 FROM subagents WHERE agent_id = conversations.id)) ORDER BY updated_at DESC, id",
         )?;
-        let rows = stmt.query_map(params![include_archived], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(params![include_archived, include_children], |r| {
+            r.get::<_, String>(0)
+        })?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
 
@@ -190,12 +224,13 @@ impl Db {
     }
 
     pub fn delete_thread(&self, id: &str) -> Result<bool, StoreError> {
-        Ok(self
-            .conn
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM conversations WHERE id = ?1", params![id])?
-            > 0)
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM queue_items WHERE thread_id = ?1", [id])?;
+        tx.execute("DELETE FROM queue_pauses WHERE thread_id = ?1", [id])?;
+        let removed = tx.execute("DELETE FROM conversations WHERE id = ?1", [id])? > 0;
+        tx.commit()?;
+        Ok(removed)
     }
 
     pub fn list_providers(&self) -> Result<Vec<StoredProvider>, StoreError> {
@@ -317,7 +352,8 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         match reason {
             Some(reason) => conn.execute(
-                "INSERT INTO queue_pauses (thread_id, reason) VALUES (?1, ?2)
+                "INSERT INTO queue_pauses (thread_id, reason) SELECT ?1, ?2
+                 WHERE EXISTS (SELECT 1 FROM conversations WHERE id = ?1)
                  ON CONFLICT(thread_id) DO UPDATE SET reason = ?2",
                 params![thread_id, reason],
             )?,
@@ -333,7 +369,8 @@ impl Db {
     pub fn push_queued(&self, thread_id: &str, item: &QueuedPrompt) -> Result<(), StoreError> {
         self.conn.lock().unwrap().execute(
             "INSERT INTO queue_items (thread_id, id, position, at, text)
-             VALUES (?1, ?2, COALESCE((SELECT MAX(position) + 1 FROM queue_items WHERE thread_id = ?1), 0), ?3, ?4)",
+             SELECT ?1, ?2, COALESCE((SELECT MAX(position) + 1 FROM queue_items WHERE thread_id = ?1), 0), ?3, ?4
+             WHERE EXISTS (SELECT 1 FROM conversations WHERE id = ?1)",
             params![thread_id, item.id, item.at, item.text],
         )?;
         Ok(())
@@ -348,7 +385,8 @@ impl Db {
             params![thread_id],
         )?;
         tx.execute(
-            "INSERT INTO queue_items (thread_id, id, position, at, text) VALUES (?1, ?2, 0, ?3, ?4)
+            "INSERT INTO queue_items (thread_id, id, position, at, text) SELECT ?1, ?2, 0, ?3, ?4
+             WHERE EXISTS (SELECT 1 FROM conversations WHERE id = ?1)
              ON CONFLICT(thread_id, id) DO UPDATE SET position = 0",
             params![thread_id, item.id, item.at, item.text],
         )?;

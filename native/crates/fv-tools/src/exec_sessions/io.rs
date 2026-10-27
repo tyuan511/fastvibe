@@ -101,14 +101,17 @@ pub(super) struct Spawned {
     readers: Vec<Reader>,
 }
 
-pub(super) fn spawn(launch: Launch) -> Result<Spawned, String> {
+pub(super) fn spawn(
+    launch: Launch,
+    environment: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+) -> Result<Spawned, String> {
     if launch.tty {
-        return spawn_pty(launch);
+        return spawn_pty(launch, environment);
     }
     let mut command = tokio::process::Command::new(&launch.program);
     command
         .args(&launch.args)
-        .envs(fv_env::snapshot())
+        .envs(environment)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -142,7 +145,10 @@ pub(super) fn spawn(launch: Launch) -> Result<Spawned, String> {
 }
 
 #[cfg(unix)]
-fn spawn_pty(launch: Launch) -> Result<Spawned, String> {
+fn spawn_pty(
+    launch: Launch,
+    environment: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+) -> Result<Spawned, String> {
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::os::fd::FromRawFd;
     let pair = native_pty_system()
@@ -155,7 +161,7 @@ fn spawn_pty(launch: Launch) -> Result<Spawned, String> {
         .map_err(|e| format!("cannot allocate PTY: {e}"))?;
     let mut command = CommandBuilder::new(&launch.program);
     command.args(&launch.args);
-    for (name, value) in fv_env::snapshot() {
+    for (name, value) in environment {
         command.env(name, value);
     }
     if let Some(cwd) = &launch.cwd {
@@ -202,7 +208,10 @@ fn spawn_pty(launch: Launch) -> Result<Spawned, String> {
 }
 
 #[cfg(not(unix))]
-fn spawn_pty(_launch: Launch) -> Result<Spawned, String> {
+fn spawn_pty(
+    _launch: Launch,
+    _environment: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+) -> Result<Spawned, String> {
     Err("PTY command sessions are not available on this platform yet.".into())
 }
 

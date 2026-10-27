@@ -30,6 +30,7 @@ struct Inner {
     usage_model: Option<(String, u64)>,
     subscribers: HashSet<ConnId>,
     running: Option<(TurnId, CancellationToken)>,
+    completion: Option<(fv_protocol::types::TurnStatus, Option<String>)>,
     /// Deferred tools found with `tool_search`; they stay offered for the rest of the thread.
     loaded: fv_agent::LoadedTools,
     /// Commands and patches the user approved "for the rest of this conversation".
@@ -50,8 +51,13 @@ struct Inner {
 /// The log, the sequence number and the subscriber set live under one lock, which is what
 /// makes `thread/resume` atomic: the snapshot and the subscription cannot straddle an event.
 pub struct ThreadRuntime {
+    /// A receipt for transcript writes. Fork tools wait for their invoking message.
+    pub(crate) commits: tokio::sync::watch::Sender<u64>,
+    thread_id: String,
+    retired: std::sync::atomic::AtomicBool,
     pub(crate) budget: Arc<fv_agent::ContextBudget>,
     pub(crate) exec_sessions: Arc<fv_tools::ExecSessions>,
+    pub(crate) code_mode: Arc<fv_tools::CodeMode>,
     inner: Mutex<Inner>,
     delivery: tokio::sync::Mutex<()>,
 }
@@ -59,9 +65,13 @@ pub struct ThreadRuntime {
 impl ThreadRuntime {
     pub fn new(thread_id: ThreadId) -> Self {
         Self {
+            thread_id: thread_id.clone(),
+            commits: tokio::sync::watch::channel(0).0,
+            retired: std::sync::atomic::AtomicBool::new(false),
             delivery: tokio::sync::Mutex::new(()),
             budget: Default::default(),
             exec_sessions: Arc::new(fv_tools::ExecSessions::default()),
+            code_mode: Arc::new(fv_tools::CodeMode::default()),
             inner: Mutex::new(Inner {
                 log: ThreadLog::new(thread_id),
                 history: Vec::new(),
@@ -69,6 +79,7 @@ impl ThreadRuntime {
                 usage_model: None,
                 subscribers: HashSet::new(),
                 running: None,
+                completion: None,
                 loaded: Default::default(),
                 approved: HashSet::new(),
                 queue: Vec::new(),
@@ -90,12 +101,16 @@ impl ThreadRuntime {
 
     /// A runtime for a thread that already has a transcript.
     pub fn restored(thread_id: ThreadId, history: Vec<Message>, turns: Vec<Turn>) -> Self {
-        let mut log = ThreadLog::with_turns(thread_id, turns);
+        let mut log = ThreadLog::with_turns(thread_id.clone(), turns);
         log.stats = fv_store::stats_from_history(&history);
         Self {
+            thread_id,
+            commits: tokio::sync::watch::channel(0).0,
+            retired: std::sync::atomic::AtomicBool::new(false),
             delivery: tokio::sync::Mutex::new(()),
             budget: Default::default(),
             exec_sessions: Arc::new(fv_tools::ExecSessions::default()),
+            code_mode: Arc::new(fv_tools::CodeMode::default()),
             inner: Mutex::new(Inner {
                 log,
                 history: fv_core::effective_history(&history),
@@ -103,6 +118,7 @@ impl ThreadRuntime {
                 usage_model: None,
                 subscribers: HashSet::new(),
                 running: None,
+                completion: None,
                 loaded: Default::default(),
                 approved: HashSet::new(),
                 queue: Vec::new(),
@@ -189,6 +205,10 @@ impl ThreadRuntime {
                 } => fv_store::search_snippet(text, query),
                 _ => None,
             })
+    }
+
+    pub fn completion(&self) -> Option<(fv_protocol::types::TurnStatus, Option<String>)> {
+        self.inner.lock().unwrap().completion.clone()
     }
 
     pub fn is_running(&self) -> bool {
@@ -326,6 +346,14 @@ impl ThreadRuntime {
         Some(g.queue.remove(index))
     }
 
+    pub fn retire(&self) {
+        self.retired
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.interrupt();
+        self.exec_sessions.close();
+        self.code_mode.cancel_all();
+    }
+
     /// Stop the running turn, if there is one. Returns whether there was.
     pub fn interrupt(&self) -> bool {
         match &self.inner.lock().unwrap().running {
@@ -339,18 +367,39 @@ impl ThreadRuntime {
 
     /// Claim the thread for a turn. `None` when one is already running.
     pub async fn begin(&self, state: &ServerState, turn_id: &str) -> Option<CancellationToken> {
-        if self.is_running() {
+        self.begin_linked(state, turn_id, CancellationToken::new())
+            .await
+    }
+
+    pub async fn begin_linked(
+        &self,
+        state: &ServerState,
+        turn_id: &str,
+        token: CancellationToken,
+    ) -> Option<CancellationToken> {
+        if self.is_running() || !crate::subagents::can_begin(state, &self.thread_id) {
             return None;
         }
         let _delivery = self.delivery.lock().await;
-        let token = CancellationToken::new();
         let staged = {
-            let mut g = self.inner.lock().unwrap();
-            if g.running.is_some() {
+            let _agents = state.subagents_lock.lock().unwrap();
+            if self.retired.load(std::sync::atomic::Ordering::Acquire)
+                || !crate::subagents::can_begin(state, &self.thread_id)
+                || !state.schedules.can_begin(&self.thread_id, turn_id)
+            {
                 return None;
             }
-            g.running = Some((turn_id.to_string(), token.clone()));
-            self.stage(&mut g, state, LogEvent::Running(true))
+            let staged = {
+                let mut g = self.inner.lock().unwrap();
+                if g.running.is_some() {
+                    return None;
+                }
+                g.completion = None;
+                g.running = Some((turn_id.to_string(), token.clone()));
+                self.stage(&mut g, state, LogEvent::Running(true))
+            };
+            crate::subagents::started(state, &self.thread_id);
+            staged
         };
         deliver(self, staged).await;
         Some(token)
@@ -359,12 +408,30 @@ impl ThreadRuntime {
     /// Hand the thread straight from one turn to the next: the next prompt runs in the same
     /// running span, so no client sees the thread go idle between two prompts that were queued
     /// back to back. `None` when the turn being replaced is no longer the one running.
-    pub fn chain(&self, turn_id: &str) -> Option<CancellationToken> {
+    pub fn chain(
+        &self,
+        state: &ServerState,
+        previous_turn: &str,
+        next_turn: &str,
+    ) -> Option<CancellationToken> {
+        let _agents = state.subagents_lock.lock().unwrap();
+        if self.retired.load(std::sync::atomic::Ordering::Acquire)
+            || !crate::subagents::can_begin(state, &self.thread_id)
+        {
+            return None;
+        }
         let token = CancellationToken::new();
         let mut g = self.inner.lock().unwrap();
         match &g.running {
-            Some((current, _)) if current == turn_id => {
-                g.running = Some((turn_id.to_string(), token.clone()));
+            Some((current, _)) if current == previous_turn => {
+                if !state
+                    .schedules
+                    .chain(&self.thread_id, previous_turn, next_turn)
+                {
+                    return None;
+                }
+                g.completion = None;
+                g.running = Some((next_turn.to_string(), token.clone()));
                 Some(token)
             }
             _ => None,
@@ -406,6 +473,9 @@ impl ThreadRuntime {
 
     /// Number the event and work out who gets it, all under the lock; sending happens after.
     fn stage(&self, g: &mut Inner, state: &ServerState, event: LogEvent) -> Staged {
+        if let LogEvent::TurnCompleted { status, error, .. } = &event {
+            g.completion = Some((*status, error.clone()));
+        }
         let note = g.log.append(event);
         let targets = g
             .subscribers

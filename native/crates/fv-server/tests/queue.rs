@@ -281,29 +281,18 @@ async fn send_now_interrupts_the_run_and_sends_the_chosen_prompt_first() {
     .await
     .unwrap();
 
-    // The chosen prompt runs before the one queued ahead of it, with no second call from the
-    // client; the one it jumped over is still queued behind it.
-    let rest = until(&mut notes, |n| {
-        matches!(n, ServerNotification::TurnCompleted(e) if e.body.status == TurnStatus::Completed)
-    })
-    .await;
-    assert_eq!(user_prompts(&rest), ["chosen"]);
+    // The chosen prompt moves in front of the older queued prompt. Both then drain;
+    // a snapshot taken after the chosen completion may already contain the next turn.
+    let rest = until(&mut notes, idle).await;
+    assert_eq!(user_prompts(&rest), ["chosen", "ahead"]);
     let snapshot = c
         .call::<ThreadResume>(ThreadIdParams {
             thread_id: thread.clone(),
         })
         .await
         .unwrap();
-    assert_eq!(
-        snapshot
-            .queue
-            .items
-            .iter()
-            .map(|i| i.text.as_str())
-            .collect::<Vec<_>>(),
-        ["ahead"],
-        "the one it jumped over is still queued"
-    );
+    assert!(snapshot.queue.items.is_empty());
+    assert!(!snapshot.running);
 }
 
 /// A failed turn pauses the queue rather than feeding every later prompt to a broken run, and
@@ -785,4 +774,79 @@ async fn steering_names_the_live_turn_when_the_client_has_the_wrong_one() {
         answer.turn_id, live,
         "the answer hands back the live run id"
     );
+}
+
+#[tokio::test]
+async fn each_chained_turn_owns_its_id_and_the_whole_queue_finishes() {
+    let h = start(ScriptedModel::new([
+        Reply::new()
+            .tool("slow1", "slow", serde_json::json!({}))
+            .done(),
+        Reply::new().text("first done").done(),
+        Reply::new()
+            .text("second ")
+            .wait(Duration::from_millis(200))
+            .done(),
+        Reply::new().text("third done").done(),
+        Reply::new().text("continuation done").done(),
+    ]))
+    .await;
+    let (c, mut notes) = client(&h).await;
+    let thread = new_thread(&c).await;
+    let first = c
+        .call::<TurnStart>(TurnStartParams {
+            thread_id: thread.clone(),
+            text: "one".into(),
+        })
+        .await
+        .unwrap()
+        .turn_id;
+    until(&mut notes, |n| n.method() == "item/started").await;
+    for prompt in ["two", "three"] {
+        c.call::<TurnEnqueue>(TurnEnqueueParams {
+            thread_id: thread.clone(),
+            text: prompt.into(),
+        })
+        .await
+        .unwrap();
+    }
+    let started = until(
+        &mut notes,
+        |n| matches!(n,ServerNotification::TurnStarted(e) if e.body.turn_id!=first),
+    )
+    .await;
+    let second = started
+        .iter()
+        .find_map(|n| match n {
+            ServerNotification::TurnStarted(e) if e.body.turn_id != first => {
+                Some(e.body.turn_id.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let steered = c
+        .call::<TurnSteer>(TurnSteerParams {
+            thread_id: thread.clone(),
+            expected_turn_id: second.clone(),
+            text: "extra context".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(steered.turn_id, second);
+    let end = until(&mut notes, idle).await;
+    assert!(end.iter().any(|n|matches!(n,ServerNotification::TurnStarted(e) if e.body.turn_id!=first && e.body.turn_id!=second)));
+    let snapshot = c
+        .call::<ThreadResume>(ThreadIdParams { thread_id: thread })
+        .await
+        .unwrap();
+    assert_eq!(snapshot.turns.len(), 3);
+    assert!(
+        !snapshot
+            .turns
+            .iter()
+            .flat_map(|t| &t.items)
+            .any(|i| matches!(i, Item::Error { .. }))
+    );
+    assert!(snapshot.queue.items.is_empty());
+    assert!(!snapshot.running);
 }

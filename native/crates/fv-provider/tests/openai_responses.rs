@@ -85,6 +85,8 @@ async fn a_responses_turn_comes_back_as_blocks_with_usage() {
             ContentBlock::Thinking { .. } => "thinking",
             ContentBlock::Text { .. } => "text",
             ContentBlock::ToolCall { .. } => "tool",
+            ContentBlock::HostedSearch(_) => "hosted",
+            ContentBlock::Citations { .. } => "citations",
         })
         .collect();
     assert_eq!(kinds, ["thinking", "text", "tool"], "{:?}", msg.content);

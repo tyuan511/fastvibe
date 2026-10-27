@@ -114,6 +114,12 @@ enum Line {
     #[serde(rename_all = "camelCase")]
     TurnStarted { turn_id: String, timestamp: i64 },
     #[serde(rename_all = "camelCase")]
+    ToolActivity {
+        turn_id: String,
+        parent_id: String,
+        item: fv_protocol::types::Item,
+    },
+    #[serde(rename_all = "camelCase")]
     TurnCompleted {
         turn_id: String,
         timestamp: i64,
@@ -131,6 +137,75 @@ pub struct Loaded {
     pub skipped: usize,
     pub(crate) turn_records: Vec<TurnRecord>,
     pub(crate) origins: Vec<UsageOrigin>,
+}
+
+impl Loaded {
+    /// The retained transcript through the explanation preceding the current delegation.
+    /// Match turn, call id AND active message count: a model can reuse a call id later.
+    /// Pending calls are excluded rather than copied with invented tool results.
+    pub fn before_tool_call(mut self, turn: &str, call: &str, active_len: usize) -> Option<Self> {
+        if self.skipped != 0 || active_len == 0 {
+            return None;
+        }
+        let start = self
+            .messages
+            .iter()
+            .rposition(|m| matches!(m, Message::Compaction { .. }))
+            .unwrap_or(0);
+        if self.messages.len() - start != active_len {
+            return None;
+        }
+        let at = self.messages.len().checked_sub(1)?;
+        let record = self.turn_records.iter().find(|r| r.id == turn)?;
+        if at < record.start || record.end != self.messages.len() || record.completed_at.is_some() {
+            return None;
+        }
+        if !matches!(&self.messages[at], Message::Assistant(a) if a.tool_calls().any(|tool| tool.id == call && matches!(tool.name,"spawn_agent"|"code_mode")))
+        {
+            return None;
+        }
+        // Preserve the assistant's explanation/plan before this call, even when the
+        // provider puts text and several tool calls in one message. None of this batch's
+        // unanswered calls is inherited; their eventual results belong to the parent.
+        let mut keep = at;
+        if let Message::Assistant(message) = &mut self.messages[at] {
+            let boundary = message.content.iter().position(
+                |b| matches!(b, fv_core::ContentBlock::ToolCall { id, .. } if id == call),
+            )?;
+            let prefix: Vec<_> = message.content[..boundary]
+                .iter()
+                .filter(|b| !matches!(b, fv_core::ContentBlock::ToolCall { .. }))
+                .cloned()
+                .collect();
+            if prefix.iter().any(
+                |b| matches!(b, fv_core::ContentBlock::Text { text } if !text.trim().is_empty())
+                    || matches!(b, fv_core::ContentBlock::HostedSearch(call) if call.status.terminal()),
+            ) {
+                message.content = prefix;
+                message.stop = fv_core::StopReason::Stop;
+                keep += 1;
+            }
+        }
+        self.messages.truncate(keep);
+        self.timestamps.truncate(keep);
+        self.origins.truncate(keep);
+        for record in &mut self.turn_records {
+            record.end = record.end.min(keep);
+            record.tools.retain(|(parent, _)| {
+                self.messages[record.start.min(keep)..record.end]
+                    .iter()
+                    .any(
+                        |m| matches!(m,Message::Assistant(a)if a.tool_calls().any(|c|c.id==parent)),
+                    )
+            });
+            if record.completed_at.is_none() {
+                // This is inherited context, not an unfinished child turn.
+                record.status = TurnStatus::Interrupted;
+                record.completed_at = Some(now_ms());
+            }
+        }
+        Some(self)
+    }
 }
 
 fn now_ms() -> i64 {
@@ -305,8 +380,22 @@ impl TranscriptStore {
         };
         for line in BufReader::new(file).lines() {
             let line = line?;
-            let Ok(Line::Message { message, .. }) = serde_json::from_str::<Line>(&line) else {
-                continue;
+            let message = match serde_json::from_str::<Line>(&line) {
+                Ok(Line::Message { message, .. }) => message,
+                Ok(Line::ToolActivity {
+                    item:
+                        fv_protocol::types::Item::ToolCall {
+                            output: Some(output),
+                            ..
+                        },
+                    ..
+                }) => {
+                    if let Some(hit) = crate::search_snippet(&output, query) {
+                        return Ok(Some(hit));
+                    }
+                    continue;
+                }
+                _ => continue,
             };
             let hit = match &message {
                 Message::User { text } => crate::search_snippet(text, query),
@@ -314,6 +403,9 @@ impl TranscriptStore {
                     fv_core::ContentBlock::Text { text } => {
                         crate::search_snippet(&fv_core::strip_memory_citation(text), query)
                     }
+                    fv_core::ContentBlock::HostedSearch(call) => serde_json::to_string(call)
+                        .ok()
+                        .and_then(|text| crate::search_snippet(&text, query)),
                     _ => None,
                 }),
                 Message::ToolResult { content, .. } => crate::search_snippet(content, query),
@@ -328,6 +420,23 @@ impl TranscriptStore {
 
     pub fn append(&self, conversation_id: &str, messages: &[Message]) -> Result<(), StoreError> {
         self.append_timed(conversation_id, messages, &vec![now_ms(); messages.len()])
+    }
+
+    pub fn tool_activity(
+        &self,
+        conversation_id: &str,
+        turn_id: &str,
+        parent_id: &str,
+        item: fv_protocol::types::Item,
+    ) -> Result<(), StoreError> {
+        self.append_record(
+            conversation_id,
+            Line::ToolActivity {
+                turn_id: turn_id.into(),
+                parent_id: parent_id.into(),
+                item,
+            },
+        )
     }
 
     pub fn start_turn(&self, conversation_id: &str, turn_id: &str) -> Result<(), StoreError> {
@@ -391,6 +500,9 @@ impl TranscriptStore {
                 &loaded.timestamps[record.start..record.end],
                 Some(&loaded.origins[record.start..record.end]),
             )?;
+            for (parent, item) in &record.tools {
+                self.tool_activity(conversation_id, &record.id, parent, item.clone())?;
+            }
             if let Some(timestamp) = record.completed_at {
                 self.append_record(
                     conversation_id,
@@ -646,6 +758,7 @@ impl TranscriptStore {
                         turn_records.retain(|r| r.start < keep);
                     }
                     for record in &mut turn_records {
+                        record.tools.retain(|(parent,_)|messages[record.start.min(keep)..record.end.min(keep)].iter().any(|m|matches!(m,Message::Assistant(a)if a.tool_calls().any(|c|c.id==parent))));
                         if record.end > keep {
                             record.end = keep;
                             record.completed_at = None;
@@ -659,6 +772,7 @@ impl TranscriptStore {
                     ordinal = 0;
                     turn_records.push(TurnRecord {
                         id: turn_id,
+                        tools: Vec::new(),
                         start: messages.len(),
                         end: messages.len(),
                         started_at: timestamp,
@@ -681,6 +795,17 @@ impl TranscriptStore {
                         record.completed_at = Some(timestamp);
                         record.status = status;
                         record.error = error;
+                    }
+                }
+                Ok(Line::ToolActivity {
+                    turn_id,
+                    parent_id,
+                    item,
+                }) => {
+                    if let Some(record) = turn_records.iter_mut().rev().find(|r| r.id == turn_id)
+                        && let fv_protocol::types::Item::ToolCall { id, .. } = &item
+                    {
+                        if let Some(old)=record.tools.iter_mut().find(|(_,i)|matches!(i,fv_protocol::types::Item::ToolCall{id:old,..}if old==id)){*old=(parent_id,item);}else{record.tools.push((parent_id,item));}
                     }
                 }
                 Ok(Line::Session { .. }) => {}

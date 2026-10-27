@@ -434,6 +434,7 @@ pub(crate) fn model_config(
     config.thinking = model.effective_thinking(thinking).map(thinking_level);
     config.max_output_tokens = model.max_output_tokens;
     config.images = model.supports_images;
+    config.web_search = model.web_search && protocol == Protocol::OpenAiResponses;
     config.context_window = model.context_window;
     // A Google model pinned under a non-Google gateway needs the gateway's bearer too;
     // Google's own provider uses only x-goog-api-key. This follows the provider-level auth

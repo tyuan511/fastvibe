@@ -15,7 +15,14 @@ pub fn to_chat_request(request: &ModelRequest, model_label: &str, images_ok: boo
         chat = chat.with_system(request.system.clone());
     }
     if !request.tools.is_empty() {
-        chat = chat.with_tools(request.tools.iter().map(to_tool).collect::<Vec<_>>());
+        chat = chat.with_tools(
+            request
+                .tools
+                .iter()
+                .filter(|s| s.name != "web_search")
+                .map(to_tool)
+                .collect::<Vec<_>>(),
+        );
     }
     // Pictures tool calls returned wait here until the run of tool results they follow ends:
     // a provider wants every tool message right after the call, so the pictures go in one
@@ -28,6 +35,7 @@ pub fn to_chat_request(request: &ModelRequest, model_label: &str, images_ok: boo
             )));
         }
         match message {
+            Message::ToolAudio { .. } => {}
             Message::ToolImages { name, images, .. } => {
                 pictures.extend(picture_parts(name, images, images_ok));
             }

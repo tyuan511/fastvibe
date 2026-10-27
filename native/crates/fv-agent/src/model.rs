@@ -16,6 +16,8 @@ pub struct ModelRequest {
 /// the deltas before it exist only so a client can draw the reply as it arrives.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ModelEvent {
+    HostedSearch(fv_core::WebSearchCall),
+    Citations(Vec<fv_core::UrlCitation>),
     Text(String),
     Thinking(String),
     ToolCallStart { id: String, name: String },
@@ -73,6 +75,10 @@ pub trait Model: Send + Sync {
     }
     /// Whether the model can look at images. A tool that returns one (`view_image`) refuses
     /// when it cannot.
+    fn supports_web_search(&self) -> bool {
+        false
+    }
+
     fn supports_images(&self) -> bool {
         true
     }

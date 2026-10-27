@@ -17,6 +17,7 @@ impl Default for ModelInfo {
             name: None,
             protocol: None,
             supports_images: true,
+            web_search: false,
             context_window: None,
             max_output_tokens: None,
             edited: false,

@@ -228,6 +228,30 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool) -> ToolView
     let family = family_of(name);
     let field = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").trim();
     let label = |done: &str, live: &str| if running { live } else { done }.to_string();
+    if name == "code_mode" {
+        return ToolView {
+            family,
+            label: label("代码模式", "正在执行代码"),
+            subject: "JavaScript".into(),
+            context: String::new(),
+        };
+    }
+    if name == "wait" {
+        return ToolView {
+            family,
+            label: if args
+                .get("terminate")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                label("终止脚本", "正在终止脚本")
+            } else {
+                label("脚本等待", "正在等待脚本")
+            },
+            subject: field("cell_id").chars().take(8).collect(),
+            context: String::new(),
+        };
+    }
     let (label, subject, context) = match family {
         Family::Terminal => (
             label("终端", "正在执行"),

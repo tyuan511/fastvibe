@@ -318,6 +318,7 @@ impl Workspace {
                     .child(panel)
             }))
             .children(editing)
+            .children(self.subagent_tray(cx))
             .children(queue)
             .children((!covered).then(|| {
                 div()

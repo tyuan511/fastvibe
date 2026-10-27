@@ -137,6 +137,8 @@ async fn drive(
             }
         }
     };
+    // The agent normally settles its tools; retain this guard for a panicking provider/tool.
+    rt.code_mode.settle().await;
     // Events sent in the last instant before the loop returned.
     while let Ok(event) = rx.try_recv() {
         persist(&state, &thread_id, &event);
@@ -159,7 +161,7 @@ async fn drive(
         TurnOutcome::Interrupted => (TurnStatus::Interrupted, None),
         TurnOutcome::Failed(message) => (TurnStatus::Failed, Some(message)),
     };
-    finish_turn(&state, &rt, &thread_id, &turn_id, status, error).await;
+    finish_turn(&state, &rt, &thread_id, &turn_id, status, error.clone()).await;
     state.touch_thread(&thread_id, Some(&first_prompt));
     // Whatever was queued behind this turn goes next — unless this turn failed, in which case
     // the queue stops where it is rather than being fed to a run that is already broken.
@@ -175,6 +177,7 @@ async fn drive(
     // "Running" ends only now, after the completion event: a client that sees the thread idle
     // has already seen everything the turn did.
     rt.end(&state).await;
+    crate::subagents::settled(&state, &thread_id, status, error, &rt.turns());
     // The guess at the user's next message is not part of the turn: it is started once the thread
     // is idle, so it can never hold up the run that produced what it is guessing from.
     //
@@ -195,6 +198,9 @@ async fn drive(
 /// waits for it), every failure is swallowed (the placeholder simply stays as it was), and the
 /// answer is withdrawn when it stops being true — a new turn, or a reply that is not prose.
 fn spawn_suggestion(state: Arc<ServerState>, rt: Arc<ThreadRuntime>, thread_id: String) {
+    if crate::subagents::is_child(&state, &thread_id) || state.schedules.owns(&thread_id) {
+        return;
+    }
     // A setting, not a hidden default: the side request costs a round trip and some people would
     // rather not spend it. Read at the moment the turn ends, so turning it off takes effect now.
     let on = crate::settings::read(&state)
@@ -276,8 +282,7 @@ pub(crate) async fn drain_queue(
         row,
         previous_turn,
     )
-    .await;
-    true
+    .await
 }
 
 /// Start a queued prompt on a thread that has no run to chain onto (nothing was running when the
@@ -320,16 +325,19 @@ async fn start_queued(
     thread_id: String,
     row: fv_store::QueuedPrompt,
     previous_turn: &str,
-) {
+) -> bool {
     let turn_id = uuid::Uuid::new_v4().to_string();
-    let Some(cancel) = rt.chain(previous_turn) else {
+    let Some(cancel) = rt.chain(&state, previous_turn, &turn_id) else {
         // Someone started a turn in the gap; the prompt goes back to the front of the queue
         // rather than being lost. It is the only copy.
-        crate::queue::requeue_front(&state, &rt, &thread_id, &row);
-        crate::queue::publish(&state, &rt, &thread_id).await;
-        return;
+        if state.thread(&thread_id).is_ok_and(|t| t.is_some()) {
+            crate::queue::requeue_front(&state, &rt, &thread_id, &row);
+            crate::queue::publish(&state, &rt, &thread_id).await;
+        }
+        return false;
     };
     spawn_turn_inner(state, rt, thread_id, turn_id, row.text, cancel, true);
+    true
 }
 
 /// Snapshot the conversation's workspace for this turn.
@@ -398,6 +406,13 @@ pub async fn rewind(
         Ok(result) => result,
         Err(error) => {
             rt.end(&state).await;
+            crate::subagents::settled(
+                &state,
+                &thread_id,
+                TurnStatus::Failed,
+                Some(error.message.clone()),
+                &rt.turns(),
+            );
             return Err(error);
         }
     };
@@ -522,8 +537,57 @@ fn restore_checkpoint(
 /// Messages reach the transcript as the agent adds them to its history, not when the turn ends:
 /// a crash then loses the message being written and nothing before it.
 fn persist(state: &ServerState, thread_id: &str, event: &AgentEvent) {
+    let nested = match event {
+        AgentEvent::NestedToolStarted {
+            parent_id,
+            call_id,
+            name,
+            arguments,
+        } => Some((
+            parent_id,
+            Item::ToolCall {
+                id: call_id.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+                output: None,
+                is_error: false,
+            },
+        )),
+        AgentEvent::NestedToolFinished {
+            parent_id,
+            call_id,
+            name,
+            arguments,
+            output,
+            is_error,
+        } => Some((
+            parent_id,
+            Item::ToolCall {
+                id: call_id.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+                output: Some(output.clone()),
+                is_error: *is_error,
+            },
+        )),
+        _ => None,
+    };
+    if let Some((parent, item)) = nested
+        && let Some(turn) = state
+            .loaded_runtime(thread_id)
+            .and_then(|rt| rt.running_turn())
+        && let Err(e) = state
+            .store
+            .transcripts
+            .tool_activity(thread_id, &turn, parent, item)
+    {
+        eprintln!("cannot record nested tool activity: {e}");
+    }
     if let AgentEvent::Committed(message) = event {
         state.persist(thread_id, message);
+        if let Some(rt) = state.loaded_runtime(thread_id) {
+            rt.commits.send_modify(|n| *n = n.wrapping_add(1));
+        }
         if let fv_core::Message::Assistant(reply) = message {
             state.memory.note_reply(state, &reply.text());
         }
@@ -591,6 +655,7 @@ async fn recover_panic(
     thread_id: &str,
     turn_id: &str,
 ) {
+    rt.code_mode.settle().await;
     // Committed events may already have reached disk before the worker panicked. Keeping an
     // older runtime history would send a different conversation until the next restart.
     if let Ok(loaded) = state.store.transcripts.read(thread_id) {
@@ -609,6 +674,13 @@ async fn recover_panic(
     crate::queue::publish(state, rt, thread_id).await;
     state.touch_thread(thread_id, None);
     rt.end(state).await;
+    crate::subagents::settled(
+        state,
+        thread_id,
+        TurnStatus::Failed,
+        Some("Internal error.".into()),
+        &rt.turns(),
+    );
 }
 
 /// What a turn of this thread runs with: its own model (or the default), the working directory
@@ -681,6 +753,18 @@ fn permissions_for(
         wire::ApprovalPolicy::OnFailure => fv_agent::ApprovalPolicy::OnFailure,
         wire::ApprovalPolicy::OnRequest => fv_agent::ApprovalPolicy::OnRequest,
         wire::ApprovalPolicy::Never => fv_agent::ApprovalPolicy::Never,
+    };
+    let read_only_role =
+        crate::subagents::roles::of_thread(state, thread_id).is_some_and(|r| r.read_only);
+    let mode = if read_only_role {
+        fv_agent::SandboxMode::ReadOnly
+    } else {
+        mode
+    };
+    let approval = if read_only_role {
+        fv_agent::ApprovalPolicy::Never
+    } else {
+        approval
     };
     Arc::new(fv_agent::Permissions {
         policy: fv_agent::Policy {
@@ -778,6 +862,59 @@ async fn build_context(
     if state.agent.tools.get("exec_command").is_some() {
         rt.exec_sessions.register(&mut mcp.tools);
     }
+    if state.agent.tools.get("code_mode").is_some() {
+        rt.code_mode.register(&mut mcp.tools);
+    }
+    crate::subagents::register(state, thread_id, turn_id, &mut mcp.tools);
+    if !crate::settings::read(state)
+        .map(|s| s.code_mode_enabled)
+        .unwrap_or(true)
+    {
+        mcp.tools
+            .retain(|name| !matches!(name, "code_mode" | "wait"));
+    }
+    let role = crate::subagents::roles::of_thread(state, thread_id);
+    crate::subagents::roles::restrict(role.as_ref(), &mut mcp.tools);
+    let ceiling = state
+        .store
+        .db
+        .subagent(thread_id)
+        .ok()
+        .flatten()
+        .and_then(|s| s.tool_ceiling);
+    if let Some(ceiling) = &ceiling {
+        mcp.tools
+            .retain(|name| ceiling.iter().any(|allowed| allowed == name));
+    }
+    let loaded = rt.loaded_tools();
+    // Explicit role/ancestor grants must work without granting tool_search as well.
+    // Load only tools that survived BOTH restrictions in this per-turn snapshot.
+    for names in role
+        .as_ref()
+        .and_then(|r| r.tools.as_ref())
+        .into_iter()
+        .chain(ceiling.as_ref())
+    {
+        loaded.load(
+            names
+                .iter()
+                .filter(|name| mcp.tools.get(name).is_some())
+                .cloned(),
+        );
+    }
+    let role_prompt = role
+        .map(|r| {
+            format!(
+                "\n\nChild agent role: {} ({})\n{}",
+                r.name, r.id, r.system_prompt
+            )
+        })
+        .unwrap_or_default();
+    let child_prompt = if crate::subagents::is_child(state, thread_id) {
+        "\n\nYou are a child agent. Any preceding conversation is inherited parent context. Follow the assigned task and your own role. Earlier tool sessions and process handles are historical and cannot be reused. Tool availability comes from your current tool list, not inherited calls. Earlier action-specific approvals belong to the parent; use your own sandbox and approvals. Report your result to the parent."
+    } else {
+        ""
+    };
     let tools = Arc::new(mcp.tools);
     // Re-read per turn, including queued runs and manual compaction. Do not put this in a
     // transcript: updating or clearing a preference must not leave old instructions behind.
@@ -796,17 +933,20 @@ async fn build_context(
         // Project context precedes explicit server additions. The user's personalization
         // is the final suffix, matching the desktop's per-turn custom instructions.
         system: format!(
-            "{}{}\n\n{}{}{}\n\n{}{}",
+            "{}{}\n\n{}{}{}\n\n{}{}{}{}{}",
             base_instructions(cwd.as_deref()),
             folders,
             permissions_prompt(&permissions),
             discovered,
             mcp.instructions,
             state.agent.system,
+            child_prompt,
+            role_prompt,
+            state.schedules.instructions(thread_id),
             personalization
         ),
         cwd,
-        loaded: rt.loaded_tools(),
+        loaded,
         ui: Some(Arc::new(ThreadUserInput {
             state: state.clone(),
             rt: rt.clone(),
@@ -910,9 +1050,10 @@ async fn drive_compaction(
             fv_agent::CompactError::Failed(message) | fv_agent::CompactError::Capacity(message),
         ) => (TurnStatus::Failed, Some(message)),
     };
-    finish_turn(&state, &rt, &thread_id, &turn_id, status, error).await;
+    finish_turn(&state, &rt, &thread_id, &turn_id, status, error.clone()).await;
     state.touch_thread(&thread_id, None);
     rt.end(&state).await;
+    crate::subagents::settled(&state, &thread_id, status, error, &rt.turns());
     // A compaction divider is not a place the user answers from, and guessing there would spend a
     // request on material that says nothing about the work.
     if rt.forget_suggestion() {

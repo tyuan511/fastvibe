@@ -26,6 +26,7 @@ static NEXT_ID: LazyLock<AtomicU64> =
 
 #[derive(Default)]
 pub struct ExecSessions {
+    runtime_dir: Option<PathBuf>,
     sessions: Mutex<BTreeMap<u64, Arc<Session>>>,
     permits: Permits,
     closed: AtomicBool,
@@ -108,6 +109,15 @@ impl Drop for StopOnDrop {
 }
 
 impl ExecSessions {
+    pub fn for_runtime(data_dir: PathBuf) -> Self {
+        Self {
+            runtime_dir: Some(data_dir),
+            sessions: Mutex::new(BTreeMap::new()),
+            permits: Permits::default(),
+            closed: AtomicBool::new(false),
+        }
+    }
+
     pub fn has_running(&self) -> bool {
         self.sessions
             .lock()
@@ -120,6 +130,14 @@ impl ExecSessions {
         registry
             .register(crate::ExecCommandTool::new(self.clone()))
             .register(crate::WriteStdinTool::new(self.clone()));
+    }
+
+    /// Stop this conversation's commands without retiring the pool; a resumed child may
+    /// launch fresh commands only once these have settled.
+    pub fn terminate_all(&self) {
+        for session in self.sessions.lock().unwrap().values() {
+            session.abort();
+        }
     }
 
     pub fn close(&self) {
@@ -158,10 +176,15 @@ impl ExecSessions {
         let effective_policy = launch.effective_policy.clone();
         let cwd = launch.cwd.clone();
         let timeout = launch.timeout;
+        let environment = self
+            .runtime_dir
+            .as_deref()
+            .map(fv_env::snapshot_for)
+            .unwrap_or_else(fv_env::snapshot);
         let spawned = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Report::failed("Command was stopped before starting."),
-            result = tokio::task::spawn_blocking(move || io::spawn(launch)) => match result {
+            result = tokio::task::spawn_blocking(move || io::spawn(launch, environment)) => match result {
                 Ok(Ok(spawned)) => spawned,
                 Ok(Err(e)) => return Report::failed(e),
                 Err(e) => return Report::failed(format!("failed to start command: {e}")),
@@ -308,6 +331,7 @@ impl ExecSessions {
                 ),
                 is_error: failed,
                 images: vec![],
+                audio: vec![],
             },
             code,
             text,
@@ -452,6 +476,7 @@ mod tests {
     #[tokio::test]
     async fn capacity_is_reserved_before_spawn_and_does_not_leave_a_rejected_child() {
         let pool = Arc::new(ExecSessions {
+            runtime_dir: None,
             permits: Permits(Arc::new(Semaphore::new(2))),
             sessions: Mutex::default(),
             closed: AtomicBool::new(false),

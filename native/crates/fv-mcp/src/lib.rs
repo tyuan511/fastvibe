@@ -770,7 +770,7 @@ async fn connect(
             command
                 .args(&config.args)
                 .env_clear()
-                .envs(inherited_environment())
+                .envs(inherited_environment(output_dir.parent()))
                 .envs(&config.env)
                 .kill_on_drop(true);
             let (transport, pipe) = TokioChildProcess::builder(command)
@@ -885,7 +885,7 @@ fn http_client(url: &str, builder: reqwest::ClientBuilder) -> Result<reqwest::Cl
         .map_err(|e| e.to_string())
 }
 
-fn inherited_environment() -> BTreeMap<String, String> {
+fn inherited_environment(runtime: Option<&std::path::Path>) -> BTreeMap<String, String> {
     let names = if cfg!(windows) {
         vec![
             "APPDATA",
@@ -915,10 +915,16 @@ fn inherited_environment() -> BTreeMap<String, String> {
                 .map(|v| (name.to_string(), v))
         })
         .collect();
-    inherited.extend(fv_env::snapshot().into_iter().filter_map(|(name, value)| {
-        let value = value.into_string().ok()?;
-        (!value.starts_with("()")).then_some((name.into_string().ok()?, value))
-    }));
+    inherited.extend(
+        runtime
+            .map(fv_env::snapshot_for)
+            .unwrap_or_else(fv_env::snapshot)
+            .into_iter()
+            .filter_map(|(name, value)| {
+                let value = value.into_string().ok()?;
+                (!value.starts_with("()")).then_some((name.into_string().ok()?, value))
+            }),
+    );
     inherited
 }
 

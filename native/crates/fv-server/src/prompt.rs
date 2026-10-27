@@ -80,6 +80,7 @@ impl UserInput for ThreadUserInput {
                 id,
             };
             rt.send_frame(&state, request_frame(&request)).await;
+            crate::subagents::relay_prompt(&state, &thread_id, request_frame(&request)).await;
             let answers = match answer.await {
                 Ok(Reply::Answers(a)) => a,
                 _ => None,
@@ -190,6 +191,7 @@ impl fv_agent::Approver for ThreadApprover {
                 id,
             };
             rt.send_frame(&state, request_frame(&wire)).await;
+            crate::subagents::relay_prompt(&state, &thread_id, request_frame(&wire)).await;
             let decision = match answer.await {
                 Ok(Reply::Decision(d)) => d,
                 _ => None,

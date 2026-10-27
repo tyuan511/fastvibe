@@ -194,6 +194,7 @@ async fn pictures_follow_all_the_tool_results_of_their_batch() {
                 }
             }
             Message::ToolImages { .. } => "images",
+            Message::ToolAudio { .. } => "audio",
             Message::Compaction { .. } => "compaction",
             Message::MemoryContext { .. } => "memory",
         })

@@ -132,9 +132,18 @@ async fn run() {
             .unwrap_or_else(|e| fail(format!("cannot open {}: {e}", data_dir.display()))),
     );
 
-    state.start_services();
     match listen {
         Listen::Stdio => {
+            state
+                .schedules_recover()
+                .unwrap_or_else(|e| fail(e.message));
+            state
+                .store
+                .db
+                .recover_subagents()
+                .unwrap_or_else(|e| fail(e));
+            state.schedules_recovery_complete();
+            state.start_services();
             // stdout carries only protocol frames; anything human-readable goes to stderr.
             tokio::select! {
                 _ = serve_connection(
@@ -151,6 +160,7 @@ async fn run() {
             let server = UnixServer::bind(state.clone(), &data_dir.join("server.sock"))
                 .await
                 .unwrap_or_else(|e| fail(e));
+            state.start_services();
             eprintln!("listening on {}", server.path().display());
             tokio::select! {
                 r = server.run() => { if let Err(e) = r { fail(format!("listener stopped: {e}")); } }
@@ -160,7 +170,9 @@ async fn run() {
         }
     }
     // A clean exit folds the write-ahead log back into the database file.
+    state.shutdown_schedules().await;
     state.close_command_sessions();
+    state.office.shutdown().await;
     let _ = state.store.db.checkpoint();
     state.mcp.shutdown().await;
     // `Terminals` kills every pty when it drops, which is what this line is for: a shell left

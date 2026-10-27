@@ -264,6 +264,7 @@ impl Workspace {
                 true
             }
             ShortcutId::FocusComposer => {
+                self.schedules_ui.open = false;
                 self.settings = None;
                 self.search_box = None;
                 self.input.update(cx, |s, cx| s.focus(window, cx));
@@ -272,6 +273,7 @@ impl Workspace {
             }
             ShortcutId::Send => {
                 if self.settings.is_some()
+                    || self.schedules_ui.open
                     || self.search_box.is_some()
                     || self.project_dialog.is_some()
                     || self.entry_dialog.is_some()
@@ -291,6 +293,7 @@ impl Workspace {
             }
             ShortcutId::Stop => {
                 if self.settings.is_some()
+                    || self.schedules_ui.open
                     || self.search_box.is_some()
                     || self.project_dialog.is_some()
                     || self.entry_dialog.is_some()

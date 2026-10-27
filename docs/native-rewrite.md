@@ -8,8 +8,8 @@
 | 问题 | 决定 |
 | --- | --- |
 | 代码位置 | 本仓库 `gpui` 分支，`native/` 下的 Cargo workspace；Electron 版继续可发布，直到原生版追平 |
-| 旧数据 | 首次启动**一次性导入**（providers / 密钥 / MCP / 设置 / 会话目录 / pi v3 转写），之后只用新格式 |
-| 手机端与远程协议 | 重新设计，Flutter 端跟着改 |
+| 旧 Electron 数据 | **最后实施**一次性导入（providers / API Key / MCP / 设置 / 会话目录 / pi v3 转写 / 用量账本）；不作为前期功能的依赖，导入后只用新格式 |
+| 手机端与远程协议 | 按当前原生 App Server / `fv-protocol` 重新设计，Flutter 同步适配；不兼容旧 Electron / App Protocol，不做新旧双栈 |
 | 网页内容 | `wry` 嵌入原生 WKWebView / WebView2 子视图 |
 | 平台 | 先 macOS，之后 Windows / Linux |
 | 插件 | 不支持第三方 TS 插件；内置功能用 Rust 实现，扩展点只有 MCP 与技能 |
@@ -62,8 +62,7 @@
 
 - **JSON-RPC 形状**（不带 `"jsonrpc":"2.0"`，与 codex 一致）：`Request{id, method, params}` / `Response{id, result}` /
   `Error{id, error{code, message, data}}` / `Notification{method, params}`。
-- **分帧**：stdio 与 unix socket 一行一条 JSON；WebSocket 用 text frame，可协商 zstd；WebRTC 数据通道沿用现有分片头
-  （16 / 64 KiB，按路径选择），帧内容与 WS 相同。
+- **分帧**：stdio 与 unix socket 一行一条 JSON；WebSocket 一条消息承载一个协议对象。WebRTC 的分片、重组与压缩在新的传输适配层设计并协商，重组后交给同一个协议分发器；不要求沿用旧分片头、尺寸或压缩位。
 - **方法表由宏生成四个枚举**：`ClientRequest`、`ServerNotification`、`ServerRequest`、`ClientNotification`
   （codex `app-server-protocol/src/protocol/common.rs` 的做法），新增一个方法只改一处，编译器保证 server 处理了它，
   策略表用 `match` 穷举，漏分类编译不过。
@@ -229,9 +228,10 @@ codex 的现行版若绑定了它自己的内部 crate，就取最近一个自�
 | `view_image` | `view_image` | 已做。大图先缩小再发（长边 > 2000px 或 > 1 MB → 1568px，有透明保留 PNG，否则 JPEG）；图片落盘，转写只存路径 |
 | MCP 工具与资源 | `mcp`、`mcp_resource`（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`），`rmcp` | 核心已接通：每引擎共享 stdio/HTTP 连接、工具快照、延迟搜索、资源和分页。字段表单、动态目录、诊断、图片产物、OAuth/刷新及客户端回调已接通；安装环境与最终验收见 native-completion.md |
 | `tool_search` | `tool_search` | 已做（BM25）。codex 靠 Responses API 自带的延迟加载，这里改为通用做法：延迟工具不进请求，搜到才声明；MCP 的延迟工具已接入；没有任何延迟工具时，搜索工具自己也不出现在请求里 |
-| 子 agent | `multi_agents`（`spawn_agent`、`send_input`、`wait`、`close_agent`、`resume_agent`） | 待做。进程内起一次性会话，沿用它的 agent 控制模型 |
-| 代码模式 | `code_mode`（执行与 `wait`） | 待做。沙箱、`tools.<name>()` 绑定和输出规则以它为准，运行时选型开工前对照上游定 |
-| `web_search` | 模型端托管的搜索 | 待做。仅在 Responses 协议下透传 |
+| 子 agent | `multi_agents`（`spawn_agent`、`send_input`、`wait_agent`、`close_agent`、`resume_agent`），加 `list_agents` | 已接通独立上下文子会话、原生回合引擎、持久化、限额、停止/恢复与任务列表。已接通历史 fork、角色模板/模型/工具范围、只读约束及后代工具授权上限；不迁移旧 `dag_*` 工具 |
+| 数学公式 | Markdown AST 的 math text / math flow + 原生公式节点 | 行内/块级 TeX 已接通，常用符号与安全降级已验证；复杂 KaTeX 宏仍待评估 |
+| 代码模式 | `code_mode`（执行与 `wait`） | 原生基础已接通：QuickJS 隔离模块、授权工具绑定、打印/图片/音频/存值、增量等待、取消与真实进程生命周期、审批/角色约束及记录；采用普通 JSON `code` 参数适配所有现有协议。验证见补齐清单第二十三、二十九批 |
+| `web_search` | 模型端托管的搜索 | 已接通自定义 Responses 模型按需开启、角色授权、进度/来源/引用、取消、历史恢复和分叉；不执行本地搜索或伪造函数结果。验证见补齐清单第二十四批 |
 | 其它小工具 | `get_context_remaining`、`new_context_window`，`sleep`、`current_time` 等 | 按需。`request_permissions`、插件安装类不做（没有审批，也没有插件系统） |
 
 **不再做的旧工具**（Electron 版有、codex 没有）：`present`、`dag_*`、`conversation_search`、`worktree`、`schedule_*`、
@@ -266,7 +266,7 @@ codex 的现行版若绑定了它自己的内部 crate，就取最近一个自�
 | 命令面板 | `command` | — |
 | 通知 / 对话框 | `notification`、`dialog`、`sheet` | — |
 | 终端 | 自绘（`alacritty_terminal` 网格 + GPUI 文本） | 参考 Zed 的做法 |
-| 浏览器、HTML/Office 预览、KaTeX | `fv-gui` 内的 wry 子视图，覆盖在 GPUI 元素区域上 | 需要处理坐标同步、焦点、遮挡 |
+| 浏览器、HTML/Office 预览、KaTeX | `fv-gui` 内的 wry 子视图，覆盖在 GPUI 元素区域上 | macOS 浏览器基础、HTML/媒体及 Office 静态/实时预览已接通，含坐标/裁切、焦点、遮挡和恢复；数学公式已接入原生 Markdown 节点与安全降级，复杂 KaTeX 宏及完整浏览器功能仍待补齐，Office 资源封装与签名随交付验收 |
 | 文件图标 / 供应商图标 | 复用 `resources/file-icons`、LobeHub SVG | — |
 
 ### 4.1 与 Electron 版 1:1 复刻
@@ -360,9 +360,8 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   场景，截图前要主动 `window.draw` 几次；`ScrollHandle::scroll_to_bottom` 要等有过布局的那一帧。
 - **设置（2026-10-24）**：侧栏「设置」、composer 模型菜单的「管理模型」进入设置；左侧分组列表照 `SETTINGS_SECTIONS`。
   **模型与默认**已可用：会话模型（默认模型 + 推理强度）、供应商列表（启用开关、删除、展开改 Base URL / API 格式 / 密钥、
-  模型列表的增删与同步）、添加供应商对话框（内置供应商表 + 自定义；确认后拉取模型、勾选、保存；第一个供应商的第一个模型
-  自动成为默认模型）。全部走现有 `provider/*`、`model/*` 协议。内置供应商表是 GUI 里的一张静态表（名称、协议、地址），
-  不是 Electron 版那样从 SDK 读取，订阅登录（OAuth）还没有。其余分组的页面暂时显示「这一页还在移植中」。
+  模型列表的增删与同步）、自定义供应商对话框（填写地址、协议和 API Key 后拉取模型、勾选、保存；第一个供应商的第一个模型
+  自动成为默认模型）。全部走现有 `provider/*`、`model/*` 协议。按 2026-10-26 用户要求，模型订阅登录不在原生版范围内。其余分组的页面暂时显示「这一页还在移植中」。
   开发构建（`capture` 特性）有 `--script-add NAME,URL,KEY` 和 `--settings providers|add-provider`，用来不点鼠标地走完添加流程并截图。
 - **弹出层（2026-10-24）**：菜单一律用 `ui::float`（`deferred` + `occlude`，优先级 10）画在整个窗口最上层，否则它是卡片的子元素，
   会被卡片的边框和聚焦环盖住（看起来像透明）。任一弹出层打开时，窗口根上多一块全屏的接收层（优先级 5），点任何别处就关闭全部菜单
@@ -378,8 +377,7 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   主文件夹变更时迁移项目分组的顺序与展开状态。前进后退（⌘[ / ⌘]）跳过已归档/删除的会话；新对话入口清除上一个项目选择。
   会话菜单支持重命名（Enter/失焦保存、Esc 取消）、置顶/取消、归档、创建分支和确认后删除；项目支持编辑、显示目录、确认后移除。
   `thread/fork` 复制完整已落盘历史并保留时间戳，图片独立复制，运行中的回合须结束后再分支。侧栏不画插件入口（原生版没有插件系统）。
-  定时任务与账号尚无原生服务接口，
-  入口显示具体未接入说明，不表示这些模块已经迁移。侧栏偏好变化不重建整套主题；宽度拖动请求完整窗口重绘，避免复用旧裁剪区域。
+  定时任务已在 2026-10-26 接入原生调度服务与卡片/编辑/历史页（见补齐清单第二十二批）；账号仍无原生服务接口，入口显示具体未接入说明。侧栏偏好变化不重建整套主题；宽度拖动请求完整窗口重绘，避免复用旧裁剪区域。
 - **宽度松手回弹修复（2026-10-24）**：直接运行 GUI 也经 `Daemon::connect_current` 核对构建与握手 `features`，
   `sidebarSettings` 缺失的空闲旧进程会被替换；忙碌或无法报告活动的进程保留并提示稍后重开。过去服务端每次握手读取磁盘上的可执行文件，
   重编译后旧进程会误报新文件的指纹；现在在服务端启动时固定指纹。回归测试模拟「指纹相同但不支持侧栏设置」的旧进程，
@@ -630,7 +628,7 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   - 两侧以 280ms `cubic-bezier(.22,1,.36,1)` 过渡宽度；外层裁切、内容保持原宽。反向切换从当前宽度接续，拖动直接跟随指针。
   - 左栏完全收至 0；展开、新对话与导航回到主区域顶栏，macOS 窗口按钮留白同步变化。右栏收起时主区域显示展开图标，展开后由右栏显示收起图标。
   - 右栏与左栏共用 8px 外留白、16px 内圆角、主题色、玻璃表层和内描边。44px 标签栏、28px 标签、添加菜单、关闭按钮、中键关闭、右键关闭其他/全部、最大化/还原均按 Electron 排布。
-  - 空态使用同样文案与入口，窄时 48px 列表，内容宽度达到 480px 时使用 88px 网格。浏览器与辅助对话入口仍提示功能待移植。
+  - 空态使用同样文案与入口，窄时 48px 列表，内容宽度达到 480px 时使用 88px 网格。浏览器入口已接通原生标签与导航，辅助对话入口仍提示功能待移植。
   - 文件树使用同一份 vscode-icons 的文件/文件夹映射、根目录分组及 40px 预览工具栏；切换标签保留草稿和编辑器。
   - Git 为左侧提交/分组文件树/历史，右侧差异的布局；分栏可拖动、文件树可收起。侧栏默认宽 288px、范围 200–480px，与 Electron 一致。
   - 代码验证覆盖动画连续反转、时间边界、直接拖动、曲线单调性及切换标签后恢复草稿。开发 fixture：`pane-empty`、`pane-maximized`、`panels-collapsed`。
@@ -645,13 +643,15 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
 - **还缺（需要新的协议数据或组件）**：标题栏与新对话页的 git 分支 / 改动 chip、压缩分隔线的
   「接近上限 · 128.0K → 24.4K」、工具卡展开后的详细样式、各种弹出菜单的 Nova 皮肤、右侧面板的终端 / Git / 浏览器标签页与设置页。
 
-## 5. 数据迁移
+## 5. 数据迁移（旧 Electron 导入最后实施）
+
+先完成其余原生功能、手机适配和交付验证，再实现本节旧 Electron 导入，最终切换前验收；不作为开发期启动、供应商配置或其它功能的前置依赖。以下保留最终导入范围。
 
 首次启动检测到 `~/Library/Application Support/FastVibe/` 时，弹窗确认后导入，之后**不再读写旧目录**：
 
 | 旧数据 | 去向 |
 | --- | --- |
-| `providers.json` + `agent/.env` + `agent/oauth.json` | 新供应商表 + 凭据文件（0600） |
+| `providers.json` + `agent/.env` | 自定义端点、模型配置与 API Key → 新供应商表 + 凭据文件（0600）；不导入 `agent/oauth.json` 等模型订阅凭据 |
 | `mcp.json`、`settings.json`、`memory.json` | 新配置文件（字段名对齐，`remote*` 不导入，需重新设置） |
 | `fastvibe.db`（会话目录、队列、DAG、定时任务、检查点、思考耗时、记忆账本） | 逐表转换 |
 | pi v3 转写 JSONL | 转成新转写格式（沿用 `import/writer.ts` 已验证的配对规则，反向执行） |
@@ -660,15 +660,31 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
 
 导入逐会话出结果（失败的列出原因），不做全有或全无；旧目录保持原样，可回退到 Electron 版。
 
-## 6. 远程访问与手机端
+## 6. 远程访问与手机端（按新架构重新设计）
 
-远程访问不再是一套单独的协议：手机就是 app server 的另一个客户端（见第 1 节）。
+实施顺序（2026-10-26 用户修正）：先补齐应用本身的功能，远程连接与手机适配后置。旧 Electron 完整数据导入仍最后实施。
 
-- 局域网：`fv-transport` 的 ws 监听（`::` 双栈、密码换设备令牌、mDNS 广播 `_fastvibe._tcp`），帧就是 JSON-RPC 文本帧。
-- 官方连接：WebRTC 数据通道（libdatachannel 的 Rust 绑定 `datachannel`，或 `webrtc-rs`；先验证 NAT 行为与现有一致），
-  通道内容同样是 JSON-RPC。信令、STUN 计划、端口预测、NAT-PMP / UPnP、只在中转时压缩、背压与心跳等已测出来的规则全部保留。
-- Flutter 端改为同一协议的客户端：从 `native/schema/` 生成 Dart 类型，换掉现在的 App Protocol 层；
-  过渡期内手机端同时支持新旧两种服务端。
+以当前原生 `fastvibe-server`、`fv-protocol` 和事件模型为唯一业务协议。Flutter 手机端可以重新适配；不支持旧 Electron App Protocol、旧远程服务端、旧 WebRTC 帧格式或旧 SSH Agent，不做兼容转换和新旧双栈。既有实现只供连接经验参考，不作为新协议的格式约束。
+
+### 6.1 统一协议和传输边界
+
+- 桌面、手机、SSH 与测试客户端调用同一份方法表、快照、通知和服务端交互请求。远程不另建功能缺失的调用集合。
+- `initialize` 校验原生协议版本并返回实际能力；版本不匹配明确提示更新，不能静默降级到旧 App Protocol。
+- WebSocket 一条消息承载一个原生 JSON 协议对象；WebRTC 的分片头、重组、压缩及大小上限按新传输设计与协商。两种传输最终进入同一个分发器，不改业务事件的序号、载荷或顺序。
+- 鉴权在注册客户端与订阅推送前完成。`ClientOrigin` 由已验证的传输上下文决定，客户端不能自行声明为 Local / Ssh；远程方法继续由穷举策略分类。
+- 背压、消息大小、分片超时、心跳和断连回收须在新传输上验证。慢连接不能阻塞模型输出或控制请求；重连重新取原子快照并按 `seq` 处理事件，后台会话与未决问题也必须恢复。
+
+### 6.2 连接方式
+
+- **局域网**：双栈监听、设备发现/扫码和设备身份认证由原生服务提供；密码换设备令牌、逐设备撤销与凭据隔离继续作为能力目标。发现与握手明确标识原生协议版本；未鉴权连接不得获得会话、配置或推送。
+- **官方连接**：账号设备发现、已认证信令、WebRTC 通道共同建立可信连接，随后使用同一套原生 RPC。信令和手机侧连接状态可随新设计调整；不受旧信令消息和候选投递格式约束。直连/中转识别、网络变化恢复和大数据传输按新桌面/手机组合验证，旧 NAT 优化只在证据支持时采用。
+- **SSH 主机**：连接和启动远端原生 `fastvibe-server`，复用原生协议与服务生命周期；安装、版本检查、终端和文件路径均面向远端主机，不适配旧 Electron 无头 Agent。
+
+### 6.3 Flutter 适配与验收
+
+- 从 `native/schema/` 生成 Dart 类型，替换旧 App Protocol 和远程传输适配；手机界面可复用，但账号、设备列表、LAN/官方连接、重连和协议状态须接入新服务。
+- 验收覆盖双端版本握手、鉴权/撤销、同账号设备隔离、多客户端与后台会话、流式回复、工具交互、Stop、快照重连、文件读取、终端及弱网络/中转大数据。只检测并拒绝不支持的版本，不测试旧协议兼容。
+- 当前 `native/` 的 Unix/stdio 通路与权限分类是已有基础；网络监听、官方连接和 Flutter 新适配仍属待实现工作。仅有设计文档或入口不能勾选远程完成。
 
 ## 7. 里程碑
 
@@ -679,12 +695,12 @@ M1 工期因此增加约 1–2 周；24 套主题与玻璃效果的**机制**在
 
 | 里程碑 | 范围 | 粗估 |
 | --- | --- | --- |
-| M1 第一条通路 | workspace、`fv-protocol` 骨架与 schema 导出、`fastvibe-server`（unix socket + stdio）、`fv-client`、`fv-daemon`；导入 providers；genai 四协议验证；exec_command / apply_patch；回合循环、取消、重试、转写、会话目录；GPUI 窗口：侧栏、转写、composer、模型选择 | 4–5 周 |
+| M1 第一条通路 | workspace、`fv-protocol` 骨架与 schema 导出、`fastvibe-server`（unix socket + stdio）、`fv-client`、`fv-daemon`；自定义端点配置；genai 四协议验证；exec_command / apply_patch；回合循环、取消、重试、转写、会话目录；GPUI 窗口：侧栏、转写、composer、模型选择 | 4–5 周 |
 | M2 对话体验 | Anthropic / Google；models.dev 与价格；上下文环与用量统计；压缩；排队与立即发送；重试 / 编辑 / 分叉；检查点回退；标题；回复推荐；todo / question；各种折叠与报错呈现 | 5–6 周（主要通路、错误持久化与压缩窗口自适应已做；代码与自动化验收见 native-completion.md） |
 | M3 工作区 | 项目与多文件夹、`@` 搜索、右侧面板（文件树、预览编辑、终端、Git 变更 / 历史 / 提交）、worktree、apply_patch | 5–6 周（文件树操作、多目录 Git、hunk 跳转、PTY 基础与工作区重启恢复已做；终端输入法接口、选择复制和历史回滚等交互的 macOS 定向代码与自动化验收已通过；跨平台仍列入交付） |
-| M4 能力 | 子 agent、记忆、MCP、代码模式、工具搜索、技能、内联产物预览、wry（浏览器 / HTML / Office / KaTeX）、电脑操控、web_search、定时任务 | 6–8 周（长期记忆、MCP、工具搜索、技能加载/管理及输入框选择与徽标已做；其余待补，详见补齐清单） |
+| M4 能力 | 子 agent、记忆、MCP、代码模式、工具搜索、技能、内联产物预览、wry（浏览器 / HTML / Office / KaTeX）、电脑操控、web_search、定时任务 | 6–8 周（子 agent（含历史 fork 与角色模板）、代码模式基础、定时任务、托管网页搜索、长期记忆、MCP、工具搜索、技能加载/管理及输入框选择与徽标已做；其余待补，详见补齐清单） |
 | M5 外围 | 全部设置面板、24 套主题与玻璃、i18n、通知、Dock 角标、保持唤醒、命令面板、自动归档、账号、远程访问 + Flutter 适配、SSH 主机 Agent、从其他 Agent 导入、自动更新、签名打包 | 6–8 周 |
-| M6 切换 | 全量数据导入、对照测试、灰度、Electron 版下线 | 2–3 周 |
+| M6 最后实施与切换 | 在其余功能、Flutter 新适配及交付验证完成后，最后实现并验收旧 Electron 完整数据导入；随后进行切换验证、灰度和 Electron 版下线 | 2–3 周 |
 
 合计约 6–8 个月（一人全职 + agent 辅助的估计）。M1 完成后可以作为内部日用版，逐步替代。
 
@@ -713,7 +729,7 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
   回放时**只发给写它的那个模型**（`AssistantMessage.model`），换模型后丢弃，否则上游会拒绝。
 - 用量：genai 的 `prompt_tokens` 含缓存，换算成 FastVibe 的「不含缓存的输入」，缓存命中率才有意义。
 - **重试**：429 / 5xx / 408 / 409 / 断线，在**还没有任何内容到达之前**按指数退避加抖动重发（默认最多 5 次，优先用 `retry-after`）；
-  有内容之后的失败交给调用方，不重放半条回复。genai 把 HTTP 错误放在流的第一个有意义的元素里（`Start` 先于状态码到达），所以先读到那一个再决定。
+  有内容或托管搜索活动之后的失败交给调用方，不重放半条回复或重复搜索。genai 把 HTTP 错误放在流的第一个有意义的元素里（`Start` 先于状态码到达），所以先读到那一个再决定。
   `WebStream` 包着真正的错误，必须拆开判断，否则 401 也会被当成可重试。
 - 已知风险：genai 的 Responses 流式解析要求 `response.completed` 里有 `model` 字段，缺了会**静默丢掉工具调用**（只打 warn）。
   离线测试用的 SSE 是手写的，不是录制的；**真实供应商验证用 `cargo run -p fv-provider --example live`**（密钥走 `FV_API_KEY`）。
@@ -788,7 +804,7 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 - **存储**：schema 迁移到 2（`providers`、`settings` 两张表，旧库原地升级，旧会话新字段取默认）。
 - **真实验证**（FastVibe 中转站）：不带任何模型参数启动 → 拉到 40 个模型 → 保存 → 设默认 `fastvibe/deepseek-v4.1-flash` + high → 重启后新建会话直接跑通一轮；
   响应里没有密钥，`credentials.json` 为 0600，数据库字节里没有密钥。
-- 模型元数据（上下文窗口、价格、是否看图）已接入 models.dev；OAuth 登录式供应商仍待做。
+- 模型元数据（上下文窗口、价格、是否看图）已接入 models.dev；仅支持自定义端点与 API Key，不实现订阅登录。
   命令行 `--protocol` 等参数现在只是没配供应商时的后备。
 
 **上下文压缩（`fv-agent::compact`，`thread/compact/start`）**：照 codex 的内联压缩（`rust-v0.46.0` 的 `codex/compact.rs`）做，提示词和桥接文案取自它的模板（Apache-2.0）。
@@ -830,7 +846,7 @@ M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-proto
 | genai 覆盖不到的协议细节或破坏性升级 | 锁版本；适配层隔离；录制 SSE 回放测试；必要时上游 PR 或在适配层直连 |
 | server 与 GUI 版本不一致 | `initialize` 交换版本；不兼容时 GUI 等 server 空闲后重启它 |
 | 功能面太大，长期双线维护 | Electron 版只修 bug 不加功能；新功能只进原生版 |
-| 远程协议改版，手机端需同步发版 | 新旧协议在过渡期由手机端同时支持 |
+| 远程协议改版，手机端需同步适配 | 按原生 schema 更新 Flutter；握手拒绝不支持的协议版本，不提供旧协议兼容层 |
 
 ## 9. 规则继承
 
@@ -861,8 +877,13 @@ AGENTS.md 里与框架无关的不变式原样带过来，例如：会话级调�
 
 ### 模型详情（2026-10-26）
 
-自定义供应商的模型详情已接通公共读取/单模型保存、并发比较保护、参数/输入能力/思考档位编辑与恢复目录值。已编辑元数据在模型同步和目录刷新时保留，价格继续从当前目录读取；明确继承协议、旧原生路由的一次迁移、混合网关鉴权和下一回合生效均有自动化用例。代码与验证范围见 `native-completion.md` 第十七批，供应商 OAuth 仍待做。
+自定义供应商的模型详情已接通公共读取/单模型保存、并发比较保护、参数/输入能力/思考档位编辑与恢复目录值。已编辑元数据在模型同步和目录刷新时保留，价格继续从当前目录读取；明确继承协议、旧原生路由的一次迁移、混合网关鉴权和下一回合生效均有自动化用例。代码与验证范围见 `native-completion.md` 第十七批。
 
 ### 模型连通性自检（2026-10-26）
 
 已保存模型的行内自检通过公共 `provider/model/test` 使用当前协议、鉴权和元数据，分别验证普通回复与不执行的测试工具。两个独立请求不创建对话、账本或工具副作用；结果只返回安全分类和耗时。请求有超时、输出及全局并发上限，断连清理资源；配置变化或切换设置页后拒绝旧结果。完整验证记录见 `native-completion.md` 第十八批。
+
+
+### 供应商范围（2026-10-26 用户修正）
+
+原生版仅支持用户配置的自定义端点、API 格式与 API Key；不支持 Claude、ChatGPT、Copilot 等任何模型订阅登录。未提交的订阅实现、协议和依赖已撤回，订阅凭据不纳入迁移目标。模型目录刷新、参数编辑和自检继续使用自定义供应商通路；MCP OAuth 属于工具服务认证，继续保留。

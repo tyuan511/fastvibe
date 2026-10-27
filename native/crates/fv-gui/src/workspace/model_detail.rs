@@ -26,6 +26,7 @@ struct Form {
     output: String,
     protocol: Option<ApiProtocol>,
     reasoning: bool,
+    web_search: bool,
     input: Vec<ModelInput>,
     levels: Vec<ThinkingLevel>,
 }
@@ -55,6 +56,7 @@ impl Form {
             output: model.max_output_tokens.unwrap_or(8_192).to_string(),
             protocol: model.protocol,
             reasoning: model.reasoning.unwrap_or(false),
+            web_search: model.web_search,
             input,
             levels,
         }
@@ -109,6 +111,7 @@ impl Form {
             edited: true,
             reasoning: Some(self.reasoning),
             supports_images: self.input.contains(&ModelInput::Image),
+            web_search: self.web_search,
             input: Some(self.input.clone()),
             thinking_levels: Some(if self.reasoning {
                 self.levels.clone()
@@ -511,6 +514,34 @@ impl Workspace {
                             .flex_1(),
                         ),
                 );
+            let search_enabled = e.form.web_search;
+            content = content.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .id("model-web-search")
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .cursor_pointer()
+                            .child(checkbox(search_enabled, p))
+                            .child("托管网页搜索")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(e) =
+                                    this.settings.as_mut().and_then(|s| s.model_edit.as_mut())
+                                {
+                                    e.form.web_search = !e.form.web_search;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().text_size(px(TEXT_XS)).muted(p).child(
+                        "需自定义端点和模型支持；仅 Responses 接口生效，其他格式不会发送搜索参数。",
+                    )),
+            );
             let mut traits = div().flex().flex_wrap().gap(px(12.0));
             for (kind, label) in [
                 (None, "推理"),

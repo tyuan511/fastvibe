@@ -12,10 +12,13 @@ fn every_builtin_tool_is_registered_under_its_codex_name() {
         names,
         [
             "apply_patch",
+            "code_mode",
             "exec_command",
             "request_user_input",
             "update_plan",
             "view_image",
+            "wait",
+            "web_search",
             "write_stdin"
         ]
     );

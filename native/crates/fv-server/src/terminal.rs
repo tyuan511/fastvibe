@@ -151,6 +151,7 @@ struct Session {
 }
 
 pub struct Terminals {
+    runtime_dir: Option<std::path::PathBuf>,
     sessions: Mutex<HashMap<String, Session>>,
 }
 
@@ -158,11 +159,19 @@ impl Default for Terminals {
     fn default() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            runtime_dir: None,
         }
     }
 }
 
 impl Terminals {
+    pub fn for_runtime(dir: std::path::PathBuf) -> Self {
+        Self {
+            runtime_dir: Some(dir),
+            sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
     /// GUI disconnects do not end these shells. They must also prevent an automatic daemon
     /// replacement, even when no conversation turn is running.
     pub fn has_running(&self) -> bool {
@@ -213,7 +222,12 @@ impl Terminals {
             .map_err(|e| failed(format!("无法创建终端：{e}")))?;
 
         let mut command = CommandBuilder::new(&shell);
-        for (name, value) in fv_env::snapshot() {
+        for (name, value) in self
+            .runtime_dir
+            .as_deref()
+            .map(fv_env::snapshot_for)
+            .unwrap_or_else(fv_env::snapshot)
+        {
             command.env(name, value);
         }
         // A login shell, so the user's own profile is read: without it `PATH`, aliases and their

@@ -5,6 +5,8 @@
 
 mod apply_patch;
 mod bm25;
+mod code_mode;
+pub use code_mode::CodeMode;
 mod exec_command;
 mod exec_sessions;
 mod paths;
@@ -13,6 +15,7 @@ mod tool_search;
 mod truncate;
 mod update_plan;
 mod view_image;
+mod web_search;
 mod write_stdin;
 
 use fv_agent::ToolRegistry;
@@ -34,6 +37,8 @@ pub fn register_builtin(registry: &mut ToolRegistry) {
         .register(UpdatePlanTool)
         .register(RequestUserInputTool)
         .register(ViewImageTool)
-        .register(ToolSearchTool);
+        .register(ToolSearchTool)
+        .register(web_search::HostedWebSearch);
     std::sync::Arc::new(ExecSessions::default()).register(registry);
+    std::sync::Arc::new(CodeMode::default()).register(registry);
 }
