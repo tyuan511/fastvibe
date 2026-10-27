@@ -888,6 +888,7 @@ impl Workspace {
                                 Section::Subagents => self.subagents_pane(cx),
                                 Section::Memory => self.memory_pane(cx),
                                 Section::Browser => self.browser_pane(s, cx),
+                                Section::Computer => self.computer_pane(cx),
                                 _ => self.not_yet().into_any_element(),
                             }),
                     ),
@@ -1139,6 +1140,34 @@ impl Workspace {
                     .text_size(px(TEXT_XS))
                     .muted(p)
                     .child("留空使用当前用户的 Downloads 目录；填写时必须是绝对路径。"),
+            )
+            .into_any_element()
+    }
+
+    fn computer_pane(&self, _cx: &mut Context<Self>) -> AnyElement {
+        let p = &self.palette;
+        let supported = cfg!(target_os = "macos");
+        card(p)
+            .p(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(div().text_size(px(TEXT_SM)).child("电脑操控"))
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(if supported {
+                        "macOS 已提供截图、点击、输入和有限按键。每个有副作用的动作都会先请求你的确认。"
+                    } else {
+                        "当前平台尚未提供电脑操控；原生工具会明确返回不支持，不会伪造执行成功。"
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child("首次使用需要在系统设置 → 隐私与安全性 → 辅助功能中允许 FastVibe；拒绝权限时动作会返回可读错误。"),
             )
             .into_any_element()
     }
