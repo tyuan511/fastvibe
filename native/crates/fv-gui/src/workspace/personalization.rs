@@ -331,11 +331,23 @@ impl Workspace {
             );
         }
         if let Some(notice) = &s.draft.notice {
+            let notice = if english {
+                if notice == "已保存" {
+                    "Saved".to_string()
+                } else if let Some(error) = notice.strip_prefix("保存失败，草稿已保留：")
+                {
+                    format!("Save failed; draft kept: {error}")
+                } else {
+                    notice.clone()
+                }
+            } else {
+                notice.clone()
+            };
             pane = pane.child(
                 div()
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(SharedString::from(notice.clone())),
+                    .child(SharedString::from(notice)),
             );
         }
         pane.into_any_element()
