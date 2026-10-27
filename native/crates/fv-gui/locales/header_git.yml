@@ -1,0 +1,14 @@
+_version: 2
+
+header_git.status:
+  zh: "%{branch}，新增 %{additions} 行，删除 %{deletions} 行"
+  en: "%{branch}, +%{additions} -%{deletions}"
+header.expand_sidebar:
+  zh: "展开侧边栏"
+  en: "Expand sidebar"
+header.new_chat:
+  zh: "新对话"
+  en: "New chat"
+header.expand_side_pane:
+  zh: "展开侧边面板"
+  en: "Expand side panel"

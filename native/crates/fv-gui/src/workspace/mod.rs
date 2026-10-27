@@ -35,6 +35,7 @@ mod ask;
 mod composer;
 mod diff;
 mod file_mention;
+mod header_git;
 mod mcp;
 mod memory;
 mod model_detail;
@@ -301,6 +302,7 @@ pub struct Workspace {
     appearance_dirty: bool,
     /// The language the menu bar was last built in.
     menu_english: bool,
+    header_git: header_git::HeaderGit,
     system_dark: bool,
 }
 
@@ -416,6 +418,7 @@ impl Workspace {
         if let Some(view) = fixture.view {
             this.selected = Some(view.thread.id.clone());
             this.views.insert(view.thread.id.clone(), view);
+            this.fixture_header_git(1);
         }
         this
     }
@@ -563,6 +566,7 @@ impl Workspace {
             live_appearance: false,
             appearance_dirty: false,
             menu_english: false,
+            header_git: Default::default(),
             system_dark: matches!(
                 window.appearance(),
                 WindowAppearance::Dark | WindowAppearance::VibrantDark
@@ -2181,6 +2185,7 @@ impl Render for Workspace {
             self.input.update(cx, |input, cx| input.focus(window, cx));
         }
         self.sync_terminal_focus(window, cx);
+        self.sync_header_git(cx);
         let english = self.app_settings.language == UiLanguage::English;
         if english != self.menu_english {
             self.menu_english = english;

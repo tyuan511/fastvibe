@@ -70,7 +70,9 @@ impl Workspace {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(p.c(Token::Foreground)),
             );
+            left = left.children(self.header_git_chip(window, cx));
         }
+        let english = language == UiLanguage::English;
         let sidebar_closed = self.app_settings.sidebar.collapsed;
         let open_fraction = (self.sidebar_motion.width
             / self.sidebar_resting_width(f32::from(window.viewport_size().width)))
@@ -87,14 +89,14 @@ impl Workspace {
             .gap(px(2.0))
             .child(
                 icon_button("expand-sidebar", "panel-left-open", p)
-                    .aria_label("展开侧边栏")
+                    .aria_label(trs!(english, "header.expand_sidebar"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_toggle_sidebar(&super::ToggleSidebar, window, cx)
                     })),
             )
             .child(
                 icon_button("header-new-chat", "message-square-plus", p)
-                    .aria_label("新对话")
+                    .aria_label(trs!(english, "header.new_chat"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_new_chat(&super::NewChat, window, cx)
                     })),
@@ -136,7 +138,7 @@ impl Workspace {
                     .when(self.side_pane_collapsed, |d| {
                         d.child(
                             icon_button("expand-side-pane", "panel-right-open", p)
-                                .aria_label("展开侧边面板")
+                                .aria_label(trs!(english, "header.expand_side_pane"))
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_side_pane(cx))),
                         )
                     }),
