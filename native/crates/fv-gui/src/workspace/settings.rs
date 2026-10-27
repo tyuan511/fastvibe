@@ -220,8 +220,17 @@ pub struct ImportSettings {
 }
 
 impl ProxySettings {
-    fn new(settings: &AppSettings, window: &mut Window, cx: &mut App) -> Self {
-        let url = input(window, cx, "留空使用系统网络设置", false);
+    fn new(settings: &AppSettings, english: bool, window: &mut Window, cx: &mut App) -> Self {
+        let url = input(
+            window,
+            cx,
+            if english {
+                "Leave empty for system network settings"
+            } else {
+                "留空使用系统网络设置"
+            },
+            false,
+        );
         url.update(cx, |state, cx| {
             state.set_value(settings.proxy_url.clone(), window, cx)
         });
@@ -230,11 +239,29 @@ impl ProxySettings {
 }
 
 impl BrowserSettings {
-    fn new(settings: &AppSettings, window: &mut Window, cx: &mut App) -> Self {
+    fn new(settings: &AppSettings, english: bool, window: &mut Window, cx: &mut App) -> Self {
         Self {
-            homepage: input(window, cx, "about:blank 或 https://…", false),
+            homepage: input(
+                window,
+                cx,
+                if english {
+                    "about:blank or https://…"
+                } else {
+                    "about:blank 或 https://…"
+                },
+                false,
+            ),
             search_engine: input(window, cx, "https://…/?q={query}", false),
-            download_dir: input(window, cx, "留空使用 ~/Downloads", false),
+            download_dir: input(
+                window,
+                cx,
+                if english {
+                    "Leave empty for ~/Downloads"
+                } else {
+                    "留空使用 ~/Downloads"
+                },
+                false,
+            ),
         }
         .with_values(settings, window, cx)
     }
@@ -329,6 +356,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if self.settings.is_none() {
+            let english = self.app_settings.language == UiLanguage::English;
             self.settings = Some(SettingsState {
                 model_checks: Default::default(),
                 model_edit: None,
@@ -344,8 +372,8 @@ impl Workspace {
                 memory: Default::default(),
                 mcp: super::mcp::McpSettings::new(window, cx),
                 skills: super::skills::SkillSettings::new(window, cx),
-                browser: BrowserSettings::new(&self.app_settings, window, cx),
-                proxy: ProxySettings::new(&self.app_settings, window, cx),
+                browser: BrowserSettings::new(&self.app_settings, english, window, cx),
+                proxy: ProxySettings::new(&self.app_settings, english, window, cx),
                 import: ImportSettings::default(),
                 section,
                 providers: None,
@@ -354,7 +382,16 @@ impl Workspace {
                 theme_menu: None,
                 archived: None,
                 confirm_delete: None,
-                search: input(window, cx, "搜索供应商或模型", false),
+                search: input(
+                    window,
+                    cx,
+                    if english {
+                        "Search providers or models"
+                    } else {
+                        "搜索供应商或模型"
+                    },
+                    false,
+                ),
                 add: None,
                 add_models: None,
                 notice: None,
@@ -782,7 +819,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let search = input(window, cx, "搜索模型", false);
+        let search = input(
+            window,
+            cx,
+            if self.app_settings.language == UiLanguage::English {
+                "Search models"
+            } else {
+                "搜索模型"
+            },
+            false,
+        );
         let Some(s) = &mut self.settings else { return };
         let chosen = s
             .providers
@@ -814,10 +860,29 @@ impl Workspace {
     }
 
     pub(super) fn open_add_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let english = self.app_settings.language == UiLanguage::English;
         let add = AddProvider {
-            name: input(window, cx, "例如 OpenRouter", false),
+            name: input(
+                window,
+                cx,
+                if english {
+                    "e.g. OpenRouter"
+                } else {
+                    "例如 OpenRouter"
+                },
+                false,
+            ),
             base_url: input(window, cx, "https://api.example.com/v1", false),
-            key: input(window, cx, "粘贴该供应商的 API 密钥", true),
+            key: input(
+                window,
+                cx,
+                if english {
+                    "Paste this provider's API key"
+                } else {
+                    "粘贴该供应商的 API 密钥"
+                },
+                true,
+            ),
             protocol: ApiProtocol::Chat,
             protocol_menu: false,
             busy: false,
@@ -841,7 +906,16 @@ impl Workspace {
             self.add_error("请填写名称、Base URL 与 API 密钥", cx);
             return;
         }
-        let search = input(window, cx, "搜索模型", false);
+        let search = input(
+            window,
+            cx,
+            if self.app_settings.language == UiLanguage::English {
+                "Search models"
+            } else {
+                "搜索模型"
+            },
+            false,
+        );
         if let Some(a) = self.settings.as_mut().and_then(|s| s.add.as_mut()) {
             a.busy = true;
             a.error = None;
