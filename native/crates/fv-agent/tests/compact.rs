@@ -382,7 +382,9 @@ async fn the_users_words_accumulate_across_compactions() {
         .await
         .unwrap();
 
-    assert_eq!(history.len(), 1);
+    // The summary, then the last answer kept word for word.
+    assert_eq!(history.len(), 2);
+    assert!(matches!(&history[1], Message::Assistant(_)));
     let (users, summary) = compaction_of(&history).unwrap();
     assert_eq!(
         users,

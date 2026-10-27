@@ -104,6 +104,51 @@ pub async fn compact(
     result
 }
 
+/// How much of the last answer survives a compaction word for word.
+const RETAINED_ANSWER_CHARS: usize = 4_000;
+
+/// The conversation's last answer, when it is plain text: the summary says what happened, but the
+/// reply the user just read is what their next message is about, and a summary rewords it.
+fn retained_answer(history: &[Message]) -> Option<Message> {
+    let Some(Message::Assistant(last)) = history.last() else {
+        return None;
+    };
+    if last.stop != fv_core::StopReason::Stop
+        || last
+            .content
+            .iter()
+            .any(|b| matches!(b, fv_core::ContentBlock::ToolCall { .. }))
+    {
+        return None;
+    }
+    let text: String = last
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            fv_core::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let text = if text.chars().count() > RETAINED_ANSWER_CHARS {
+        let cut: String = text.chars().take(RETAINED_ANSWER_CHARS).collect();
+        format!("{cut}\n[… the rest of this answer was left out]")
+    } else {
+        text.to_string()
+    };
+    Some(Message::Assistant(fv_core::AssistantMessage {
+        duration_ms: None,
+        content: vec![fv_core::ContentBlock::Text { text }],
+        stop: fv_core::StopReason::Stop,
+        usage: Default::default(),
+        model: None,
+    }))
+}
+
 pub(crate) async fn compact_auto(
     ctx: &AgentContext,
     history: &mut Vec<Message>,
@@ -137,9 +182,11 @@ async fn compact_inner(
         let message = Message::Compaction {
             usage, model: ctx.model.label().map(str::to_owned), user_messages, summary: summary.clone(),
         };
+        let retained = retained_answer(history);
         // Check the ordinary request's projection, including the memory map that will be
         // re-injected, system instructions and tools. Do not publish an unusable checkpoint.
         let mut proposed = vec![message.clone()];
+        proposed.extend(retained.clone());
         if let Some(summary) = ctx.memory.as_ref().and_then(|m| m.snapshot()) {
             proposed.push(Message::MemoryContext { summary });
         }
@@ -151,6 +198,10 @@ async fn compact_inner(
         let _ = events.send(AgentEvent::Committed(message.clone()));
         history.clear();
         history.push(message);
+        if let Some(answer) = retained {
+            let _ = events.send(AgentEvent::Committed(answer.clone()));
+            history.push(answer);
+        }
         let _ = events.send(AgentEvent::CompactionDone { id: id.clone(), summary });
         let _ = events.send(AgentEvent::ContextBudgetChanged { used: after, window: effective_context_window(ctx) });
         Ok(())
