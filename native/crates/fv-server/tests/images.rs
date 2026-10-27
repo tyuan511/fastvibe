@@ -7,7 +7,7 @@ use std::time::Duration;
 use fv_agent::testing::{Reply, ScriptedModel};
 use fv_client::Client;
 use fv_core::{ImageSource, Message};
-use fv_protocol::methods::{Initialize, ThreadStart, TurnStart};
+use fv_protocol::methods::{Initialize, ThreadResume, ThreadStart, TurnStart};
 use fv_protocol::types::*;
 use fv_protocol::{PROTOCOL_VERSION, ServerNotification};
 use fv_server::{ServerState, UnixServer};
@@ -111,6 +111,22 @@ async fn a_viewed_picture_is_a_file_on_disk_and_survives_a_restart() {
         assert!(matches!(&images[0].source, ImageSource::Base64 { .. }));
         thread
     };
+
+    let (_, projection_sock) = run(data.path(), "projection", ScriptedModel::new([])).await;
+    let (projection_client, _) = connect(&projection_sock).await;
+    let snapshot = projection_client
+        .call::<ThreadResume>(ThreadIdParams {
+            thread_id: thread.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        snapshot
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.items)
+            .any(|item| matches!(item, Item::Image { mime, .. } if mime == "image/png"))
+    );
 
     // The transcript holds a path, not the picture.
     let transcript =
