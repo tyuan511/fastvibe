@@ -29,6 +29,7 @@ fn source_root(source: &str) -> Result<PathBuf, ErrorObject> {
     match source {
         "claude-code" => Ok(home.join(".claude").join("projects")),
         "pi" => Ok(home.join(".pi").join("agent").join("sessions")),
+        "codex" => Ok(home.join(".codex")),
         _ => Err(invalid(format!("unsupported import source: {source}"))),
     }
 }
@@ -71,12 +72,13 @@ pub fn scan(
         .source
         .as_deref()
         .map(|source| vec![source])
-        .unwrap_or_else(|| vec!["claude-code", "pi"]);
+        .unwrap_or_else(|| vec!["claude-code", "pi", "codex"]);
     let mut candidates = Vec::new();
     for source in sources {
         let scanned = match source {
             "claude-code" => fv_import::scan_claude(&source_root(source)?),
             "pi" => fv_import::scan_pi(&source_root(source)?),
+            "codex" => fv_import::scan_codex(&source_root(source)?),
             _ => return Err(invalid(format!("unsupported import source: {source}"))),
         }
         .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
@@ -94,6 +96,7 @@ pub fn read(
     let imported = match params.source.as_str() {
         "claude-code" => fv_import::read_claude(&path),
         "pi" => fv_import::read_pi(&path),
+        "codex" => fv_import::read_codex(&path),
         _ => {
             return Err(invalid(format!(
                 "unsupported import source: {}",
@@ -125,6 +128,7 @@ pub fn commit(
     let imported = match params.source.as_str() {
         "claude-code" => fv_import::read_claude(&path),
         "pi" => fv_import::read_pi(&path),
+        "codex" => fv_import::read_codex(&path),
         _ => {
             return Err(invalid(format!(
                 "unsupported import source: {}",

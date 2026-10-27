@@ -463,6 +463,322 @@ pub fn read_pi(path: &Path) -> Result<ImportedSession, ImportError> {
     })
 }
 
+/// Scan Codex CLI rollout files below `sessions/` and `archived_sessions/`.
+pub fn scan_codex(root: &Path) -> Result<Vec<Candidate>, ImportError> {
+    let mut files = Vec::new();
+    collect_jsonl(root, &mut files)?;
+    let mut candidates = Vec::new();
+    for path in files {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("rollout-"))
+            && let Some(candidate) = summarize_codex(&path)?
+        {
+            candidates.push(candidate);
+        }
+    }
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.updated_at));
+    Ok(candidates)
+}
+
+pub fn read_codex(path: &Path) -> Result<ImportedSession, ImportError> {
+    let candidate = summarize_codex(path)?
+        .ok_or_else(|| ImportError::InvalidPath("no Codex conversation entries".into()))?;
+    let mut messages = Vec::new();
+    let mut timestamps = Vec::new();
+    let mut skipped = Vec::new();
+    let mut pending_thinking = Vec::new();
+    let mut model = None;
+    for value in lines(path)? {
+        let Ok(value) = value else {
+            skipped.push("invalid JSON line".into());
+            continue;
+        };
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        let at = timestamp(value.get("timestamp"));
+        if kind == "session_meta" || kind == "turn_context" || kind == "world_state" {
+            if kind == "turn_context" {
+                model = value
+                    .get("payload")
+                    .and_then(|payload| payload.get("model"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or(model);
+            }
+            continue;
+        }
+        if kind == "event_msg" {
+            let payload = value.get("payload");
+            let event_kind = payload
+                .and_then(|payload| payload.get("type"))
+                .and_then(Value::as_str);
+            if event_kind == Some("token_count")
+                && let Some(last) = payload
+                    .and_then(|payload| payload.get("info"))
+                    .and_then(|info| info.get("last_token_usage"))
+            {
+                let usage_value = Usage {
+                    input_tokens: last
+                        .get("input_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    output_tokens: last
+                        .get("output_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    cache_read_tokens: last
+                        .get("cached_input_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    cache_write_tokens: last
+                        .get("cache_write_input_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                };
+                if let Some(Message::Assistant(assistant)) = messages
+                    .iter_mut()
+                    .rev()
+                    .find(|message| matches!(message, Message::Assistant(_)))
+                {
+                    assistant.usage = usage_value;
+                }
+            }
+            continue;
+        }
+        if matches!(
+            kind,
+            "compacted" | "context_compacted" | "token_usage_record"
+        ) {
+            skipped.push(format!("skipped {kind}"));
+            continue;
+        }
+        if kind != "response_item" {
+            continue;
+        }
+        let Some(payload) = value.get("payload").and_then(Value::as_object) else {
+            continue;
+        };
+        let item_kind = payload.get("type").and_then(Value::as_str).unwrap_or("");
+        match item_kind {
+            "message" => match payload.get("role").and_then(Value::as_str) {
+                Some("user") => {
+                    let text = message_text(payload.get("content"));
+                    if text.trim().is_empty() || is_codex_injected(&text) {
+                        if !text.trim().is_empty() {
+                            skipped.push("injected user message".into());
+                        }
+                        continue;
+                    }
+                    pending_thinking.clear();
+                    messages.push(Message::User { text });
+                    timestamps.push(at);
+                }
+                Some("assistant") => {
+                    let text = message_text(payload.get("content"));
+                    let mut content = pending_thinking
+                        .drain(..)
+                        .map(|text| ContentBlock::Thinking {
+                            text,
+                            signature: None,
+                        })
+                        .collect::<Vec<_>>();
+                    if !text.trim().is_empty() {
+                        content.push(ContentBlock::Text { text });
+                    }
+                    if !content.is_empty() {
+                        messages.push(Message::Assistant(AssistantMessage {
+                            duration_ms: None,
+                            content,
+                            stop: StopReason::Stop,
+                            usage: Usage::default(),
+                            model: payload
+                                .get("model")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                .or_else(|| model.clone()),
+                        }));
+                        timestamps.push(at);
+                    }
+                }
+                _ => skipped.push("system/developer message".into()),
+            },
+            "reasoning" => {
+                if let Some(summary) = payload.get("summary") {
+                    let text = message_text(Some(summary));
+                    if !text.trim().is_empty() {
+                        pending_thinking.push(text);
+                    }
+                }
+            }
+            "function_call" | "custom_tool_call" => {
+                let id = payload
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("imported-call");
+                let name = payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("imported_tool");
+                let arguments = payload
+                    .get("arguments")
+                    .or_else(|| payload.get("input"))
+                    .cloned()
+                    .and_then(|value| {
+                        value
+                            .as_str()
+                            .map(|text| {
+                                serde_json::from_str(text).unwrap_or(Value::String(text.into()))
+                            })
+                            .or(Some(value))
+                    })
+                    .unwrap_or(Value::Object(Default::default()));
+                messages.push(Message::Assistant(AssistantMessage {
+                    duration_ms: None,
+                    content: vec![ContentBlock::ToolCall {
+                        id: id.into(),
+                        name: name.into(),
+                        arguments,
+                    }],
+                    stop: StopReason::ToolUse,
+                    usage: Usage::default(),
+                    model: model.clone(),
+                }));
+                timestamps.push(at);
+            }
+            "function_call_output" | "custom_tool_call_output" => {
+                let id = payload
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("imported-call");
+                messages.push(Message::ToolResult {
+                    call_id: id.into(),
+                    name: "imported_tool".into(),
+                    content: tool_result_text(payload.get("output")),
+                    is_error: false,
+                });
+                timestamps.push(at);
+            }
+            _ => skipped.push(format!("unknown response item {item_kind}")),
+        }
+    }
+    Ok(ImportedSession {
+        candidate,
+        messages,
+        timestamps,
+        skipped,
+    })
+}
+
+fn collect_jsonl(root: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<(), ImportError> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            collect_jsonl(&path, files)?;
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("jsonl") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn summarize_codex(path: &Path) -> Result<Option<Candidate>, ImportError> {
+    let meta = std::fs::metadata(path)?;
+    let mut cwd = None;
+    let mut first_user = None;
+    let mut created = 0;
+    let mut updated = 0;
+    let mut count = 0;
+    for value in lines(path)? {
+        let Ok(value) = value else { continue };
+        let at = timestamp(value.get("timestamp"));
+        if created == 0 && at > 0 {
+            created = at;
+        }
+        updated = updated.max(at);
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        if kind == "session_meta" {
+            cwd = value
+                .get("payload")
+                .and_then(|payload| payload.get("cwd"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or(cwd);
+        }
+        if kind != "response_item" {
+            continue;
+        }
+        let Some(payload) = value.get("payload").and_then(Value::as_object) else {
+            continue;
+        };
+        if payload.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let role = payload.get("role").and_then(Value::as_str).unwrap_or("");
+        if role != "user" && role != "assistant" {
+            continue;
+        }
+        let text = message_text(payload.get("content"));
+        if role == "user"
+            && first_user.is_none()
+            && !is_codex_injected(&text)
+            && !text.trim().is_empty()
+        {
+            first_user = Some(text.clone());
+        }
+        if role == "assistant" || (role == "user" && !is_codex_injected(&text)) {
+            count += 1;
+        }
+    }
+    Some(Candidate {
+        source: "codex".into(),
+        source_id: path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .display()
+            .to_string(),
+        title: first_user.unwrap_or_else(|| {
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into()
+        }),
+        cwd,
+        created_at: created,
+        updated_at: updated.max(
+            meta.modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as i64)
+                .unwrap_or(0),
+        ),
+        message_count: count,
+        bytes: meta.len(),
+    })
+    .filter(|candidate| candidate.message_count > 0)
+    .map(Ok)
+    .transpose()
+}
+
+fn is_codex_injected(text: &str) -> bool {
+    [
+        "<permissions instructions>",
+        "<recommended_plugins>",
+        "<multi_agent_mode>",
+        "<environment_context>",
+        "<world_state>",
+        "# AGENTS.md instructions",
+        "<INSTRUCTIONS>",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
+}
+
 fn summarize_pi(path: &Path) -> Result<Option<Candidate>, ImportError> {
     let meta = std::fs::metadata(path)?;
     let mut cwd = None;
@@ -681,5 +997,27 @@ mod tests {
             matches!(&imported.messages[2], Message::ToolResult { call_id, content, .. } if call_id == "c1" && content == "ok")
         );
         assert_eq!(imported.skipped.len(), 1);
+    }
+
+    #[test]
+    fn codex_ignores_event_mirrors_and_injected_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-test.jsonl");
+        let lines = [
+            r#"{"type":"session_meta","timestamp":"2026-10-27T00:00:00Z","payload":{"cwd":"/tmp/codex"}}"#,
+            r#"{"type":"response_item","timestamp":"2026-10-27T00:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>hidden</environment_context>"}]}}"#,
+            r#"{"type":"response_item","timestamp":"2026-10-27T00:00:02Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}"#,
+            r#"{"type":"response_item","timestamp":"2026-10-27T00:00:03Z","payload":{"type":"reasoning","summary":[{"text":"think"}]}}"#,
+            r#"{"type":"response_item","timestamp":"2026-10-27T00:00:04Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-10-27T00:00:05Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":5,"output_tokens":2}}}}"#,
+        ];
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let imported = read_codex(&path).unwrap();
+        assert_eq!(imported.candidate.title, "hello");
+        assert_eq!(imported.messages.len(), 2);
+        assert!(
+            matches!(&imported.messages[1], Message::Assistant(message) if message.content.len() == 2 && message.usage.input_tokens == 5)
+        );
+        assert_eq!(imported.timestamps.len(), imported.messages.len());
     }
 }
