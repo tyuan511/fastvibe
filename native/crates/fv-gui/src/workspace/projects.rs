@@ -45,7 +45,15 @@ impl Workspace {
             ),
             None => (String::new(), Vec::new()),
         };
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("项目名称 / Project name"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(
+                if self.app_settings.language == UiLanguage::English {
+                    "Project name"
+                } else {
+                    "项目名称"
+                },
+            )
+        });
         input.update(cx, |st, cx| st.set_value(name, window, cx));
         cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, _, cx| {
             if matches!(ev, InputEvent::Change)
@@ -75,7 +83,14 @@ impl Workspace {
             files: false,
             directories: true,
             multiple: true,
-            prompt: Some("添加文件夹".into()),
+            prompt: Some(
+                if self.app_settings.language == UiLanguage::English {
+                    "Add folders"
+                } else {
+                    "添加文件夹"
+                }
+                .into(),
+            ),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else {
@@ -153,7 +168,11 @@ impl Workspace {
                     Err(e) => {
                         if let Some(d) = &mut this.project_dialog {
                             d.busy = false;
-                            d.error = Some(format!("无法保存项目：{e}"));
+                            d.error = Some(if this.app_settings.language == UiLanguage::English {
+                                format!("Could not save project: {e}")
+                            } else {
+                                format!("无法保存项目：{e}")
+                            });
                         }
                     }
                 }
@@ -306,93 +325,95 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, _, cx| this.pick_folders(cx))),
         );
 
-        let body = dialog_card(p, 448.0)
-            .child(dialog_head(
-                if editing {
-                    if english {
-                        "Edit project"
+        let body =
+            dialog_card(p, 448.0)
+                .child(dialog_head(
+                    if editing {
+                        if english {
+                            "Edit project"
+                        } else {
+                            "编辑项目"
+                        }
                     } else {
-                        "编辑项目"
-                    }
-                } else {
-                    if english {
+                        if english {
+                            "Create project"
+                        } else {
+                            "创建项目"
+                        }
+                    },
+                    "",
+                    p,
+                ))
+                .child(
+                    div()
+                        .px(px(20.0))
+                        .pb(px(16.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .px(px(8.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .rounded(px(10.0))
+                                .border_1()
+                                .border_color(p.c(Token::Border))
+                                .child(icon("folder01", 16.0, p.c(Token::MutedForeground)))
+                                .child(
+                                    div().flex_1().child(
+                                        Input::new(&d.name).appearance(false).bordered(false),
+                                    ),
+                                ),
+                        )
+                        .when_some(placeholder_hint.filter(|_| !editing), |col, hint| {
+                            col.child(div().text_size(px(TEXT_XS)).muted(p).child(
+                                SharedString::from(if english {
+                                    format!("Leave blank to use \"{hint}\"")
+                                } else {
+                                    format!("不填则用「{hint}」")
+                                }),
+                            ))
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .child(div().text_size(px(TEXT_SM)).muted(p).child(if english {
+                                    "Source folders"
+                                } else {
+                                    "源文件夹"
+                                }))
+                                .child(rows),
+                        )
+                        .when_some(d.error.clone(), |col, e| {
+                            col.child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .text_color(p.c(Token::Destructive))
+                                    .child(SharedString::from(e)),
+                            )
+                        }),
+                )
+                .child(dialog_foot(
+                    p,
+                    cx,
+                    |this, cx| {
+                        this.project_dialog = None;
+                        cx.notify();
+                    },
+                    if editing {
+                        if english { "Confirm" } else { "确认" }
+                    } else if english {
                         "Create project"
                     } else {
                         "创建项目"
-                    }
-                },
-                "",
-                p,
-            ))
-            .child(
-                div()
-                    .px(px(20.0))
-                    .pb(px(16.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.0))
-                    .child(
-                        div()
-                            .px(px(8.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .rounded(px(10.0))
-                            .border_1()
-                            .border_color(p.c(Token::Border))
-                            .child(icon("folder01", 16.0, p.c(Token::MutedForeground)))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(Input::new(&d.name).appearance(false).bordered(false)),
-                            ),
-                    )
-                    .when_some(placeholder_hint.filter(|_| !editing), |col, hint| {
-                        col.child(
-                            div()
-                                .text_size(px(TEXT_XS))
-                                .muted(p)
-                                .child(SharedString::from(format!("不填则用「{hint}」"))),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(div().text_size(px(TEXT_SM)).muted(p).child(if english {
-                                "Source folders"
-                            } else {
-                                "源文件夹"
-                            }))
-                            .child(rows),
-                    )
-                    .when_some(d.error.clone(), |col, e| {
-                        col.child(
-                            div()
-                                .text_size(px(TEXT_SM))
-                                .text_color(p.c(Token::Destructive))
-                                .child(SharedString::from(e)),
-                        )
-                    }),
-            )
-            .child(dialog_foot(
-                p,
-                cx,
-                |this, cx| {
-                    this.project_dialog = None;
-                    cx.notify();
-                },
-                if editing {
-                    if english { "Confirm" } else { "确认" }
-                } else if english {
-                    "Create project"
-                } else {
-                    "创建项目"
-                },
-                |this, _, cx| this.save_project(cx),
-                d.folders.is_empty() || d.busy,
-            ));
+                    },
+                    |this, _, cx| this.save_project(cx),
+                    d.folders.is_empty() || d.busy,
+                ));
         Some(modal(body, p, cx, |this| this.project_dialog = None))
     }
 }
