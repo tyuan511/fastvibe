@@ -11,6 +11,7 @@ use crate::{
 };
 use fv_protocol::types::{FilePreview, FilePreviewKind, UiLanguage};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     component::{
         Sizable as _,
@@ -31,6 +32,8 @@ pub(super) struct ContentView {
     pub loading: bool,
     pub notice: Option<String>,
     browser: bool,
+    /// Set once WebKit commits the page being navigated to.
+    committed: bool,
     external: Option<String>,
 }
 pub(super) fn live_key(tab: &str) -> String {
@@ -202,6 +205,15 @@ impl Workspace {
         state.activate(id);
         cx.notify();
     }
+    /// The capture fixture: the right pane open on a browser tab at the homepage.
+    pub fn open_browser_for_fixture(&mut self, cx: &mut Context<Self>) {
+        let Some(conversation) = self.selected.clone() else {
+            return;
+        };
+        self.side_pane_collapsed = false;
+        let url = std::env::var("FV_FIXTURE_URL").unwrap_or_else(|_| "https://example.com".into());
+        self.open_browser_tab(&conversation, &url, cx);
+    }
     fn web_events(
         &self,
         key: String,
@@ -266,6 +278,7 @@ impl Workspace {
             }
             WebEvent::Loading(loading) => {
                 view.loading = loading;
+                view.committed |= loading;
                 if let Some(tab) = key.strip_prefix("office-live:")
                     && let Some(office) = self.office_views.get_mut(tab)
                     && loading
@@ -327,6 +340,32 @@ impl Workspace {
                             }
                             view.loading = true;
                             view.notice = None;
+                            // WebKit reports a start only once the server answers, so a
+                            // failed connection is otherwise a spinner that never ends.
+                            let (key, target) = (key.to_string(), url.clone());
+                            let english = self.app_settings.language == UiLanguage::English;
+                            cx.spawn(async move |this, cx| {
+                                cx.background_executor()
+                                    .timer(std::time::Duration::from_secs(20))
+                                    .await;
+                                this.update(cx, |this, cx| {
+                                    if let Some(view) = this.web_views.get_mut(&key)
+                                        && view.loading
+                                        && !view.committed
+                                        && view.url == target
+                                    {
+                                        view.loading = false;
+                                        view.notice = Some(
+                                            trs!(english, "pane_web.page_did_not_start_loading")
+                                                .into(),
+                                        );
+                                        cx.notify();
+                                    }
+                                })
+                                .ok();
+                            })
+                            .detach();
+                            view.committed = false;
                         }
                         Err(error) => view.notice = Some(error),
                     }
@@ -416,6 +455,7 @@ impl Workspace {
                     loading: false,
                     notice: None,
                     browser: true,
+                    committed: false,
                     external: None,
                 },
             );
@@ -428,9 +468,19 @@ impl Workspace {
             });
             let key = id.to_string();
             cx.subscribe(&address, move |this, input, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    let value = input.read(cx).value().to_string();
-                    this.navigate_browser(&key, &value, cx);
+                match event {
+                    InputEvent::PressEnter { .. } => {
+                        let value = input.read(cx).value().to_string();
+                        this.navigate_browser(&key, &value, cx);
+                    }
+                    // The native web view keeps AppKit's first responder after a click in
+                    // the page, so keys never reach this field unless the window takes it back.
+                    InputEvent::Focus => {
+                        if let Some(view) = this.web_views.get(&key) {
+                            let _ = view.surface.command("focus_parent");
+                        }
+                    }
+                    _ => (),
                 }
             })
             .detach();
@@ -528,13 +578,16 @@ impl Workspace {
                 this.toggle_browser_bookmark(&bookmark_url, &bookmark_title, cx);
             })),
         );
+        // The scroll wrapper is `size_full` unless told otherwise: without a height of its own the
+        // bar takes the whole column and the page below it is laid out zero pixels tall.
         let mut library = div()
             .w_full()
+            .h(px(26.0))
+            .flex_none()
             .flex()
             .items_center()
             .gap(px(6.0))
             .px(px(8.0))
-            .py(px(4.0))
             .overflow_x_scrollbar();
         for bookmark in self.browser_bookmarks.iter().rev().take(8) {
             let url = bookmark.url.clone();
@@ -556,7 +609,9 @@ impl Workspace {
             .flex()
             .flex_col()
             .child(toolbar)
-            .child(library)
+            .when(!self.browser_bookmarks.is_empty(), |this| {
+                this.child(library)
+            })
             .children(notice.map(|text| {
                 div()
                     .px(px(8.))
@@ -605,6 +660,7 @@ impl Workspace {
                             loading: false,
                             notice: None,
                             browser: false,
+                            committed: false,
                             external: None,
                         },
                     );
@@ -661,6 +717,7 @@ impl Workspace {
                             loading: true,
                             notice: None,
                             browser: false,
+                            committed: false,
                             external: None,
                         },
                     );

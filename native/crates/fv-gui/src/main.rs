@@ -215,6 +215,16 @@ fn main() {
                             ws.open_terminal_for_fixture(cx);
                             return ws;
                         }
+                        Some("browser") => {
+                            let mut ws = Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::side_pane(),
+                                window,
+                                cx,
+                            );
+                            ws.open_browser_for_fixture(cx);
+                            return ws;
+                        }
                         Some("mention") => {
                             let mut ws = Workspace::fixture(
                                 palette,

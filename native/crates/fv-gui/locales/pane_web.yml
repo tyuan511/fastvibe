@@ -36,3 +36,6 @@ pane_web.remove_bookmark:
 pane_web.bookmark_this_page:
   zh: "收藏此页"
   en: "Bookmark this page"
+pane_web.page_did_not_start_loading:
+  zh: "页面无法打开：连接失败或超时，请检查网络、代理或地址"
+  en: "The page could not be opened: the connection failed or timed out. Check the network, proxy or address"
