@@ -16,7 +16,9 @@ pub struct Layout {
     pub version: u32,
     pub selected: Option<String>,
     pub collapsed: bool,
-    pub width: f32,
+    /// What the pane was dragged to; `None` follows the window. Older files wrote the old fixed
+    /// default (380) for a pane nobody had sized, which `restore_panes` reads as `None`.
+    pub width: Option<f32>,
     pub maximized: bool,
     pub panes: BTreeMap<String, Pane>,
     #[serde(default)]
@@ -31,7 +33,7 @@ impl Default for Layout {
             version: 1,
             selected: None,
             collapsed: true,
-            width: 380.0,
+            width: None,
             maximized: false,
             panes: BTreeMap::new(),
             browser_bookmarks: Vec::new(),
@@ -217,7 +219,7 @@ mod tests {
         let mut layout = Layout {
             selected: Some("chat-a".into()),
             collapsed: false,
-            width: 720.0,
+            width: Some(720.0),
             maximized: true,
             ..Default::default()
         };

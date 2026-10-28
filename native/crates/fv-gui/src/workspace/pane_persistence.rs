@@ -195,8 +195,11 @@ impl Workspace {
         self.browser_bookmarks = layout.browser_bookmarks.clone();
         self.browser_history = layout.browser_history.clone();
         self.side_pane_collapsed = layout.collapsed;
-        self.side_pane_width =
-            finite_width(layout.width, super::DEFAULT_WIDTH).max(super::MIN_WIDTH);
+        self.side_pane_width = layout
+            .width
+            // The old fixed default was saved for every pane nobody had sized.
+            .filter(|width| *width != super::DEFAULT_WIDTH)
+            .map(|width| finite_width(width, super::DEFAULT_WIDTH).max(super::MIN_WIDTH));
         self.side_pane_maximized = layout.maximized;
         if self.selected.is_none() {
             self.selected = layout.selected;

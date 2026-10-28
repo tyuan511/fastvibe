@@ -468,7 +468,7 @@ impl Workspace {
         // The fixture opens the pane wide enough for side-by-side, so that mode is what the capture
         // shows. At the default width the pane refuses it (two 150px columns are not readable), and
         // a fixture that forced it would be photographing a layout the app will not draw.
-        self.side_pane_width = super::pane::DEFAULT_WIDTH;
+        self.side_pane_width = Some(super::pane::DEFAULT_WIDTH);
         self.side_pane_maximized = true;
         view.split = true;
         if let Some(status) = &view.status

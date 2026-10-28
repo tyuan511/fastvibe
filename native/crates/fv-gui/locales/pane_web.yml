@@ -39,3 +39,42 @@ pane_web.bookmark_this_page:
 pane_web.page_did_not_start_loading:
   zh: "页面无法打开：连接失败或超时，请检查网络、代理或地址"
   en: "The page could not be opened: the connection failed or timed out. Check the network, proxy or address"
+pane_web.more:
+  zh: "更多"
+  en: "More"
+pane_web.print:
+  zh: "打印"
+  en: "Print"
+pane_web.zoom:
+  zh: "缩放"
+  en: "Zoom"
+pane_web.zoom_out:
+  zh: "缩小"
+  en: "Zoom out"
+pane_web.zoom_in:
+  zh: "放大"
+  en: "Zoom in"
+pane_web.zoom_reset:
+  zh: "重置缩放"
+  en: "Reset zoom"
+pane_web.copy_url:
+  zh: "复制地址"
+  en: "Copy address"
+pane_web.copied_url:
+  zh: "已复制网页地址"
+  en: "Page address copied"
+pane_web.clear_data:
+  zh: "清除浏览数据"
+  en: "Clear browsing data"
+pane_web.data_cleared:
+  zh: "已清除 Cookie、缓存和网站数据"
+  en: "Cookies, cache and site data cleared"
+pane_web.recent:
+  zh: "最近访问"
+  en: "Recently visited"
+pane_web.no_history:
+  zh: "还没有访问记录"
+  en: "No history yet"
+pane_web.browser_settings:
+  zh: "浏览器设置"
+  en: "Browser settings"

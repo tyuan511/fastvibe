@@ -74,6 +74,41 @@ pub fn address_with_search(value: &str, search_engine: &str) -> Result<String, S
     fv_core::safe_web_url(&target).ok_or_else(|| "搜索引擎地址无效".into())
 }
 
+/// WebKit's own user agent stops at `(KHTML, like Gecko)`, and sites that sniff for a browser read
+/// that as something unknown: Baidu answers it with a page that sends it to `http://`, which WebKit
+/// upgrades straight back to `https://`, so the page reloads forever and never shows. The browser
+/// tab therefore says it is the Safari whose WebKit it is running.
+#[cfg(target_os = "macos")]
+fn browser_user_agent() -> &'static str {
+    static AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        let version = std::fs::read_to_string("/Applications/Safari.app/Contents/Info.plist")
+            .ok()
+            .and_then(|plist| safari_version(&plist))
+            .unwrap_or_else(|| "18.0".into());
+        safari_user_agent(&version)
+    })
+}
+fn safari_user_agent(version: &str) -> String {
+    format!(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 \
+         (KHTML, like Gecko) Version/{version} Safari/605.1.15"
+    )
+}
+fn safari_version(plist: &str) -> Option<String> {
+    let after = plist
+        .split("<key>CFBundleShortVersionString</key>")
+        .nth(1)?;
+    let value = after
+        .trim_start()
+        .strip_prefix("<string>")?
+        .split("</string>")
+        .next()?;
+    let value = value.trim();
+    (!value.is_empty() && value.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .then(|| value.to_string())
+}
+
 pub fn download_directory(configured: &str) -> PathBuf {
     if !configured.trim().is_empty() {
         return PathBuf::from(configured.trim());
@@ -304,6 +339,7 @@ impl Surface {
                     Ok(())
                 }
                 "reload" => native.reload(),
+                "print" => native.print(),
                 "stop" => {
                     use wry::WebViewExtMacOS as _;
                     unsafe {
@@ -316,6 +352,33 @@ impl Surface {
             return result.map_err(|e| e.to_string());
         }
         let _ = command;
+        Ok(())
+    }
+    /// Whether WebKit has a page to go back or forward to.
+    pub fn can_go(&self) -> (bool, bool) {
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &self.native {
+            return (
+                native.can_go_back().unwrap_or(false),
+                native.can_go_forward().unwrap_or(false),
+            );
+        }
+        (false, false)
+    }
+    pub fn set_zoom(&self, factor: f64) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &self.native {
+            return native.zoom(factor).map_err(|e| e.to_string());
+        }
+        let _ = factor;
+        Ok(())
+    }
+    /// Forget cookies, caches and site storage of every browser tab: they share one data store.
+    pub fn clear_data(&self) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &self.native {
+            return native.clear_all_browsing_data().map_err(|e| e.to_string());
+        }
         Ok(())
     }
     pub fn retry(&mut self) {
@@ -404,7 +467,9 @@ impl Surface {
             .with_on_web_content_process_terminate_handler(move || {
                 let _ = crashed_events.send(WebEvent::Crashed);
             });
-        if !browser {
+        if browser {
+            builder = builder.with_user_agent(browser_user_agent());
+        } else {
             builder = builder.with_initialization_script(
                 "window.alert=()=>{};window.confirm=()=>false;window.prompt=()=>null;",
             );
@@ -458,6 +523,23 @@ mod tests {
         }
         assert!(!Navigation::Browser.allows("file:///tmp/a"));
     }
+    #[test]
+    fn the_browser_says_it_is_safari_so_sniffing_sites_serve_their_real_page() {
+        let plist =
+            "<dict>\n\t<key>CFBundleShortVersionString</key>\n\t<string>27.0.1</string>\n</dict>";
+        assert_eq!(safari_version(plist).as_deref(), Some("27.0.1"));
+        assert_eq!(
+            safari_version("<key>CFBundleShortVersionString</key><string>x\"</string>"),
+            None
+        );
+        assert_eq!(safari_version("<dict></dict>"), None);
+        let agent = safari_user_agent("27.0.1");
+        assert!(
+            agent.contains("(KHTML, like Gecko) Version/27.0.1 Safari/605.1.15"),
+            "{agent}"
+        );
+    }
+
     #[test]
     fn clipped_or_nonfinite_native_views_are_hidden_instead_of_covering_the_app() {
         let clip = Bounds::new(point(px(10.), px(20.)), size(px(300.), px(200.)));

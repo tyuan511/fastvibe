@@ -56,7 +56,17 @@ pub fn icon_button(id: impl Into<ElementId>, name: &str, p: &Palette) -> Statefu
 
 /// `size="icon-xs"`: 24px square, 14px glyph.
 pub fn icon_button_xs(id: impl Into<ElementId>, name: &str, p: &Palette) -> Stateful<Div> {
-    ghost_square(id, 24.0, 8.0, p).child(icon(name, 14.0, p.c(Token::MutedForeground)))
+    icon_button_xs_tinted(id, name, p.c(Token::MutedForeground), p)
+}
+
+/// `icon_button_xs` whose glyph carries a state of its own, such as a bookmarked page's star.
+pub fn icon_button_xs_tinted(
+    id: impl Into<ElementId>,
+    name: &str,
+    color: Hsla,
+    p: &Palette,
+) -> Stateful<Div> {
+    ghost_square(id, 24.0, 8.0, p).child(icon(name, 14.0, color))
 }
 
 fn ghost_square(id: impl Into<ElementId>, size: f32, radius: f32, p: &Palette) -> Stateful<Div> {

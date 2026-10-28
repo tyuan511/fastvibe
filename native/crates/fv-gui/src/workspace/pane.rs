@@ -111,8 +111,16 @@ pub(super) const SPLIT_MIN_WIDTH: f32 = 640.0;
 
 /// The narrowest the pane may be dragged. Below this the diff and the tree stop being readable.
 pub const MIN_WIDTH: f32 = 280.0;
-/// How wide it opens the first time.
+/// The narrowest a pane nobody has sized opens at.
 pub const DEFAULT_WIDTH: f32 = 380.0;
+/// A pane nobody has sized takes this share of the room right of the sidebar, so a web page or a
+/// diff gets more of a wide window instead of the same 380px on every screen.
+const AUTO_SHARE: f32 = 0.45;
+
+/// The width of a pane the user has not dragged.
+pub(super) fn auto_width(viewport: f32, sidebar: f32) -> f32 {
+    ((viewport - sidebar).max(0.0) * AUTO_SHARE).max(DEFAULT_WIDTH)
+}
 /// The file list's column inside the pane, as the Electron pane keeps it.
 const TREE_WIDTH: f32 = 224.0;
 const TREE_MIN: f32 = 120.0;
@@ -641,7 +649,7 @@ impl Workspace {
                                 )
                                 .on_click(cx.listener(|this, e: &ClickEvent, _, cx| {
                                     if super::sidebar_actions::is_width_reset(e) {
-                                        this.side_pane_width = DEFAULT_WIDTH;
+                                        this.side_pane_width = None;
                                         cx.notify();
                                     }
                                 })),
@@ -971,7 +979,7 @@ impl Workspace {
         if let Some(width) = self.side_pane_resize.take() {
             self.side_pane_collapsed = width < MIN_WIDTH / 2.0;
             if !self.side_pane_collapsed {
-                self.side_pane_width = width.max(MIN_WIDTH);
+                self.side_pane_width = Some(width.max(MIN_WIDTH));
             }
             cx.notify();
         }
@@ -2237,6 +2245,19 @@ pub(crate) fn preview_body_box(owns_scroll: bool) -> Stateful<Div> {
         .min_h_0()
         .w_full()
         .when(!owns_scroll, |d| d.overflow_y_scroll())
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::{DEFAULT_WIDTH, auto_width};
+
+    #[test]
+    fn an_unsized_pane_grows_with_the_window_but_never_below_the_old_default() {
+        assert_eq!(auto_width(1100.0, 300.0), DEFAULT_WIDTH);
+        assert_eq!(auto_width(1900.0, 300.0), 720.0);
+        assert!(auto_width(2560.0, 300.0) > auto_width(1900.0, 300.0));
+        assert_eq!(auto_width(200.0, 300.0), DEFAULT_WIDTH);
+    }
 }
 
 #[cfg(test)]

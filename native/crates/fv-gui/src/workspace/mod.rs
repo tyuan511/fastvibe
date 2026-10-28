@@ -248,12 +248,15 @@ pub struct Workspace {
     /// Whether the pane is collapsed, and how wide it is when it is not. Remembered per client,
     /// not per conversation: the pane's width is a property of the window, not of a chat.
     side_pane_collapsed: bool,
-    side_pane_width: f32,
+    /// `None` until the user drags it: the pane then follows the window (`pane::auto_width`).
+    side_pane_width: Option<f32>,
     side_pane_maximized: bool,
     side_pane_resize: Option<f32>,
     /// Actual inner width after window constraints (also used by responsive pane content).
     pane_content_width: f32,
     pane_menu: Option<(Point<Pixels>, Option<String>)>,
+    /// The browser toolbar's ⋯ menu: where it opened, and the tab it belongs to.
+    browser_menu: Option<(Point<Pixels>, String)>,
     entry_menu: Option<pane::entries::EntryMenu>,
     entry_dialog: Option<pane::entries::EntryDialog>,
     /// The file tree's column while it is being dragged, if it is.
@@ -537,11 +540,12 @@ impl Workspace {
             // conversation is a column the reader did not ask for, and the Electron pane starts
             // closed for the same reason. A tab appearing (a file, 变更) opens it.
             side_pane_collapsed: true,
-            side_pane_width: pane::DEFAULT_WIDTH,
+            side_pane_width: None,
             side_pane_maximized: false,
             side_pane_resize: None,
             pane_content_width: pane::DEFAULT_WIDTH - 16.0,
             pane_menu: None,
+            browser_menu: None,
             entry_menu: None,
             entry_dialog: None,
             pane_tree_resize: None,
@@ -794,6 +798,7 @@ impl Workspace {
             || self.approval_menu
             || self.project_menu
             || self.pane_menu.is_some()
+            || self.browser_menu.is_some()
             || self.entry_menu.is_some()
             || self.sidebar_menu.is_some()
             || self.thread_menu.is_some()
@@ -809,6 +814,7 @@ impl Workspace {
 
     fn close_menus(&mut self, cx: &mut Context<Self>) {
         self.pane_menu = None;
+        self.browser_menu = None;
         self.entry_menu = None;
         self.sidebar_menu = None;
         self.model_menu = false;
@@ -2342,7 +2348,11 @@ impl Render for Workspace {
         } else {
             self.side_pane_resize
                 .map(|w| w.max(0.0))
-                .unwrap_or(self.side_pane_width.max(pane::MIN_WIDTH))
+                .unwrap_or_else(|| {
+                    self.side_pane_width
+                        .unwrap_or_else(|| pane::auto_width(viewport, sidebar_target))
+                        .max(pane::MIN_WIDTH)
+                })
                 .min((viewport * 0.65).max(pane::MIN_WIDTH))
                 .min((viewport - self.sidebar_motion.width - 420.0).max(0.0))
         };
@@ -2517,6 +2527,7 @@ impl Render for Workspace {
         });
         self.prepare_web_views(cx);
         root.children(self.pane_menu_view(window, cx))
+            .children(self.browser_menu_view(window, cx))
             .children(self.entry_menu_view(window, cx))
             .children(self.sidebar_menu_view(window, cx))
             .children(self.header_git_menu_view(window, cx))

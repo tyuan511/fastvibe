@@ -34,6 +34,10 @@ pub(super) struct ContentView {
     browser: bool,
     /// Set once WebKit commits the page being navigated to.
     committed: bool,
+    /// Page zoom of this tab (1.0 is 100%).
+    zoom: f64,
+    can_back: bool,
+    can_forward: bool,
     external: Option<String>,
 }
 pub(super) fn live_key(tab: &str) -> String {
@@ -102,12 +106,12 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Whether a native page may be on screen. A splitter drag is not a reason to hide it: AppKit
+    /// sends every dragged event to the view the button went down in, so the page cannot take the
+    /// drag, and hiding it blanked the pane for the whole drag, which read as the page re-rendering.
     pub(super) fn native_views_allowed(&self) -> bool {
         !self.side_pane_collapsed
             && !self.web_drag_blocked
-            && self.side_pane_resize.is_none()
-            && self.sidebar_resize.is_none()
-            && self.pane_tree_resize.is_none()
             && self.settings.is_none()
             && !self.schedules_ui.open
             && self.search_box.is_none()
@@ -213,6 +217,24 @@ impl Workspace {
         self.side_pane_collapsed = false;
         let url = std::env::var("FV_FIXTURE_URL").unwrap_or_else(|_| "https://example.com".into());
         self.open_browser_tab(&conversation, &url, cx);
+        // `FV_FIXTURE_BROWSER_MENU=1` also opens the ⋯ menu, and a bookmark gives its star a state.
+        if std::env::var_os("FV_FIXTURE_BROWSER_MENU").is_some() {
+            if let Some(tab) = self.panes.get(&conversation).and_then(|p| p.active.clone()) {
+                self.browser_bookmarks.push(crate::pane_layout::Bookmark {
+                    title: "Example".into(),
+                    url: "https://example.com/".into(),
+                });
+                self.browser_history.push(crate::pane_layout::HistoryEntry {
+                    title: "Example Domain".into(),
+                    url: "https://example.com/".into(),
+                    visited_at: 1,
+                });
+                self.browser_menu = Some((
+                    gpui_kit::point(gpui_kit::px(1180.0), gpui_kit::px(96.0)),
+                    tab,
+                ));
+            }
+        }
     }
     fn web_events(
         &self,
@@ -279,6 +301,7 @@ impl Workspace {
             WebEvent::Loading(loading) => {
                 view.loading = loading;
                 view.committed |= loading;
+                (view.can_back, view.can_forward) = view.surface.can_go();
                 if let Some(tab) = key.strip_prefix("office-live:")
                     && let Some(office) = self.office_views.get_mut(tab)
                     && loading
@@ -379,6 +402,206 @@ impl Workspace {
         }
         cx.notify();
     }
+    const ZOOM_STEPS: [f64; 15] = [
+        0.25, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 5.0,
+    ];
+
+    /// `step` of -1/+1 moves to the neighbouring zoom level, 0 goes back to 100%.
+    fn browser_zoom(&mut self, key: &str, step: i32, cx: &mut Context<Self>) {
+        let Some(view) = self.web_views.get_mut(key) else {
+            return;
+        };
+        let at = Self::ZOOM_STEPS
+            .iter()
+            .position(|z| (*z - view.zoom).abs() < 0.001)
+            .unwrap_or_else(|| {
+                Self::ZOOM_STEPS
+                    .iter()
+                    .position(|z| *z >= view.zoom)
+                    .unwrap_or(Self::ZOOM_STEPS.len() - 1)
+            });
+        let next = match step {
+            0 => 1.0,
+            s => {
+                Self::ZOOM_STEPS
+                    [(at as i32 + s).clamp(0, Self::ZOOM_STEPS.len() as i32 - 1) as usize]
+            }
+        };
+        match view.surface.set_zoom(next) {
+            Ok(()) => view.zoom = next,
+            Err(error) => view.notice = Some(error),
+        }
+        cx.notify();
+    }
+
+    pub(super) fn browser_menu_view(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (at, key) = self.browser_menu.clone()?;
+        let view = self.web_views.get(&key)?;
+        let english = self.app_settings.language == UiLanguage::English;
+        let p = &self.palette;
+        let at = super::sidebar_actions::popup_origin(at, 248.0, 420.0, window);
+        let hover = p.c(fv_theme::Token::Accent);
+        let muted = p.c(fv_theme::Token::MutedForeground);
+        let mut menu = super::settings::popover(p)
+            .absolute()
+            .left(at.x)
+            .top(at.y)
+            .w(px(248.0));
+        let item = |id: &'static str, glyph: &str, label: &str| {
+            super::settings::menu_item(SharedString::from(id), false, hover)
+                .child(ui::icon(glyph, 16.0, muted))
+                .child(label.to_string())
+        };
+        menu = menu.child(
+            item("browser-print", "printer", trs!(english, "pane_web.print")).on_click(
+                cx.listener({
+                    let key = key.clone();
+                    move |this, _, _, cx| {
+                        this.close_menus(cx);
+                        this.web_command(&key, "print", cx);
+                    }
+                }),
+            ),
+        );
+        let zoom_button = |id: &'static str, glyph: &str, label: &str, step: i32| {
+            let key = key.clone();
+            ui::icon_button_xs(id, glyph, p)
+                .aria_label(label.to_string())
+                .on_click(cx.listener(move |this, _, _, cx| this.browser_zoom(&key, step, cx)))
+        };
+        menu = menu.child(
+            div()
+                .min_h(px(32.0))
+                .px(px(8.0))
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(div().flex_1().child(trs!(english, "pane_web.zoom")))
+                .child(zoom_button(
+                    "browser-zoom-out",
+                    "minus-sign",
+                    trs!(english, "pane_web.zoom_out"),
+                    -1,
+                ))
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .flex()
+                        .justify_center()
+                        .text_size(px(TEXT_XS))
+                        .child(format!("{}%", (view.zoom * 100.0).round())),
+                )
+                .child(zoom_button(
+                    "browser-zoom-in",
+                    "plus-sign",
+                    trs!(english, "pane_web.zoom_in"),
+                    1,
+                ))
+                .child(zoom_button(
+                    "browser-zoom-reset",
+                    "rotate-ccw",
+                    trs!(english, "pane_web.zoom_reset"),
+                    0,
+                )),
+        );
+        let url = view.url.clone();
+        menu = menu.child(
+            item(
+                "browser-copy-url",
+                "copy01",
+                trs!(english, "pane_web.copy_url"),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                this.close_menus(cx);
+                if let Some(view) = this.web_views.values_mut().find(|v| v.url == url) {
+                    view.notice = Some(trs!(english, "pane_web.copied_url").into());
+                }
+                cx.notify();
+            })),
+        );
+        menu = menu.child(
+            item(
+                "browser-clear-data",
+                "delete02",
+                trs!(english, "pane_web.clear_data"),
+            )
+            .on_click(cx.listener({
+                let key = key.clone();
+                move |this, _, _, cx| {
+                    this.close_menus(cx);
+                    if let Some(view) = this.web_views.get_mut(&key) {
+                        view.notice = Some(match view.surface.clear_data() {
+                            Ok(()) => trs!(english, "pane_web.data_cleared").into(),
+                            Err(error) => error,
+                        });
+                    }
+                    cx.notify();
+                }
+            })),
+        );
+        menu = menu.child(
+            item(
+                "browser-settings",
+                "settings01",
+                trs!(english, "pane_web.browser_settings"),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.close_menus(cx);
+                this.open_settings(super::settings::Section::Browser, window, cx);
+            })),
+        );
+        menu = menu
+            .child(
+                div()
+                    .my(px(4.0))
+                    .h(px(1.0))
+                    .bg(p.c(fv_theme::Token::Border)),
+            )
+            .child(super::settings::menu_label(
+                trs!(english, "pane_web.recent"),
+                p,
+            ));
+        let recent = self
+            .browser_history
+            .iter()
+            .rev()
+            .take(8)
+            .map(|entry| (entry.title.clone(), entry.url.clone()))
+            .collect::<Vec<_>>();
+        if recent.is_empty() {
+            menu = menu.child(
+                div()
+                    .px(px(8.0))
+                    .py(px(4.0))
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "pane_web.no_history")),
+            );
+        }
+        for (index, (title, url)) in recent.into_iter().enumerate() {
+            let key = key.clone();
+            menu = menu.child(
+                super::settings::menu_item(
+                    SharedString::from(format!("browser-recent-{index}")),
+                    false,
+                    hover,
+                )
+                .child(ui::icon("clock01", 16.0, muted))
+                .child(ui::truncate(title).flex_1().min_w_0())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_menus(cx);
+                    this.navigate_browser(&key, &url, cx);
+                })),
+            );
+        }
+        Some(ui::float(menu).into_any_element())
+    }
+
     pub(super) fn web_command(&mut self, key: &str, command: &str, cx: &mut Context<Self>) {
         if let Some(view) = self.web_views.get_mut(key) {
             if let Err(error) = view.surface.command(command) {
@@ -456,6 +679,9 @@ impl Workspace {
                     notice: None,
                     browser: true,
                     committed: false,
+                    zoom: 1.0,
+                    can_back: false,
+                    can_forward: false,
                     external: None,
                 },
             );
@@ -522,6 +748,7 @@ impl Workspace {
             .flex_none()
             .border_b_1()
             .border_color(p.c(fv_theme::Token::Border));
+        let (can_back, can_forward) = (view.can_back, view.can_forward);
         for (command, glyph, label) in [
             ("back", "arrow-left01", trs!(english, "pane_web.back")),
             (
@@ -540,6 +767,11 @@ impl Workspace {
             ),
         ] {
             let key = id.to_string();
+            let enabled = match command {
+                "back" => can_back,
+                "forward" => can_forward,
+                _ => true,
+            };
             toolbar = toolbar.child(
                 icon_button_xs(
                     SharedString::from(format!("browser-{id}-{command}")),
@@ -547,7 +779,12 @@ impl Workspace {
                     &p,
                 )
                 .aria_label(label)
-                .on_click(cx.listener(move |this, _, _, cx| this.web_command(&key, command, cx))),
+                .when(!enabled, |d| d.opacity(0.4).cursor_default())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if enabled {
+                        this.web_command(&key, command, cx);
+                    }
+                })),
             );
         }
         toolbar = toolbar.child(div().flex_1().min_w_0().child(Input::new(&address).small()));
@@ -564,9 +801,14 @@ impl Workspace {
         let bookmark_url = current.clone();
         let bookmark_title = title;
         toolbar = toolbar.child(
-            icon_button_xs(
+            ui::icon_button_xs_tinted(
                 "browser-bookmark",
-                if bookmarked { "star01" } else { "star02" },
+                "star",
+                if bookmarked {
+                    p.c(fv_theme::Token::Primary)
+                } else {
+                    p.c(fv_theme::Token::MutedForeground)
+                },
                 &p,
             )
             .aria_label(if bookmarked {
@@ -580,6 +822,17 @@ impl Workspace {
         );
         // The scroll wrapper is `size_full` unless told otherwise: without a height of its own the
         // bar takes the whole column and the page below it is laid out zero pixels tall.
+        let menu_key = id.to_string();
+        toolbar = toolbar.child(
+            icon_button_xs("browser-more", "more-horizontal", &p)
+                .aria_label(trs!(english, "pane_web.more"))
+                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                    let at = e.position();
+                    this.close_menus(cx);
+                    this.browser_menu = Some((at, menu_key.clone()));
+                    cx.notify();
+                })),
+        );
         let mut library = div()
             .w_full()
             .h(px(26.0))
@@ -609,6 +862,15 @@ impl Workspace {
             .flex()
             .flex_col()
             .child(toolbar)
+            .when(loading, |d| {
+                d.child(
+                    div()
+                        .h(px(2.))
+                        .w_full()
+                        .flex_none()
+                        .bg(p.c(fv_theme::Token::Primary).opacity(0.6)),
+                )
+            })
             .when(!self.browser_bookmarks.is_empty(), |this| {
                 this.child(library)
             })
@@ -661,6 +923,9 @@ impl Workspace {
                             notice: None,
                             browser: false,
                             committed: false,
+                            zoom: 1.0,
+                            can_back: false,
+                            can_forward: false,
                             external: None,
                         },
                     );
@@ -718,6 +983,9 @@ impl Workspace {
                             notice: None,
                             browser: false,
                             committed: false,
+                            zoom: 1.0,
+                            can_back: false,
+                            can_forward: false,
                             external: None,
                         },
                     );
