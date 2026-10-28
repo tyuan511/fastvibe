@@ -25,7 +25,13 @@ fn home_dir() -> PathBuf {
 }
 
 fn source_root(source: &str) -> Result<PathBuf, ErrorObject> {
-    let home = home_dir();
+    source_root_in(&home_dir(), source)
+}
+
+/// The same mapping, rooted at an explicit home so a test can lay out a store without touching
+/// the one the machine is really using.
+fn source_root_in(home: &Path, source: &str) -> Result<PathBuf, ErrorObject> {
+    let home = home.to_path_buf();
     match source {
         "claude-code" => Ok(home.join(".claude").join("projects")),
         "pi" => Ok(home.join(".pi").join("agent").join("sessions")),
@@ -70,6 +76,10 @@ pub fn scan(
     _state: &ServerState,
     params: ImportScanParams,
 ) -> Result<ImportScanResponse, ErrorObject> {
+    scan_in(&home_dir(), params)
+}
+
+fn scan_in(home: &Path, params: ImportScanParams) -> Result<ImportScanResponse, ErrorObject> {
     let sources = params
         .source
         .as_deref()
@@ -77,16 +87,23 @@ pub fn scan(
         .unwrap_or_else(|| vec!["claude-code", "pi", "codex", "opencode", "zcode"]);
     let mut candidates = Vec::new();
     for source in sources {
+        // One unreadable store must not take the others down with it: an agent that changed
+        // its database schema used to fail this whole call, so the panel showed nothing at
+        // all — not even the agents whose sessions were perfectly readable.
         let scanned = match source {
-            "claude-code" => fv_import::scan_claude(&source_root(source)?),
-            "pi" => fv_import::scan_pi(&source_root(source)?),
-            "codex" => fv_import::scan_codex(&source_root(source)?),
-            "opencode" => fv_import::scan_opencode(&source_root(source)?.join("opencode.db")),
-            "zcode" => fv_import::scan_zcode(&source_root(source)?.join("db.sqlite")),
+            "claude-code" => fv_import::scan_claude(&source_root_in(home, source)?),
+            "pi" => fv_import::scan_pi(&source_root_in(home, source)?),
+            "codex" => fv_import::scan_codex(&source_root_in(home, source)?),
+            "opencode" => {
+                fv_import::scan_opencode(&source_root_in(home, source)?.join("opencode.db"))
+            }
+            "zcode" => fv_import::scan_zcode(&source_root_in(home, source)?.join("db.sqlite")),
             _ => return Err(invalid(format!("unsupported import source: {source}"))),
+        };
+        match scanned {
+            Ok(scanned) => candidates.extend(scanned.into_iter().map(candidate)),
+            Err(error) => eprintln!("[import] could not scan {source}: {error}"),
         }
-        .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
-        candidates.extend(scanned.into_iter().map(candidate));
     }
     candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.updated_at));
     Ok(ImportScanResponse { candidates })
@@ -195,4 +212,40 @@ pub fn commit(
     Ok(ThreadStartResponse {
         thread: imported_thread,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_store_that_cannot_be_read_does_not_hide_the_others() {
+        let home = tempfile::tempdir().unwrap();
+        // An empty file is a valid SQLite database with no tables in it, so scanning it fails
+        // the way a store from a future OpenCode release would. That failure used to abort the
+        // whole scan, which is why one unreadable agent emptied the panel for all of them.
+        let opencode = source_root_in(home.path(), "opencode").unwrap();
+        std::fs::create_dir_all(&opencode).unwrap();
+        std::fs::write(opencode.join("opencode.db"), b"").unwrap();
+        let response = scan_in(
+            home.path(),
+            ImportScanParams {
+                source: Some("opencode".into()),
+            },
+        )
+        .unwrap();
+        assert!(response.candidates.is_empty());
+    }
+
+    #[test]
+    fn every_source_maps_under_the_given_home() {
+        let home = Path::new("/home/someone");
+        for source in ["claude-code", "pi", "codex", "opencode", "zcode"] {
+            let root = source_root_in(home, source).unwrap();
+            assert!(
+                root.starts_with(home),
+                "{source} escaped the home directory"
+            );
+        }
+    }
 }
