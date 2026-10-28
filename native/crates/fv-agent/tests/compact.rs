@@ -424,6 +424,7 @@ fn a_compaction_reaches_the_model_as_one_user_message() {
             usage: Default::default(),
             user_messages: vec!["ask".into()],
             summary: "did it".into(),
+            stats: None,
         },
         assistant("later", 10),
     ]);

@@ -131,7 +131,7 @@ fn settled_calls_between_prose_fold_into_one_run() {
         tool("3", true),
     ];
     let refs: Vec<&Item> = items.iter().collect();
-    let parts = fold_runs(&refs, false);
+    let parts = fold_runs(&refs, false, false);
     assert_eq!(parts.len(), 4);
     assert!(matches!(&parts[1], Part::Run(r) if r.len() == 2));
     assert!(
@@ -150,10 +150,48 @@ fn a_running_call_stands_alone_and_splits_the_batch() {
         tool("4", true),
     ];
     let refs: Vec<&Item> = items.iter().collect();
-    let parts = fold_runs(&refs, true);
+    let parts = fold_runs(&refs, true, false);
     assert!(matches!(&parts[0], Part::Run(r) if r.len() == 2));
     assert!(matches!(&parts[1], Part::Item(_)));
     assert!(matches!(&parts[2], Part::Item(_)));
+}
+
+#[test]
+fn collapse_thinking_folds_finished_thoughts_into_a_batch_with_calls_only() {
+    use fv_gui::presentation::{Part, Piece, fold_runs, run_summary};
+    let think = |id: &str| Item::Reasoning {
+        id: id.into(),
+        text: "hmm".into(),
+    };
+    let items = [tool("1", true), think("t"), tool("2", true), say("b")];
+    let refs: Vec<&Item> = items.iter().collect();
+    // Off: the thought splits the batch as prose does.
+    assert_eq!(fold_runs(&refs, false, false).len(), 4);
+    let parts = fold_runs(&refs, false, true);
+    let Part::Run(run) = &parts[0] else {
+        panic!("expected one folded run, got {parts:?}");
+    };
+    assert_eq!(run.len(), 3);
+    let line: String = run_summary(run, false)
+        .into_iter()
+        .map(|p| match p {
+            Piece::Text(t) | Piece::Path(t) | Piece::Name(t) => t,
+        })
+        .collect();
+    assert_eq!(line, "已运行 2 个命令，思考 1 次");
+    // Two thoughts with no call keep their own rows, and one still being written stands alone.
+    let lone = [think("a"), think("b")];
+    let refs: Vec<&Item> = lone.iter().collect();
+    assert!(
+        fold_runs(&refs, false, true)
+            .iter()
+            .all(|p| matches!(p, Part::Item(_)))
+    );
+    let live = [tool("1", true), tool("2", true), think("t")];
+    let refs: Vec<&Item> = live.iter().collect();
+    let parts = fold_runs(&refs, true, true);
+    assert!(matches!(&parts[0], Part::Run(r) if r.len() == 2));
+    assert!(matches!(&parts[1], Part::Item(Item::Reasoning { .. })));
 }
 
 #[test]
@@ -166,7 +204,7 @@ fn questions_and_plans_break_a_run() {
     ];
     let refs: Vec<&Item> = items.iter().collect();
     assert!(
-        fold_runs(&refs, false)
+        fold_runs(&refs, false, false)
             .iter()
             .all(|p| matches!(p, Part::Item(_)))
     );
@@ -184,7 +222,7 @@ fn the_summary_names_one_file_and_counts_many() {
     let line: String = run_summary(&refs, false)
         .into_iter()
         .map(|p| match p {
-            Piece::Text(t) | Piece::Name(t) => t,
+            Piece::Text(t) | Piece::Path(t) | Piece::Name(t) => t,
         })
         .collect();
     assert_eq!(line, "已运行 2 个命令，读取 pic.png");
@@ -202,7 +240,7 @@ fn the_same_summary_reads_in_english_with_a_lowercase_later_clause() {
     let line: String = run_summary(&refs, true)
         .into_iter()
         .map(|p| match p {
-            Piece::Text(t) | Piece::Name(t) => t,
+            Piece::Text(t) | Piece::Path(t) | Piece::Name(t) => t,
         })
         .collect();
     assert_eq!(line, "Ran 2 commands, read pic.png");
@@ -212,7 +250,7 @@ fn the_same_summary_reads_in_english_with_a_lowercase_later_clause() {
     let line: String = run_summary(&refs, true)
         .into_iter()
         .map(|p| match p {
-            Piece::Text(t) | Piece::Name(t) => t,
+            Piece::Text(t) | Piece::Path(t) | Piece::Name(t) => t,
         })
         .collect();
     assert_eq!(line, "Ran 1 command");

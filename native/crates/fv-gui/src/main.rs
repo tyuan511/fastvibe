@@ -21,6 +21,8 @@ struct Args {
     script_add: Option<String>,
     /// Dev only: start with the composer's model list open.
     model_menu: bool,
+    /// Dev only: also open the first provider's flyout beside it.
+    provider_menu: bool,
     thinking_menu: bool,
     context_menu: bool,
     /// Dev only: open a project row's right-click menu.
@@ -56,6 +58,7 @@ fn parse_args() -> Args {
         settings: None,
         script_add: None,
         model_menu: false,
+        provider_menu: false,
         thinking_menu: false,
         context_menu: false,
         project_menu: false,
@@ -87,6 +90,7 @@ fn parse_args() -> Args {
             "--fixture" => a.fixture = it.next(),
             "--settings" => a.settings = it.next(),
             "--model-menu" => a.model_menu = true,
+            "--provider-menu" => a.provider_menu = true,
             "--thinking-menu" => a.thinking_menu = true,
             "--context-menu" => a.context_menu = true,
             "--project-menu" => a.project_menu = true,
@@ -118,10 +122,19 @@ fn main() {
             );
             theme::apply(&palette, cx);
             let glass = palette.glass();
+            let (win_w, win_h) = std::env::var("FV_WIN")
+                .map(|v| {
+                    let mut it = v.split('x');
+                    (
+                        it.next().unwrap().parse::<f32>().unwrap(),
+                        it.next().unwrap().parse::<f32>().unwrap(),
+                    )
+                })
+                .unwrap_or((1100.0, 720.0));
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(1100.0), px(720.0)),
+                    size(px(win_w), px(win_h)),
                     cx,
                 ))),
                 titlebar: Some(TitlebarOptions {
@@ -138,6 +151,7 @@ fn main() {
             let fixture = args.fixture.clone();
             let settings = args.settings.clone();
             let model_menu = args.model_menu;
+            let provider_menu = args.provider_menu;
             let thinking_menu = args.thinking_menu;
             let context_menu = args.context_menu;
             let project_menu = args.project_menu;
@@ -292,6 +306,21 @@ fn main() {
                                 cx,
                             );
                         }
+                        Some("skills") => {
+                            let mut ws = Workspace::fixture(palette, fv_gui::fixture::mention(), window, cx);
+                            ws.show_skill_picker_fixture(window, cx);
+                            return ws;
+                        }
+                        Some("goal") => {
+                            let mut ws = Workspace::fixture(palette, fv_gui::fixture::queued(), window, cx);
+                            ws.show_goal_fixture(cx);
+                            return ws;
+                        }
+                        Some(mode) if mode.starts_with("schedules") => {
+                            let mut ws = Workspace::fixture(palette, fv_gui::fixture::new_chat(), window, cx);
+                            ws.show_schedules_fixture(mode, window, cx);
+                            return ws;
+                        }
                         Some(other) => {
                             panic!(
                                 "unknown fixture {other} (theme, approval, question, new, queue, queue-paused, markdown, process)"
@@ -316,6 +345,8 @@ fn main() {
                 }
                 if thinking_menu {
                     ws.update(cx, |ws, cx| ws.show_thinking_menu(cx));
+                } else if provider_menu {
+                    ws.update(cx, |ws, cx| ws.show_provider_menu(cx));
                 } else if model_menu {
                     ws.update(cx, |ws, cx| ws.show_model_menu(cx));
                 }

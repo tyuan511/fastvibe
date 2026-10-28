@@ -1,5 +1,6 @@
 //! The conversation column, after `App.tsx`'s header, `message-list.tsx` and `message-row.tsx`.
 
+use crate::ui::px;
 use fv_protocol::types::*;
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -424,10 +425,10 @@ impl Workspace {
                         body = body.child(row);
                     }
                 }
-                if let Some(pin) = pin {
-                    if let Some(turn) = view.turns.get(pin.turn) {
-                        pinned_prompt = Some(self.pinned_prompt(turn, pin.y, cx));
-                    }
+                if let Some(pin) = pin
+                    && let Some(turn) = view.turns.get(pin.turn)
+                {
+                    pinned_prompt = Some(self.pinned_prompt(turn, pin.y, cx));
                 }
             }
         }
@@ -512,7 +513,20 @@ impl Workspace {
             return div().into_any_element();
         };
         let fill = if p.glass() {
-            p.overlay()
+            // The band has to hide the reply under it, so it is opaque; but the floating layer's
+            // fill is near-white against the grey glass. Composite the pane over an estimate of
+            // the vibrancy material instead, so it reads as part of the column.
+            let pane = p.main_pane();
+            let material = if p.is_dark() { 0.13 } else { 0.90 };
+            let mix = |c: f32| c * pane.a + material * (1.0 - pane.a);
+            let rgb = pane.to_rgb();
+            Rgba {
+                r: mix(rgb.r),
+                g: mix(rgb.g),
+                b: mix(rgb.b),
+                a: 1.0,
+            }
+            .into()
         } else {
             p.c(Token::Background)
         };
@@ -611,9 +625,32 @@ impl Workspace {
     fn compaction(&self, item: &Item, live: bool) -> AnyElement {
         let p = &self.palette;
         let language = self.app_settings.language;
-        let Item::ContextCompaction { .. } = item else {
+        let Item::ContextCompaction {
+            reason,
+            tokens_before,
+            tokens_after,
+            ..
+        } = item
+        else {
             return div().into_any_element();
         };
+        // `CompactNotice`: the reason and the request size it moved, after the label.
+        let english = language == UiLanguage::English;
+        let reason = match reason.as_deref() {
+            Some("threshold") => Some(trs!(english, "text.compact_threshold").to_string()),
+            Some("overflow") => Some(trs!(english, "text.compact_overflow").to_string()),
+            _ => None,
+        };
+        let tokens = match (tokens_before, tokens_after) {
+            (Some(b), Some(a)) => Some(format!("{} → {}", compact_count(*b), compact_count(*a))),
+            (Some(b), None) => Some(compact_count(*b)),
+            _ => None,
+        };
+        let detail = [reason, tokens]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
         let label: AnyElement = if live {
             shimmer("compaction-live", text::compacting(language))
                 .text_color(p.c(Token::Foreground))
@@ -633,7 +670,22 @@ impl Workspace {
             .text_size(px(TEXT_XS))
             .line_height(px(16.0))
             .child(ui::rule(p))
-            .child(label)
+            .child(div().flex().items_center().gap(px(6.0)).child(label).when(
+                !live && !detail.is_empty(),
+                |d| {
+                    d.child(
+                        div()
+                            .text_color(p.c(Token::MutedForeground).opacity(0.4))
+                            .child("·"),
+                    )
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(p.c(Token::MutedForeground).opacity(0.8))
+                            .child(SharedString::from(detail)),
+                    )
+                },
+            ))
             .child(ui::rule(p))
             .into_any_element()
     }
@@ -788,25 +840,16 @@ impl Workspace {
             col = col.child(self.changes_card(&layout.changes).mt(px(4.0)));
         }
         if !running {
-            // 耗时: the whole turn, from the user's message to the last entry.
+            // 用时: the whole turn, from the user's message to the last entry (Electron's
+            // `message.elapsed`, which English renders as the bare duration).
             let stamp = turn.completed_at.map(|end| {
                 let took = turn.started_at.filter(|s| end >= *s).map(|s| {
-                    if language == UiLanguage::English {
-                        format!(
-                            "Duration {}",
-                            presentation::format_duration(
-                                (end - s) as u64,
-                                language == UiLanguage::English
-                            )
-                        )
+                    let english = language == UiLanguage::English;
+                    let span = presentation::format_duration((end - s) as u64, english);
+                    if english {
+                        span
                     } else {
-                        format!(
-                            "耗时 {}",
-                            presentation::format_duration(
-                                (end - s) as u64,
-                                language == UiLanguage::English
-                            )
-                        )
+                        format!("用时 {span}")
                     }
                 });
                 (clock(end), took)
@@ -832,18 +875,23 @@ impl Workspace {
                 p,
             )
             .on_click(cx.listener(move |this, _, _, cx| this.copy_text(answer.clone(), cx)));
-            let fork_id = turn_id.to_string();
+            // Forking copies the whole thread; `turn_id` names a turn, which the server has no thread for.
+            let fork_thread_id = self.selected.clone();
             let fork = action_button(
                 SharedString::from(format!("fork-{turn_id}")),
                 "git-fork",
                 if language == UiLanguage::English {
-                    "Fork"
+                    "Fork from here"
                 } else {
-                    "创建分支"
+                    "从此处分叉"
                 },
                 p,
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.fork_thread(fork_id.clone(), cx)));
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(id) = fork_thread_id.clone() {
+                    this.fork_thread(id, cx)
+                }
+            }));
             // 重试 asks for this turn again: its reply is thrown away and the same prompt is
             // re-sent, which is the only sense in which a reply can be "run again".
             let retry_id = turn_id.to_string();
@@ -1139,13 +1187,19 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(div().flex_1().min_w_0().child(header))
+                    // The chevron follows the summary, as `ToolRow` places it: right after the
+                    // words, or at the end when a trailing context takes the leftover width.
                     .child(
-                        div()
-                            .when(!chevron_always && !open, |d| {
-                                d.invisible().group_hover(group, |s| s.visible())
-                            })
-                            .child(ui::chevron(open, 14.0, p.c(Token::MutedForeground))),
+                        div().flex_1().min_w_0().child(
+                            header.child(
+                                div()
+                                    .flex_none()
+                                    .when(!chevron_always && !open, |d| {
+                                        d.invisible().group_hover(group, |s| s.visible())
+                                    })
+                                    .child(ui::chevron(open, 14.0, p.c(Token::MutedForeground))),
+                            ),
+                        ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.open_items.remove(&key) {
@@ -1243,7 +1297,6 @@ impl Workspace {
         };
         let id = format!("run:{id}");
         let mut line = div()
-            .flex_1()
             .min_w_0()
             .overflow_hidden()
             .whitespace_nowrap()
@@ -1253,6 +1306,17 @@ impl Workspace {
         for piece in presentation::run_summary(items, self.english()) {
             line = match piece {
                 presentation::Piece::Text(t) => line.child(SharedString::from(t)),
+                // A file is the underlined path link the transcript uses everywhere; only a
+                // query or a tool name is a chip.
+                presentation::Piece::Path(n) => line.child(
+                    div()
+                        .mx(px(2.0))
+                        .flex_none()
+                        .font_family(crate::assets::MONO_FONT)
+                        .text_color(p.c(Token::Primary))
+                        .underline()
+                        .child(SharedString::from(n)),
+                ),
                 presentation::Piece::Name(n) => line.child(
                     div()
                         .mx(px(2.0))
@@ -1292,7 +1356,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let last = items.last().copied();
-        presentation::fold_runs(items, running)
+        presentation::fold_runs(items, running, self.app_settings.collapse_thinking)
             .into_iter()
             .map(|part| match part {
                 presentation::Part::Run(batch) => self.run_row(&batch, cx).into_any_element(),
@@ -1721,5 +1785,16 @@ fn local_hour() -> u32 {
             return 12;
         }
         tm.tm_hour as u32
+    }
+}
+
+/// `formatCount` beside the compaction divider: `45.5K`, `1.2M`.
+fn compact_count(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{:.1}M", value as f64 / 1_000_000.0)
+    } else if value >= 1_000 {
+        format!("{:.1}K", value as f64 / 1_000.0)
+    } else {
+        value.to_string()
     }
 }

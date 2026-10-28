@@ -433,6 +433,13 @@ pub enum Item {
     /// sent to the model (but is still shown).
     ContextCompaction {
         id: ItemId,
+        /// `threshold`, `overflow` or `manual`; absent while it runs and on old transcripts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens_before: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens_after: Option<u64>,
     },
 }
 
@@ -1919,11 +1926,17 @@ pub enum UiLanguage {
 pub struct AppSettings {
     #[serde(default)]
     pub language: UiLanguage,
+    /// AI 偏好语言: the language every reply is asked to be written in, whatever the user types.
+    #[serde(default)]
+    pub ai_language: UiLanguage,
     pub theme_mode: ThemeMode,
     pub light_theme: String,
     pub dark_theme: String,
     /// 玻璃效果: the translucent window, where the platform has a blur to show.
     pub glass: bool,
+    /// 界面字号: the root font size in px that every rem-based size scales from.
+    #[serde(default = "default_ui_font_size")]
+    pub ui_font_size: u32,
     /// How much of the machine a command may touch (codex's `sandbox_mode`).
     #[serde(default)]
     pub sandbox_mode: SandboxMode,
@@ -1949,6 +1962,16 @@ pub struct AppSettings {
     /// JavaScript orchestration. Changes take effect at the next turn boundary.
     #[serde(default = "default_true")]
     pub code_mode_enabled: bool,
+    /// 工具搜索: offer `tool_search`, so deferred tools can be found and loaded on demand.
+    #[serde(default = "default_true")]
+    pub tool_search_enabled: bool,
+    /// 折叠思考内容: fold finished thoughts into the tool batch they sit in. Display only.
+    #[serde(default)]
+    pub collapse_thinking: bool,
+    /// 系统通知: tell the user when a run finishes, fails or waits for an answer while no
+    /// window has their attention.
+    #[serde(default = "default_true")]
+    pub notifications: bool,
     /// User-authored suffix of each conversation's system instructions. Empty disables it.
     #[serde(default)]
     pub custom_system_prompt: String,
@@ -1968,7 +1991,8 @@ pub struct AppSettings {
     /// Automatically archive inactive, unpinned conversations after this many days.
     #[serde(default)]
     pub auto_archive_after_days: Option<u32>,
-    #[serde(default)]
+    /// 运行时保持唤醒: on unless turned off, as in the desktop app.
+    #[serde(default = "default_true")]
     pub keep_awake: bool,
     /// 允许操作电脑: the master switch for the desktop-control driver. Off, the driver is not
     /// running and the agent has no desktop tools; on, the app that holds the OS permissions
@@ -2061,14 +2085,20 @@ pub struct ApprovalResponse {
     pub decision: ApprovalDecision,
 }
 
+fn default_ui_font_size() -> u32 {
+    16
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             language: UiLanguage::Chinese,
+            ai_language: UiLanguage::Chinese,
             theme_mode: ThemeMode::System,
             light_theme: "github-light".into(),
             dark_theme: "github-dark".into(),
             glass: false,
+            ui_font_size: default_ui_font_size(),
             sandbox_mode: SandboxMode::default(),
             approval_policy: ApprovalPolicy::default(),
             sandbox_network: false,
@@ -2077,6 +2107,9 @@ impl Default for AppSettings {
             auto_review_approvals: false,
             auto_compaction_enabled: true,
             code_mode_enabled: true,
+            tool_search_enabled: true,
+            collapse_thinking: false,
+            notifications: true,
             custom_system_prompt: String::new(),
             send_on_enter: true,
             shortcuts: Default::default(),
@@ -2084,7 +2117,7 @@ impl Default for AppSettings {
             browser_search_engine: default_browser_search_engine(),
             browser_download_dir: String::new(),
             auto_archive_after_days: None,
-            keep_awake: false,
+            keep_awake: true,
             computer_control: false,
             proxy_url: String::new(),
         }
@@ -2098,6 +2131,8 @@ pub struct AppSettingsPatch {
     #[serde(default)]
     pub language: Option<UiLanguage>,
     #[serde(default)]
+    pub ai_language: Option<UiLanguage>,
+    #[serde(default)]
     pub theme_mode: Option<ThemeMode>,
     #[serde(default)]
     pub light_theme: Option<String>,
@@ -2105,6 +2140,8 @@ pub struct AppSettingsPatch {
     pub dark_theme: Option<String>,
     #[serde(default)]
     pub glass: Option<bool>,
+    #[serde(default)]
+    pub ui_font_size: Option<u32>,
     #[serde(default)]
     pub sandbox_mode: Option<SandboxMode>,
     #[serde(default)]
@@ -2121,6 +2158,12 @@ pub struct AppSettingsPatch {
     pub auto_compaction_enabled: Option<bool>,
     #[serde(default)]
     pub code_mode_enabled: Option<bool>,
+    #[serde(default)]
+    pub tool_search_enabled: Option<bool>,
+    #[serde(default)]
+    pub collapse_thinking: Option<bool>,
+    #[serde(default)]
+    pub notifications: Option<bool>,
     #[serde(default)]
     pub custom_system_prompt: Option<String>,
     /// Optional compare-and-set guard for editors. Omit for an unconditional update.
@@ -2232,6 +2275,18 @@ impl AppSettings {
         if let Some(v) = patch.language {
             self.language = v;
         }
+        if let Some(v) = patch.ai_language {
+            self.ai_language = v;
+        }
+        if let Some(v) = patch.tool_search_enabled {
+            self.tool_search_enabled = v;
+        }
+        if let Some(v) = patch.collapse_thinking {
+            self.collapse_thinking = v;
+        }
+        if let Some(v) = patch.notifications {
+            self.notifications = v;
+        }
         if let Some(v) = patch.send_on_enter {
             self.send_on_enter = v;
         }
@@ -2291,6 +2346,9 @@ impl AppSettings {
         }
         if let Some(v) = patch.glass {
             self.glass = v;
+        }
+        if let Some(v) = patch.ui_font_size {
+            self.ui_font_size = v.clamp(12, 20);
         }
         if let Some(v) = patch.sandbox_mode {
             self.sandbox_mode = v;

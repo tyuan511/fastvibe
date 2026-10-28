@@ -1,26 +1,42 @@
 //! ⌘K: commands, recent conversations and full-text transcript search over the shared protocol.
 
+use crate::ui::px;
 use fv_protocol::{methods::ThreadSearch, types::*};
 use fv_theme::Token;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::*;
 
-use super::settings::{Section, dialog_card, menu_item};
-use super::{Workspace, text};
+use super::Workspace;
+use super::settings::{Section, all_sections, dialog_card};
 use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon};
+use fv_protocol::shortcuts::{Chord, ShortcutId, resolve};
+use gpui_kit::prelude::FluentBuilder as _;
 
 #[derive(Clone)]
 enum Hit {
     NewChat,
-    Settings,
+    OpenFolder,
+    Settings(Section),
     Thread(String, Option<String>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Group {
+    Chats,
+    Actions,
+    Settings,
 }
 
 struct Row {
     hit: Hit,
+    group: Group,
     label: String,
-    glyph: &'static str,
-    detail: Option<String>,
+    glyph: Option<&'static str>,
+    /// The excerpt under a chat's title: where the query sits in its text.
+    snippet: Option<String>,
+    project: Option<String>,
+    archived: bool,
+    shortcut: Option<String>,
 }
 
 #[derive(Default)]
@@ -31,7 +47,49 @@ pub(super) struct SearchResults {
     loading: bool,
     error: Option<String>,
     include_archived: bool,
+    /// The highlighted row (`data-selected`), moved by ↑/↓ and taken by Enter.
+    selected: usize,
 }
+
+/// The words each settings pane is also found by (`app:palette.keywords`). Its name and icon
+/// come from the settings list itself, so a renamed pane cannot drift here.
+const SETTINGS: &[(Section, &str)] = &[
+    (
+        Section::General,
+        "外观 主题 字号 界面 发送 思考 队列 时间戳 打断 appearance theme font general",
+    ),
+    (
+        Section::Personalization,
+        "个性化 指令 personalization instructions",
+    ),
+    (Section::Shortcuts, "键盘 热键 keymap keyboard shortcuts"),
+    (
+        Section::Archived,
+        "恢复 删除 archive restore delete archived",
+    ),
+    (Section::Usage, "token 费用 统计 usage cost"),
+    (
+        Section::Import,
+        "导入 迁移 claude codex opencode zcode pi 会话 import",
+    ),
+    (
+        Section::Providers,
+        "供应商 api 密钥 模型 providers models key",
+    ),
+    (Section::Subagents, "子代理 subagents agents"),
+    (Section::Memory, "记忆 memory"),
+    (Section::Mcp, "工具 mcp tools"),
+    (Section::Skills, "skill 技能 skills"),
+    (Section::Computer, "电脑 操控 computer use"),
+    (Section::Browser, "浏览器 browser"),
+    (Section::Proxy, "代理 proxy network"),
+    (
+        Section::Remote,
+        "远程 手机 网页 服务器 密码 设备 remote server password device phone web",
+    ),
+    (Section::Ssh, "ssh 主机 服务器 hosts server"),
+    (Section::About, "版本 about version"),
+];
 
 impl Workspace {
     pub(super) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -42,12 +100,10 @@ impl Workspace {
             generation: self.search_results.generation + 1,
             ..Default::default()
         };
-        let placeholder = if self.app_settings.language == UiLanguage::English {
-            "Search chats, titles, or commands"
-        } else {
-            "搜索对话正文、标题或命令"
-        };
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let english = self.app_settings.language == UiLanguage::English;
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(trs!(english, "palette.placeholder"))
+        });
         input.update(cx, |st, cx| st.focus(window, cx));
         cx.subscribe_in(
             &input,
@@ -58,7 +114,10 @@ impl Workspace {
                 }
                 InputEvent::PressEnter { .. } => {
                     let query = input.read(cx).value().trim().to_lowercase();
-                    if let Some(row) = this.palette_hits(&query).into_iter().next() {
+                    let selected = this.search_results.selected;
+                    let mut rows = this.palette_hits(&query);
+                    if selected < rows.len() {
+                        let row = rows.swap_remove(selected);
                         this.choose(row.hit, window, cx);
                     }
                 }
@@ -88,28 +147,25 @@ impl Workspace {
         s.query = query.clone();
         s.hits.clear();
         s.error = None;
-        s.loading = !query.is_empty();
+        s.selected = 0;
+        // Like the Electron palette, one character only filters titles; the transcript search
+        // starts at two.
+        s.loading = query.chars().count() >= 2;
         let generation = s.generation;
         let include_archived = s.include_archived;
         cx.notify();
-        if query.is_empty() {
+        if !s.loading {
             return;
         }
+        let english = self.app_settings.language == UiLanguage::English;
         let Some(b) = self.backend.clone() else {
             self.search_results.loading = false;
-            self.search_results.error = Some(
-                if self.app_settings.language == UiLanguage::English {
-                    "Connect to the server to search transcript text"
-                } else {
-                    "连接服务器后可搜索正文"
-                }
-                .into(),
-            );
+            self.search_results.error = Some(trs!(english, "palette.offline").into());
             return;
         };
         let delay = cx
             .background_executor()
-            .timer(std::time::Duration::from_millis(200));
+            .timer(std::time::Duration::from_millis(180));
         self.search_task = Some(cx.spawn(async move |this, cx| {
             delay.await;
             let result = b
@@ -127,11 +183,7 @@ impl Workspace {
                     Ok(r) => this.search_results.hits = r.hits,
                     Err(e) => {
                         this.search_results.error =
-                            Some(if this.app_settings.language == UiLanguage::English {
-                                format!("Search failed: {e}")
-                            } else {
-                                format!("搜索失败：{e}")
-                            })
+                            Some(tr!(english, "palette.failed", error = e.to_string()))
                     }
                 }
                 cx.notify();
@@ -141,28 +193,14 @@ impl Workspace {
     }
 
     fn palette_hits(&self, query: &str) -> Vec<Row> {
+        let english = self.app_settings.language == UiLanguage::English;
+        let mac = cfg!(target_os = "macos");
+        let shortcut = |id: ShortcutId| {
+            resolve(id, &self.app_settings.shortcuts)
+                .and_then(|s| Chord::parse(s).ok())
+                .map(|c| c.label(mac))
+        };
         let mut rows = Vec::new();
-        for (hit, label, glyph) in [
-            (
-                Hit::NewChat,
-                text::new_chat(self.app_settings.language),
-                "message-square-plus",
-            ),
-            (
-                Hit::Settings,
-                text::settings(self.app_settings.language),
-                "settings01",
-            ),
-        ] {
-            if query.is_empty() || label.to_lowercase().contains(query) {
-                rows.push(Row {
-                    hit,
-                    label,
-                    glyph,
-                    detail: None,
-                });
-            }
-        }
         // Local title/project matches remain immediate; body results join them by thread id.
         let mut threads: Vec<_> = self
             .threads
@@ -173,7 +211,7 @@ impl Workspace {
                     || t.title.to_lowercase().contains(query)
                     || t.project
                         .as_ref()
-                        .is_some_and(|p| p.to_lowercase().contains(query))
+                        .is_some_and(|p| self.project_label(p).to_lowercase().contains(query))
             })
             .map(|t| (t.clone(), None))
             .collect();
@@ -190,31 +228,94 @@ impl Workspace {
                 .cmp(&a.updated_at)
                 .then_with(|| a.id.cmp(&b.id))
         });
-        for (t, snippet) in threads
+        for (i, (t, snippet)) in threads
             .into_iter()
             .take(if query.is_empty() { 9 } else { 50 })
+            .enumerate()
         {
             let body_query = snippet.as_ref().map(|_| query.to_string());
-            let detail = snippet.or(t.project);
-            let detail = if t.archived {
-                Some(if self.app_settings.language == UiLanguage::English {
-                    format!("Archived · {}", detail.unwrap_or_default())
-                } else {
-                    format!("已归档 · {}", detail.unwrap_or_default())
-                })
-            } else {
-                detail
-            };
             rows.push(Row {
                 hit: Hit::Thread(t.id, body_query),
+                group: Group::Chats,
                 label: if t.title.trim().is_empty() {
-                    text::untitled(self.app_settings.language)
+                    trs!(english, "palette.new_session").to_string()
                 } else {
                     t.title
                 },
-                glyph: "message-square-plus",
-                detail,
+                glyph: None,
+                snippet: snippet
+                    .filter(|_| !query.is_empty())
+                    .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ")),
+                project: t.project.as_deref().map(|p| self.project_label(p)),
+                archived: t.archived,
+                shortcut: query
+                    .is_empty()
+                    .then(|| format!("{}{}", if mac { "⌘" } else { "Ctrl+" }, i + 1)),
             });
+        }
+        for (hit, label, keywords, glyph, id) in [
+            (
+                Hit::NewChat,
+                trs!(english, "palette.new_chat"),
+                trs!(english, "palette.keywords.new"),
+                "message-square-plus",
+                ShortcutId::NewChat,
+            ),
+            (
+                Hit::OpenFolder,
+                trs!(english, "palette.open_folder"),
+                trs!(english, "palette.keywords.folder"),
+                "folder01",
+                ShortcutId::OpenFolder,
+            ),
+            (
+                Hit::Settings(Section::General),
+                trs!(english, "palette.settings"),
+                trs!(english, "palette.keywords.settings"),
+                "settings01",
+                ShortcutId::Settings,
+            ),
+        ] {
+            if query.is_empty() || format!("{label} {keywords}").to_lowercase().contains(query) {
+                rows.push(Row {
+                    hit,
+                    group: Group::Actions,
+                    label: label.into(),
+                    glyph: Some(glyph),
+                    snippet: None,
+                    project: None,
+                    archived: false,
+                    shortcut: shortcut(id),
+                });
+            }
+        }
+        if !query.is_empty() {
+            let available = all_sections();
+            for (section, keywords) in SETTINGS {
+                if !available.contains(section) {
+                    continue;
+                }
+                let zh = super::settings::section_label_for(*section, UiLanguage::Chinese);
+                let en = super::settings::section_label_for(*section, UiLanguage::English);
+                let label = if english { en } else { zh };
+                let glyph = super::settings::section_icon(*section);
+                let prefix = trs!(english, "palette.group_settings");
+                if format!("{prefix} {label} {zh} {en} {keywords}")
+                    .to_lowercase()
+                    .contains(query)
+                {
+                    rows.push(Row {
+                        hit: Hit::Settings(*section),
+                        group: Group::Settings,
+                        label: label.into(),
+                        glyph: Some(glyph),
+                        snippet: None,
+                        project: None,
+                        archived: false,
+                        shortcut: None,
+                    });
+                }
+            }
         }
         rows
     }
@@ -227,7 +328,11 @@ impl Workspace {
                 self.selected = None;
                 cx.notify();
             }
-            Hit::Settings => self.open_settings(Section::General, window, cx),
+            Hit::OpenFolder => {
+                self.settings = None;
+                self.open_project_dialog(None, window, cx);
+            }
+            Hit::Settings(section) => self.open_settings(section, window, cx),
             Hit::Thread(id, query) => {
                 self.search_target = query.map(|q| (id.clone(), q));
                 self.search_jump_pending = false;
@@ -240,127 +345,181 @@ impl Workspace {
     pub(super) fn palette_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let input = self.search_box.clone()?;
         let p = self.palette.clone();
+        let english = self.app_settings.language == UiLanguage::English;
         let query = input.read(cx).value().trim().to_lowercase();
         let hits = self.palette_hits(&query);
-        let hover = p.c(Token::Accent);
+        let count = hits.len();
+        let selected = self.search_results.selected.min(count.saturating_sub(1));
+        let muted_bg = p.c(Token::Muted);
         let mut list = div()
             .id("palette-list")
-            .max_h(px(360.0))
+            .max_h(px(432.0))
             .overflow_y_scroll()
-            .p(px(6.0))
             .flex()
             .flex_col();
+        let mut group: Option<(Group, Div)> = None;
+        let heading = |g: Group| {
+            div()
+                .px(px(8.0))
+                .py(px(6.0))
+                .text_size(px(TEXT_XS))
+                .line_height(px(16.0))
+                .font_weight(FontWeight::MEDIUM)
+                .muted(&p)
+                .child(match g {
+                    Group::Chats => trs!(english, "palette.group_chats"),
+                    Group::Actions => trs!(english, "palette.group_actions"),
+                    Group::Settings => trs!(english, "palette.group_settings"),
+                })
+        };
+        for (i, row) in hits.into_iter().enumerate() {
+            if group.as_ref().is_none_or(|(g, _)| *g != row.group) {
+                if let Some((_, done)) = group.take() {
+                    list = list.child(done);
+                }
+                group = Some((
+                    row.group,
+                    div().p(px(4.0)).flex().flex_col().child(heading(row.group)),
+                ));
+            }
+            let hit = row.hit;
+            let active = i == selected;
+            let title = div()
+                .flex()
+                .items_center()
+                .min_w_0()
+                .child(highlight(row.label, &query, &p).min_w_0())
+                .when(row.archived, |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .ml(px(8.0))
+                            .text_size(px(TEXT_XS))
+                            .muted(&p)
+                            .child(trs!(english, "palette.archived")),
+                    )
+                });
+            let item = div()
+                .id(SharedString::from(format!("hit-{i}")))
+                .min_h(px(32.0))
+                .px(px(8.0))
+                .py(px(6.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .rounded(px(10.0))
+                .text_size(px(TEXT_SM))
+                .line_height(px(20.0))
+                .cursor_pointer()
+                .when(active, |d| d.bg(muted_bg))
+                .hover(move |d| d.bg(muted_bg))
+                .children(row.glyph.map(|g| {
+                    icon(
+                        g,
+                        14.0,
+                        if active {
+                            p.c(Token::Foreground)
+                        } else {
+                            p.c(Token::MutedForeground)
+                        },
+                    )
+                }))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .child(title)
+                        .children(row.snippet.map(|snippet| {
+                            highlight(snippet, &query, &p)
+                                .text_size(px(TEXT_XS))
+                                .muted(&p)
+                        })),
+                )
+                .children(row.project.map(|project| {
+                    crate::ui::truncate(project)
+                        .flex_none()
+                        .max_w(px(128.0))
+                        .text_size(px(TEXT_XS))
+                        .muted(&p)
+                }))
+                .children(row.shortcut.map(|s| kbd(s, &p)))
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.choose(hit.clone(), window, cx)),
+                );
+            group = group.map(|(g, d)| (g, d.child(item)));
+        }
+        if let Some((_, done)) = group.take() {
+            list = list.child(done);
+        }
         let status = self.search_results.error.clone().or_else(|| {
-            if self.search_results.loading {
-                Some(if self.app_settings.language == UiLanguage::English {
-                    "Searching chats…".into()
-                } else {
-                    "正在搜索正文…".into()
-                })
-            } else if hits.is_empty() {
-                Some(if self.app_settings.language == UiLanguage::English {
-                    "No matching results".into()
-                } else {
-                    "没有匹配的结果".into()
-                })
+            if count == 0 && self.search_results.loading {
+                Some(trs!(english, "palette.searching").into())
+            } else if count == 0 {
+                Some(trs!(english, "palette.empty").into())
             } else {
                 None
             }
         });
-        for (i, row) in hits.into_iter().enumerate() {
-            let hit = row.hit;
-            list =
-                list.child(
-                    menu_item(SharedString::from(format!("hit-{i}")), i == 0, hover)
-                        .h_auto()
-                        .min_h(px(36.0))
-                        .py(px(6.0))
-                        .child(icon(row.glyph, 14.0, p.c(Token::MutedForeground)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(3.0))
-                                .child(highlight(row.label, &query, &p))
-                                .children(row.detail.map(|detail| {
-                                    highlight(detail, &query, &p)
-                                        .text_size(px(TEXT_XS))
-                                        .muted(&p)
-                                })),
-                        )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.choose(hit.clone(), window, cx)
-                        })),
-                );
-        }
         if let Some(status) = status {
             list = list.child(
                 div()
-                    .px(px(8.0))
-                    .py(px(12.0))
+                    .py(px(24.0))
+                    .flex()
+                    .justify_center()
                     .text_size(px(TEXT_SM))
-                    .muted(&p)
                     .child(status),
             );
         }
         let include = self.search_results.include_archived;
-        let body = dialog_card(&p, 560.0)
+        let body = dialog_card(&p, 512.0)
+            .rounded(px(10.0))
+            .overflow_hidden()
+            .text_size(px(TEXT_SM))
             .child(
-                div()
-                    .p(px(10.0))
-                    .border_b_1()
-                    .border_color(p.c(Token::Border))
-                    .child(Input::new(&input).prefix(icon(
-                        "search01",
-                        14.0,
-                        p.c(Token::MutedForeground),
-                    ))),
+                div().p(px(4.0)).pb_0().child(
+                    div()
+                        .h(px(32.0))
+                        .pl(px(8.0))
+                        .rounded(px(10.0))
+                        .border_1()
+                        .border_color(p.c(Token::Input).opacity(0.3))
+                        .bg(p.c(Token::Input).opacity(0.3))
+                        .flex()
+                        .items_center()
+                        .child(icon("search01", 16.0, p.c(Token::Foreground).opacity(0.5)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&input).appearance(false).bordered(false)),
+                        ),
+                ),
             )
-            .child(list)
             .child(
                 div()
+                    .id("search-archived")
                     .px(px(12.0))
                     .py(px(8.0))
-                    .border_t_1()
+                    .border_b_1()
                     .border_color(p.c(Token::Border))
-                    .text_size(px(TEXT_XS))
-                    .muted(&p)
                     .flex()
                     .items_center()
-                    .gap(px(12.0))
-                    .child(if self.app_settings.language == UiLanguage::English {
-                        "Enter opens the first result · Esc closes"
-                    } else {
-                        "Enter 打开第一项 · Esc 关闭"
-                    })
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .id("search-archived")
-                            .cursor_pointer()
-                            .child(if include {
-                                if self.app_settings.language == UiLanguage::English {
-                                    "☑ Include archived chats"
-                                } else {
-                                    "☑ 包括已归档对话"
-                                }
-                            } else {
-                                if self.app_settings.language == UiLanguage::English {
-                                    "☐ Include archived chats"
-                                } else {
-                                    "☐ 包括已归档对话"
-                                }
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.search_results.include_archived =
-                                    !this.search_results.include_archived;
-                                let query = this.search_results.query.clone();
-                                this.search_palette(query, cx);
-                            })),
-                    ),
-            );
+                    .gap(px(8.0))
+                    .text_size(px(TEXT_XS))
+                    .muted(&p)
+                    .cursor_pointer()
+                    .child(super::settings::checkbox(include, &p))
+                    .child(trs!(english, "palette.include_archived"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.search_results.include_archived =
+                            !this.search_results.include_archived;
+                        let query = this.search_results.query.clone();
+                        this.search_palette(query, cx);
+                    })),
+            )
+            .child(list);
         Some(
             div()
                 .id("palette-backdrop")
@@ -370,17 +529,68 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .items_center()
-                .pt(px(96.0))
                 .on_click(cx.listener(|this, _, window, cx| this.close_palette(window, cx)))
+                // `top-1/3`.
+                .child(div().flex_none().h(relative(1.0 / 3.0)))
                 .child(
                     div()
                         .id("palette-body")
                         .on_click(|_, _, cx| cx.stop_propagation())
+                        .capture_key_down(cx.listener(
+                            move |this, ev: &KeyDownEvent, window, cx| {
+                                let key = ev.keystroke.key.as_str();
+                                let m = &ev.keystroke.modifiers;
+                                match key {
+                                    "down" | "up" if count > 0 => {
+                                        let s = &mut this.search_results;
+                                        s.selected = if key == "down" {
+                                            (selected + 1) % count
+                                        } else {
+                                            (selected + count - 1) % count
+                                        };
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }
+                                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+                                        if (m.platform || m.control)
+                                            && this.search_results.query.is_empty() =>
+                                    {
+                                        let n = key.parse::<usize>().unwrap_or(1) - 1;
+                                        let mut rows = this.palette_hits("");
+                                        rows.retain(|r| r.group == Group::Chats);
+                                        if n < rows.len() {
+                                            cx.stop_propagation();
+                                            let row = rows.swap_remove(n);
+                                            this.choose(row.hit, window, cx);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            },
+                        ))
                         .child(body),
                 )
                 .into_any_element(),
         )
     }
+}
+
+/// `Kbd`: a 20px key cap of `text-xs`.
+fn kbd(label: String, p: &crate::theme::Palette) -> Div {
+    div()
+        .flex_none()
+        .h(px(20.0))
+        .min_w(px(20.0))
+        .px(px(4.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.0))
+        .bg(p.c(Token::Muted))
+        .text_size(px(TEXT_XS))
+        .font_weight(FontWeight::MEDIUM)
+        .muted(p)
+        .child(label)
 }
 
 /// Byte ranges for GPUI; skip highlighting when case folding changes byte offsets.

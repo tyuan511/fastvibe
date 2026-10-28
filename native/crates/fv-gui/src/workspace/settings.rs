@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 
+use crate::ui::px;
 use fv_protocol::methods::*;
 use fv_protocol::types::Empty;
 use fv_protocol::types::*;
@@ -14,7 +15,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::composer::thinking_label_in;
-use super::sidebar::{INSET, SIDEBAR_WIDTH};
+use super::model_menu::{
+    group_holds_current, model_display_name, model_row, provider_groups, provider_row,
+};
+use super::sidebar::INSET;
 use super::{Workspace, text};
 use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon, icon_button_xs};
 
@@ -111,7 +115,17 @@ fn section_label(section: Section) -> &'static str {
         .unwrap_or("")
 }
 
-fn section_label_for(section: Section, language: UiLanguage) -> &'static str {
+/// A pane's icon, as the settings list draws it.
+pub(super) fn section_icon(section: Section) -> &'static str {
+    SECTIONS
+        .iter()
+        .flat_map(|(_, items)| items.iter())
+        .find(|(s, _, _)| *s == section)
+        .map(|(_, _, glyph)| *glyph)
+        .unwrap_or("settings02")
+}
+
+pub(super) fn section_label_for(section: Section, language: UiLanguage) -> &'static str {
     if language == UiLanguage::Chinese {
         return section_label(section);
     }
@@ -225,31 +239,119 @@ pub struct BrowserSettings {
     pub download_dir: Entity<InputState>,
 }
 
+/// 网络代理, edited as Electron edits it: a switch, then protocol, host and port. The server
+/// keeps one `proxy_url`; empty means direct.
 pub struct ProxySettings {
-    pub url: Entity<InputState>,
+    pub enabled: bool,
+    pub protocol: &'static str,
+    pub host: Entity<InputState>,
+    pub port: Entity<InputState>,
+    pub protocol_menu: bool,
 }
+
+/// `scheme://host:port` → its parts; anything unreadable falls back to an empty HTTP proxy.
+fn split_proxy_url(url: &str) -> (&'static str, String, String) {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("http", url));
+    let protocol = PROXY_PROTOCOLS
+        .iter()
+        .copied()
+        .find(|p| p.eq_ignore_ascii_case(scheme))
+        .unwrap_or("http");
+    let rest = rest.trim_end_matches('/');
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
+            (h.to_string(), p.to_string())
+        }
+        _ => (rest.to_string(), String::new()),
+    };
+    (protocol, host, port)
+}
+
+const PROXY_PROTOCOLS: [&str; 3] = ["http", "https", "socks5"];
 
 #[derive(Default)]
 pub struct ImportSettings {
     pub generation: u64,
     pub candidates: Option<Vec<ImportCandidate>>,
-    pub preview: Option<ImportReadResponse>,
     pub busy: bool,
     pub notice: Option<String>,
+    /// The source whose session picker is open (`claude-code`, `codex`, …).
+    pub picking: Option<String>,
+    /// Session ids ticked in that picker.
+    pub selected: HashSet<String>,
+    pub importing: bool,
+}
+
+impl ImportSettings {
+    /// Dev capture: a few sessions from two agents, the second one's picker open.
+    pub fn sample_for_capture(&mut self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let make = |source: &str, id: &str, title: &str, n: usize| ImportCandidate {
+            source: source.into(),
+            source_id: id.into(),
+            title: title.into(),
+            cwd: Some("~/code/fastvibe".into()),
+            created_at: now,
+            updated_at: now,
+            message_count: n,
+            bytes: 0,
+        };
+        self.candidates = Some(vec![
+            make("claude-code", "c1", "修复消息队列重复发送", 42),
+            make("claude-code", "c2", "梳理 pi 扩展的加载流程", 18),
+            make("codex", "x1", "Add dark mode toggle", 12),
+            make("codex", "x2", "Refactor the settings store", 30),
+        ]);
+        self.busy = false;
+        self.generation = self.generation.wrapping_add(1);
+        self.picking = Some("codex".into());
+        self.selected.insert("x1".into());
+    }
 }
 
 impl ProxySettings {
-    fn new(settings: &AppSettings, english: bool, window: &mut Window, cx: &mut App) -> Self {
-        let url = input(
-            window,
-            cx,
-            trs!(english, "settings.leave_empty_for_system_network"),
-            false,
-        );
-        url.update(cx, |state, cx| {
-            state.set_value(settings.proxy_url.clone(), window, cx)
-        });
-        Self { url }
+    fn new(settings: &AppSettings, _english: bool, window: &mut Window, cx: &mut App) -> Self {
+        let url = settings.proxy_url.trim();
+        let (protocol, host_value, port_value) = split_proxy_url(url);
+        let host = input(window, cx, "127.0.0.1", false);
+        host.update(cx, |state, cx| state.set_value(host_value, window, cx));
+        let port = input(window, cx, "7890", false);
+        port.update(cx, |state, cx| state.set_value(port_value, window, cx));
+        Self {
+            enabled: !url.is_empty(),
+            protocol,
+            host,
+            port,
+            protocol_menu: false,
+        }
+    }
+
+    /// What the form says, as the one URL the server stores.
+    fn url(&self, cx: &App) -> String {
+        if !self.enabled {
+            return String::new();
+        }
+        let host = value(&self.host, cx);
+        let port = value(&self.port, cx);
+        if port.is_empty() {
+            format!("{}://{host}", self.protocol)
+        } else {
+            format!("{}://{host}:{port}", self.protocol)
+        }
+    }
+
+    fn host_valid(&self, cx: &App) -> bool {
+        let host = value(&self.host, cx);
+        !host.is_empty() && !host.contains("://") && !host.contains(['/', '@', ' '])
+    }
+
+    fn port_valid(&self, cx: &App) -> bool {
+        value(&self.port, cx)
+            .parse::<u32>()
+            .is_ok_and(|p| (1..=65535).contains(&p))
     }
 }
 
@@ -291,9 +393,12 @@ impl BrowserSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeMenu {
     Language,
+    AiLanguage,
+    AutoArchive,
     Mode,
     Light,
     Dark,
+    FontSize,
     Sandbox,
     Approval,
 }
@@ -321,6 +426,8 @@ pub struct SettingsState {
     pub providers: Option<Vec<ProviderInfo>>,
     pub edit: Option<ProviderEdit>,
     pub default_menu: bool,
+    /// Which provider's models stand beside the 默认模型 menu — Electron nests them one level in.
+    pub default_provider_menu: Option<String>,
     /// The 推理强度 flyout beside `default_menu`, matching Electron's submenu.
     pub default_thinking_menu: bool,
     pub search: Entity<InputState>,
@@ -388,6 +495,7 @@ impl Workspace {
                 providers: None,
                 edit: None,
                 default_menu: false,
+                default_provider_menu: None,
                 default_thinking_menu: false,
                 theme_menu: None,
                 archived: None,
@@ -503,83 +611,64 @@ impl Workspace {
         .detach();
     }
 
-    fn preview_import(&mut self, candidate: ImportCandidate, cx: &mut Context<Self>) {
+    /// Copy every ticked session of the open picker into FastVibe, one after another, then
+    /// close the picker and say how it went. The chats stay where they are: an import of twelve
+    /// sessions must not walk the user through twelve conversations.
+    fn import_selected(&mut self, cx: &mut Context<Self>) {
         let Some(backend) = self.backend.clone() else {
             return;
         };
         let Some(settings) = self.settings.as_mut() else {
             return;
         };
-        settings.import.generation = settings.import.generation.wrapping_add(1);
-        let generation = settings.import.generation;
-        settings.import.busy = true;
-        settings.import.preview = None;
+        let Some(source) = settings.import.picking.clone() else {
+            return;
+        };
+        let picked: Vec<ImportCandidate> = settings
+            .import
+            .candidates
+            .iter()
+            .flatten()
+            .filter(|c| c.source == source && settings.import.selected.contains(&c.source_id))
+            .cloned()
+            .collect();
+        if picked.is_empty() {
+            return;
+        }
+        settings.import.importing = true;
         settings.import.notice = None;
-        let call = backend.call::<ImportRead>(ImportReadParams {
-            source: candidate.source,
-            source_id: candidate.source_id,
-        });
         cx.spawn(async move |this, cx| {
-            let result = call.await;
-            this.update(cx, |this, cx| {
-                let english = this.english();
-                if let Some(settings) = this
-                    .settings
-                    .as_mut()
-                    .filter(|settings| settings.import.generation == generation)
+            let (mut ok, mut failed) = (0usize, Vec::new());
+            for candidate in picked {
+                match backend
+                    .call::<ImportCommit>(ImportCommitParams {
+                        source: candidate.source,
+                        source_id: candidate.source_id,
+                    })
+                    .await
                 {
-                    settings.import.busy = false;
-                    match result {
-                        Ok(response) => settings.import.preview = Some(response),
-                        Err(error) => {
-                            settings.import.notice = Some(tr!(
-                                english,
-                                "settings.could_not_read_the_import",
-                                error = error
-                            ))
-                        }
-                    }
+                    Ok(_) => ok += 1,
+                    Err(error) => failed.push(error.to_string()),
                 }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
-    }
-
-    fn commit_import(&mut self, candidate: ImportCandidate, cx: &mut Context<Self>) {
-        let Some(backend) = self.backend.clone() else {
-            return;
-        };
-        let Some(settings) = self.settings.as_mut() else {
-            return;
-        };
-        settings.import.busy = true;
-        settings.import.notice = None;
-        let call = backend.call::<ImportCommit>(ImportCommitParams {
-            source: candidate.source,
-            source_id: candidate.source_id,
-        });
-        cx.spawn(async move |this, cx| {
-            let result = call.await;
+            }
             this.update(cx, |this, cx| {
                 let english = this.english();
-                match result {
-                    Ok(response) => {
-                        let thread_id = response.thread.id.clone();
-                        this.settings = None;
-                        this.refresh_threads(cx);
-                        this.select(thread_id, cx);
+                if let Some(settings) = &mut this.settings {
+                    let import = &mut settings.import;
+                    import.importing = false;
+                    import.picking = None;
+                    import.selected.clear();
+                    let mut notice = tr!(english, "settings.import_done", ok = ok);
+                    if !failed.is_empty() {
+                        notice.push_str(&tr!(
+                            english,
+                            "settings.import_done_failed",
+                            failed = failed.len()
+                        ));
                     }
-                    Err(error) => {
-                        if let Some(settings) = &mut this.settings {
-                            settings.import.busy = false;
-                            settings.import.notice =
-                                Some(tr!(english, "settings.import_failed_error", error = error));
-                        }
-                    }
+                    import.notice = Some(notice);
                 }
+                this.refresh_threads(cx);
                 cx.notify();
             })
             .ok();
@@ -721,6 +810,7 @@ impl Workspace {
         self.defaults = defaults.clone();
         if let Some(s) = &mut self.settings {
             s.default_menu = false;
+            s.default_provider_menu = None;
             s.default_thinking_menu = false;
         }
         cx.notify();
@@ -1136,7 +1226,7 @@ impl Workspace {
         div()
             .size_full()
             .flex()
-            .child(self.settings_nav(s, cx))
+            .child(self.settings_nav(s, window, cx))
             .child(
                 div()
                     .id("settings-body")
@@ -1155,16 +1245,19 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap(px(20.0))
-                            .child(
-                                div()
-                                    .text_size(px(20.0))
-                                    .line_height(px(28.0))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(section_label_for(
-                                        s.section,
-                                        self.app_settings.language,
-                                    )),
-                            )
+                            // 使用统计 draws its own header (title + 应用用量 pill), as Electron's does.
+                            .when(s.section != Section::Usage, |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(20.0))
+                                        .line_height(px(28.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(section_label_for(
+                                            s.section,
+                                            self.app_settings.language,
+                                        )),
+                                )
+                            })
                             .child(match s.section {
                                 Section::Providers => {
                                     self.providers_pane(s, window, cx).into_any_element()
@@ -1190,10 +1283,21 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn settings_nav(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The settings list takes the shell sidebar's own width, as Electron's aside does.
+    fn settings_nav_width(&self, window: &Window) -> f32 {
+        self.sidebar_resting_width(f32::from(window.viewport_size().width))
+    }
+
+    fn settings_nav(
+        &self,
+        s: &SettingsState,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let p = &self.palette;
         let language = self.app_settings.language;
         let hover = ui::half(p.c(Token::SidebarAccent));
+        let foreground = p.c(Token::Foreground);
         let mut list = div().px(px(8.0)).pb(px(12.0)).flex().flex_col();
         for (gi, (group, items)) in SECTIONS.iter().enumerate() {
             // A group whose every pane this platform hides keeps no heading of its own.
@@ -1207,9 +1311,10 @@ impl Workspace {
             list = list.child(
                 div()
                     .when(gi > 0, |d| d.mt(px(12.0)))
-                    .pl(px(8.0))
-                    .py(px(4.0))
+                    .px(px(8.0))
+                    .pb(px(4.0))
                     .text_size(px(TEXT_XS))
+                    .line_height(px(16.0))
                     .font_weight(FontWeight::MEDIUM)
                     .muted(p)
                     .child(section_group_label(group, language)),
@@ -1221,6 +1326,7 @@ impl Workspace {
                     div()
                         .id(SharedString::from(format!("settings-{label}")))
                         .h(px(32.0))
+                        .mb(px(2.0))
                         .px(px(8.0))
                         .flex()
                         .items_center()
@@ -1236,7 +1342,7 @@ impl Workspace {
                                 d.hover(move |d| d.bg(hover))
                             }
                         })
-                        .child(icon(glyph, 14.0, p.c(Token::MutedForeground)))
+                        .child(icon(glyph, 16.0, p.c(Token::MutedForeground)))
                         .child(section_label_for(section, language))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_settings(section, window, cx)
@@ -1245,7 +1351,7 @@ impl Workspace {
             }
         }
         div()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(self.settings_nav_width(window)))
             .h_full()
             .flex_none()
             .p(px(INSET))
@@ -1261,7 +1367,7 @@ impl Workspace {
                     .flex_col()
                     .child(div().h(px(44.0)).flex_none())
                     .child(
-                        div().px(px(8.0)).flex_none().child(
+                        div().px(px(8.0)).pt(px(4.0)).flex_none().child(
                             div()
                                 .id("back-to-app")
                                 .h(px(32.0))
@@ -1272,8 +1378,9 @@ impl Workspace {
                                 .rounded(px(8.0))
                                 .cursor_pointer()
                                 .text_size(px(TEXT_SM))
-                                .hover(move |d| d.bg(hover))
-                                .child(icon("arrow-left01", 14.0, p.c(Token::MutedForeground)))
+                                .muted(p)
+                                .hover(move |d| d.bg(hover).text_color(foreground))
+                                .child(icon("arrow-left01", 16.0, p.c(Token::MutedForeground)))
                                 .child(if language == UiLanguage::English {
                                     "Back to app"
                                 } else {
@@ -1291,7 +1398,7 @@ impl Workspace {
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
-                            .pt(px(4.0))
+                            .pt(px(12.0))
                             .child(list),
                     )
                     .child(
@@ -1305,226 +1412,334 @@ impl Workspace {
             )
     }
 
+    /// 导入: one row per agent that has sessions on this machine, each opening a picker of
+    /// its sessions; nothing is copied until the user ticks some and confirms.
     fn import_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
-        let open_skills =
-            cx.listener(|this, _, window, cx| this.open_settings(Section::Skills, window, cx));
-        let open_mcp =
-            cx.listener(|this, _, window, cx| this.open_settings(Section::Mcp, window, cx));
-        let refresh = cx.listener(|this, _, _, cx| this.refresh_import(cx));
-        let mut claude = card(p)
-            .p(px(16.))
+        let import = &s.import;
+        let candidates = import.candidates.as_deref().unwrap_or(&[]);
+        let mut sources: Vec<(&str, Vec<&ImportCandidate>)> = Vec::new();
+        for id in ["pi", "claude-code", "codex", "opencode", "zcode"] {
+            let list: Vec<&ImportCandidate> =
+                candidates.iter().filter(|c| c.source == id).collect();
+            if !list.is_empty() {
+                sources.push((id, list));
+            }
+        }
+        let mut header = div()
             .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(TEXT_SM))
-                            .child(trs!(english, "settings.other_agent_sessions")),
-                    )
-                    .child(
-                        outline_button("refresh-import-candidates", p)
-                            .child(if s.import.busy {
-                                trs!(english, "settings.reading")
-                            } else {
-                                trs!(english, "settings.refresh")
-                            })
-                            .on_click(refresh),
-                    ),
-            )
+            .items_center()
+            .justify_between()
+            .gap(px(8.0))
             .child(
                 div()
                     .text_size(px(TEXT_XS))
                     .muted(p)
-                    .child(trs!(english, "settings.scan_local_claude_code_pi")),
-            );
-        if let Some(notice) = &s.import.notice {
-            claude = claude.child(
+                    .child(SharedString::from(if import.busy {
+                        trs!(english, "settings.reading").to_string()
+                    } else {
+                        tr!(english, "settings.import_found", count = candidates.len())
+                    })),
+            )
+            .child(
                 div()
-                    .text_size(px(TEXT_XS))
-                    .text_color(p.c(Token::Destructive))
-                    .child(notice.clone()),
+                    .id("refresh-import-candidates")
+                    .size(px(28.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(p.c(Token::Border))
+                    .bg(p.c(Token::Background))
+                    .cursor_pointer()
+                    .child(icon("refresh", 14.0, p.c(Token::Foreground)))
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh_import(cx))),
             );
+        if import.candidates.is_none() && import.busy {
+            header = header.opacity(0.7);
         }
-        match &s.import.candidates {
-            None if s.import.busy => {
-                claude = claude.child(
-                    div()
-                        .text_size(px(TEXT_XS))
-                        .muted(p)
-                        .child(trs!(english, "settings.looking_for_sessions")),
-                );
-            }
-            Some(candidates) if candidates.is_empty() => {
-                claude = claude.child(
-                    div()
-                        .text_size(px(TEXT_XS))
-                        .muted(p)
-                        .child(trs!(english, "settings.no_importable_agent_sessions_found")),
-                );
-            }
-            Some(candidates) => {
-                for (index, candidate) in candidates.iter().enumerate() {
-                    let selected =
-                        s.import.preview.as_ref().is_some_and(|preview| {
-                            preview.candidate.source_id == candidate.source_id
-                        });
-                    let preview_candidate = candidate.clone();
-                    claude = claude.child(
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(10.))
-                            .when(index > 0, |d| {
-                                d.border_t_1().border_color(p.c(Token::Border))
-                            })
-                            .pt(px(if index > 0 { 8. } else { 2. }))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        ui::truncate(format!(
-                                            "{} · {}",
-                                            candidate.source, candidate.title
-                                        ))
-                                        .text_size(px(TEXT_SM)),
-                                    )
-                                    .child(div().text_size(px(TEXT_XS)).muted(p).child(format!(
-                                            "{} {} · {}",
-                                            candidate.message_count,
-                                            trs!(english, "settings.messages"),
-                                            candidate.cwd.as_deref().unwrap_or(trs!(
-                                                english,
-                                                "settings.unknown_directory"
-                                            ))
-                                        ))),
-                            )
-                            .child(
-                                outline_button(
-                                    SharedString::from(format!("preview-import-{index}")),
-                                    p,
+                            .gap(px(8.0))
+                            .text_size(px(TEXT_SM))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(icon("import", 16.0, p.c(Token::Foreground)))
+                            .child(trs!(english, "settings.import_title")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .muted(p)
+                            .child(trs!(english, "settings.import_desc")),
+                    ),
+            )
+            .child(header);
+        if let Some(notice) = &import.notice {
+            body = body.child(div().text_size(px(TEXT_XS)).muted(p).child(notice.clone()));
+        }
+        if sources.is_empty() {
+            if !import.busy {
+                body = body.child(
+                    div()
+                        .py(px(24.0))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .text_size(px(TEXT_SM))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(trs!(english, "settings.import_empty_title")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(TEXT_XS))
+                                .muted(p)
+                                .child(trs!(english, "settings.import_empty_desc")),
+                        ),
+                );
+            }
+        } else {
+            let mut list = div()
+                .rounded(px(10.0))
+                .border_1()
+                .border_color(p.c(Token::Border))
+                .overflow_hidden()
+                .flex()
+                .flex_col();
+            for (i, (id, sessions)) in sources.iter().enumerate() {
+                let source = id.to_string();
+                let latest = sessions.iter().map(|c| c.updated_at).max().unwrap_or(0);
+                let mut detail = tr!(english, "settings.import_sessions", count = sessions.len());
+                if let Some(date) = month_day(latest) {
+                    detail.push('·');
+                    detail.push_str(&tr!(english, "settings.import_latest", date = date));
+                }
+                list = list.child(
+                    div()
+                        .px(px(12.0))
+                        .py(px(10.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(12.0))
+                        .when(i > 0, |d| d.border_t_1().border_color(p.c(Token::Border)))
+                        .child(
+                            div()
+                                .size(px(32.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(8.0))
+                                .border_1()
+                                .border_color(p.c(Token::Border))
+                                .bg(p.c(Token::Background))
+                                .child(icon(&format!("brand-{id}"), 16.0, p.c(Token::Foreground))),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .text_size(px(TEXT_SM))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(source_name(id)),
                                 )
-                                .child(if selected {
-                                    trs!(english, "settings.previewed")
-                                } else {
-                                    trs!(english, "settings.preview")
-                                })
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.preview_import(preview_candidate.clone(), cx)
-                                    },
-                                )),
-                            ),
-                    );
+                                .child(
+                                    div()
+                                        .text_size(px(TEXT_XS))
+                                        .muted(p)
+                                        .child(SharedString::from(detail)),
+                                ),
+                        )
+                        .child(
+                            outline_button(SharedString::from(format!("import-{id}")), p)
+                                .h(px(28.0))
+                                .child(trs!(english, "settings.import_action"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(s) = &mut this.settings {
+                                        let import = &mut s.import;
+                                        import.picking =
+                                            if import.picking.as_deref() == Some(source.as_str()) {
+                                                None
+                                            } else {
+                                                Some(source.clone())
+                                            };
+                                        import.selected.clear();
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                );
+                if import.picking.as_deref() == Some(*id) {
+                    list = list.child(self.import_picker(id, sessions, import, cx));
                 }
             }
-            _ => {}
+            body = body.child(list);
         }
-        if let Some(preview) = &s.import.preview {
-            let commit_candidate = preview.candidate.clone();
-            claude = claude.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(10.))
-                    .mt(px(4.))
-                    .pt(px(10.))
-                    .border_t_1()
-                    .border_color(p.c(Token::Border))
-                    .text_size(px(TEXT_XS))
-                    .child(div().flex_1().child(tr!(
-                        english,
-                        "settings.preview_arg1_engine_messages_skipped",
-                        arg1 = preview.messages.len(),
-                        arg2 = preview.skipped.len()
-                    )))
-                    .child(
-                        outline_button("commit-import", p)
-                            .child(trs!(english, "settings.import_as_new_chat"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.commit_import(commit_candidate.clone(), cx)
-                            })),
-                    ),
-            );
-        }
-        card(p)
-            .p(px(16.))
+        card(p).p(px(16.0)).child(body).into_any_element()
+    }
+
+    /// The sessions of one source, ticked for import.
+    fn import_picker(
+        &self,
+        source: &str,
+        sessions: &[&ImportCandidate],
+        import: &ImportSettings,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
+        let all: Vec<String> = sessions.iter().map(|c| c.source_id.clone()).collect();
+        let every = !all.is_empty() && all.iter().all(|id| import.selected.contains(id));
+        let count = import.selected.len();
+        let hover = p.c(Token::Muted);
+        let mut rows = div()
+            .id(SharedString::from(format!("import-picker-{source}")))
+            .max_h(px(288.0))
+            .overflow_y_scroll()
             .flex()
-            .flex_col()
-            .gap(px(14.))
-            .child(
+            .flex_col();
+        for c in sessions {
+            let id = c.source_id.clone();
+            let on = import.selected.contains(&id);
+            rows = rows.child(
                 div()
-                    .text_size(px(TEXT_SM))
-                    .child(trs!(english, "settings.import_tools_and_extensions")),
-            )
-            .child(claude)
-            .child(
-                div()
-                    .text_size(px(TEXT_SM))
-                    .muted(p)
-                    .child(trs!(english, "settings.native_import_entry_points_are")),
-            )
-            .child(
-                div()
+                    .id(SharedString::from(format!("import-pick-{id}")))
+                    .px(px(12.0))
+                    .py(px(8.0))
                     .flex()
                     .items_center()
-                    .justify_between()
-                    .gap(px(12.))
+                    .gap(px(10.0))
+                    .cursor_pointer()
+                    .hover(move |d| d.bg(hover))
+                    .child(checkbox(on, p))
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .child(ui::truncate(c.title.clone()).text_size(px(TEXT_SM)))
                             .child(
-                                div()
-                                    .text_size(px(TEXT_SM))
-                                    .child(trs!(english, "settings.skills_folder")),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(TEXT_XS))
-                                    .muted(p)
-                                    .child(trs!(english, "settings.import_a_local_skill_md")),
+                                ui::truncate(format!(
+                                    "{} · {}",
+                                    tr!(
+                                        english,
+                                        "settings.import_messages",
+                                        count = c.message_count
+                                    ),
+                                    c.cwd
+                                        .as_deref()
+                                        .unwrap_or(trs!(english, "settings.unknown_directory"))
+                                ))
+                                .text_size(px(TEXT_XS))
+                                .muted(p),
                             ),
                     )
-                    .child(
-                        outline_button("open-import-skills", p)
-                            .child(trs!(english, "settings.open_skill_import"))
-                            .on_click(open_skills),
-                    ),
-            )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(s) = &mut this.settings
+                            && !s.import.selected.remove(&id)
+                        {
+                            s.import.selected.insert(id.clone());
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        let importing = import.importing;
+        let disabled = importing || count == 0;
+        div()
+            .border_t_1()
+            .border_color(p.c(Token::Border))
+            .bg(ui::half(p.c(Token::Muted)))
+            .flex()
+            .flex_col()
             .child(
                 div()
+                    .id(SharedString::from(format!("import-all-{source}")))
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .cursor_pointer()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(checkbox(every, p))
+                    .child(SharedString::from(tr!(
+                        english,
+                        "settings.import_select_all",
+                        selected = count,
+                        total = all.len()
+                    )))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(s) = &mut this.settings {
+                            if every {
+                                s.import.selected.clear();
+                            } else {
+                                s.import.selected = all.iter().cloned().collect();
+                            }
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(rows)
+            .child(
+                div()
+                    .px(px(12.0))
+                    .py(px(8.0))
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap(px(12.))
+                    .gap(px(8.0))
+                    .border_t_1()
+                    .border_color(p.c(Token::Border))
                     .child(
                         div()
-                            .flex_1()
-                            .child(
-                                div()
-                                    .text_size(px(TEXT_SM))
-                                    .child(trs!(english, "settings.mcp_configuration")),
-                            )
-                            .child(div().text_size(px(TEXT_XS)).muted(p).child(trs!(
-                                english,
-                                "settings.paste_mcpservers_servers_json_validate"
-                            ))),
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child(trs!(english, "settings.import_pick_hint")),
                     )
                     .child(
-                        outline_button("open-import-mcp", p)
-                            .child(trs!(english, "settings.open_mcp_import"))
-                            .on_click(open_mcp),
+                        div()
+                            .id(SharedString::from(format!("import-run-{source}")))
+                            .h(px(28.0))
+                            .px(px(10.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(8.0))
+                            .bg(p.c(Token::Primary))
+                            .text_color(p.c(Token::PrimaryForeground))
+                            .text_size(px(TEXT_XS))
+                            .font_weight(FontWeight::MEDIUM)
+                            .when(disabled, |d| d.opacity(0.5))
+                            .when(!disabled, |d| d.cursor_pointer())
+                            .child(SharedString::from(if importing {
+                                trs!(english, "settings.import_importing").to_string()
+                            } else {
+                                tr!(english, "settings.import_count", count = count)
+                            }))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !disabled {
+                                    this.import_selected(cx);
+                                }
+                            })),
                     ),
             )
-            .into_any_element()
     }
 
     fn not_yet(&self) -> impl IntoElement {
@@ -1559,71 +1774,60 @@ impl Workspace {
     fn browser_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
-        card(p)
-            .p(px(16.0))
+        let field =
+            |state: &Entity<InputState>| div().w(px(288.0)).child(Input::new(state).small());
+        let changed = value(&s.browser.homepage, cx) != self.app_settings.browser_homepage
+            || value(&s.browser.search_engine, cx) != self.app_settings.browser_search_engine
+            || value(&s.browser.download_dir, cx) != self.app_settings.browser_download_dir;
+        div()
             .flex()
             .flex_col()
-            .gap(px(14.0))
+            .gap(px(8.0))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(
-                                div()
-                                    .text_size(px(TEXT_SM))
-                                    .child(trs!(english, "settings.browser_control")),
-                            )
-                            .child(
-                                div().text_size(px(TEXT_XS)).muted(p).child(trs!(
-                                    english,
-                                    "settings.configure_new_tabs_address_bar"
-                                )),
-                            ),
-                    )
-                    .child(
+                    .px(px(4.0))
+                    .text_size(px(TEXT_SM))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(trs!(english, "settings.browser_control")),
+            )
+            .child(
+                card(p)
+                    .child(setting_row(
+                        trs!(english, "settings.home_page"),
+                        trs!(english, "settings.home_page_desc"),
+                        false,
+                        p,
+                        field(&s.browser.homepage),
+                    ))
+                    .child(setting_row(
+                        trs!(english, "settings.search_url_template"),
+                        trs!(english, "settings.the_template_must_contain_query"),
+                        true,
+                        p,
+                        field(&s.browser.search_engine),
+                    ))
+                    .child(setting_row(
+                        trs!(english, "settings.download_directory"),
+                        trs!(english, "settings.leave_empty_to_use_the"),
+                        true,
+                        p,
+                        field(&s.browser.download_dir),
+                    ))
+                    .child(setting_row(
+                        trs!(english, "settings.proxy_apply_title"),
+                        "",
+                        true,
+                        p,
                         outline_button("save-browser-settings", p)
+                            .h(px(28.0))
+                            .when(!changed, |d| d.opacity(0.5).cursor_default())
                             .child(trs!(english, "settings.save"))
-                            .on_click(cx.listener(|this, _, _, cx| this.save_browser(cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(trs!(english, "settings.home_page")),
-            )
-            .child(Input::new(&s.browser.homepage).small())
-            .child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(trs!(english, "settings.search_url_template")),
-            )
-            .child(Input::new(&s.browser.search_engine).small())
-            .child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(trs!(english, "settings.the_template_must_contain_query")),
-            )
-            .child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(trs!(english, "settings.download_directory")),
-            )
-            .child(Input::new(&s.browser.download_dir).small())
-            .child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(trs!(english, "settings.leave_empty_to_use_the")),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if changed {
+                                    this.save_browser(cx)
+                                }
+                            })),
+                    )),
             )
             .into_any_element()
     }
@@ -1638,7 +1842,7 @@ impl Workspace {
         };
         self.patch_settings(
             AppSettingsPatch {
-                proxy_url: Some(value(&settings.proxy.url, cx)),
+                proxy_url: Some(settings.proxy.url(cx)),
                 ..Default::default()
             },
             cx,
@@ -1648,34 +1852,128 @@ impl Workspace {
     fn proxy_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
-        card(p)
-            .p(px(16.0))
+        let proxy = &s.proxy;
+        let enabled = proxy.enabled;
+        let hover = p.c(Token::Accent);
+        let host_valid = proxy.host_valid(cx);
+        let port_valid = proxy.port_valid(cx);
+        let changed = proxy.url(cx) != self.app_settings.proxy_url.trim();
+        let can_apply = changed && (!enabled || (host_valid && port_valid));
+        let mut card = card(p).child(setting_row(
+            trs!(english, "settings.proxy_enabled"),
+            trs!(english, "settings.proxy_scope"),
+            false,
+            p,
+            switch(SharedString::from("proxy-enabled"), enabled, p).on_click(cx.listener(
+                |this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.proxy.enabled = !s.proxy.enabled;
+                    }
+                    cx.notify();
+                },
+            )),
+        ));
+        if enabled {
+            let mut menu = popover(p)
+                .absolute()
+                .top(px(34.0))
+                .right(px(0.0))
+                .w(px(144.0));
+            for protocol in PROXY_PROTOCOLS {
+                menu = menu.child(
+                    menu_item(
+                        SharedString::from(format!("proxy-protocol-{protocol}")),
+                        proxy.protocol == protocol,
+                        hover,
+                    )
+                    .child(protocol.to_uppercase())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(s) = &mut this.settings {
+                            s.proxy.protocol = protocol;
+                            s.proxy.protocol_menu = false;
+                        }
+                        cx.notify();
+                    })),
+                );
+            }
+            let protocol_button = outline_button("proxy-protocol", p)
+                .w(px(144.0))
+                .h(px(30.0))
+                .justify_between()
+                .rounded(px(8.0))
+                .font_weight(FontWeight::NORMAL)
+                .text_size(px(TEXT_SM))
+                .child(proxy.protocol.to_uppercase())
+                .child(icon("unfold-more", 14.0, p.c(Token::MutedForeground)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.proxy.protocol_menu = !s.proxy.protocol_menu;
+                    }
+                    cx.notify();
+                }));
+            let host_hint = if host_valid || value(&proxy.host, cx).is_empty() {
+                trs!(english, "settings.proxy_host_hint")
+            } else {
+                trs!(english, "settings.proxy_invalid_host")
+            };
+            let port_hint = if port_valid || value(&proxy.port, cx).is_empty() {
+                ""
+            } else {
+                trs!(english, "settings.proxy_invalid_port")
+            };
+            card = card
+                .child(setting_row(
+                    trs!(english, "settings.proxy_protocol"),
+                    "",
+                    true,
+                    p,
+                    div()
+                        .relative()
+                        .child(protocol_button)
+                        .when(proxy.protocol_menu, |d| d.child(ui::float(menu))),
+                ))
+                .child(setting_row(
+                    trs!(english, "settings.proxy_host"),
+                    host_hint,
+                    true,
+                    p,
+                    div().w(px(144.0)).child(Input::new(&proxy.host).small()),
+                ))
+                .child(setting_row(
+                    trs!(english, "settings.proxy_port"),
+                    port_hint,
+                    true,
+                    p,
+                    div().w(px(144.0)).child(Input::new(&proxy.port).small()),
+                ));
+        }
+        card = card.child(setting_row(
+            trs!(english, "settings.proxy_apply_title"),
+            trs!(english, "settings.proxy_limits"),
+            true,
+            p,
+            outline_button("save-proxy", p)
+                .h(px(28.0))
+                .when(!can_apply, |d| d.opacity(0.5).cursor_default())
+                .child(trs!(english, "settings.proxy_apply"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if can_apply {
+                        this.save_proxy(cx)
+                    }
+                })),
+        ));
+        div()
             .flex()
             .flex_col()
-            .gap(px(12.0))
+            .gap(px(8.0))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(TEXT_SM))
-                            .child(trs!(english, "settings.network_proxy")),
-                    )
-                    .child(
-                        outline_button("save-proxy", p)
-                            .child(trs!(english, "settings.save"))
-                            .on_click(cx.listener(|this, _, _, cx| this.save_proxy(cx))),
-                    ),
+                    .px(px(4.0))
+                    .text_size(px(TEXT_SM))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(trs!(english, "settings.network_proxy")),
             )
-            .child(
-                div()
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(trs!(english, "settings.used_for_model_requests_catalog")),
-            )
-            .child(Input::new(&s.proxy.url).small())
+            .child(card)
             .into_any_element()
     }
 
@@ -1740,9 +2038,12 @@ impl Workspace {
             )
             .child(
                 outline_button("default-model", p)
-                    .h(px(36.0))
-                    .rounded(px(10.0))
-                    .child(SharedString::from(format!("{current} · {thinking}")))
+                    .h(px(30.0))
+                    .rounded(px(8.0))
+                    .font_weight(FontWeight::NORMAL)
+                    .text_size(px(TEXT_SM))
+                    .child(SharedString::from(current))
+                    .child(div().muted(p).child(SharedString::from(thinking)))
                     .child(icon("arrow-down01", 12.0, p.c(Token::MutedForeground)))
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(s) = &mut this.settings {
@@ -1756,6 +2057,12 @@ impl Workspace {
             )
             .when(s.default_menu, |d| {
                 d.child(ui::float(self.default_menu(cx)))
+                    .when(s.default_provider_menu.is_some(), |d| {
+                        d.child(
+                            deferred(self.default_provider_flyout(window, cx).occlude())
+                                .with_priority(11),
+                        )
+                    })
                     .when(s.default_thinking_menu, |d| {
                         // Its own float: a child of the parent popover is clipped to that
                         // card, so the glass fill never covers the page and the text shows through.
@@ -1943,9 +2250,9 @@ impl Workspace {
         };
         let mut mode_menu = popover(p)
             .absolute()
-            .top(px(40.0))
+            .top(px(34.0))
             .right(px(0.0))
-            .w(px(172.0));
+            .w(px(176.0));
         for (m, label) in modes {
             mode_menu = mode_menu.child(
                 menu_item(
@@ -1971,9 +2278,9 @@ impl Workspace {
 
         let mut policy_menu = popover(p)
             .absolute()
-            .top(px(40.0))
+            .top(px(34.0))
             .right(px(0.0))
-            .w(px(172.0));
+            .w(px(176.0));
         for (m, label) in policies {
             policy_menu = policy_menu.child(
                 menu_item(
@@ -2104,12 +2411,11 @@ impl Workspace {
         let auto_compaction_enabled = a.auto_compaction_enabled;
         let auto_review_approvals = a.auto_review_approvals;
         let code_mode_enabled = a.code_mode_enabled;
-        let auto_archive = a.auto_archive_after_days.is_some();
         let keep_awake = a.keep_awake;
         let english = a.language == UiLanguage::English;
         let hover = p.c(Token::Accent);
         let language_label = |language: UiLanguage| match language {
-            UiLanguage::Chinese => "中文",
+            UiLanguage::Chinese => "简体中文",
             UiLanguage::English => "English",
         };
         let mode_label = |m: ThemeMode| match m {
@@ -2126,10 +2432,10 @@ impl Workspace {
         let select =
             |id: &'static str, which: ThemeMenu, content: AnyElement, cx: &mut Context<Self>| {
                 outline_button(id, p)
-                    .w(px(172.0))
-                    .h(px(36.0))
+                    .w(px(176.0))
+                    .h(px(30.0))
                     .justify_between()
-                    .rounded(px(10.0))
+                    .rounded(px(8.0))
                     .font_weight(FontWeight::NORMAL)
                     .text_size(px(TEXT_SM))
                     .child(content)
@@ -2148,9 +2454,9 @@ impl Workspace {
 
         let mut mode_menu = popover(p)
             .absolute()
-            .top(px(40.0))
+            .top(px(34.0))
             .right(px(0.0))
-            .w(px(172.0));
+            .w(px(176.0));
         for m in [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark] {
             mode_menu = mode_menu.child(
                 menu_item(
@@ -2176,9 +2482,9 @@ impl Workspace {
 
         let mut language_menu = popover(p)
             .absolute()
-            .top(px(40.0))
+            .top(px(34.0))
             .right(px(0.0))
-            .w(px(172.0));
+            .w(px(176.0));
         for language in [UiLanguage::Chinese, UiLanguage::English] {
             language_menu = language_menu.child(
                 menu_item(
@@ -2201,6 +2507,42 @@ impl Workspace {
                 })),
             );
         }
+
+        let mut font_size_menu = popover(p)
+            .absolute()
+            .top(px(34.0))
+            .right(px(0.0))
+            .w(px(176.0));
+        for size in 12u32..=20 {
+            font_size_menu = font_size_menu.child(
+                menu_item(
+                    SharedString::from(format!("font-size-{size}")),
+                    a.ui_font_size == size,
+                    hover,
+                )
+                .child(SharedString::from(format!("{size}px")))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.theme_menu = None;
+                    }
+                    this.patch_settings(
+                        AppSettingsPatch {
+                            ui_font_size: Some(size),
+                            ..Default::default()
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+        let font_size_btn = select(
+            "ui-font-size",
+            ThemeMenu::FontSize,
+            div()
+                .child(SharedString::from(format!("{}px", a.ui_font_size)))
+                .into_any_element(),
+            cx,
+        );
 
         let theme_list = |kind: fv_theme::ThemeKind, current: &str, cx: &mut Context<Self>| {
             let menu = popover(p)
@@ -2280,214 +2622,368 @@ impl Workspace {
             cx,
         );
         let glass = a.glass;
+        let ai_language = a.ai_language;
+        let mut ai_language_menu = popover(p)
+            .absolute()
+            .top(px(36.0))
+            .right(px(0.0))
+            .w(px(176.0));
+        for language in [UiLanguage::Chinese, UiLanguage::English] {
+            ai_language_menu = ai_language_menu.child(
+                menu_item(
+                    SharedString::from(format!("ai-language-{language:?}")),
+                    ai_language == language,
+                    hover,
+                )
+                .child(language_label(language))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.theme_menu = None;
+                    }
+                    this.patch_settings(
+                        AppSettingsPatch {
+                            ai_language: Some(language),
+                            ..Default::default()
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+        let ai_language_btn = select(
+            "ai-language",
+            ThemeMenu::AiLanguage,
+            div().child(language_label(ai_language)).into_any_element(),
+            cx,
+        );
+        let heading = |label: &'static str| {
+            div()
+                .px(px(4.0))
+                .text_size(px(TEXT_SM))
+                .font_weight(FontWeight::MEDIUM)
+                .child(label)
+        };
+        let group = |label: &'static str, body: Div| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(heading(label))
+                .child(body)
+        };
+        let float_when = |open: bool, button: AnyElement, menu: Div| {
+            div()
+                .relative()
+                .child(button)
+                .when(open, |d| d.child(ui::float(menu)))
+        };
+        let menu = s.theme_menu;
+
+        let language = card(p)
+            .child(setting_row(
+                trs!(english, "settings.interface_language"),
+                trs!(english, "settings.interface_language_desc"),
+                false,
+                p,
+                float_when(
+                    menu == Some(ThemeMenu::Language),
+                    language_btn.into_any_element(),
+                    language_menu,
+                ),
+            ))
+            .child(setting_row(
+                trs!(english, "settings.ai_language"),
+                trs!(english, "settings.ai_language_desc"),
+                true,
+                p,
+                float_when(
+                    menu == Some(ThemeMenu::AiLanguage),
+                    ai_language_btn.into_any_element(),
+                    ai_language_menu,
+                ),
+            ));
+
+        let appearance = card(p)
+            .child(setting_row(
+                trs!(english, "settings.theme_mode"),
+                trs!(english, "settings.follow_the_macos_appearance_when"),
+                false,
+                p,
+                float_when(
+                    menu == Some(ThemeMenu::Mode),
+                    mode_btn.into_any_element(),
+                    mode_menu,
+                ),
+            ))
+            .child(setting_row(
+                trs!(english, "settings.light_theme"),
+                trs!(english, "settings.theme_used_in_light_mode"),
+                true,
+                p,
+                float_when(
+                    menu == Some(ThemeMenu::Light),
+                    light_btn.into_any_element(),
+                    light_menu,
+                ),
+            ))
+            .child(setting_row(
+                trs!(english, "settings.dark_theme"),
+                trs!(english, "settings.theme_used_in_dark_mode"),
+                true,
+                p,
+                float_when(
+                    menu == Some(ThemeMenu::Dark),
+                    dark_btn.into_any_element(),
+                    dark_menu,
+                ),
+            ))
+            .child(setting_row(
+                trs!(english, "settings.ui_font_size"),
+                "",
+                true,
+                p,
+                float_when(
+                    menu == Some(ThemeMenu::FontSize),
+                    font_size_btn.into_any_element(),
+                    font_size_menu,
+                ),
+            ))
+            // Offered only where there is a blur to show, as Electron's `HAS_VIBRANCY`.
+            .when(cfg!(target_os = "macos"), |d| {
+                d.child(self.settings_switch_row(
+                    "glass",
+                    trs!(english, "settings.glass_effect"),
+                    trs!(english, "settings.make_the_window_background_translucent"),
+                    glass,
+                    |v| AppSettingsPatch {
+                        glass: Some(v),
+                        ..Default::default()
+                    },
+                    cx,
+                ))
+            });
+
+        let runtime = card(p)
+            .child(
+                self.settings_switch_row(
+                    "keep-awake",
+                    trs!(english, "settings.keep_awake"),
+                    trs!(english, "settings.prevent_macos_from_sleeping_during"),
+                    keep_awake,
+                    |v| AppSettingsPatch {
+                        keep_awake: Some(v),
+                        ..Default::default()
+                    },
+                    cx,
+                )
+                .border_t_0(),
+            )
+            .child(self.settings_switch_row(
+                "notifications",
+                trs!(english, "settings.system_notifications"),
+                trs!(english, "settings.system_notifications_desc"),
+                a.notifications,
+                |v| AppSettingsPatch {
+                    notifications: Some(v),
+                    ..Default::default()
+                },
+                cx,
+            ));
+
+        let chat = card(p)
+            .child(
+                self.settings_switch_row(
+                    "reply-suggestions",
+                    trs!(english, "settings.reply_suggestions"),
+                    trs!(english, "settings.suggest_what_you_may_say"),
+                    reply_suggestions,
+                    |v| AppSettingsPatch {
+                        reply_suggestions: Some(v),
+                        ..Default::default()
+                    },
+                    cx,
+                )
+                .border_t_0(),
+            )
+            .child(self.settings_switch_row(
+                "code-mode",
+                trs!(english, "settings.code_mode"),
+                trs!(english, "settings.let_the_model_orchestrate_existing"),
+                code_mode_enabled,
+                |v| AppSettingsPatch {
+                    code_mode_enabled: Some(v),
+                    ..Default::default()
+                },
+                cx,
+            ))
+            .child(self.settings_switch_row(
+                "tool-search",
+                trs!(english, "settings.tool_search"),
+                trs!(english, "settings.tool_search_desc"),
+                a.tool_search_enabled,
+                |v| AppSettingsPatch {
+                    tool_search_enabled: Some(v),
+                    ..Default::default()
+                },
+                cx,
+            ))
+            .child(self.settings_switch_row(
+                "collapse-thinking",
+                trs!(english, "settings.collapse_thinking"),
+                trs!(english, "settings.collapse_thinking_desc"),
+                a.collapse_thinking,
+                |v| AppSettingsPatch {
+                    collapse_thinking: Some(v),
+                    ..Default::default()
+                },
+                cx,
+            ))
+            .child(self.settings_switch_row(
+                "auto-compaction",
+                trs!(english, "settings.auto_compact_context"),
+                trs!(english, "settings.organize_context_near_its_limit"),
+                auto_compaction_enabled,
+                |v| AppSettingsPatch {
+                    auto_compaction_enabled: Some(v),
+                    ..Default::default()
+                },
+                cx,
+            ))
+            .child(self.settings_switch_row(
+                "auto-review-approvals",
+                trs!(english, "settings.auto_review_approvals"),
+                trs!(english, "settings.auto_review_approvals_hint"),
+                auto_review_approvals,
+                |v| AppSettingsPatch {
+                    auto_review_approvals: Some(v),
+                    ..Default::default()
+                },
+                cx,
+            ));
 
         div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
-            .child(
-                div()
-                    .pl(px(4.0))
-                    .text_size(px(TEXT_SM))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(trs!(english, "settings.appearance")),
-            )
-            .child(
-                card(p)
-                    .child(setting_row(
-                        trs!(english, "settings.interface_language"),
-                        trs!(english, "settings.switch_the_native_interface_language"),
-                        false,
-                        p,
-                        div()
-                            .relative()
-                            .child(language_btn)
-                            .when(s.theme_menu == Some(ThemeMenu::Language), |d| {
-                                d.child(ui::float(language_menu))
-                            }),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.theme_mode"),
-                        trs!(english, "settings.follow_the_macos_appearance_when"),
-                        false,
-                        p,
-                        div()
-                            .relative()
-                            .child(mode_btn)
-                            .when(s.theme_menu == Some(ThemeMenu::Mode), |d| {
-                                d.child(ui::float(mode_menu))
-                            }),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.light_theme"),
-                        trs!(english, "settings.theme_used_in_light_mode"),
-                        true,
-                        p,
-                        div()
-                            .relative()
-                            .child(light_btn)
-                            .when(s.theme_menu == Some(ThemeMenu::Light), |d| {
-                                d.child(ui::float(light_menu))
-                            }),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.dark_theme"),
-                        trs!(english, "settings.theme_used_in_dark_mode"),
-                        true,
-                        p,
-                        div()
-                            .relative()
-                            .child(dark_btn)
-                            .when(s.theme_menu == Some(ThemeMenu::Dark), |d| {
-                                d.child(ui::float(dark_menu))
-                            }),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.glass_effect"),
-                        trs!(english, "settings.make_the_window_background_translucent"),
-                        true,
-                        p,
-                        switch(SharedString::from("glass"), glass, p).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                this.patch_settings(
-                                    AppSettingsPatch {
-                                        glass: Some(!glass),
-                                        ..Default::default()
-                                    },
-                                    cx,
-                                )
-                            },
-                        )),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.reply_suggestions"),
-                        trs!(english, "settings.suggest_what_you_may_say"),
-                        true,
-                        p,
-                        switch(
-                            SharedString::from("reply-suggestions"),
-                            reply_suggestions,
-                            p,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.patch_settings(
-                                AppSettingsPatch {
-                                    reply_suggestions: Some(!reply_suggestions),
-                                    ..Default::default()
-                                },
-                                cx,
-                            )
-                        })),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.code_mode"),
-                        trs!(english, "settings.let_the_model_orchestrate_existing"),
-                        true,
-                        p,
-                        switch(SharedString::from("code-mode"), code_mode_enabled, p).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                this.patch_settings(
-                                    AppSettingsPatch {
-                                        code_mode_enabled: Some(!code_mode_enabled),
-                                        ..Default::default()
-                                    },
-                                    cx,
-                                )
-                            }),
-                        ),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.auto_compact_context"),
-                        trs!(english, "settings.organize_context_near_its_limit"),
-                        true,
-                        p,
-                        switch(
-                            SharedString::from("auto-compaction"),
-                            auto_compaction_enabled,
-                            p,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.patch_settings(
-                                AppSettingsPatch {
-                                    auto_compaction_enabled: Some(!auto_compaction_enabled),
-                                    ..Default::default()
-                                },
-                                cx,
-                            )
-                        })),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.auto_review_approvals"),
-                        trs!(english, "settings.auto_review_approvals_hint"),
-                        true,
-                        p,
-                        switch(
-                            SharedString::from("auto-review-approvals"),
-                            auto_review_approvals,
-                            p,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.patch_settings(
-                                AppSettingsPatch {
-                                    auto_review_approvals: Some(!auto_review_approvals),
-                                    ..Default::default()
-                                },
-                                cx,
-                            )
-                        })),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.auto_archive_old_chats"),
-                        trs!(english, "settings.every_hour_archive_chats_inactive"),
-                        true,
-                        p,
-                        switch(SharedString::from("auto-archive"), auto_archive, p).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                this.patch_settings(
-                                    AppSettingsPatch {
-                                        auto_archive_after_days: Some(if auto_archive {
-                                            None
-                                        } else {
-                                            Some(30)
-                                        }),
-                                        ..Default::default()
-                                    },
-                                    cx,
-                                )
-                            }),
-                        ),
-                    ))
-                    .child(setting_row(
-                        trs!(english, "settings.keep_awake"),
-                        trs!(english, "settings.prevent_macos_from_sleeping_during"),
-                        true,
-                        p,
-                        switch(SharedString::from("keep-awake"), keep_awake, p).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                this.patch_settings(
-                                    AppSettingsPatch {
-                                        keep_awake: Some(!keep_awake),
-                                        ..Default::default()
-                                    },
-                                    cx,
-                                )
-                            }),
-                        ),
-                    )),
-            )
+            .gap(px(24.0))
+            .child(group(trs!(english, "settings.language_group"), language))
+            .child(group(trs!(english, "settings.appearance"), appearance))
+            .child(group(trs!(english, "settings.runtime_group"), runtime))
+            .child(group(trs!(english, "settings.chat_group"), chat))
+    }
+
+    /// A switch row of 偏好设置; every one after the first in its card draws the divider.
+    #[allow(clippy::too_many_arguments)]
+    fn settings_switch_row(
+        &self,
+        id: &'static str,
+        title: &str,
+        description: &str,
+        value: bool,
+        patch: fn(bool) -> AppSettingsPatch,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let p = &self.palette;
+        setting_row(
+            title,
+            description,
+            true,
+            p,
+            switch(SharedString::from(id), value, p).on_click(
+                cx.listener(move |this, _, _, cx| this.patch_settings(patch(!value), cx)),
+            ),
+        )
     }
 
     /// 归档对话: restore one to the sidebar, or delete it for good (after asking).
     fn archived_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> impl IntoElement {
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
-        let mut col = div().flex().flex_col().gap(px(16.0)).child(
-            div()
-                .pl(px(4.0))
-                .text_size(px(TEXT_XS))
-                .muted(p)
-                .child(trs!(english, "settings.archiving_hides_a_chat_from")),
-        );
+        let days = self.app_settings.auto_archive_after_days;
+        let days_label = |d: Option<u32>| match d {
+            None => trs!(english, "settings.auto_archive_never").to_string(),
+            Some(n) if english => format!("{n} days"),
+            Some(n) => format!("{n} 天"),
+        };
+        let hover = p.c(Token::Accent);
+        let mut menu = popover(p)
+            .absolute()
+            .top(px(34.0))
+            .right(px(0.0))
+            .w(px(176.0));
+        for option in [
+            None,
+            Some(7),
+            Some(14),
+            Some(30),
+            Some(90),
+            Some(180),
+            Some(365),
+        ] {
+            menu = menu.child(
+                menu_item(
+                    SharedString::from(format!("auto-archive-{option:?}")),
+                    days == option,
+                    hover,
+                )
+                .child(SharedString::from(days_label(option)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(s) = &mut this.settings {
+                        s.theme_menu = None;
+                    }
+                    this.patch_settings(
+                        AppSettingsPatch {
+                            auto_archive_after_days: Some(option),
+                            ..Default::default()
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+        let button = outline_button("auto-archive", p)
+            .w(px(176.0))
+            .h(px(30.0))
+            .justify_between()
+            .rounded(px(8.0))
+            .font_weight(FontWeight::NORMAL)
+            .text_size(px(TEXT_SM))
+            .child(SharedString::from(days_label(days)))
+            .child(icon("unfold-more", 14.0, p.c(Token::MutedForeground)))
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(s) = &mut this.settings {
+                    s.theme_menu = if s.theme_menu == Some(ThemeMenu::AutoArchive) {
+                        None
+                    } else {
+                        Some(ThemeMenu::AutoArchive)
+                    };
+                }
+                cx.notify();
+            }));
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.0))
+            .child(
+                div()
+                    .pl(px(4.0))
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(trs!(english, "settings.archiving_hides_a_chat_from")),
+            )
+            .child(
+                card(p).child(setting_row(
+                    trs!(english, "settings.auto_archive"),
+                    trs!(english, "settings.auto_archive_desc"),
+                    false,
+                    p,
+                    div()
+                        .relative()
+                        .child(button)
+                        .when(s.theme_menu == Some(ThemeMenu::AutoArchive), |d| {
+                            d.child(ui::float(menu))
+                        }),
+                )),
+            );
         let list = match &s.archived {
             None => card(p).child(
                 div()
@@ -2505,6 +3001,17 @@ impl Workspace {
                     .flex_col()
                     .items_center()
                     .gap(px(6.0))
+                    .child(
+                        div()
+                            .mb(px(8.0))
+                            .size(px(32.0))
+                            .rounded(px(8.0))
+                            .bg(p.c(Token::Muted))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icon("archive04", 16.0, p.c(Token::Foreground))),
+                    )
                     .child(
                         div()
                             .text_size(px(TEXT_SM))
@@ -2587,7 +3094,6 @@ impl Workspace {
 
     fn default_menu(&self, cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
-        let hover = p.c(Token::Accent);
         let mut menu = popover(p)
             .absolute()
             .top(px(52.0))
@@ -2611,33 +3117,56 @@ impl Workspace {
                     .child(text::no_model_hint(self.app_settings.language)),
             );
         }
-        for m in &self.models {
-            let label = m.label.clone();
-            let active = self.defaults.model.as_deref() == Some(m.label.as_str());
+        // One row per provider, its models in a flyout beside this card — the same fold the
+        // composer's chip makes, and what keeps a dozen models off one settings popover.
+        let current = self.defaults.model.clone();
+        let open_provider = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.default_provider_menu.clone());
+        for group in provider_groups(&self.models) {
+            let id = group.id.to_string();
+            let clicked_id = id.clone();
+            let holds_current = group_holds_current(&group, current.as_deref());
+            let open = open_provider.as_deref() == Some(group.id);
             menu = menu.child(
-                menu_item(SharedString::from(format!("dm-{}", m.label)), active, hover)
-                    .h(px(32.0))
-                    .child(ui::truncate(format!("{}/{}", m.provider_name, m.model.id)).flex_1())
-                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                        if *hovered {
-                            if let Some(s) = &mut this.settings {
-                                if s.default_thinking_menu {
-                                    s.default_thinking_menu = false;
-                                    cx.notify();
-                                }
-                            }
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let thinking = this.defaults.thinking;
-                        this.set_default(
-                            ModelDefaults {
-                                model: Some(label.clone()),
-                                thinking,
-                            },
-                            cx,
-                        )
-                    })),
+                provider_row(
+                    SharedString::from(format!("dm-{id}")),
+                    group.name,
+                    holds_current,
+                    open,
+                    p,
+                )
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if !*hovered {
+                        return;
+                    }
+                    let Some(s) = &mut this.settings else {
+                        return;
+                    };
+                    // One flyout at a time: the effort list and a provider's models cannot both
+                    // hang off this card, or they draw on top of each other.
+                    if s.default_thinking_menu
+                        || s.default_provider_menu.as_deref() != Some(id.as_str())
+                    {
+                        s.default_thinking_menu = false;
+                        s.default_provider_menu = Some(id.clone());
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let Some(s) = &mut this.settings else {
+                        return;
+                    };
+                    s.default_thinking_menu = false;
+                    s.default_provider_menu =
+                        if s.default_provider_menu.as_deref() == Some(clicked_id.as_str()) {
+                            None
+                        } else {
+                            Some(clicked_id.clone())
+                        };
+                    cx.notify();
+                })),
             );
         }
         menu = menu.child(div().my(px(4.0)).h(px(1.0)).bg(p.c(Token::Border)));
@@ -2682,13 +3211,12 @@ impl Workspace {
                         .child(icon("arrow-right01", 12.0, p.c(Token::MutedForeground))),
                 )
                 .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                    if *hovered {
-                        if let Some(s) = &mut this.settings {
-                            if !s.default_thinking_menu {
-                                s.default_thinking_menu = true;
-                                cx.notify();
-                            }
-                        }
+                    if *hovered
+                        && let Some(s) = &mut this.settings
+                        && !s.default_thinking_menu
+                    {
+                        s.default_thinking_menu = true;
+                        cx.notify();
                     }
                 }))
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -2726,7 +3254,7 @@ impl Workspace {
             + if self.models.is_empty() {
                 28.0
             } else {
-                self.models.len() as f32 * 32.0
+                provider_groups(&self.models).len() as f32 * 32.0
             }
             + 9.0;
         let mut flyout = popover(p)
@@ -2763,11 +3291,69 @@ impl Workspace {
     /// when the window has room, otherwise left.
     fn thinking_flyout_opens_left(&self, window: &Window, flyout_w: f32) -> bool {
         let width = f32::from(window.viewport_size().width);
-        let content = (width - SIDEBAR_WIDTH).max(0.0);
+        let nav = self.settings_nav_width(window);
+        let content = (width - nav).max(0.0);
         let body = content.min(768.0);
-        let body_right = SIDEBAR_WIDTH + (content - body) / 2.0 + body;
+        let body_right = nav + (content - body) / 2.0 + body;
         let menu_right = body_right - 32.0;
         menu_right + flyout_w + 12.0 > width
+    }
+
+    /// The models of the provider whose row is open, standing beside the 默认模型 card. Its own
+    /// float for the same reason the effort list is one — the card clips what sticks out — and it
+    /// hangs off the row it belongs to: a list that always started at the card's foot would name a
+    /// different provider each time the roster grew.
+    fn default_provider_flyout(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let p = &self.palette;
+        let english = self.app_settings.language == UiLanguage::English;
+        let Some(open) = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.default_provider_menu.clone())
+        else {
+            return div().id("default-model-submenu-empty");
+        };
+        let flyout_w = if english { 208.0 } else { 168.0 };
+        // Rows start below the card's padding and its 模型 label, and are 32 tall by design.
+        let row = provider_groups(&self.models)
+            .iter()
+            .position(|group| group.id == open)
+            .unwrap_or(0) as f32;
+        let mut flyout = popover(p)
+            .id("default-model-submenu")
+            .absolute()
+            .top(px(52.0 + 4.0 + 24.0 + row * 32.0))
+            .w(px(flyout_w))
+            .max_h(px(320.0))
+            .overflow_y_scroll();
+        flyout = if self.thinking_flyout_opens_left(window, flyout_w) {
+            flyout.right(px(16.0 + 300.0 - 12.0))
+        } else {
+            flyout.right(px(16.0 - (flyout_w - 12.0)))
+        };
+        for m in self.models.iter().filter(|m| m.provider_id == open) {
+            let label = m.label.clone();
+            let current = self.defaults.model.as_deref() == Some(label.as_str());
+            flyout = flyout.child(
+                model_row(
+                    SharedString::from(format!("dmp-{label}")),
+                    model_display_name(m),
+                    current,
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let thinking = this.defaults.thinking;
+                    this.set_default(
+                        ModelDefaults {
+                            model: Some(label.clone()),
+                            thinking,
+                        },
+                        cx,
+                    )
+                })),
+            );
+        }
+        flyout
     }
 
     fn thinking_choice(
@@ -2828,7 +3414,7 @@ impl Workspace {
             .child(
                 ui::truncate(provider.name.clone())
                     .flex_1()
-                    .text_size(px(15.0))
+                    .text_size(px(TEXT_SM))
                     .font_weight(FontWeight::MEDIUM),
             )
             .when(!provider.has_key, |d| {
@@ -3146,6 +3732,32 @@ impl Workspace {
         let s = self.settings.as_ref()?;
         if s.model_edit.is_some() {
             return self.model_detail_dialog(cx);
+        }
+        // The MCP server form and the subagent role editor are Electron dialogs: drawn over the
+        // pane, closed by the backdrop as by their own Cancel.
+        if s.section == Section::Mcp && self.mcp_form_open() {
+            let body = div()
+                .id("mcp-form-dialog")
+                .w(px(576.0))
+                .max_h(px(640.0))
+                .overflow_y_scroll()
+                .child(self.mcp_form(cx));
+            return Some(modal(div().child(body), &self.palette, cx, |this| {
+                this.close_mcp_form()
+            }));
+        }
+        if s.section == Section::Subagents
+            && let Some(editor) = self.role_editor_dialog(cx)
+        {
+            let body = div()
+                .id("role-editor-dialog")
+                .w(px(576.0))
+                .max_h(px(640.0))
+                .overflow_y_scroll()
+                .child(editor);
+            return Some(modal(div().child(body), &self.palette, cx, |this| {
+                this.close_role_editor()
+            }));
         }
         if let Some(a) = &s.add {
             return Some(modal(
@@ -3642,17 +4254,20 @@ pub(super) fn setting_row(
                 .child(
                     div()
                         .text_size(px(TEXT_SM))
+                        .line_height(px(20.0))
                         .font_weight(FontWeight::MEDIUM)
                         .child(SharedString::from(title.to_string())),
                 )
-                .child(
-                    div()
-                        .mt(px(2.0))
-                        .text_size(px(TEXT_XS))
-                        .line_height(px(16.0))
-                        .muted(p)
-                        .child(SharedString::from(description.to_string())),
-                ),
+                .when(!description.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .mt(px(2.0))
+                            .text_size(px(TEXT_XS))
+                            .line_height(px(16.0))
+                            .muted(p)
+                            .child(SharedString::from(description.to_string())),
+                    )
+                }),
         )
         .child(div().flex_none().child(control))
 }
@@ -3684,8 +4299,9 @@ fn swatch(seed: &fv_theme::Seed) -> Div {
 
 /// `SettingsGroup`'s card: rounded, bordered, rows divided by hairlines.
 pub(super) fn card(p: &crate::theme::Palette) -> Div {
+    // `rounded-xl`.
     div()
-        .rounded(px(14.0))
+        .rounded(px(12.0))
         .border_1()
         .border_color(p.c(Token::Border))
         .bg(p.c(Token::Card))
@@ -3722,9 +4338,9 @@ fn overlay_surface(d: Div, radius: f32, p: &crate::theme::Palette) -> Div {
         (Some(edge), Some(shade)) => {
             let shadow = |color: Hsla, y: f32, blur: f32, spread: f32| BoxShadow {
                 color,
-                offset: point(px(0.0), px(y)),
-                blur_radius: px(blur),
-                spread_radius: px(spread),
+                offset: point(gpui_kit::px(0.0), gpui_kit::px(y)),
+                blur_radius: gpui_kit::px(blur),
+                spread_radius: gpui_kit::px(spread),
                 inset: false,
             };
             d.rounded(px(14.0))
@@ -3941,5 +4557,33 @@ fn compact_tokens(n: u32) -> String {
         format!("{}K", n / 1000)
     } else {
         n.to_string()
+    }
+}
+
+/// An import source's product name, as the user knows it.
+fn source_name(id: &str) -> &'static str {
+    match id {
+        "pi" => "pi coding agent",
+        "claude-code" => "Claude Code",
+        "codex" => "Codex",
+        "opencode" => "opencode",
+        "zcode" => "zcode",
+        _ => "Agent",
+    }
+}
+
+/// `MM/DD` in local time, for an import source's latest session.
+fn month_day(at_ms: i64) -> Option<String> {
+    if at_ms <= 0 {
+        return None;
+    }
+    // SAFETY: `localtime_r` writes only into the `tm` it is given.
+    unsafe {
+        let secs = (at_ms / 1000) as libc::time_t;
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&secs, &mut tm).is_null() {
+            return None;
+        }
+        Some(format!("{:02}/{:02}", tm.tm_mon + 1, tm.tm_mday))
     }
 }

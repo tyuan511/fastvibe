@@ -36,6 +36,7 @@ fn boundaries_keep_steers_and_compaction_in_their_run_and_errors_out_of_model_hi
             model: None,
             user_messages: vec!["work".into(), "steer".into()],
             summary: "summary".into(),
+            stats: None,
         },
         reply("partial"),
     ];

@@ -1,6 +1,7 @@
 //! The composer, after `components/chat/composer.tsx`: a 22px-round card holding the text area,
 //! and under it the attach button, the model and thinking chip, and send / stop.
 
+use crate::ui::px;
 use fv_protocol::types::{ThinkingLevel, UiLanguage};
 use fv_theme::Token;
 use gpui_kit::component::Sizable as _;
@@ -9,6 +10,9 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::model_menu::{
+    group_holds_current, model_display_name, model_row, provider_groups, provider_row,
+};
 use super::transcript::{THREAD_MAX, THREAD_PAD};
 use super::{Workspace, text};
 use crate::context_stats::{cache_hit, format_cost, format_count, format_speed, token_pair};
@@ -35,18 +39,16 @@ impl Workspace {
         let p = &self.palette;
         div()
             .absolute()
-            .left(px(12.0))
-            .top(px(14.0))
-            .px(px(5.0))
-            .h(px(18.0))
+            .left(px(16.0))
+            .top(px(16.0))
+            .px(px(4.0))
+            .h(px(20.0))
             .flex()
             .items_center()
             .rounded(px(4.0))
-            .border_1()
-            .border_color(p.c(Token::Border))
             .bg(p.c(Token::Muted))
-            .text_size(px(10.0))
-            .line_height(px(12.0))
+            .text_size(px(TEXT_XS))
+            .font_weight(FontWeight::MEDIUM)
             .muted(p)
             .child("Tab")
     }
@@ -63,10 +65,18 @@ impl Workspace {
         // 回复推荐 rides in the placeholder: an empty composer shows what the user is likely to
         // say next, and Tab takes it. Written only when it changed — the text area is a child
         // entity, so setting it every frame would make every frame a change.
-        let wanted_placeholder = self
-            .compose_suggestion
-            .clone()
-            .unwrap_or_else(|| text::placeholder(language).to_string());
+        let wanted_placeholder = self.compose_suggestion.clone().unwrap_or_else(|| {
+            let running = self
+                .selected
+                .as_ref()
+                .and_then(|id| self.views.get(id))
+                .is_some_and(|v| v.running);
+            if running {
+                trs!(english, "composer.placeholder_queued").to_string()
+            } else {
+                text::placeholder(language).to_string()
+            }
+        });
         if wanted_placeholder != self.placeholder_shown {
             self.placeholder_shown = wanted_placeholder.clone();
             self.input.update(cx, |state, cx| {
@@ -81,6 +91,11 @@ impl Workspace {
             .is_some_and(|v| v.running);
         let empty = self.input.read(cx).value().trim().is_empty();
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
+        let history_live = {
+            let value = self.input.read(cx).value().to_string();
+            self.history_keys_live(&value)
+        };
+        let can_resume = self.can_resume();
         let label = self.current_model_label();
         let entry = label
             .as_deref()
@@ -139,6 +154,7 @@ impl Workspace {
         // One button, three jobs: queue the words behind the reply in flight, stop it when there
         // is nothing typed, or send. A run never disables the composer — text typed while the
         // agent is working is the normal case, and the queue is where it goes.
+        let resumes = can_resume && empty && !running;
         let stops = running && empty;
         let send_enabled = !empty || running;
         let send = div()
@@ -150,11 +166,13 @@ impl Workspace {
             .justify_center()
             .rounded_full()
             .bg(p.c(Token::Primary))
-            .when(!send_enabled, |d| d.opacity(0.5))
+            .when(!send_enabled && !resumes, |d| d.opacity(0.5))
             .cursor_pointer()
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(if stops {
                     trs!(english, "composer.stop")
+                } else if resumes {
+                    trs!(english, "composer.resume")
                 } else if running {
                     trs!(english, "composer.queue")
                 } else {
@@ -163,13 +181,21 @@ impl Workspace {
                 .build(window, cx)
             })
             .child(icon(
-                if stops { "square" } else { "arrow-up02" },
+                if stops {
+                    "square"
+                } else if resumes {
+                    "play"
+                } else {
+                    "arrow-up02"
+                },
                 16.0,
                 p.c(Token::PrimaryForeground),
             ))
             .on_click(cx.listener(move |this, _, window, cx| {
                 if stops {
                     this.interrupt(cx);
+                } else if resumes {
+                    this.resume_run(window, cx);
                 } else {
                     this.send(window, cx);
                 }
@@ -204,8 +230,16 @@ impl Workspace {
 
         let menu = self.model_menu.then(|| self.model_menu(cx));
         let thinking_menu = (self.model_menu && self.thinking_menu).then(|| self.thinking_menu(cx));
+        let provider_menu = self
+            .model_menu
+            .then(|| self.model_submenu.clone())
+            .flatten()
+            .map(|id| self.provider_menu(&id, cx));
         // Only a conversation that does not exist yet can still choose where it runs.
-        let project_row = self.selected.is_none().then(|| self.project_chip(cx));
+        let project_row = self
+            .selected
+            .is_none()
+            .then(|| self.project_chip(window, cx));
         let notice = self.notice.clone();
         // A question stands above the composer; a command to allow covers it.
         let (covered, panel) = match self.pending() {
@@ -264,6 +298,7 @@ impl Workspace {
             .map(|q| self.queue_tray(q, cx).into_any_element());
 
         let goal_strip = self.goal_tray(cx);
+        let attachments = self.attachment_chips(cx);
 
         div()
             .w_full()
@@ -328,9 +363,17 @@ impl Workspace {
             .children(queue)
             .children((!covered).then(|| {
                 div()
+                    .id("composer-card")
                     .relative()
                     .rounded(px(22.0))
                     .border_1()
+                    // Dropping files on the card attaches them; the ring says it will.
+                    .drag_over::<ExternalPaths>(|d, _, _, cx| {
+                        d.border_color(gpui_kit::component::Theme::global(cx).ring)
+                    })
+                    .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                        this.attach_paths(paths.paths(), cx)
+                    }))
                     // `focus-within:border-ring`
                     .border_color(if focused {
                         p.c(Token::Ring)
@@ -341,6 +384,7 @@ impl Workspace {
                     .shadow_sm()
                     .flex()
                     .flex_col()
+                    .children(attachments)
                     .child(
                         // `14px 16px 8px` around the text, less the 8px / 2px the control
                         // insets by itself at this size.
@@ -354,7 +398,10 @@ impl Workspace {
                                 // While the `@` menu is open it owns the arrows and Escape.
                                 "FilledComposer MentionOpen"
                             } else if empty {
-                                "EmptyComposer"
+                                // ↑ recalls the last prompt, Tab takes the guess.
+                                "EmptyComposer HistoryComposer"
+                            } else if history_live {
+                                "FilledComposer HistoryComposer"
                             } else {
                                 "FilledComposer"
                             })
@@ -383,7 +430,9 @@ impl Workspace {
                                     .appearance(false)
                                     .bordered(false)
                                     // Its text is 0.875 of its size: 16 gives `text-sm`.
-                                    .with_size(gpui_kit::component::Size::Size(px(16.0))),
+                                    .with_size(gpui_kit::component::Size::Size(
+                                        gpui_kit::component::Theme::global(cx).font_size,
+                                    )),
                             )
                             // The key that takes it, ahead of the guess: a placeholder says what
                             // would be typed, and this says how it gets there.
@@ -399,7 +448,17 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(4.0))
-                            .child(crate::ui::icon_button("attach", "attachment", p).rounded_full())
+                            .child(
+                                crate::ui::icon_button("attach", "attachment", p)
+                                    .rounded_full()
+                                    .tooltip(move |window, cx| {
+                                        Tooltip::new(trs!(english, "composer.attach"))
+                                            .build(window, cx)
+                                    })
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.pick_attachments(cx)),
+                                    ),
+                            )
                             .child(access)
                             .child(div().flex_1())
                             .children(context_ring)
@@ -410,6 +469,7 @@ impl Workspace {
                     .children((!focused).then(|| crate::ui::glass_rim(22.0, p)).flatten())
                     .children(menu.map(|menu| deferred(menu.occlude()).with_priority(10)))
                     .children(thinking_menu.map(|m| deferred(m.occlude()).with_priority(11)))
+                    .children(provider_menu.map(|m| deferred(m.occlude()).with_priority(11)))
                     .children(access_menu.map(crate::ui::float))
             }))
     }
@@ -444,31 +504,45 @@ impl Workspace {
                     .child(text::no_model_hint(self.app_settings.language)),
             );
         }
-        for m in &self.models {
-            let label = m.label.clone();
+        // One row per provider, its models a hover away in a flyout beside this card — the shape
+        // Electron's dropdown has, and what keeps a dozen models off one scrolling column.
+        let current = self.current_model_label();
+        for group in provider_groups(&self.models) {
+            let id = group.id.to_string();
+            let clicked_id = id.clone();
+            let holds_current = group_holds_current(&group, current.as_deref());
+            let open = self.model_submenu.as_deref() == Some(group.id);
             list = list.child(
-                div()
-                    .id(SharedString::from(format!("m-{}", m.label)))
-                    .h(px(32.0))
-                    .px(px(8.0))
-                    .flex()
-                    .items_center()
-                    .rounded(px(8.0))
-                    .cursor_pointer()
-                    .hover(move |d| d.bg(hover))
-                    .child(
-                        crate::ui::truncate(format!("{}/{}", m.provider_name, m.model.id)).flex_1(),
-                    )
-                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                        if *hovered && this.thinking_menu {
+                provider_row(
+                    SharedString::from(format!("model-provider-{id}")),
+                    group.name,
+                    holds_current,
+                    open,
+                    p,
+                )
+                .on_hover(cx.listener({
+                    let id = id.clone();
+                    move |this, hovered: &bool, _, cx| {
+                        if *hovered
+                            && (this.thinking_menu
+                                || this.model_submenu.as_deref() != Some(id.as_str()))
+                        {
                             this.thinking_menu = false;
+                            this.model_submenu = Some(id.clone());
                             cx.notify();
                         }
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.thinking_menu = false;
-                        this.pick_model(label.clone(), cx);
-                    })),
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.thinking_menu = false;
+                    this.model_submenu =
+                        if this.model_submenu.as_deref() == Some(clicked_id.as_str()) {
+                            None
+                        } else {
+                            Some(clicked_id.clone())
+                        };
+                    cx.notify();
+                })),
             );
         }
         list = list.child(div().my(px(4.0)).h(px(1.0)).bg(p.c(Token::Border)));
@@ -511,11 +585,15 @@ impl Workspace {
                 .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                     if *hovered && !this.thinking_menu {
                         this.thinking_menu = true;
+                        this.model_submenu = None;
                         cx.notify();
                     }
                 }))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.thinking_menu = !this.thinking_menu;
+                    if this.thinking_menu {
+                        this.model_submenu = None;
+                    }
                     cx.notify();
                 })),
         );
@@ -549,6 +627,7 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.model_menu = false;
                     this.thinking_menu = false;
+                    this.model_submenu = None;
                     this.open_settings(super::settings::Section::Providers, window, cx)
                 })),
         );
@@ -640,6 +719,47 @@ impl Workspace {
             );
         }
 
+        list
+    }
+
+    /// The models of the provider whose row is open, standing beside the menu that named it. A
+    /// sibling float for the same reason the effort flyout is one: the card clips what sticks out.
+    fn provider_menu(&self, provider_id: &str, cx: &mut Context<Self>) -> Stateful<Div> {
+        let p = &self.palette;
+        let current = self.current_model_label();
+        let mut list = div()
+            .id("composer-model-submenu")
+            .max_h(px(440.0))
+            .overflow_y_scroll()
+            .absolute()
+            .bottom(px(44.0))
+            .right(px(296.0))
+            .w(px(208.0))
+            .p(px(4.0))
+            .rounded(px(12.0))
+            .border_1()
+            .border_color(p.c(Token::Border))
+            .bg(p.overlay())
+            .text_color(p.c(Token::PopoverForeground))
+            .shadow_md()
+            .flex()
+            .flex_col()
+            .text_size(px(TEXT_SM));
+        for m in self.models.iter().filter(|m| m.provider_id == provider_id) {
+            let label = m.label.clone();
+            let selected = Some(label.as_str()) == current.as_deref();
+            list = list.child(
+                model_row(
+                    SharedString::from(format!("ms-{label}")),
+                    model_display_name(m),
+                    selected,
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.pick_model(label.clone(), cx);
+                })),
+            );
+        }
         list
     }
 
@@ -761,14 +881,16 @@ impl Workspace {
                             .justify_between()
                             .text_size(px(TEXT_XS))
                             .muted(p)
-                            .child(SharedString::from(format!(
-                                "已用 {}",
-                                format_count(usage.map(|u| u.used))
+                            .child(SharedString::from(tr!(
+                                english,
+                                "composer.used",
+                                count = format_count(usage.map(|u| u.used))
                             )))
-                            .child(SharedString::from(format!(
-                                "剩余 {} / {}",
-                                format_count(remaining),
-                                format_count(usage.map(|u| u.window))
+                            .child(SharedString::from(tr!(
+                                english,
+                                "composer.remaining",
+                                remaining = format_count(remaining),
+                                window = format_count(usage.map(|u| u.window))
                             ))),
                     )
                     .child(button),
@@ -782,52 +904,52 @@ impl Workspace {
                 .gap(px(6.0))
                 .child(context_stat(
                     "turn-tokens",
-                    "本轮 Token",
+                    trs!(english, "composer.turn_tokens"),
                     token_pair(stats.turn.as_ref()),
-                    "本轮：自你最近一次输入起",
+                    trs!(english, "composer.turn_scope"),
                     false,
                     p,
                 ))
                 .child(context_stat(
                     "session-tokens",
-                    "会话 Token",
+                    trs!(english, "composer.session_tokens"),
                     token_pair(Some(&stats.tokens)),
-                    "整个会话累计",
+                    trs!(english, "composer.session_scope"),
                     false,
                     p,
                 ))
                 .child(context_stat(
                     "output-speed",
-                    "输出速度",
+                    trs!(english, "composer.output_speed"),
                     format_speed(stats.last_request.as_ref()),
-                    "最近一次已完成的模型请求：输出 token ÷ 请求耗时（含首 token 等待）",
+                    trs!(english, "composer.request_speed_scope"),
                     false,
                     p,
                 ))
                 .child(context_stat(
                     "steps",
-                    "步骤",
+                    trs!(english, "composer.steps"),
                     stats.steps.to_string(),
-                    "整个会话累计",
+                    trs!(english, "composer.session_scope"),
                     false,
                     p,
                 ))
                 .child(context_stat(
                     "cache-hit",
-                    "缓存命中率",
+                    trs!(english, "composer.cache_hit"),
                     cache.map(|v| format!("{v}%")).unwrap_or_else(|| "—".into()),
-                    "整个会话累计；缓存读取 /（输入 + 缓存读取）",
+                    trs!(english, "composer.cache_scope"),
                     cache.is_some_and(|v| v > 0),
                     p,
                 ))
                 .child(context_stat(
                     "cost",
-                    "费用",
+                    trs!(english, "composer.cost"),
                     format_cost(stats.cost),
                     if stats.cost.is_some() {
-                        "整个会话累计，按 models.dev 价格估算"
+                        trs!(english, "composer.cost_scope")
                     } else {
-                        "models.dev 没有这个模型的价格"
+                        trs!(english, "composer.cost_unknown")
                     },
                     false,
                     p,
@@ -840,7 +962,7 @@ impl Workspace {
     }
 
     /// 选择项目: the folder chip above a new conversation's composer, and its list.
-    fn project_chip(&self, cx: &mut Context<Self>) -> Div {
+    fn project_chip(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
         let hover = p.c(Token::Muted);
@@ -848,7 +970,18 @@ impl Workspace {
             Some(path) => self.project_label(path),
             None => trs!(english, "composer.choose_project").to_string(),
         };
-        let projects: Vec<String> = self.projects.iter().map(|p| p.path.clone()).collect();
+        let query = self.project_search.read(cx).value().trim().to_lowercase();
+        let projects: Vec<String> = self
+            .projects
+            .iter()
+            .filter(|p| {
+                query.is_empty()
+                    || format!("{} {}", self.project_label(&p.path), p.path)
+                        .to_lowercase()
+                        .contains(&query)
+            })
+            .map(|p| p.path.clone())
+            .collect();
         let menu = self.project_menu.then(|| {
             let mut list = div()
                 .absolute()
@@ -865,6 +998,27 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .text_size(px(TEXT_SM));
+            list = list.child(
+                div()
+                    .px(px(2.0))
+                    .pt(px(2.0))
+                    .pb(px(4.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(div().pl(px(6.0)).child(icon(
+                        "search01",
+                        14.0,
+                        p.c(Token::MutedForeground),
+                    )))
+                    .child(
+                        div().flex_1().child(
+                            gpui_kit::component::input::Input::new(&self.project_search)
+                                .appearance(false)
+                                .bordered(false),
+                        ),
+                    ),
+            );
             if projects.is_empty() {
                 list = list.child(
                     div()
@@ -872,6 +1026,28 @@ impl Workspace {
                         .py(px(6.0))
                         .muted(p)
                         .child(trs!(english, "composer.no_matching_projects")),
+                );
+            }
+            if self.draft_project.is_some() {
+                list = list.child(
+                    div()
+                        .id("project-clear")
+                        .h(px(32.0))
+                        .px(px(8.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .rounded(px(8.0))
+                        .cursor_pointer()
+                        .muted(p)
+                        .hover(move |d| d.bg(hover))
+                        .child(icon("cancel01", 14.0, p.c(Token::MutedForeground)))
+                        .child(trs!(english, "composer.clear_project"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.draft_project = None;
+                            this.project_menu = false;
+                            cx.notify();
+                        })),
                 );
             }
             for project in &projects {
@@ -898,6 +1074,26 @@ impl Workspace {
                         })),
                 );
             }
+            list = list.child(div().my(px(4.0)).h(px(1.0)).bg(p.c(Token::Border)));
+            list = list.child(
+                div()
+                    .id("project-new")
+                    .h(px(32.0))
+                    .px(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .rounded(px(8.0))
+                    .cursor_pointer()
+                    .muted(p)
+                    .hover(move |d| d.bg(hover))
+                    .child(icon("add01", 14.0, p.c(Token::MutedForeground)))
+                    .child(trs!(english, "composer.new_project"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.project_menu = false;
+                        this.open_project_dialog(None, window, cx);
+                    })),
+            );
             list
         });
         div()
@@ -923,12 +1119,21 @@ impl Workspace {
                     .child(icon("folder01", 14.0, p.c(Token::MutedForeground)))
                     .child(crate::ui::truncate(label))
                     .child(icon("arrow-down01", 12.0, p.c(Token::MutedForeground)))
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
                         this.project_menu = !this.project_menu;
                         this.model_menu = false;
+                        this.model_submenu = None;
+                        // A fresh list each time, with the keyboard already in its filter.
+                        this.project_search
+                            .update(cx, |state, cx| state.set_value("", window, cx));
+                        if this.project_menu {
+                            this.project_search
+                                .update(cx, |state, cx| state.focus(window, cx));
+                        }
                         cx.notify();
                     })),
             )
+            .children(self.header_git_chip(window, cx))
             .children(menu.map(|menu| deferred(menu.occlude()).with_priority(10)))
     }
 }
@@ -957,4 +1162,228 @@ fn context_stat(
                 .when(success, |d| d.text_color(p.c(Token::Success)))
                 .child(SharedString::from(value)),
         )
+}
+
+/// A pasted text longer than this becomes an attachment instead of filling the box
+/// (`PASTED_TEXT_ATTACHMENT_THRESHOLD`).
+const PASTED_TEXT_ATTACHMENT_THRESHOLD: usize = 500;
+
+/// How many characters of a long paste name its chip (`pastedTextAttachmentName`).
+const PASTED_TEXT_NAME_LENGTH: usize = 32;
+
+/// The first characters of a paste on one line, with an ellipsis when it was cut.
+fn pasted_text_name(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let chars: Vec<char> = flat.chars().collect();
+    let head: String = chars.iter().take(PASTED_TEXT_NAME_LENGTH).collect();
+    if chars.len() > PASTED_TEXT_NAME_LENGTH {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+/// Where pasted text and images are written so the model can open them by path.
+fn paste_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("fastvibe-attachments");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn paste_stamp() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default()
+}
+
+impl Workspace {
+    /// The prompts of this conversation, oldest first: what ↑ walks back through.
+    fn past_prompts(&self) -> Vec<String> {
+        let Some(view) = self.selected.as_ref().and_then(|id| self.views.get(id)) else {
+            return Vec::new();
+        };
+        view.turns
+            .iter()
+            .flat_map(|turn| turn.items.iter())
+            .filter_map(|item| match item {
+                fv_protocol::types::Item::UserMessage { text, .. } if !text.trim().is_empty() => {
+                    // The reference block is how the files travelled, not what was typed.
+                    Some(
+                        text.split("\n\n<fastvibe-attachments>")
+                            .next()
+                            .unwrap_or(text)
+                            .to_string(),
+                    )
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether ↑/↓ belong to history right now: an empty box, or the very prompt that was
+    /// recalled, and on its first line (a multi-line recall keeps its arrows for the caret).
+    pub(super) fn history_keys_live(&self, value: &str) -> bool {
+        if value.contains('\n') {
+            return false;
+        }
+        value.is_empty()
+            || self
+                .history
+                .as_ref()
+                .is_some_and(|(_, shown, _)| shown == value)
+    }
+
+    fn show_history(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |state, cx| {
+            state.set_value(crate::skill_draft::content(text), window, cx)
+        });
+    }
+
+    pub(super) fn on_history_prev(
+        &mut self,
+        _: &super::HistoryPrev,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let past = self.past_prompts();
+        if past.is_empty() {
+            return;
+        }
+        let value = self.input.read(cx).value().to_string();
+        let (index, draft) = match &self.history {
+            Some((i, shown, draft)) if *shown == value => {
+                if *i == 0 {
+                    return;
+                }
+                (*i - 1, draft.clone())
+            }
+            _ => (past.len() - 1, value),
+        };
+        let text = past[index.min(past.len() - 1)].clone();
+        self.history = Some((index, text.clone(), draft));
+        self.show_history(text, window, cx);
+    }
+
+    pub(super) fn on_history_next(
+        &mut self,
+        _: &super::HistoryNext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let value = self.input.read(cx).value().to_string();
+        let Some((index, shown, draft)) = self.history.clone() else {
+            return;
+        };
+        if shown != value {
+            self.history = None;
+            return;
+        }
+        let past = self.past_prompts();
+        if index + 1 < past.len() {
+            let text = past[index + 1].clone();
+            self.history = Some((index + 1, text.clone(), draft));
+            self.show_history(text, window, cx);
+        } else {
+            self.history = None;
+            self.show_history(draft, window, cx);
+        }
+    }
+
+    /// 继续: the last turn stopped before an answer, so say so and let it carry on.
+    pub(super) fn can_resume(&self) -> bool {
+        use fv_protocol::types::Item;
+        let Some(view) = self.selected.as_ref().and_then(|id| self.views.get(id)) else {
+            return false;
+        };
+        if view.running || !view.queue.items.is_empty() || !view.questions.is_empty() {
+            return false;
+        }
+        matches!(
+            view.turns.last().and_then(|t| t.items.last()),
+            Some(
+                Item::UserMessage { .. }
+                    | Item::ToolCall { .. }
+                    | Item::Reasoning { .. }
+                    | Item::Error { .. }
+            )
+        )
+    }
+
+    pub(super) fn resume_run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_resume() {
+            return;
+        }
+        let prompt = trs!(self.english(), "composer.resume_prompt");
+        self.input
+            .update(cx, |state, cx| state.set_value(prompt, window, cx));
+        self.send(window, cx);
+    }
+
+    /// ⌘V in the composer: files, images and long text are attached; ordinary text falls
+    /// through to the text area.
+    pub(super) fn on_paste_capture(
+        &mut self,
+        _: &gpui_kit::component::input::Paste,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.input.read(cx).focus_handle(cx).is_focused(window) {
+            return;
+        }
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        let mut attached = false;
+        let mut paths = Vec::new();
+        for entry in item.entries() {
+            match entry {
+                ClipboardEntry::Image(image) => {
+                    let ext = match image.format {
+                        ImageFormat::Jpeg => "jpg",
+                        ImageFormat::Webp => "webp",
+                        ImageFormat::Gif => "gif",
+                        _ => "png",
+                    };
+                    let path = paste_dir().join(format!("pasted-image-{}.{ext}", paste_stamp()));
+                    if std::fs::write(&path, &image.bytes).is_ok() {
+                        paths.push(path);
+                    }
+                }
+                ClipboardEntry::ExternalPaths(files) => {
+                    paths.extend(files.paths().iter().cloned());
+                }
+                ClipboardEntry::String(string) => {
+                    let text = string.text();
+                    // Files copied in the Finder arrive as their paths, one per line.
+                    let listed: Vec<std::path::PathBuf> = text
+                        .lines()
+                        .filter(|l| !l.trim().is_empty())
+                        .map(|l| std::path::PathBuf::from(l.trim()))
+                        .collect();
+                    if !listed.is_empty() && listed.iter().all(|p| p.is_absolute() && p.is_file()) {
+                        paths.extend(listed);
+                    } else if text.chars().count() > PASTED_TEXT_ATTACHMENT_THRESHOLD {
+                        let name = pasted_text_name(text);
+                        let path = paste_dir().join(format!("pasted-text-{}.txt", paste_stamp()));
+                        if std::fs::write(&path, text).is_ok() {
+                            self.attached_files.push(fv_protocol::types::FileHit {
+                                relative: name,
+                                path: path.display().to_string(),
+                            });
+                            attached = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !paths.is_empty() {
+            self.attach_paths(&paths, cx);
+            attached = true;
+        }
+        if attached {
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
 }

@@ -192,3 +192,189 @@ schedules.save_failed_the_draft_was:
 schedules.saved_edits_made_while_saving:
   zh: "已保存，保存期间的新修改仍在草稿中。"
   en: "Saved; edits made while saving are still in the draft."
+schedules.page.title:
+  zh: "定时任务"
+  en: "Scheduled tasks"
+schedules.page.new:
+  zh: "新建任务"
+  en: "New task"
+schedules.page.edit_title:
+  zh: "编辑任务"
+  en: "Edit task"
+schedules.page.lifetime:
+  zh: "关闭窗口后，定时任务仍会继续运行。从菜单退出应用会停止它们。错过的运行会在下次启动时处理。"
+  en: "Closing the window leaves scheduled tasks running. Quitting the app stops them. Missed runs are processed the next time the app starts."
+schedules.page.empty_title:
+  zh: "还没有定时任务"
+  en: "No scheduled tasks yet"
+schedules.page.empty_desc:
+  zh: "到点后，会按你写的指令开始一段新对话。"
+  en: "At the scheduled time, a new chat starts from the instruction you wrote."
+schedules.page.resume:
+  zh: "恢复"
+  en: "Resume"
+schedules.page.stop:
+  zh: "停止"
+  en: "Stop"
+schedules.page.cancel_queued:
+  zh: "取消排队"
+  en: "Cancel queued run"
+schedules.page.delete:
+  zh: "删除"
+  en: "Delete"
+schedules.page.save:
+  zh: "保存"
+  en: "Save"
+schedules.page.saving:
+  zh: "正在保存…"
+  en: "Saving…"
+schedules.page.cancel:
+  zh: "取消"
+  en: "Cancel"
+schedules.page.name:
+  zh: "名称"
+  en: "Name"
+schedules.page.name_placeholder:
+  zh: "例如：每天整理收件箱"
+  en: "For example: tidy the inbox every morning"
+schedules.page.prompt:
+  zh: "指令"
+  en: "Instruction"
+schedules.page.prompt_placeholder:
+  zh: "到点后要让智能体做的事"
+  en: "What the agent should do when this runs"
+schedules.page.project:
+  zh: "项目"
+  en: "Project"
+schedules.page.project_scratch:
+  zh: "不绑定项目"
+  en: "No project"
+schedules.page.project_hint:
+  zh: "不选项目时，会在一个新的临时工作区里运行。"
+  en: "With no project, the run starts in a fresh scratch workspace."
+schedules.page.project_missing:
+  zh: "%{path}（已保存的项目不在当前列表中）"
+  en: "%{path} (Saved project is not in the current list)"
+schedules.page.kind:
+  zh: "重复"
+  en: "Repeat"
+schedules.page.kind_once:
+  zh: "一次"
+  en: "Once"
+schedules.page.at:
+  zh: "运行时间"
+  en: "Run at"
+schedules.page.at_hint:
+  zh: "按这台电脑的本地时间选择，保存为绝对时间。"
+  en: "Pick a time on this computer. It is saved as an absolute instant."
+schedules.page.date:
+  zh: "日期"
+  en: "Date"
+schedules.page.time:
+  zh: "时间"
+  en: "Time"
+schedules.page.time_zone:
+  zh: "时区"
+  en: "Time zone"
+schedules.page.days:
+  zh: "星期"
+  en: "Days"
+schedules.page.thinking:
+  zh: "思考强度"
+  en: "Thinking"
+schedules.page.status.running:
+  zh: "运行中"
+  en: "Running"
+schedules.page.status.completed:
+  zh: "已完成"
+  en: "Completed"
+schedules.page.status.failed:
+  zh: "失败"
+  en: "Failed"
+schedules.page.status.stopped:
+  zh: "已停止"
+  en: "Stopped"
+schedules.page.status.interrupted:
+  zh: "已中断"
+  en: "Interrupted"
+schedules.page.status.missed:
+  zh: "已错过"
+  en: "Missed"
+schedules.page.status.paused:
+  zh: "已暂停"
+  en: "Paused"
+schedules.page.status.scheduled:
+  zh: "已排期"
+  en: "Scheduled"
+schedules.page.status.queued:
+  zh: "排队中"
+  en: "Queued"
+schedules.page.status.stopping:
+  zh: "正在停止"
+  en: "Stopping"
+schedules.page.status.waiting:
+  zh: "等待输入"
+  en: "Waiting for input"
+schedules.page.summary_once:
+  zh: "%{time} 运行一次"
+  en: "Once at %{time}"
+schedules.page.summary_daily:
+  zh: "每天 %{time}（%{zone}）"
+  en: "Daily at %{time} (%{zone})"
+schedules.page.summary_weekly:
+  zh: "每周 %{days} %{time}（%{zone}）"
+  en: "Weekly on %{days} at %{time} (%{zone})"
+schedules.page.next:
+  zh: "下次运行"
+  en: "Next run"
+schedules.page.last:
+  zh: "上次运行"
+  en: "Last run"
+schedules.page.history:
+  zh: "运行记录"
+  en: "History"
+schedules.page.history_empty:
+  zh: "还没有运行记录"
+  en: "No runs yet"
+schedules.page.history_loading:
+  zh: "正在读取运行记录…"
+  en: "Loading history…"
+schedules.page.open_conversation:
+  zh: "打开对话"
+  en: "Open chat"
+schedules.page.scheduled_at:
+  zh: "计划于 %{time}"
+  en: "Scheduled %{time}"
+schedules.page.started_at:
+  zh: "开始于 %{time}"
+  en: "Started %{time}"
+schedules.page.ended_at:
+  zh: "结束于 %{time}"
+  en: "Ended %{time}"
+schedules.page.delete_title:
+  zh: "删除定时任务？"
+  en: "Delete this scheduled task?"
+schedules.page.delete_desc:
+  zh: "「%{name}」和它的运行记录会被删除，此操作无法撤销。"
+  en: "“%{name}” and its run history will be deleted. This cannot be undone."
+schedules.page.time_limit:
+  zh: "执行时限"
+  en: "Execution time limit"
+schedules.page.minutes:
+  zh: "%{count} 分钟"
+  en: "%{count} minutes"
+schedules.page.seconds:
+  zh: "%{count} 秒"
+  en: "%{count} seconds"
+schedules.page.missed_policy:
+  zh: "错过时间后"
+  en: "When overdue"
+schedules.page.missed_run_latest:
+  zh: "24 小时内补跑最近一次"
+  en: "Run latest occurrence within 24 hours"
+schedules.page.missed_skip:
+  zh: "超过 1 分钟就跳过"
+  en: "Skip if over 1 minute late"
+schedules.page.queue_reason:
+  zh: "已进入执行队列，等待前面的定时任务结束。"
+  en: "Queued, waiting for earlier scheduled tasks to finish."

@@ -89,6 +89,8 @@ pub struct ThreadLog {
     pub seq: u64,
     pub running: bool,
     pub stats: SessionStats,
+    /// Whether the last message folded into `stats` was a summary (see `record_stats`).
+    pub stats_after_compaction: bool,
     pub token_usage: Option<TokenUsage>,
 }
 
@@ -101,7 +103,7 @@ pub fn item_id(item: &Item) -> &str {
         | Item::Audio { id, .. }
         | Item::Image { id, .. }
         | Item::Error { id, .. }
-        | Item::ContextCompaction { id } => id,
+        | Item::ContextCompaction { id, .. } => id,
     }
 }
 
@@ -114,6 +116,7 @@ impl ThreadLog {
             seq: 0,
             running: false,
             stats: SessionStats::default(),
+            stats_after_compaction: false,
             token_usage: None,
         }
     }
@@ -126,6 +129,7 @@ impl ThreadLog {
             seq: 0,
             running: false,
             stats: SessionStats::default(),
+            stats_after_compaction: false,
             token_usage: None,
         }
     }
@@ -167,7 +171,7 @@ impl ThreadLog {
         }
         match event {
             LogEvent::StatsMessage(message) => {
-                fv_store::record_stats(&mut self.stats, &message);
+                fv_store::record_stats(&mut self.stats, &message, &mut self.stats_after_compaction);
                 ServerNotification::ThreadStatsUpdated(ev!(self.stats.clone()))
             }
             LogEvent::StatsSnapshot => {

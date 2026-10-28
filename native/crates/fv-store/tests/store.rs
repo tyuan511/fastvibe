@@ -460,6 +460,7 @@ fn a_compaction_is_a_divider_between_turns_and_hides_nothing() {
             usage: Default::default(),
             user_messages: vec!["first".into()],
             summary: "s".into(),
+            stats: None,
         },
         user("second"),
         assistant(vec![ContentBlock::Text { text: "two".into() }]),
@@ -485,6 +486,7 @@ fn a_compaction_survives_the_transcript_and_picks_the_models_view() {
         usage: Default::default(),
         user_messages: vec!["a".into()],
         summary: "s".into(),
+        stats: None,
     };
     store
         .append(

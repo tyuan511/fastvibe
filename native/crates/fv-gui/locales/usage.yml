@@ -1,37 +1,97 @@
 _version: 2
 
-usage.failed_to_load_usage_statistics:
-  zh: "读取使用统计失败：%{error}"
-  en: "Failed to load usage statistics: %{error}"
-usage.7_days:
-  zh: "7 天"
-  en: "7 days"
-usage.30_days:
-  zh: "30 天"
-  en: "30 days"
-usage.90_days:
-  zh: "90 天"
-  en: "90 days"
-usage.1_year:
-  zh: "一年"
-  en: "1 year"
-usage.all:
-  zh: "全部"
-  en: "All"
-usage.loading:
-  zh: "正在读取…"
-  en: "Loading…"
-usage.refresh:
-  zh: "刷新"
-  en: "Refresh"
-usage.loading_usage_statistics:
-  zh: "正在读取使用统计…"
-  en: "Loading usage statistics…"
-usage.no_usage_statistics_yet:
-  zh: "暂无使用统计"
-  en: "No usage statistics yet"
+usage.title:
+  zh: "使用统计"
+  en: "Usage"
+usage.app_usage:
+  zh: "应用用量"
+  en: "App usage"
+usage.range_7d:
+  zh: "最近 7 天"
+  en: "Last 7 days"
+usage.range_30d:
+  zh: "最近 30 天"
+  en: "Last 30 days"
+usage.range_90d:
+  zh: "最近 90 天"
+  en: "Last 90 days"
+usage.range_365d:
+  zh: "最近一年"
+  en: "Last year"
+usage.range_all:
+  zh: "全部时间"
+  en: "All time"
+usage.total_token_count:
+  zh: "累计 Token 数"
+  en: "Total tokens"
+usage.peak_tokens:
+  zh: "峰值 Token 数"
+  en: "Peak tokens"
+usage.longest_chat:
+  zh: "最长聊天时长"
+  en: "Longest chat"
+usage.current_streak:
+  zh: "当前连续天数"
+  en: "Current streak"
+usage.longest_streak:
+  zh: "最长连续天数"
+  en: "Longest streak"
+usage.minutes:
+  zh: "%{count} 分钟"
+  en: "%{count} min"
+usage.days_count:
+  zh: "%{count} 天"
+  en: "%{count} days"
+usage.days_count_one:
+  zh: "%{count} 天"
+  en: "%{count} day"
+usage.total_tokens:
+  zh: "总 Token"
+  en: "Tokens"
+usage.estimated_cost:
+  zh: "预估花费"
+  en: "Estimated cost"
+usage.input_tokens:
+  zh: "输入 Token"
+  en: "Input tokens"
+usage.output_tokens:
+  zh: "输出 Token"
+  en: "Output tokens"
+usage.cache_tokens:
+  zh: "缓存 Token"
+  en: "Cache tokens"
+usage.estimate_hint:
+  zh: "按当前模型价格估算，实际费用以供应商账单为准。"
+  en: "Estimated using current model prices. Actual charges follow your provider bill."
+usage.cache_detail:
+  zh: "缓存读取 %{read} · 写入 %{write} · 读取占输入 %{rate}%"
+  en: "Cache read %{read} · write %{write} · %{rate}% of input served from cache"
+usage.unpriced:
+  zh: "%{count} 次请求缺少可用价格或用量，费用仅包含可估算部分。"
+  en: "%{count} requests have no usable price or usage; the cost covers only what could be estimated."
+usage.invalid_timestamps:
+  zh: "%{count} 条记录时间无效，未纳入日期统计。"
+  en: "%{count} records have an invalid time and are left out of the daily figures."
+usage.partial:
+  zh: "（部分）"
+  en: " (partial)"
+usage.cost_breakdown:
+  zh: "费用来源"
+  en: "Cost breakdown"
+usage.by_project:
+  zh: "按项目"
+  en: "By project"
+usage.by_conversation:
+  zh: "按会话"
+  en: "By chat"
+usage.scratch:
+  zh: "临时工作区"
+  en: "Scratch workspace"
+usage.unavailable_chat:
+  zh: "已删除或其他会话"
+  en: "Deleted or other chats"
 usage.token_activity:
-  zh: "Token 活跃度"
+  zh: "Token 活动"
   en: "Token activity"
 usage.daily:
   zh: "每日"
@@ -42,96 +102,84 @@ usage.weekly:
 usage.cumulative:
   zh: "累计"
   en: "Cumulative"
+usage.range_7_short:
+  zh: "近 7 日"
+  en: "Last 7 days"
+usage.range_30_short:
+  zh: "近 30 日"
+  en: "Last 30 days"
+usage.daily_token_trend:
+  zh: "每日 Token 趋势图"
+  en: "Daily token trend"
+usage.model_usage:
+  zh: "模型用量"
+  en: "Model usage"
+usage.tokens:
+  zh: "tokens"
+  en: "tokens"
+usage.other:
+  zh: "其他"
+  en: "Other"
+usage.load_failed:
+  zh: "无法读取使用统计。"
+  en: "Could not load usage stats."
+usage.retry:
+  zh: "重试"
+  en: "Retry"
+usage.no_activity:
+  zh: "没有活动"
+  en: "No activity"
 usage.earlier:
   zh: "更早"
   en: "Earlier"
 usage.later:
   zh: "更近"
   en: "Later"
-usage.daily_token_trend:
-  zh: "每日 Token 趋势"
-  en: "Daily Token trend"
-usage.cost_breakdown:
-  zh: "费用分布"
-  en: "Cost breakdown"
-usage.by_project:
-  zh: "按项目"
-  en: "By project"
-usage.by_chat:
-  zh: "按对话"
-  en: "By chat"
-usage.today_tokens_this_view:
-  zh: "%{arg1} · 本日 %{arg2} Token · 当前视图 %{arg3}"
-  en: "%{arg1} · today %{arg2} tokens · this view %{arg3}"
-usage.peak_tokens:
-  zh: "%{arg1} — %{arg2} · 峰值 %{arg3} Token"
-  en: "%{arg1} — %{arg2} · peak %{arg3} tokens"
-usage.tokens_requests:
-  zh: "%{arg1} Token · %{arg2} 次"
-  en: "%{arg1} tokens · %{arg2} requests"
-usage.other_models:
-  zh: "其它模型"
-  en: "Other models"
-usage.partial:
-  zh: "（部分）"
-  en: "(partial)"
-usage.model_usage:
-  zh: "模型用量"
-  en: "Model usage"
 usage.month_1:
   zh: "1月"
-  en: "Jan"
+  en: "1"
 usage.month_2:
   zh: "2月"
-  en: "Feb"
+  en: "2"
 usage.month_3:
   zh: "3月"
-  en: "Mar"
+  en: "3"
 usage.month_4:
   zh: "4月"
-  en: "Apr"
+  en: "4"
 usage.month_5:
   zh: "5月"
-  en: "May"
+  en: "5"
 usage.month_6:
   zh: "6月"
-  en: "Jun"
+  en: "6"
 usage.month_7:
   zh: "7月"
-  en: "Jul"
+  en: "7"
 usage.month_8:
   zh: "8月"
-  en: "Aug"
+  en: "8"
 usage.month_9:
   zh: "9月"
-  en: "Sep"
+  en: "9"
 usage.month_10:
   zh: "10月"
-  en: "Oct"
+  en: "10"
 usage.month_11:
   zh: "11月"
-  en: "Nov"
+  en: "11"
 usage.month_12:
   zh: "12月"
-  en: "Dec"
-usage.weekday_0:
-  zh: "日"
-  en: "S"
-usage.weekday_1:
+  en: "12"
+usage.weekday_mon:
   zh: "一"
   en: "M"
-usage.weekday_2:
-  zh: "二"
-  en: "T"
-usage.weekday_3:
+usage.weekday_wed:
   zh: "三"
   en: "W"
-usage.weekday_4:
-  zh: "四"
-  en: "T"
-usage.weekday_5:
+usage.weekday_fri:
   zh: "五"
   en: "F"
-usage.weekday_6:
-  zh: "六"
+usage.weekday_sun:
+  zh: "日"
   en: "S"

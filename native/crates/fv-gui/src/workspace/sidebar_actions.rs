@@ -1,5 +1,6 @@
 //! Stateful sidebar operations. All durable state goes through the app protocol.
 use super::{GoBack, GoForward, ToggleSidebar, Workspace, settings};
+use crate::ui::px;
 use crate::{sidebar_state, ui};
 use fv_protocol::types::*;
 use fv_theme::Token;
@@ -110,9 +111,9 @@ impl Workspace {
         let pos = e.event.position;
         self.sidebar_scroll_direction = if !e.bounds.contains(&pos) {
             0
-        } else if pos.y < e.bounds.top() + px(32.0) {
+        } else if pos.y < e.bounds.top() + gpui_kit::px(32.0) {
             1
-        } else if pos.y > e.bounds.bottom() - px(32.0) {
+        } else if pos.y > e.bounds.bottom() - gpui_kit::px(32.0) {
             -1
         } else {
             0
@@ -132,8 +133,9 @@ impl Workspace {
                             return false;
                         }
                         let mut offset = this.sidebar_scroll.offset();
-                        offset.y = (offset.y + px(f32::from(this.sidebar_scroll_direction) * 8.0))
-                            .clamp(-this.sidebar_scroll.max_offset().y, px(0.0));
+                        offset.y = (offset.y
+                            + gpui_kit::px(f32::from(this.sidebar_scroll_direction) * 8.0))
+                        .clamp(-this.sidebar_scroll.max_offset().y, gpui_kit::px(0.0));
                         this.sidebar_scroll.set_offset(offset);
                         cx.notify();
                         true
@@ -511,12 +513,12 @@ pub(super) fn popup_origin(
 ) -> Point<Pixels> {
     point(
         at.x.clamp(
-            px(8.0),
-            (window.viewport_size().width - px(width + 8.0)).max(px(8.0)),
+            gpui_kit::px(8.0),
+            (window.viewport_size().width - gpui_kit::px(width + 8.0)).max(gpui_kit::px(8.0)),
         ),
         at.y.clamp(
-            px(8.0),
-            (window.viewport_size().height - px(height + 8.0)).max(px(8.0)),
+            gpui_kit::px(8.0),
+            (window.viewport_size().height - gpui_kit::px(height + 8.0)).max(gpui_kit::px(8.0)),
         ),
     )
 }

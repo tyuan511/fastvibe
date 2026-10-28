@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::ui::px;
 use fv_protocol::RequestId;
 use fv_protocol::types::*;
 use fv_theme::Token;

@@ -1,5 +1,6 @@
 //! File tree menus, dialogs and path changes. Child of pane so drafts stay with their tabs.
 use super::*;
+use crate::ui::px;
 use crate::workspace::settings::{dialog_card, dialog_foot, dialog_head, modal};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 

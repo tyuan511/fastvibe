@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::ui::px;
 use futures_util::StreamExt as _;
 use fv_protocol::methods::*;
 use fv_protocol::types::Empty;
@@ -25,6 +26,7 @@ mod header_git;
 mod mcp;
 mod memory;
 mod model_detail;
+mod model_menu;
 mod palette;
 mod pane;
 mod pane_git;
@@ -76,11 +78,6 @@ mod text {
     use super::UiLanguage;
 
     pub const CHANGED_FILES: &str = "已修改 {n} 个文件";
-    pub const QUEUE_SEND_NOW: &str = "立即";
-    pub const QUEUE_RESUME: &str = "继续";
-    pub const QUEUE_UNIT: &str = "条排队中";
-    pub const QUEUE_PAUSED: &str = "上次回复出错，队列已暂停";
-    pub const QUEUE_PAUSED_STOPPED: &str = "已停止，队列已暂停";
 
     /// The locale file key is `text.<name>`; see `locales/app.yml`.
     macro_rules! texts {
@@ -181,8 +178,15 @@ pub struct Workspace {
     /// The project a new conversation will start in (the composer's 选择项目 chip).
     draft_project: Option<String>,
     project_menu: bool,
+    /// The filter above the project list in the composer's 选择项目 menu.
+    project_search: Entity<InputState>,
+    /// ↑/↓ recall in the composer: which past prompt is in the box, and what was there before.
+    history: Option<(usize, String, String)>,
     model_menu: bool,
     thinking_menu: bool,
+    /// Which provider's models stand beside the model menu. Electron's `ModelThinkingSelect` nests
+    /// them in a submenu per provider; only that one and the effort flyout can be open at a time.
+    model_submenu: Option<String>,
     context_menu: bool,
     compact_pending: HashSet<ThreadId>,
     input: Entity<TextareaState>,
@@ -455,6 +459,13 @@ impl Workspace {
             }
         })
         .detach();
+        let project_search = cx.new(|cx| InputState::new(window, cx));
+        cx.subscribe_in(&project_search, window, |_, _, ev: &InputEvent, _, cx| {
+            if matches!(ev, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
         let ask_input = cx.new(|cx| InputState::new(window, cx).placeholder("或自行撰写回复"));
         cx.subscribe_in(
             &ask_input,
@@ -490,8 +501,11 @@ impl Workspace {
             pending_thinking: None,
             draft_project: None,
             project_menu: false,
+            project_search,
+            history: None,
             model_menu: false,
             thinking_menu: false,
+            model_submenu: None,
             context_menu: false,
             compact_pending: HashSet::new(),
             input,
@@ -793,6 +807,7 @@ impl Workspace {
     fn any_menu_open(&self) -> bool {
         self.model_menu
             || self.thinking_menu
+            || self.model_submenu.is_some()
             || self.context_menu
             || self.access_menu
             || self.approval_menu
@@ -819,6 +834,7 @@ impl Workspace {
         self.sidebar_menu = None;
         self.model_menu = false;
         self.thinking_menu = false;
+        self.model_submenu = None;
         self.context_menu = false;
         self.access_menu = false;
         self.approval_menu = false;
@@ -828,6 +844,7 @@ impl Workspace {
         self.project_row_menu = None;
         if let Some(s) = &mut self.settings {
             s.default_menu = false;
+            s.default_provider_menu = None;
             s.default_thinking_menu = false;
             s.theme_menu = None;
             if let Some(e) = &mut s.edit {
@@ -871,7 +888,7 @@ impl Workspace {
             .first()
             .map(|p| p.path.clone())
             .unwrap_or_else(|| "/tmp".into());
-        self.project_row_menu = Some((path, point(px(150.0), px(180.0))));
+        self.project_row_menu = Some((path, point(gpui_kit::px(150.0), gpui_kit::px(180.0))));
         cx.notify();
     }
 
@@ -901,6 +918,14 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Dev only: open the model menu with its first provider's flyout, to look at a popup.
+    pub fn show_provider_menu(&mut self, cx: &mut Context<Self>) {
+        self.model_menu = true;
+        self.thinking_menu = false;
+        self.model_submenu = self.models.first().map(|m| m.provider_id.clone());
+        cx.notify();
+    }
+
     /// Dev only: open the composer's model list and thinking submenu.
     pub fn show_thinking_menu(&mut self, cx: &mut Context<Self>) {
         self.model_menu = true;
@@ -920,7 +945,42 @@ impl Workspace {
                     s.default_thinking_menu = true;
                 }
             }
+            // Dev capture: the session-model menu with the first provider's models open.
+            "providers-models" => {
+                self.open_settings(settings::Section::Providers, window, cx);
+                if let Some(s) = &mut self.settings {
+                    s.default_menu = true;
+                    s.default_provider_menu = self.models.first().map(|m| m.provider_id.clone());
+                }
+            }
+            // Dev capture: the 长期记忆 pane with its inline model list folded open under the
+            // first provider — the shape the role, schedule and memory pickers all share.
+            "memory-models" => {
+                self.open_settings(settings::Section::Memory, window, cx);
+                if let Some(s) = &mut self.settings {
+                    s.memory.show_models_for_capture(
+                        self.models.first().map(|m| m.provider_id.clone()),
+                    );
+                }
+            }
             "archived" => self.open_settings(settings::Section::Archived, window, cx),
+            // Dev capture: the MCP server form, drawn as a dialog.
+            "mcp-form" => {
+                self.open_settings(settings::Section::Mcp, window, cx);
+                self.open_mcp_form(None, window, cx);
+            }
+            // Dev capture: 使用统计 with a sample, since the harness has no host to ask.
+            "usage" | "usage-en" | "usage-tail" | "usage-en-tail" => {
+                self.open_settings(settings::Section::Usage, window, cx);
+                self.usage_fixture(name);
+            }
+            // Dev capture: 导入 with sample sources and the Codex picker open.
+            "import-sample" => {
+                self.open_settings(settings::Section::Import, window, cx);
+                if let Some(s) = &mut self.settings {
+                    s.import.sample_for_capture();
+                }
+            }
             // Dev capture: the 电脑操控 pane in a state the fixture cannot reach on its own.
             "computer" | "computer-downloading" | "computer-off" => {
                 self.open_settings(settings::Section::Computer, window, cx);
@@ -930,7 +990,27 @@ impl Workspace {
                 self.open_settings(settings::Section::Providers, window, cx);
                 self.open_add_provider(window, cx);
             }
-            _ => self.open_settings(settings::Section::General, window, cx),
+            other => {
+                use settings::Section as S;
+                // The same ids as the Electron router's `#/settings/<section>`.
+                let section = match other {
+                    "personalization" => S::Personalization,
+                    "shortcuts" => S::Shortcuts,
+                    "usage" => S::Usage,
+                    "import" => S::Import,
+                    "subagents" => S::Subagents,
+                    "memory" => S::Memory,
+                    "mcp" => S::Mcp,
+                    "skills" => S::Skills,
+                    "browser" => S::Browser,
+                    "proxy" => S::Proxy,
+                    "remote" => S::Remote,
+                    "ssh" => S::Ssh,
+                    "about" => S::About,
+                    _ => S::General,
+                };
+                self.open_settings(section, window, cx)
+            }
         }
     }
 
@@ -979,7 +1059,8 @@ impl Workspace {
         self.appearance_dirty |= patch.theme_mode.is_some()
             || patch.light_theme.is_some()
             || patch.dark_theme.is_some()
-            || patch.glass.is_some();
+            || patch.glass.is_some()
+            || patch.ui_font_size.is_some();
         self.app_settings.apply(patch.clone());
         cx.notify();
         let Some(b) = self.backend.clone() else {
@@ -1014,6 +1095,11 @@ impl Workspace {
         };
         let palette = Palette::new(prefs.resolve(self.system_dark, cfg!(target_os = "macos")));
         crate::theme::apply(&palette, cx);
+        // 界面字号 is the window's rem: every length in the UI is rem-based, so this one number
+        // scales it all. The component library's `Root` sets the window's rem size from
+        // `Theme::font_size` on every frame, so that is the value to change, not the window's.
+        let root = fv_theme::clamp_ui_font_size(self.app_settings.ui_font_size as f32);
+        gpui_kit::component::Theme::global_mut(cx).font_size = gpui_kit::px(root);
         window.set_background_appearance(crate::vibrancy::background(palette.glass()));
         crate::vibrancy::set(window, palette.glass());
         self.palette = palette;
@@ -1378,6 +1464,7 @@ impl Workspace {
             }
             BackendEvent::Request(ServerRequest::UserInput { id, params }) => {
                 let thread = params.thread_id.clone();
+                self.notify_waiting(&thread, cx);
                 match self.views.get_mut(&thread) {
                     Some(view) => view.ask(id, params),
                     None => {
@@ -1393,6 +1480,7 @@ impl Workspace {
             }
             BackendEvent::Request(ServerRequest::Approval { id, params }) => {
                 let thread = params.thread_id.clone();
+                self.notify_waiting(&thread, cx);
                 match self.views.get_mut(&thread) {
                     Some(view) => view.ask_approval(id, params),
                     None => {
@@ -1417,7 +1505,8 @@ impl Workspace {
                         self.appearance_dirty |= self.app_settings.theme_mode != s.theme_mode
                             || self.app_settings.light_theme != s.light_theme
                             || self.app_settings.dark_theme != s.dark_theme
-                            || self.app_settings.glass != s.glass;
+                            || self.app_settings.glass != s.glass
+                            || self.app_settings.ui_font_size != s.ui_font_size;
                         self.app_settings = s.clone();
                         self.computer_sync(cx);
                     }
@@ -1460,6 +1549,12 @@ impl Workspace {
                     ServerNotification::MemoryChanged(state) => {
                         self.memory_changed(state.clone(), cx)
                     }
+                    ServerNotification::TurnCompleted(event) => {
+                        self.notify_finished(&event.thread_id, event.body.status, cx);
+                    }
+                    _ => {}
+                }
+                match &note {
                     ServerNotification::TurnCompleted(event)
                         if self.selected.as_deref() != Some(event.thread_id.as_str()) =>
                     {
@@ -2135,6 +2230,7 @@ impl Workspace {
         // Changing the model must not silently reset the conversation's chosen effort.
         let thinking = self.explicit_thinking();
         self.thinking_menu = false;
+        self.model_submenu = None;
         self.set_conversation_model(Some(label), thinking, cx);
     }
 
@@ -2166,6 +2262,7 @@ impl Workspace {
         if close_menu {
             self.model_menu = false;
             self.thinking_menu = false;
+            self.model_submenu = None;
         }
         let Some(id) = self.selected.clone() else {
             self.pending_model = model;
@@ -2388,7 +2485,10 @@ impl Render for Workspace {
         self.focus_pending(window, cx);
         // The handle only knows the content's height after a layout, so the jump to the end
         // waits for a frame that has one.
-        if !self.schedules_ui.open && self.stick_to_bottom && self.scroll.max_offset().y > px(0.0) {
+        if !self.schedules_ui.open
+            && self.stick_to_bottom
+            && self.scroll.max_offset().y > gpui_kit::px(0.0)
+        {
             self.scroll.scroll_to_bottom();
             self.stick_to_bottom = false;
         } else if !self.schedules_ui.open && self.stick_to_bottom {
@@ -2472,6 +2572,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_go_back))
             .on_action(cx.listener(Self::on_go_forward))
             .on_action(cx.listener(Self::on_accept_suggestion))
+            .on_action(cx.listener(Self::on_history_prev))
+            .on_action(cx.listener(Self::on_history_next))
+            // Pasting a file, an image or a long text attaches it; the text area never sees it.
+            .capture_action(cx.listener(Self::on_paste_capture))
             .on_action(cx.listener(Self::on_save_preview))
             .on_action(cx.listener(Self::on_browser_address))
             .on_action(cx.listener(Self::on_browser_reload))
@@ -2559,6 +2663,8 @@ actions!(
         GoBack,
         GoForward,
         AcceptSuggestion,
+        HistoryPrev,
+        HistoryNext,
         SavePreview,
         BrowserAddress,
         BrowserReload,
@@ -3143,7 +3249,7 @@ mod locale_file_tests {
         assert_eq!(text::tr(Chinese, "office.back"), "返回文件列表");
         assert_eq!(
             text::tr(English, "office.quote_selection"),
-            "Quote selection"
+            "Cite selection"
         );
         assert_eq!(
             rust_i18n::t!("office.snapshot_failed", locale = "zh", error = "x"),
@@ -3172,6 +3278,47 @@ mod locale_file_tests {
         assert_eq!(
             tr!(false, "pane_entries.operation_failed", error = "boom"),
             "boom"
+        );
+    }
+}
+
+impl Workspace {
+    /// The name a notification gives a chat: its title, else 会话.
+    fn notice_title(&self, thread: &str) -> String {
+        self.threads
+            .iter()
+            .find(|t| t.id == thread)
+            .map(|t| t.title.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| trs!(self.english(), "mod.notify_chat").into())
+    }
+
+    /// 系统通知 for a finished run, sent only while no window has focus (the sidebar's marks
+    /// already tell someone who is looking). A run the user stopped tells them nothing new.
+    fn notify_finished(&self, thread: &str, status: TurnStatus, cx: &Context<Self>) {
+        if !self.app_settings.notifications || cx.active_window().is_some() {
+            return;
+        }
+        let body = match status {
+            TurnStatus::Completed => trs!(self.english(), "mod.notify_done"),
+            TurnStatus::Failed => trs!(self.english(), "mod.notify_failed"),
+            _ => return,
+        };
+        crate::notify::post(&self.notice_title(thread), body);
+    }
+
+    /// A tool parked behind a question: the one notice that is a real blocker. Sent when the app
+    /// is in the background, or when the question belongs to a chat that is not on screen.
+    fn notify_waiting(&self, thread: &str, cx: &Context<Self>) {
+        if !self.app_settings.notifications {
+            return;
+        }
+        if cx.active_window().is_some() && self.selected.as_deref() == Some(thread) {
+            return;
+        }
+        crate::notify::post(
+            trs!(self.english(), "mod.notify_waiting_title"),
+            trs!(self.english(), "mod.notify_waiting_body"),
         );
     }
 }

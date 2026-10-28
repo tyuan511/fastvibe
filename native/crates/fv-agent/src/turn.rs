@@ -273,8 +273,9 @@ async fn run_turn_inner(
             if !auto_compaction(ctx) {
                 return TurnOutcome::Failed(AUTO_COMPACTION_DISABLED.into());
             }
+            let overflow = capacity_recovery;
             capacity_recovery = false;
-            match crate::compact::compact_auto(ctx, history, events, cancel).await {
+            match crate::compact::compact_auto(ctx, history, events, cancel, overflow).await {
                 Ok(()) => {}
                 Err(crate::compact::CompactError::Interrupted) => return TurnOutcome::Interrupted,
                 Err(crate::compact::CompactError::Capacity(e)) => {
@@ -865,13 +866,21 @@ fn install_new_window(
         model: ctx.model.label().map(str::to_owned),
         user_messages,
         summary: summary.clone(),
+        stats: None,
     };
     let id = uuid::Uuid::new_v4().to_string();
     emit(events, AgentEvent::CompactionStarted { id: id.clone() });
     emit(events, AgentEvent::Committed(message.clone()));
     history.clear();
     history.push(message);
-    emit(events, AgentEvent::CompactionDone { id, summary });
+    emit(
+        events,
+        AgentEvent::CompactionDone {
+            id,
+            summary,
+            stats: None,
+        },
+    );
     emit(
         events,
         AgentEvent::ContextBudgetChanged {

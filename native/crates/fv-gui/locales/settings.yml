@@ -258,24 +258,30 @@ settings.dark_theme:
 settings.theme_used_in_dark_mode:
   zh: "暗色模式下使用的主题"
   en: "Theme used in Dark mode"
+settings.ui_font_size:
+  zh: "界面字号"
+  en: "Interface font size"
+settings.scale_the_whole_interface:
+  zh: "整体缩放界面文字与控件"
+  en: "Scale text and controls across the app"
 settings.glass_effect:
   zh: "玻璃效果"
   en: "Glass effect"
 settings.make_the_window_background_translucent:
-  zh: "窗口背景半透明，透出桌面"
-  en: "Make the window background translucent"
+  zh: "窗口透出桌面背景，呈现毛玻璃质感，适用于所有主题"
+  en: "See-through, frosted window over the desktop, in any theme"
 settings.reply_suggestions:
   zh: "回复推荐"
   en: "Reply suggestions"
 settings.suggest_what_you_may_say:
-  zh: "回复结束后猜测你下一句，显示在输入框里，按 Tab 填入"
-  en: "Suggest what you may say next after a reply; press Tab to insert it"
+  zh: "回复完成后，猜你下一句想说的话，显示在输入框里，按 Tab 填入"
+  en: "After a reply, guess your next message and show it in the input; press Tab to use it"
 settings.code_mode:
   zh: "代码模式"
   en: "Code mode"
 settings.let_the_model_orchestrate_existing:
-  zh: "允许模型通过隔离 JavaScript 编排已有工具；使用现有权限，下个回合生效"
-  en: "Let the model orchestrate existing tools through isolated JavaScript; applies next turn"
+  zh: "让模型写一段脚本，一次调用多个工具，只把结果交回给它"
+  en: "Let the model write one script that calls many tools and gets only its output back"
 settings.auto_compact_context:
   zh: "自动压缩上下文"
   en: "Auto-compact context"
@@ -289,11 +295,11 @@ settings.every_hour_archive_chats_inactive:
   zh: "每小时检查一次，将 30 天未活动、未置顶且没有运行任务的对话移入归档"
   en: "Every hour, archive chats inactive for 30 days that are not pinned and have no running task"
 settings.keep_awake:
-  zh: "保持唤醒"
-  en: "Keep awake"
+  zh: "运行时保持唤醒"
+  en: "Keep awake while running"
 settings.prevent_macos_from_sleeping_during:
-  zh: "生成回复或定时任务期间阻止 macOS 进入睡眠；其它平台会忽略此开关"
-  en: "Prevent macOS from sleeping during replies or scheduled tasks; other platforms ignore this switch"
+  zh: "任务运行或远程访问开启时阻止系统空闲休眠，合盖仍会休眠"
+  en: "Prevents idle sleep while an agent runs or remote access is on. Closing the lid still sleeps"
 settings.archiving_hides_a_chat_from:
   zh: "归档只是从侧边栏收起，内容仍在；删除会一并移除会话记录，无法恢复。"
   en: "Archiving hides a chat from the sidebar; its contents remain. Deleting removes the transcript and cannot be undone."
@@ -432,3 +438,129 @@ settings.select_at_least_one_model:
 settings.cancel:
   zh: "取消"
   en: "Cancel"
+settings.language_group:
+  zh: "语言"
+  en: "Language"
+settings.interface_language_desc:
+  zh: "应用内所有文字使用的语言"
+  en: "The language used for all text in the app"
+settings.ai_language:
+  zh: "AI 偏好语言"
+  en: "AI response language"
+settings.ai_language_desc:
+  zh: "每轮对话都会提示 AI 用该语言回复"
+  en: "Tell the AI, on every turn, which language to reply in"
+settings.runtime_group:
+  zh: "运行时"
+  en: "Runtime"
+settings.chat_group:
+  zh: "对话"
+  en: "Chat"
+settings.system_notifications:
+  zh: "系统通知"
+  en: "Desktop notifications"
+settings.system_notifications_desc:
+  zh: "完成、出错、需要确认和应用更新时提醒"
+  en: "Notify when a task finishes, fails, needs an answer, or an update is ready"
+settings.tool_search:
+  zh: "工具搜索"
+  en: "Tool search"
+settings.tool_search_desc:
+  zh: "让模型按需查找并加载没有预先提供的工具"
+  en: "Let the model look up and load tools that are not provided up front"
+settings.collapse_thinking:
+  zh: "折叠思考内容"
+  en: "Collapse thinking"
+settings.collapse_thinking_desc:
+  zh: "把已写完的思考并入所在工具行，显示为「已思考 N 次」；正在写的思考仍单独一行"
+  en: "Fold a finished thought into the tool line it belongs to, shown as \"Thought N times\"; one still being written keeps its own line"
+settings.auto_archive:
+  zh: "自动归档"
+  en: "Auto archive"
+settings.auto_archive_desc:
+  zh: "超过所选时间没有更新的对话会自动移到这里。"
+  en: "Chats with no update for longer than this move here on their own."
+settings.auto_archive_never:
+  zh: "永不"
+  en: "Never"
+settings.import_title:
+  zh: "从其他 Agent 导入"
+  en: "Import from other agents"
+settings.import_desc:
+  zh: "读取本机其他编程 agent 的会话，转换后复制到 FastVibe。原始数据只读。"
+  en: "Reads sessions from other coding agents on this machine and copies them into FastVibe. The originals are read-only."
+settings.import_found:
+  zh: "共发现 %{count} 个会话"
+  en: "%{count} sessions found"
+settings.import_empty_title:
+  zh: "未检测到可导入的会话"
+  en: "No importable sessions found"
+settings.import_empty_desc:
+  zh: "本机未找到 pi、Claude Code、Codex、opencode 或 zcode 的数据目录"
+  en: "No data directories for pi, Claude Code, Codex, opencode or zcode were found on this machine"
+settings.import_sessions:
+  zh: "%{count} 个会话"
+  en: "%{count} sessions"
+settings.import_latest:
+  zh: "最近 %{date}"
+  en: "latest %{date}"
+settings.import_action:
+  zh: "导入"
+  en: "Import"
+settings.import_select_all:
+  zh: "全选（%{selected}/%{total}）"
+  en: "Select all (%{selected}/%{total})"
+settings.import_messages:
+  zh: "%{count} 条消息"
+  en: "%{count} messages"
+settings.import_pick_hint:
+  zh: "导入后会出现在左侧对话列表，原会话不受影响。"
+  en: "Imported sessions appear in the sidebar; the originals are untouched."
+settings.import_importing:
+  zh: "正在导入…"
+  en: "Importing…"
+settings.import_count:
+  zh: "导入 %{count} 个会话"
+  en: "Import %{count} sessions"
+settings.import_done:
+  zh: "本次导入完成：成功 %{ok} 个"
+  en: "Import finished: %{ok} succeeded"
+settings.import_done_failed:
+  zh: "，失败 %{failed} 个"
+  en: ", %{failed} failed"
+settings.proxy_enabled:
+  zh: "启用代理"
+  en: "Enable proxy"
+settings.proxy_scope:
+  zh: "代理模型请求、登录、更新、下载和内置浏览器。关闭时直连。"
+  en: "Proxies model requests, logins, updates, downloads and the built-in browser. Direct when off."
+settings.proxy_protocol:
+  zh: "协议"
+  en: "Protocol"
+settings.proxy_host:
+  zh: "主机"
+  en: "Host"
+settings.proxy_host_hint:
+  zh: "只填主机名或 IP，不含协议、路径和账号；IPv6 用方括号。"
+  en: "Hostname or IP only — no scheme, path or credentials. Brackets for IPv6."
+settings.proxy_invalid_host:
+  zh: "请输入有效主机名或 IP，不含协议、路径、空格或账号。"
+  en: "Enter a valid hostname or IP without a scheme, path, spaces or credentials."
+settings.proxy_port:
+  zh: "端口"
+  en: "Port"
+settings.proxy_invalid_port:
+  zh: "端口必须是 1–65535 的整数。"
+  en: "Port must be an integer from 1 to 65535."
+settings.proxy_apply_title:
+  zh: "保存后生效"
+  en: "Apply after saving"
+settings.proxy_limits:
+  zh: "保存后会断开现有连接。SSH、穿透隧道和外部程序不走此代理，也不支持认证代理与系统 SOCKS4。"
+  en: "Disconnects existing connections. SSH, tunnels and external programs bypass this proxy; authenticated proxies are unsupported."
+settings.proxy_apply:
+  zh: "应用"
+  en: "Apply"
+settings.home_page_desc:
+  zh: "新标签页打开的地址，留空为空白页"
+  en: "Where a new tab opens; empty is a blank page"

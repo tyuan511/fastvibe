@@ -15,6 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::ui::px;
 use fv_protocol::methods::*;
 use fv_protocol::types::*;
 use fv_theme::Token;
@@ -69,6 +70,18 @@ fn editable_text(preview: &FilePreview) -> Option<String> {
     }
 }
 
+/// Whether `editable_text` would return something, without copying the text.
+fn is_editable(preview: &FilePreview) -> bool {
+    match preview {
+        FilePreview::Text { kind, path, .. } => match kind {
+            FilePreviewKind::Code | FilePreviewKind::Diff | FilePreviewKind::Html => true,
+            FilePreviewKind::Markdown => markdown_extension(path),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 fn markdown_extension(path: &str) -> bool {
     let ext = std::path::Path::new(path)
         .extension()
@@ -91,7 +104,7 @@ fn preview_path(preview: Option<&FilePreview>) -> Option<String> {
 
 /// The rows of one directory level, in the tree's own spacing.
 fn tree_body(rows: Vec<AnyElement>) -> Div {
-    div().px(px(4.0)).child(
+    div().child(
         div()
             .flex()
             .flex_col()
@@ -181,6 +194,9 @@ pub struct PaneState {
     pub editor: Option<Entity<EditorState>>,
     /// The directory being dragged over, for the splitter.
     pub tree_width: f32,
+    /// The open Markdown file's text as a `SharedString`, keyed by path and length. `TextView`
+    /// recognises unchanged text by allocation, so it must be the same one every frame.
+    markdown_source: Option<(String, usize, SharedString)>,
     saved_files: HashMap<String, FileViewState>,
 }
 
@@ -204,6 +220,7 @@ impl Default for PaneState {
             baseline: None,
             editor: None,
             tree_width: TREE_WIDTH,
+            markdown_source: None,
             saved_files: HashMap::new(),
         }
     }
@@ -332,9 +349,17 @@ impl Workspace {
         }
         // The fixture shows the source view: the editor, the toggle and the dirty dot are what
         // the capture is for, and a rendered-only screenshot would show none of them.
-        let preview = crate::workspace::preview_fixture(&format!("{root}/native/Cargo.toml"));
+        // `FV_FIXTURE_FILE=none` leaves the tree on its own (Electron's `?pane=files`); any other
+        // value is a path under the project to preview instead of the manifest.
+        let file = std::env::var("FV_FIXTURE_FILE").unwrap_or_else(|_| "native/Cargo.toml".into());
+        if file == "none" {
+            return;
+        }
+        let preview = crate::workspace::preview_fixture(&format!("{root}/{file}"));
         self.adopt_preview(&conversation, preview, window, cx);
-        if let Some(state) = self.panes.get_mut(&conversation) {
+        if let Some(state) = self.panes.get_mut(&conversation)
+            && file == "native/Cargo.toml"
+        {
             state.editing = true;
         }
     }
@@ -1100,6 +1125,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The text may have changed without changing length.
+        if let Some(state) = self.panes.get_mut(conversation) {
+            state.markdown_source = None;
+        }
         let baseline = editable_text(&preview);
         let editing = match &preview {
             FilePreview::Text { kind, .. } => {
@@ -1378,8 +1407,47 @@ impl Workspace {
         for path in directories {
             self.load_dir(path, cx);
         }
-        let (entries, tree_width, notice, preview) = {
+        let (entries, tree_width, notice, preview, markdown) = {
             let state = self.panes.entry(conversation.to_string()).or_default();
+            // Markdown is drawn from a cached `SharedString`, so the preview handed to the body
+            // carries no copy of the text: cloning a large file every frame is what a scroll paid.
+            let markdown = if state.show_preview
+                && let Some(FilePreview::Text {
+                    kind: FilePreviewKind::Markdown,
+                    path,
+                    text,
+                    ..
+                }) = &state.preview
+            {
+                match &state.markdown_source {
+                    Some((p, len, source)) if p == path && *len == text.len() => {
+                        Some(source.clone())
+                    }
+                    _ => {
+                        let source = SharedString::from(text.clone());
+                        state.markdown_source = Some((path.clone(), text.len(), source.clone()));
+                        Some(source)
+                    }
+                }
+            } else {
+                None
+            };
+            let preview = state.show_preview.then(|| match &state.preview {
+                Some(FilePreview::Text {
+                    kind: FilePreviewKind::Markdown,
+                    path,
+                    name,
+                    language,
+                    ..
+                }) => Some(FilePreview::Text {
+                    kind: FilePreviewKind::Markdown,
+                    path: path.clone(),
+                    name: name.clone(),
+                    language: language.clone(),
+                    text: String::new(),
+                }),
+                other => other.clone(),
+            });
             (
                 state.listings.get(&root).cloned().unwrap_or_default(),
                 // While the splitter is held, the dragged width wins: the stored one is where it
@@ -1388,7 +1456,8 @@ impl Workspace {
                     .tree_width
                     .clamp(TREE_MIN, (0.75 * self.pane_content_width).max(TREE_MIN)),
                 state.notice.clone(),
-                state.show_preview.then(|| state.preview.clone()).flatten(),
+                preview.flatten(),
+                markdown,
             )
         };
         // A pane narrower than 32rem swaps the two instead of squeezing them: at 380px a
@@ -1398,6 +1467,7 @@ impl Workspace {
         let side_by_side = self.side_pane_width_side_by_side();
         let showing_file = preview.is_some() && !side_by_side;
         let editing = self.panes.get(conversation).is_some_and(|s| s.editing);
+        let is_markdown_text = markdown.is_some();
         let intrinsic_scroll = matches!(
             &preview,
             Some(FilePreview::Media { .. } | FilePreview::Office { .. })
@@ -1407,9 +1477,9 @@ impl Workspace {
                 kind: FilePreviewKind::Html,
                 ..
             })
-        ) || (editing
-            && preview.as_ref().is_some_and(|p| editable_text(p).is_some()));
-        let preview_body = self.preview_body(preview, cx);
+        ) || (editing && preview.as_ref().is_some_and(is_editable))
+            || (!editing && is_markdown_text);
+        let preview_body = self.preview_body(preview, markdown, cx);
 
         // The rows are elements, so the two branches below can each put them in their own scroll
         // container. A `Div` is not cloneable; a `Vec<AnyElement>` is the shared part.
@@ -1421,131 +1491,113 @@ impl Workspace {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| root.clone());
-        let root_context = root.clone();
-        let root_toggle = root.clone();
-        let mut tree_rows: Vec<AnyElement> = vec![
-            div()
-                .id("pane-root-folder")
-                .h(px(32.0))
-                .px(px(8.0))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .rounded(px(8.0))
-                .bg(p.c(Token::Muted).opacity(0.6))
-                .text_size(px(TEXT_SM))
-                .font_weight(FontWeight::MEDIUM)
-                .cursor_pointer()
-                .child(ui::chevron(root_open, 12.0, p.c(Token::MutedForeground)))
-                .child(
-                    img(crate::file_icons::folder_path(
-                        &root_name,
-                        root_open,
-                        !p.is_dark(),
-                    ))
-                    .size(px(16.0))
-                    .flex_none(),
-                )
-                .child(ui::truncate(root_name).flex_1())
-                .child(
-                    div()
-                        .text_size(px(TEXT_XS))
-                        .font_weight(FontWeight::NORMAL)
-                        .muted(&p)
-                        .child(if self.app_settings.language == UiLanguage::English {
-                            "Main"
-                        } else {
-                            "主"
-                        }),
-                )
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        this.open_entry_menu(
-                            entries::EntryMenu {
-                                at: event.position,
-                                root: root_context.clone(),
-                                path: root_context.clone(),
-                                kind: EntryKind::Directory,
-                                is_root: true,
-                            },
-                            cx,
-                        );
-                    }),
-                )
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.toggle_dir(root_toggle.clone(), cx)),
-                )
-                .into_any_element(),
-        ];
-        if root_open {
+        // One folder: the tree starts at its children — the project directory is not a row.
+        // Several: each folder is a card (`chat-tree-card`) with its own disclosure, the first
+        // one marked 主, and its rows inside it.
+        let mut tree_rows: Vec<AnyElement> = Vec::new();
+        if roots.len() <= 1 {
             for entry in entries.iter() {
-                tree_rows.extend(self.tree_row(entry, &root, 0, cx));
+                tree_rows.extend(self.tree_row(entry, &root, 0, false, cx));
             }
-        }
-        for folder in roots.iter().skip(1) {
-            let open = self
-                .panes
-                .get(conversation)
-                .is_some_and(|s| s.expanded.contains(folder));
-            let label = std::path::Path::new(folder)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let (toggle, context) = (folder.clone(), folder.clone());
-            tree_rows.push(
-                div()
-                    .id(SharedString::from(format!("pane-root-{folder}")))
-                    .h(px(32.0))
-                    .px(px(8.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .rounded(px(8.0))
-                    .bg(p.c(Token::Muted).opacity(0.6))
-                    .text_size(px(TEXT_SM))
-                    .font_weight(FontWeight::MEDIUM)
-                    .cursor_pointer()
-                    .child(ui::chevron(open, 12.0, p.c(Token::MutedForeground)))
+        } else {
+            for (index, folder) in roots.iter().enumerate() {
+                let open = if index == 0 {
+                    root_open
+                } else {
+                    self.panes
+                        .get(conversation)
+                        .is_some_and(|s| s.expanded.contains(folder))
+                };
+                let label = if index == 0 {
+                    root_name.clone()
+                } else {
+                    std::path::Path::new(folder)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string()
+                };
+                let (toggle, context) = (folder.clone(), folder.clone());
+                let tooltip = folder.clone();
+                let mut card = div()
+                    .mx(px(4.0))
+                    .mt(px(if index == 0 { 0.0 } else { 4.0 }))
                     .child(
-                        img(crate::file_icons::folder_path(&label, open, !p.is_dark()))
-                            .size(px(16.0))
-                            .flex_none(),
-                    )
-                    .child(ui::truncate(label))
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.toggle_dir(toggle.clone(), cx)),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            this.open_entry_menu(
-                                entries::EntryMenu {
-                                    at: event.position,
-                                    root: context.clone(),
-                                    path: context.clone(),
-                                    kind: EntryKind::Directory,
-                                    is_root: true,
-                                },
-                                cx,
-                            );
-                        }),
-                    )
-                    .into_any_element(),
-            );
-            if open {
-                for entry in self
-                    .panes
-                    .get(conversation)
-                    .and_then(|s| s.listings.get(folder))
-                    .into_iter()
-                    .flatten()
-                {
-                    tree_rows.extend(self.tree_row(entry, folder, 0, cx));
+                        div()
+                            .id(SharedString::from(format!("pane-root-{folder}")))
+                            .h(px(32.0))
+                            .px(px(8.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .rounded(px(8.0))
+                            .bg(p.c(Token::Muted).opacity(0.6))
+                            .text_size(px(TEXT_SM))
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(p.c(Token::Muted)))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                    .build(window, cx)
+                            })
+                            .child(ui::chevron(open, 12.0, p.c(Token::MutedForeground)))
+                            .child(
+                                img(crate::file_icons::folder_path(&label, open, !p.is_dark()))
+                                    .size(px(16.0))
+                                    .flex_none(),
+                            )
+                            .child(ui::truncate(label).flex_1())
+                            .when(index == 0, |d| {
+                                d.child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(TEXT_XS))
+                                        .font_weight(FontWeight::NORMAL)
+                                        .muted(&p)
+                                        .child(
+                                            if self.app_settings.language == UiLanguage::English {
+                                                "Primary"
+                                            } else {
+                                                "主"
+                                            },
+                                        ),
+                                )
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_dir(toggle.clone(), cx)
+                            }))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.open_entry_menu(
+                                        entries::EntryMenu {
+                                            at: event.position,
+                                            root: context.clone(),
+                                            path: context.clone(),
+                                            kind: EntryKind::Directory,
+                                            is_root: true,
+                                        },
+                                        cx,
+                                    );
+                                }),
+                            ),
+                    );
+                if open {
+                    let listed: Vec<DirEntry> = if index == 0 {
+                        entries.clone()
+                    } else {
+                        self.panes
+                            .get(conversation)
+                            .and_then(|s| s.listings.get(folder))
+                            .cloned()
+                            .unwrap_or_default()
+                    };
+                    for entry in listed.iter() {
+                        card = card.children(self.tree_row(entry, folder, 1, true, cx));
+                    }
                 }
+                tree_rows.push(card.into_any_element());
             }
         }
         // Three cases, and only one of them can own the tree: `Div` is not cloneable, so the
@@ -1624,12 +1676,17 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// One tree row and, when it is an expanded directory, its children.
+    /// One tree row and, when it is an expanded directory, its children (`chat-tree-row`): no
+    /// chevron, a 14px icon, and one indent guide per level drawn through the parent's icon.
+    ///
+    /// `card` is a row inside a multi-folder card, whose first indent slot is wider so the
+    /// children sit under the card's own (larger, chevron-pushed) folder icon.
     fn tree_row(
         &self,
         entry: &DirEntry,
         root: &str,
         depth: usize,
+        card: bool,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let p = &self.palette;
@@ -1647,11 +1704,28 @@ impl Workspace {
         let name = entry.name.clone();
         let (context_path, context_root, context_kind) =
             (entry.path.clone(), root.to_string(), entry.kind);
+        // `--tree-indent` 0.75rem, `--tree-gap` 0.375rem, `--tree-icon` 0.875rem: the guide sits
+        // `indent - gap - icon / 2` before its slot's trailing edge, i.e. 1px past it.
+        let mut guides = div().h_full().flex_none().flex().ml(px(-2.0));
+        for level in 0..depth {
+            let width = if level == 0 && card { 18.0 } else { 12.0 };
+            guides = guides.child(
+                div().relative().w(px(width)).h_full().child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right(px(-1.0))
+                        .w(px(1.0))
+                        .bg(p.c(Token::Foreground).opacity(0.12)),
+                ),
+            );
+        }
         let row = div()
             .id(SharedString::from(format!("tree-{}", entry.path)))
             .h(px(24.0))
-            .pl(px(8.0 + depth as f32 * 12.0))
-            .pr(px(8.0))
+            .w_full()
+            .px(px(8.0))
             .flex()
             .items_center()
             .gap(px(6.0))
@@ -1659,7 +1733,7 @@ impl Workspace {
             .cursor_pointer()
             .when(open, |d| d.bg(p.c(Token::Foreground).opacity(0.1)))
             .hover(move |d| d.bg(hover))
-            .children(is_dir.then(|| ui::chevron(expanded, 12.0, p.c(Token::MutedForeground))))
+            .child(guides)
             .child(if is_dir {
                 img(crate::file_icons::folder_path(
                     &name,
@@ -1675,7 +1749,7 @@ impl Workspace {
                     .flex_none()
                     .into_any_element()
             })
-            .child(ui::truncate(name.clone()))
+            .child(ui::truncate(name.clone()).flex_1())
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -1712,7 +1786,7 @@ impl Workspace {
                 .cloned()
                 .unwrap_or_default();
             for child in children {
-                rows.extend(self.tree_row(&child, root, depth + 1, cx));
+                rows.extend(self.tree_row(&child, root, depth + 1, card, cx));
             }
         }
         rows
@@ -1814,7 +1888,12 @@ impl Workspace {
         self.pane_content_width >= SIDE_BY_SIDE_MIN
     }
 
-    fn preview_body(&mut self, preview: Option<FilePreview>, cx: &mut Context<Self>) -> AnyElement {
+    fn preview_body(
+        &mut self,
+        preview: Option<FilePreview>,
+        markdown: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let p = self.palette.clone();
         // In the narrow layout the preview owns the pane, so its header carries 返回.
         let back = !self.side_pane_width_side_by_side();
@@ -1832,14 +1911,13 @@ impl Workspace {
                 // Code and diffs open on their source; Markdown and HTML open rendered. A
                 // document is meant to be read, a source file is meant to be edited, and the
                 // toggle in the header is there for the other case.
-                let editable = editable_text(&FilePreview::Text {
+                let editable = is_editable(&FilePreview::Text {
                     kind,
                     path: path.clone(),
                     name: name.clone(),
                     language: None,
-                    text: text.clone(),
-                })
-                .is_some();
+                    text: String::new(),
+                });
                 let editing = self
                     .selected
                     .as_ref()
@@ -1884,17 +1962,26 @@ impl Workspace {
                     _ if kind == FilePreviewKind::Html => {
                         self.document_body(&path, Some(&text), None, None, cx)
                     }
-                    _ if kind == FilePreviewKind::Markdown => div()
-                        .px(px(14.0))
-                        .py(px(10.0))
-                        .text_size(px(TEXT_SM))
-                        .line_height(px(24.0))
-                        .child(crate::markdown::view(
-                            SharedString::from(format!("pane-md-{path}")),
-                            SharedString::from(text.clone()),
-                            &p,
-                        ))
-                        .into_any_element(),
+                    _ if kind == FilePreviewKind::Markdown => {
+                        // Virtualised: the view lays out and paints only the blocks on screen and
+                        // owns the scroll, instead of laying out the whole file every frame.
+                        let source = markdown.clone().unwrap_or_default();
+                        div()
+                            .size_full()
+                            .px(px(14.0))
+                            .py(px(10.0))
+                            .text_size(px(TEXT_SM))
+                            .line_height(px(24.0))
+                            .child(
+                                crate::markdown::view(
+                                    SharedString::from(format!("pane-md-{path}")),
+                                    source,
+                                    &p,
+                                )
+                                .scrollable(true),
+                            )
+                            .into_any_element()
+                    }
                     _ => self.code_view(&text).into_any_element(),
                 };
                 let toggle = editable.then(|| {
@@ -1930,7 +2017,9 @@ impl Workspace {
                 // the two bodies that own their scroll — the editor, and a document drawn by a
                 // webview — must not be put inside a second one, which would measure them by their
                 // content and collapse them.
-                let body_owns_scroll = shows_editor || kind == FilePreviewKind::Html;
+                let body_owns_scroll = shows_editor
+                    || kind == FilePreviewKind::Html
+                    || (kind == FilePreviewKind::Markdown && !shows_editor);
                 div()
                     .h_full()
                     .w_full()
@@ -2073,43 +2162,220 @@ impl Workspace {
                 }))
                 .into_any_element(),
             FilePreview::Error {
+                path,
                 name,
                 message,
+                reason,
                 detail,
                 directory,
-                ..
             } => {
-                let _ = cx;
-                div()
+                // `PreviewFailure` in Electron's `preview-panel.tsx`: a conclusion, one line on
+                // what it means, the path, and the ways out that still make sense.
+                let english = self.app_settings.language == UiLanguage::English;
+                let (glyph, title, hint) = match (reason, english) {
+                    (PreviewFailure::Missing, false) => (
+                        "file-not-found",
+                        "文件不存在",
+                        Some("这个路径下没有文件，它可能已被移动、重命名或删除。"),
+                    ),
+                    (PreviewFailure::Missing, true) => (
+                        "file-not-found",
+                        "File not found",
+                        Some(
+                            "Nothing is at this path — it may have been moved, renamed or deleted.",
+                        ),
+                    ),
+                    (PreviewFailure::Permission, false) => (
+                        "lock",
+                        "没有读取权限",
+                        Some("文件可能属于其他用户，或被系统保护。"),
+                    ),
+                    (PreviewFailure::Permission, true) => (
+                        "lock",
+                        "No read permission",
+                        Some("The file belongs to another user or is protected by the system."),
+                    ),
+                    (PreviewFailure::NotAFile, false) => (
+                        "folder01",
+                        "这是一个文件夹",
+                        Some("它是一个目录，选择一个文件才能预览。"),
+                    ),
+                    (PreviewFailure::NotAFile, true) => (
+                        "folder01",
+                        "This is a folder",
+                        Some("That path is a directory. Pick a file inside it to preview."),
+                    ),
+                    (PreviewFailure::Unknown, false) => ("alert-circle", "无法预览这个文件", None),
+                    (PreviewFailure::Unknown, true) => {
+                        ("alert-circle", "Can't preview this file", None)
+                    }
+                };
+                let unknown = reason == PreviewFailure::Unknown;
+                let folder = directory.clone().or_else(|| {
+                    std::path::Path::new(&path)
+                        .parent()
+                        .map(|d| d.display().to_string())
+                });
+                let local = !path.starts_with("remote:");
+                let button =
+                    |id: &'static str, glyph: &'static str, label: &'static str, outline: bool| {
+                        div()
+                            .id(id)
+                            .h(px(24.0))
+                            .px(px(8.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .rounded(px(6.0))
+                            .when(outline, |d| {
+                                d.border_1()
+                                    .border_color(p.c(Token::Border))
+                                    .bg(p.c(Token::Background))
+                            })
+                            .text_size(px(TEXT_XS))
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(p.c(Token::Muted)))
+                            .child(icon(glyph, 14.0, p.c(Token::Foreground)))
+                            .child(label)
+                    };
+                let retry_path = path.clone();
+                let copy_path = path.clone();
+                let body = div()
+                    .min_h(px(160.0))
                     .flex()
                     .flex_col()
-                    .gap(px(6.0))
-                    .p(px(16.0))
+                    .items_start()
+                    .justify_center()
+                    .gap(px(12.0))
+                    .px(px(16.0))
+                    .py(px(24.0))
                     .child(
                         div()
-                            .text_size(px(TEXT_SM))
-                            .text_color(p.c(Token::Foreground))
-                            .child(SharedString::from(message)),
+                            .w_full()
+                            .min_w_0()
+                            .flex()
+                            .items_start()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .size(px(36.0))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(8.0))
+                                    .bg(p.c(Token::Muted))
+                                    .child(icon(glyph, 20.0, p.c(Token::MutedForeground))),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .child(
+                                        div()
+                                            .text_size(px(TEXT_SM))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(p.c(Token::Foreground))
+                                            .child(title),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(2.0))
+                                            .text_size(px(TEXT_XS))
+                                            .line_height(px(20.0))
+                                            .muted(&p)
+                                            .child(SharedString::from(
+                                                hint.map(str::to_string).unwrap_or(message),
+                                            )),
+                                    ),
+                            ),
                     )
+                    .when(!path.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .max_w_full()
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .rounded(px(6.0))
+                                .bg(p.c(Token::Muted).opacity(0.6))
+                                .font_family(crate::assets::MONO_FONT)
+                                .text_size(px(TEXT_XS))
+                                .muted(&p)
+                                .child(SharedString::from(path.clone())),
+                        )
+                    })
                     .child(
                         div()
-                            .muted(&p)
-                            .text_size(px(TEXT_XS))
-                            .child(SharedString::from(name)),
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                button(
+                                    "preview-retry",
+                                    "refresh",
+                                    if english { "Retry" } else { "重试" },
+                                    true,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.load_preview(retry_path.clone(), window, cx);
+                                    },
+                                )),
+                            )
+                            .children(folder.filter(|_| local).map(|folder| {
+                                button(
+                                    "preview-open-folder",
+                                    "folder-open",
+                                    if english {
+                                        "Open containing folder"
+                                    } else {
+                                        "打开所在文件夹"
+                                    },
+                                    true,
+                                )
+                                .on_click(move |_, _, cx| {
+                                    cx.reveal_path(std::path::Path::new(&folder));
+                                })
+                            }))
+                            .when(!path.is_empty(), |d| {
+                                d.child(
+                                    button(
+                                        "preview-copy-path",
+                                        "copy01",
+                                        if english {
+                                            "Copy full path"
+                                        } else {
+                                            "复制完整路径"
+                                        },
+                                        false,
+                                    )
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(
+                                                gpui_kit::ClipboardItem::new_string(
+                                                    copy_path.clone(),
+                                                ),
+                                            );
+                                        },
+                                    ),
+                                )
+                            }),
                     )
-                    .children(directory.clone().into_iter().map(|dir| {
+                    .children(detail.filter(|_| unknown).map(|detail| {
                         div()
-                            .muted(&p)
+                            .max_w(px(448.0))
                             .text_size(px(TEXT_XS))
-                            .child(SharedString::from(dir))
-                    }))
-                    .children(detail.map(|detail| {
-                        div()
-                            .text_size(px(TEXT_XS))
-                            .font_family(crate::assets::MONO_FONT)
-                            .muted(&p)
+                            .text_color(p.c(Token::MutedForeground).opacity(0.7))
                             .child(SharedString::from(detail))
-                    }))
+                    }));
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(self.preview_head(&name, back, cx))
+                    .child(body)
                     .into_any_element()
             }
         }
@@ -2137,11 +2403,10 @@ impl Workspace {
                     .rounded_full()
                     .bg(p.c(Token::Warning))
             }))
-            .child(div().flex_1())
             .children(toggle)
     }
 
-    fn preview_head(&self, name: &str, back: bool, cx: &mut Context<Self>) -> Div {
+    pub(super) fn preview_head(&self, name: &str, back: bool, cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
         div()
             .h(px(40.0))
@@ -2169,23 +2434,86 @@ impl Workspace {
                     },
                 ))
             }))
-            .child(ui::truncate(
-                self.selected
-                    .as_ref()
-                    .and_then(|id| self.panes.get(id))
-                    .and_then(|s| preview_path(s.preview.as_ref()))
-                    .map(|path| {
-                        let root = self
-                            .selected
-                            .as_ref()
-                            .and_then(|id| self.project_root_for(id))
-                            .unwrap_or_default();
-                        path.strip_prefix(&format!("{root}/"))
-                            .unwrap_or(&path)
-                            .replace('/', "  /  ")
+            .child(self.preview_crumbs(name))
+    }
+
+    /// The open file's path as `FileBreadcrumb` draws it: one segment per folder under the project
+    /// (a folder glyph, muted), `/` between them, and the file last with its own icon. Folders
+    /// give up width first; the file's name is the last thing to shrink.
+    fn preview_crumbs(&self, name: &str) -> Div {
+        let p = &self.palette;
+        let path = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.panes.get(id))
+            .and_then(|s| preview_path(s.preview.as_ref()))
+            .unwrap_or_else(|| name.to_string());
+        let root = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.project_root_for(id))
+            .unwrap_or_default();
+        let relative = if !root.is_empty() {
+            path.strip_prefix(&format!("{}/", root.trim_end_matches('/')))
+                .unwrap_or(&path)
+        } else {
+            &path
+        };
+        let parts: Vec<&str> = relative
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        let mut crumbs = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_size(px(TEXT_XS));
+        for (index, part) in parts.iter().enumerate() {
+            let file = index + 1 == parts.len();
+            if index > 0 {
+                crumbs = crumbs.child(
+                    div()
+                        .flex_none()
+                        .text_color(p.c(Token::MutedForeground))
+                        .child("/"),
+                );
+            }
+            crumbs = crumbs.child(
+                div()
+                    .min_w(px(if file { 48.0 } else { 20.0 }))
+                    .flex_shrink(if file { 1.0 } else { 2.0 })
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .overflow_hidden()
+                    .rounded(px(3.0))
+                    .px(px(3.0))
+                    .text_color(if file {
+                        p.c(Token::Foreground)
+                    } else {
+                        p.c(Token::MutedForeground)
                     })
-                    .unwrap_or_else(|| name.to_string()),
-            ))
+                    .child(if file {
+                        img(crate::file_icons::path(part, !p.is_dark()))
+                            .size(px(14.0))
+                            .flex_none()
+                            .into_any_element()
+                    } else {
+                        icon("folder01", 14.0, p.c(Token::MutedForeground)).into_any_element()
+                    })
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(SharedString::from(part.to_string())),
+                    ),
+            );
+        }
+        crumbs
     }
 
     /// Monospace text with its line numbers. The highlighter comes later; the shape of the view

@@ -42,6 +42,7 @@ fn turn_totals_reset_but_session_totals_and_speed_survive_compaction_and_reopeni
             },
             user_messages: vec!["first".into()],
             summary: "summary".into(),
+            stats: None,
         },
         Message::User {
             text: "second".into(),
@@ -49,8 +50,9 @@ fn turn_totals_reset_but_session_totals_and_speed_survive_compaction_and_reopeni
         answer(40, 4, 20, Some(800)),
     ];
     let mut live = SessionStats::default();
+    let mut after_compaction = false;
     for message in &messages {
-        record_stats(&mut live, message);
+        record_stats(&mut live, message, &mut after_compaction);
     }
     assert_eq!(live.tokens.input, 740);
     assert_eq!(live.tokens.output, 64);
@@ -91,4 +93,34 @@ fn latest_untimed_request_replaces_previous_speed_and_old_transcripts_still_load
     )
     .unwrap();
     assert_eq!(stats_from_history(&[old_compaction]).tokens.input, 0);
+}
+
+#[test]
+fn the_answer_a_summary_carries_over_is_not_another_step() {
+    let carried = Message::Assistant(fv_core::AssistantMessage {
+        duration_ms: None,
+        content: vec![fv_core::ContentBlock::Text {
+            text: "done".into(),
+        }],
+        stop: fv_core::StopReason::Stop,
+        usage: Default::default(),
+        model: None,
+    });
+    let stats = stats_from_history(&[
+        Message::User { text: "go".into() },
+        answer(10, 5, 0, Some(100)),
+        Message::Compaction {
+            usage: Default::default(),
+            model: None,
+            user_messages: vec!["go".into()],
+            summary: "s".into(),
+            stats: None,
+        },
+        carried,
+        Message::User {
+            text: "next".into(),
+        },
+        answer(10, 5, 0, Some(100)),
+    ]);
+    assert_eq!(stats.steps, 2);
 }

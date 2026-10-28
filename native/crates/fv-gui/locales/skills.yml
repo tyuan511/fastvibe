@@ -63,3 +63,60 @@ skills.could_not_open_the_skill:
 skills.could_not_read_skills_e:
   zh: "无法读取技能：%{e}"
   en: "Could not read skills: %{e}"
+skills.installed:
+  zh: "已安装 %{count}"
+  en: "%{count} installed"
+skills.search:
+  zh: "搜索技能..."
+  en: "Search skills…"
+skills.import_folder:
+  zh: "导入文件夹"
+  en: "Import folder"
+skills.new:
+  zh: "新建"
+  en: "New"
+skills.none_match:
+  zh: "没有匹配的技能"
+  en: "No matching skills"
+skills.none:
+  zh: "尚未安装技能"
+  en: "No skills installed"
+skills.try_other:
+  zh: "试试其他关键词"
+  en: "Try a different keyword"
+skills.empty_hint:
+  zh: "新建或导入文件夹后会出现在这里"
+  en: "Create one or import a folder to see it here"
+skills.dialog_title:
+  zh: "添加技能"
+  en: "Add skill"
+skills.dialog_desc:
+  zh: "写入 FastVibe 的全局技能目录，新会话会自动加载。"
+  en: "Written to FastVibe’s global skills directory and loaded by new sessions."
+skills.name:
+  zh: "名称"
+  en: "Name"
+skills.name_hint:
+  zh: "小写字母、数字和连字符"
+  en: "Lowercase letters, digits and hyphens"
+skills.description:
+  zh: "说明"
+  en: "Description"
+skills.instructions:
+  zh: "指令"
+  en: "Instructions"
+skills.name_placeholder:
+  zh: "my-skill"
+  en: "my-skill"
+skills.description_placeholder:
+  zh: "这个技能做什么，以及何时使用"
+  en: "What this skill does, and when to use it"
+skills.instructions_placeholder:
+  zh: "完整步骤、命令和注意事项。相对路径相对于技能目录。"
+  en: "Full steps, commands and caveats. Relative paths are relative to the skill directory."
+skills.import_placeholder:
+  zh: "包含 SKILL.md 的文件夹"
+  en: "Folder containing SKILL.md"
+skills.add:
+  zh: "添加"
+  en: "Add"

@@ -5,7 +5,7 @@ personalization.agent_instructions:
   en: "Agent instructions"
 personalization.appended_after_the_system_prompt:
   zh: "追加到所有对话的系统提示词之后。"
-  en: "Appended after the system prompt in every conversation."
+  en: "Appended to the system prompt of every conversation."
 personalization.saving:
   zh: "正在保存…"
   en: "Saving…"
@@ -13,8 +13,8 @@ personalization.save:
   zh: "保存"
   en: "Save"
 personalization.used_in_every_turn_leave:
-  zh: "每轮对话都会使用；留空即停用。保存后从下一轮起生效。"
-  en: "Used in every turn; leave empty to disable. Changes apply from the next turn."
+  zh: "每轮对话都会使用；留空即停用。"
+  en: "Used on every turn; leave empty to disable."
 personalization.another_window_changed_the_instructions:
   zh: "其他窗口已修改说明，当前草稿已保留。"
   en: "Another window changed the instructions; your draft was kept."
@@ -30,3 +30,6 @@ personalization.saved:
 personalization.save_failed:
   zh: "保存失败，草稿已保留：%{error}"
   en: "Save failed; draft kept: %{error}"
+personalization.placeholder:
+  zh: "例如：始终使用简体中文回答；修改代码前先说明计划。"
+  en: "For example: Always answer in Simplified Chinese; explain your plan before editing code."

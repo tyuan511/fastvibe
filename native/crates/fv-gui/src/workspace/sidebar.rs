@@ -3,6 +3,7 @@
 
 use super::sidebar_actions::SidebarDrag;
 use crate::sidebar_state;
+use crate::ui::px;
 use fv_protocol::types::ThreadUpdateParams;
 use fv_protocol::types::{SidebarSettingsPatch, Thread, UiLanguage};
 use fv_theme::Token;

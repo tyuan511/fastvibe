@@ -1,5 +1,6 @@
 //! MCP OAuth controls. The browser callback listener runs in the client's backend runtime.
 
+use crate::ui::px;
 use fv_protocol::methods::McpAuthForget;
 use fv_protocol::types::*;
 use gpui_kit::component::input::{Input, InputState};

@@ -3,6 +3,7 @@
 //! muted code block, the tinted inline code, a bordered table with a muted header row, and
 //! syntax colours taken from the theme's own `--code-*` tokens.
 
+use crate::ui::px;
 use fv_theme::Token;
 use gpui_kit::base::text::{
     InlineElement, InlineRenderContext, MarkdownExtensions, MarkdownNode, markdown_ast,

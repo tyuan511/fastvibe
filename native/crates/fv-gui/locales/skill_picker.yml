@@ -1,3 +1,4 @@
+_version: 2
 skill_picker.could_not_read_skills_e:
   zh: "无法读取技能：%{e}"
   en: "Could not read skills: %{e}"

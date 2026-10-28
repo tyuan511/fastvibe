@@ -11,6 +11,7 @@ use fv_protocol::jsonrpc::code;
 use fv_protocol::methods::*;
 use fv_protocol::types::*;
 use fv_protocol::{PROTOCOL_VERSION, ServerNotification};
+use fv_server::context::ContextLoader;
 use fv_server::{ServerState, UnixServer};
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -26,7 +27,11 @@ async fn run(
 ) -> (Arc<ScriptedModel>, std::path::PathBuf) {
     let model = Arc::new(model);
     let agent = fv_server::agent_with_builtin_tools(model.clone());
-    let state = Arc::new(ServerState::new(dir.to_path_buf(), agent).unwrap());
+    let mut state = ServerState::new(dir.to_path_buf(), agent).unwrap();
+    // No HOME and no built-in skills: the per-turn context must not depend on what is installed
+    // on the machine running the tests, since these windows are small enough for it to matter.
+    state.context = ContextLoader::with_roots(dir, None, vec![]);
+    let state = Arc::new(state);
     // These tests pin a scripted sequence, so the 回复推荐 side request — which runs on the same
     // model — is turned off here. It has its own tests (`suggestion.rs`, `tests/suggestion.rs`).
     common::disable_reply_suggestions(&state);
@@ -177,13 +182,14 @@ async fn a_conversation_that_fills_its_window_is_summarized_and_remembered_so_af
     assert!(snap.token_usage.is_some_and(|u| u.window == 16_000));
 
     say(&c, &mut notes, &thread, "and then?").await;
-    let request = &model.requests()[0];
-    assert_eq!(request.messages.len(), 3, "{:?}", request.messages);
+    let requests = model.requests();
+    let request = conversation(&requests[0].messages);
+    assert_eq!(request.len(), 3, "{request:?}");
     assert!(
-        matches!(&request.messages[0], Message::User { text } if text.contains("do the big job") && text.contains("SUMMARY: the plan is in progress"))
+        matches!(&request[0], Message::User { text } if text.contains("do the big job") && text.contains("SUMMARY: the plan is in progress"))
     );
-    assert!(matches!(&request.messages[1], Message::Assistant(a) if a.text() == "carried on"));
-    assert!(matches!(&request.messages[2], Message::User { text } if text == "and then?"));
+    assert!(matches!(&request[1], Message::Assistant(a) if a.text() == "carried on"));
+    assert!(matches!(&request[2], Message::User { text } if text == "and then?"));
 }
 
 #[tokio::test]
@@ -228,11 +234,15 @@ async fn a_conversation_can_be_summarized_on_request() {
     );
 
     say(&c, &mut notes, &thread, "second question").await;
-    let after = &model.requests()[2];
-    assert_eq!(after.messages.len(), 2, "{:?}", after.messages);
+    let requests = model.requests();
+    let after = conversation(&requests[2].messages);
+    // The summary, the last answer it carries over, then the new question.
+    assert_eq!(after.len(), 3, "{after:?}");
     assert!(
-        matches!(&after.messages[0], Message::User { text } if text.contains("first question") && text.contains("SUMMARY: answered once"))
+        matches!(&after[0], Message::User { text } if text.contains("first question") && text.contains("SUMMARY: answered once"))
     );
+    assert!(matches!(&after[1], Message::Assistant(a) if a.text() == "first answer"));
+    assert!(matches!(&after[2], Message::User { text } if text == "second question"));
 }
 
 #[tokio::test]
@@ -343,7 +353,10 @@ async fn stopping_a_summary_leaves_the_conversation_as_it_was() {
 
     // Nothing was replaced: the next turn still has the whole conversation.
     say(&c, &mut notes, &thread, "again").await;
-    assert_eq!(model.requests().last().unwrap().messages.len(), 3);
+    assert_eq!(
+        conversation(&model.requests().last().unwrap().messages).len(),
+        3
+    );
 }
 
 #[tokio::test]
@@ -450,4 +463,13 @@ async fn stats_are_pushed_at_each_request_and_restored_from_the_full_transcript(
         restored.stats, snapshot.stats,
         "compacted history must still count after restart"
     );
+}
+
+/// A request's conversation without the per-turn `<project_context>` message, which every
+/// request leads with (it always carries the date) and which is not part of the history.
+fn conversation(messages: &[Message]) -> Vec<&Message> {
+    messages
+        .iter()
+        .filter(|m| !matches!(m, Message::User { text } if text.starts_with("<project_context>")))
+        .collect()
 }

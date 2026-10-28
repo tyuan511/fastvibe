@@ -110,6 +110,17 @@ pub struct GitRepoView {
     pub notice: Option<String>,
     pub pending: Option<(GitAction, Vec<String>)>,
     pub show_history: bool,
+    /// The history's branch scope: every branch (Electron's default) or only the current one.
+    pub history_current: bool,
+    /// AI 生成提交信息 is running; the editor says so instead of its hint.
+    pub generating: bool,
+    /// A generated message waiting for the editor: `(what the editor held when asked, message)`.
+    /// It lands only if the draft is still what it was, so typing meanwhile wins.
+    pub generated: Option<(String, String)>,
+    /// The commit button's ⌄ menu (提交 / 提交并推送) is open.
+    pub commit_menu: bool,
+    /// The placeholder last handed to the editor, so it is only set when it changes.
+    pub hint_shown: String,
     pub split: bool,
     pub collapsed: HashSet<String>,
     pub flat: bool,
@@ -261,9 +272,132 @@ impl GitRepoView {
     }
 }
 
+/// How one lane crosses a history row (`lib/git-graph.ts`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgeKind {
+    /// A lane passing by: from the row's top to its bottom, moving column if it must.
+    Through,
+    /// The lane that arrives at this commit, from the top to its dot.
+    In,
+    /// A line from this commit's dot to one of its parents' lanes.
+    Out,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphEdge {
+    pub from: usize,
+    pub to: usize,
+    pub color: usize,
+    pub kind: EdgeKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GraphRow {
+    pub column: usize,
+    pub color: usize,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// One lane per pending ancestor; only real parent hashes make edges — Electron's
+/// `layoutGitGraph`, so a root commit draws no line to unrelated history.
+pub fn layout_graph(commits: &[(String, Vec<String>)]) -> (Vec<GraphRow>, usize) {
+    let mut lanes: Vec<(String, usize)> = Vec::new();
+    let mut next_color = 0;
+    let mut columns = 1;
+    let mut rows = Vec::new();
+    for (hash, parents) in commits {
+        let found = lanes.iter().position(|(lane, _)| lane == hash);
+        let incoming = found.is_some();
+        let column = found.unwrap_or_else(|| {
+            lanes.push((hash.clone(), next_color));
+            next_color += 1;
+            lanes.len() - 1
+        });
+        let before = lanes.clone();
+        let color = before[column].1;
+        lanes.remove(column);
+        let mut unique: Vec<&String> = Vec::new();
+        for parent in parents {
+            if !unique.contains(&parent) {
+                unique.push(parent);
+            }
+        }
+        for (index, parent) in unique.iter().enumerate() {
+            if !lanes.iter().any(|(lane, _)| lane == *parent) {
+                let lane_color = if index == 0 {
+                    color
+                } else {
+                    next_color += 1;
+                    next_color - 1
+                };
+                let at = (column + index).min(lanes.len());
+                lanes.insert(at, ((*parent).clone(), lane_color));
+            }
+        }
+        let mut edges = Vec::new();
+        for (index, (lane, lane_color)) in before.iter().enumerate() {
+            if index == column {
+                continue;
+            }
+            if let Some(target) = lanes.iter().position(|(next, _)| next == lane) {
+                edges.push(GraphEdge {
+                    from: index,
+                    to: target,
+                    color: *lane_color,
+                    kind: EdgeKind::Through,
+                });
+            }
+        }
+        if incoming {
+            edges.push(GraphEdge {
+                from: column,
+                to: column,
+                color,
+                kind: EdgeKind::In,
+            });
+        }
+        for parent in unique {
+            if let Some(target) = lanes.iter().position(|(lane, _)| lane == parent) {
+                edges.push(GraphEdge {
+                    from: column,
+                    to: target,
+                    color: lanes[target].1,
+                    kind: EdgeKind::Out,
+                });
+            }
+        }
+        columns = columns.max(before.len()).max(lanes.len());
+        rows.push(GraphRow {
+            column,
+            color,
+            edges,
+        });
+    }
+    (rows, columns)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DiffNavigation, GitRepoView, GitView};
+    use super::{DiffNavigation, EdgeKind, GitRepoView, GitView, layout_graph};
+
+    #[test]
+    fn a_merge_opens_a_second_lane_and_a_root_draws_nothing_below() {
+        let c = |h: &str, p: &[&str]| (h.to_string(), p.iter().map(|s| s.to_string()).collect());
+        let (rows, columns) = layout_graph(&[c("m", &["a", "b"]), c("b", &["a"]), c("a", &[])]);
+        assert_eq!(columns, 2);
+        assert_eq!(rows[0].column, 0);
+        assert_eq!(
+            rows[0]
+                .edges
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Out)
+                .count(),
+            2
+        );
+        assert_eq!(rows[1].column, 1);
+        // The root ends its lane: nothing goes out of it.
+        assert!(rows[2].edges.iter().all(|e| e.kind != EdgeKind::Out));
+    }
     use fv_protocol::types::{DiffSource, GitCommit, GitHistory};
     const PATCH: &str = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n@@ -20 +20 @@\n-before\n+after\n";
     fn page(hash: &str, tip: &str) -> GitHistory {

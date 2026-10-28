@@ -163,7 +163,22 @@ pub enum Message {
         /// previous compactions), so their own words survive however many times this happens.
         user_messages: Vec<String>,
         summary: String,
+        /// Why it ran and how far it brought the request down, for the divider the transcript
+        /// draws. Absent on summaries written before this was recorded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stats: Option<CompactionStats>,
     },
+}
+
+/// What the transcript says beside 已压缩上下文: why, and the request size before and after.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactionStats {
+    /// `threshold` (near the window), `overflow` (the provider refused the request) or
+    /// `manual` (the user asked).
+    pub reason: String,
+    pub tokens_before: u64,
+    pub tokens_after: u64,
 }
 
 /// How much of the user's own words a compaction carries over, in bytes (about 20k tokens).
@@ -348,6 +363,7 @@ mod tests {
             model: None,
             user_messages: vec!["a".into()],
             summary: "s".into(),
+            stats: None,
         };
         let all = vec![user("a"), user("b"), compaction.clone(), user("c")];
         assert_eq!(effective_history(&all), vec![compaction, user("c")]);
@@ -361,6 +377,7 @@ mod tests {
                 model: None,
                 user_messages: vec![],
                 summary: "old".into(),
+                stats: None,
             },
             user("x"),
             Message::Compaction {
@@ -368,6 +385,7 @@ mod tests {
                 model: None,
                 user_messages: vec!["x".into()],
                 summary: "new".into(),
+                stats: None,
             },
         ];
         assert_eq!(effective_history(&two).len(), 1);

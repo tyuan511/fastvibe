@@ -125,7 +125,7 @@ fn renumber(turn: &mut Turn) {
             Item::UserMessage { id, .. }
             | Item::AgentMessage { id, .. }
             | Item::Reasoning { id, .. }
-            | Item::ContextCompaction { id }
+            | Item::ContextCompaction { id, .. }
             | Item::Error { id, .. } => *id = format!("{}i{i}", turn.id),
             // Tool ids come from the provider; the corresponding result names the same id.
             Item::ToolCall { .. } | Item::Audio { .. } | Item::Image { .. } => {}

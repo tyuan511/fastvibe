@@ -28,7 +28,7 @@ impl TerminalInput {
             preedit: Preedit::default(),
             cursor: None,
             viewport: None,
-            cell_width: 7.4,
+            cell_width: 7.8,
             bracketed_paste: false,
         }
     }

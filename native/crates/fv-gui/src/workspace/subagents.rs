@@ -1,9 +1,11 @@
 //! A compact child-task tray plus protocol-backed limits and lifecycle controls.
 use super::{
     Workspace,
-    settings::{card, outline_button, switch},
+    personalization::{group, outline_sm, rich_row, select_trigger},
+    settings::{menu_item, outline_button, popover, setting_row, switch},
 };
-use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, truncate};
+use crate::ui::px;
+use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon, truncate};
 use fv_protocol::methods::*;
 use fv_protocol::subagents::*;
 use fv_protocol::types::{Empty, UiLanguage};
@@ -24,6 +26,8 @@ pub(super) struct Subagents {
     saving: bool,
     error: Option<String>,
     pub(super) open: Option<String>,
+    /// Which count select in 设置 → 子 Agent is open (0 the per-chat limit, 1 the depth).
+    menu: Option<u8>,
 }
 fn label(a: &Subagent, english: bool) -> &'static str {
     if a.waiting_for_input {
@@ -259,10 +263,148 @@ impl Workspace {
         }
         list
     }
+    /// 设置 → 子 Agent's subtask list: one `SettingsRow` per child, its action on the right.
+    fn subtask_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let p = &self.palette;
+        let english = self.english();
+        let mut rows = Vec::new();
+        for (i, agent) in self.subagents.agents.iter().enumerate() {
+            let id = agent.agent_id.clone();
+            let open_id = id.clone();
+            let reopen = agent.status == SubagentStatus::Closed;
+            let busy = self.subagents.busy.contains(&id);
+            let meta = format!(
+                "{}{}{}",
+                label(agent, english),
+                agent
+                    .role
+                    .as_ref()
+                    .map(|r| format!(" · {}", r.name))
+                    .unwrap_or_default(),
+                if agent.fork_context {
+                    trs!(english, "subagents.inherited_context")
+                } else {
+                    ""
+                }
+            );
+            let desc = div().flex().flex_col().gap(px(2.0)).child(meta).children(
+                agent
+                    .error
+                    .as_ref()
+                    .map(|e| div().text_color(p.c(Token::Destructive)).child(e.clone())),
+            );
+            rows.push(
+                rich_row(
+                    div()
+                        .id(SharedString::from(format!("child-open-{id}")))
+                        .cursor_pointer()
+                        .child(truncate(agent.task.clone()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.settings = None;
+                            this.select(open_id.clone(), cx);
+                        })),
+                    Some(desc.into_any_element()),
+                    i > 0,
+                    p,
+                    outline_sm(SharedString::from(format!("child-close-{id}")), p)
+                        .when(busy, |d| d.opacity(0.5))
+                        .child(if busy {
+                            trs!(english, "subagents.please_wait")
+                        } else if reopen {
+                            trs!(english, "subagents.resume")
+                        } else {
+                            trs!(english, "subagents.close")
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.child_action(id.clone(), reopen, cx)
+                        })),
+                )
+                .into_any_element(),
+            );
+        }
+        if rows.is_empty() {
+            rows.push(
+                div()
+                    .px(px(16.0))
+                    .py(px(12.0))
+                    .text_size(px(TEXT_SM))
+                    .muted(p)
+                    .child(if self.subagents.loading {
+                        trs!(english, "subagents.loading")
+                    } else {
+                        trs!(english, "subagents.no_subtasks")
+                    })
+                    .into_any_element(),
+            );
+        }
+        rows
+    }
+
+    /// A `Select` over a few counts, saving the config on pick.
+    fn count_select(
+        &self,
+        which: u8,
+        values: &[u32],
+        current: u32,
+        apply: fn(&mut SubagentConfig, u32),
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let p = &self.palette;
+        let open = self.subagents.menu == Some(which);
+        let hover = p.c(Token::Muted);
+        let mut menu = popover(p)
+            .absolute()
+            .top(px(34.0))
+            .right(px(0.0))
+            .w(px(176.0));
+        for &count in values {
+            let mut value = self.subagents.config.clone();
+            apply(&mut value, count);
+            menu = menu.child(
+                menu_item(
+                    SharedString::from(format!("agents-{which}-{count}")),
+                    current == count,
+                    hover,
+                )
+                .justify_between()
+                .child(count.to_string())
+                .when(current == count, |d| {
+                    d.child(icon("tick02", 14.0, p.c(Token::Foreground)))
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.subagents.menu = None;
+                    this.save_subagent_config(value.clone(), cx)
+                })),
+            );
+        }
+        div()
+            .relative()
+            .child(
+                select_trigger(
+                    SharedString::from(format!("agents-select-{which}")),
+                    current.to_string(),
+                    176.0,
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.subagents.menu = if this.subagents.menu == Some(which) {
+                        None
+                    } else {
+                        Some(which)
+                    };
+                    cx.notify();
+                })),
+            )
+            .when(open, |d| d.child(crate::ui::float(menu)))
+    }
+
     pub(super) fn subagents_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
-        let english = self.app_settings.language == UiLanguage::English;
-        if !self.subagents.config_loaded {
+        let english = self.english();
+        // The capture harness has no host; it draws the defaults a fresh install answers with.
+        let loaded =
+            self.subagents.config_loaded || (cfg!(feature = "capture") && self.backend.is_none());
+        if !loaded {
             return div()
                 .text_size(px(TEXT_SM))
                 .muted(p)
@@ -274,101 +416,65 @@ impl Workspace {
         let config = self.subagents.config.clone();
         let mut toggled = config.clone();
         toggled.enabled = !toggled.enabled;
-        let mut limits = div()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .child(trs!(english, "subagents.max_per_conversation"));
-        for count in [1, 3, 6, 12, 16] {
-            let mut value = config.clone();
-            value.max_agents = count;
-            limits = limits.child(
-                outline_button(SharedString::from(format!("agents-max-{count}")), p)
-                    .when(config.max_agents == count, |d| d.bg(p.c(Token::Accent)))
-                    .child(count.to_string())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.save_subagent_config(value.clone(), cx)
-                    })),
-            );
-        }
-        let mut depth = div()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .child(trs!(english, "subagents.delegation_depth"));
-        for count in [1, 2, 3] {
-            let mut value = config.clone();
-            value.max_depth = count;
-            depth = depth.child(
-                outline_button(SharedString::from(format!("agents-depth-{count}")), p)
-                    .when(config.max_depth == count, |d| d.bg(p.c(Token::Accent)))
-                    .child(count.to_string())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.save_subagent_config(value.clone(), cx)
-                    })),
-            );
-        }
+        let settings = group(
+            None,
+            p,
+            [
+                setting_row(
+                    trs!(english, "subagents.allow_sub_agents"),
+                    trs!(english, "subagents.allow_desc"),
+                    false,
+                    p,
+                    switch("agents-enabled".into(), config.enabled, p).on_click(cx.listener(
+                        move |this, _, _, cx| this.save_subagent_config(toggled.clone(), cx),
+                    )),
+                )
+                .into_any_element(),
+                setting_row(
+                    trs!(english, "subagents.max_per_conversation"),
+                    trs!(english, "subagents.max_desc"),
+                    true,
+                    p,
+                    self.count_select(
+                        0,
+                        &[1, 3, 6, 12, 16],
+                        config.max_agents,
+                        |c, n| c.max_agents = n,
+                        cx,
+                    ),
+                )
+                .into_any_element(),
+                setting_row(
+                    trs!(english, "subagents.delegation_depth"),
+                    trs!(english, "subagents.depth_desc"),
+                    true,
+                    p,
+                    self.count_select(1, &[1, 2, 3], config.max_depth, |c, n| c.max_depth = n, cx),
+                )
+                .into_any_element(),
+            ],
+        );
         div()
             .flex()
             .flex_col()
-            .gap(px(16.0))
-            .text_size(px(TEXT_SM))
-            .child(
-                card(p)
-                    .p(px(16.0))
-                    .gap(px(16.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(trs!(english, "subagents.allow_sub_agents"))
-                            .child(switch("agents-enabled".into(), config.enabled, p).on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    this.save_subagent_config(toggled.clone(), cx)
-                                }),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(TEXT_XS))
-                            .muted(p)
-                            .child(trs!(english, "subagents.sub_agents_can_use_an")),
-                    )
-                    .child(limits)
-                    .child(depth)
-                    .child(
-                        div()
-                            .text_size(px(TEXT_XS))
-                            .muted(p)
-                            .child(trs!(english, "subagents.the_limit_counts_non_closed")),
-                    ),
-            )
+            .gap(px(28.0))
+            .child(settings)
             .child(self.roles_pane(cx))
-            .children(
-                self.subagents
-                    .error
-                    .as_ref()
-                    .map(|e| div().text_color(p.c(Token::Destructive)).child(e.clone())),
-            )
-            .child(
-                card(p)
-                    .p(px(16.0))
-                    .gap(px(10.0))
-                    .child(if self.selected.is_some() {
-                        trs!(english, "subagents.subtasks_in_this_conversation")
-                    } else {
-                        trs!(english, "subagents.recent_subtasks_up_to_100")
-                    })
-                    .when(self.subagents.agents.is_empty(), |d| {
-                        d.child(div().muted(p).child(if self.subagents.loading {
-                            trs!(english, "subagents.loading")
-                        } else {
-                            trs!(english, "subagents.no_subtasks")
-                        }))
-                    })
-                    .child(self.child_rows(self.subagents.agents.clone(), cx)),
-            )
+            .children(self.subagents.error.as_ref().map(|e| {
+                div()
+                    .text_size(px(TEXT_SM))
+                    .text_color(p.c(Token::Destructive))
+                    .child(e.clone())
+            }))
+            .child(group(
+                Some(if self.selected.is_some() {
+                    trs!(english, "subagents.subtasks_in_this_conversation")
+                } else {
+                    trs!(english, "subagents.recent_subtasks_up_to_100")
+                }),
+                p,
+                self.subtask_rows(cx),
+            ))
             .into_any_element()
     }
     pub(super) fn subagent_tray(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

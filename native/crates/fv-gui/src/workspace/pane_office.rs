@@ -1,11 +1,13 @@
 //! Static snapshots arrive independently of live startup; only a loaded live
 //! document replaces the snapshot. Every completion is scoped to its tab and lease.
 use super::{Workspace, text};
+use crate::ui::px;
 use crate::{
-    ui::{Muted as _, TEXT_XS, icon_button_xs},
+    ui::{Muted as _, TEXT_XS, icon, icon_button_xs},
     workspace::pane_web,
 };
 use fv_protocol::{methods::*, office::*, types::OfficeFormat};
+use fv_theme::Token;
 use gpui_kit::*;
 use std::time::Duration;
 pub(super) struct OfficeView {
@@ -232,57 +234,30 @@ impl Workspace {
         let revision = format!("{}:{}", view.lease, view.html_revision);
         let p = self.palette.clone();
         let lang = self.app_settings.language;
-        let mut head = div()
-            .h(px(36.))
-            .px(px(8.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .text_size(px(TEXT_XS))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(name.to_string()),
-            );
-        if back {
-            head = head.child(
-                icon_button_xs("office-back", "arrow-left01", &p)
-                    .aria_label(text::tr(lang, "office.back"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(pane) =
-                            this.selected.as_ref().and_then(|id| this.panes.get_mut(id))
-                        {
-                            pane.show_preview = false;
-                        }
-                        cx.notify();
-                    })),
-            );
-        }
-        if let Ok(url) = url::Url::from_file_path(path) {
-            head = head.child(
-                icon_button_xs("office-open-external", "link-square02", &p)
-                    .aria_label(text::tr(lang, "office.open_external"))
-                    .on_click(move |_, _, cx| cx.open_url(url.as_str())),
-            );
-        }
-        let (retry_tab, retry_path) = (tab.clone(), path.to_string());
-        head = head.child(
-            icon_button_xs("office-refresh", "refresh", &p)
-                .aria_label(text::tr(lang, "office.refresh"))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.start_office(&retry_tab, &retry_path, cx)
-                })),
-        );
+        // The same header every preview has (back, the path as crumbs), then the document's own
+        // controls: 引用选中内容 as Electron draws it, and the native refresh / open-externally.
+        let mut head = self.preview_head(name, back, cx);
         if format != OfficeFormat::Xlsx && ready {
             let (select_tab, select_lease) = (tab.clone(), lease.clone());
             head = head.child(
                 div()
                     .id("office-selection")
+                    .h(px(24.))
+                    .px(px(8.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(p.c(Token::Border))
+                    .bg(p.c(Token::Background))
+                    .text_size(px(TEXT_XS))
+                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                    .text_color(p.c(Token::Foreground))
                     .cursor_pointer()
+                    .hover(|d| d.bg(p.c(Token::Muted)))
+                    .child(icon("quote-up", 14.0, p.c(Token::Foreground)))
                     .child(text::tr(
                         lang,
                         if selection_pending {
@@ -294,6 +269,21 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.office_selection(&select_tab, &select_lease, window, cx)
                     })),
+            );
+        }
+        let (retry_tab, retry_path) = (tab.clone(), path.to_string());
+        head = head.child(
+            icon_button_xs("office-refresh", "refresh", &p)
+                .aria_label(text::tr(lang, "office.refresh"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.start_office(&retry_tab, &retry_path, cx)
+                })),
+        );
+        if let Ok(url) = url::Url::from_file_path(path) {
+            head = head.child(
+                icon_button_xs("office-open-external", "link-square02", &p)
+                    .aria_label(text::tr(lang, "office.open_external"))
+                    .on_click(move |_, _, cx| cx.open_url(url.as_str())),
             );
         }
         let had_snapshot = html.is_some();

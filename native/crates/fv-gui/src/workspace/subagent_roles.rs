@@ -1,9 +1,12 @@
 //! Explicit role saves, guarded against stale reads, concurrent editors and late responses.
+use super::model_menu::{PickerRow, picker_row_view, picker_rows, provider_groups};
 use super::{
     Workspace,
-    settings::{Section, card, outline_button, switch},
+    personalization::{outline_sm, primary_button, select_trigger},
+    settings::{Section, card, checkbox, dialog_head, menu_item, outline_button, popover, switch},
 };
-use crate::ui::{Muted as _, TEXT_SM, TEXT_XS};
+use crate::ui::px;
+use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon, truncate};
 use fv_protocol::{
     methods::*,
     subagents::*,
@@ -45,6 +48,10 @@ struct Editor {
     read_only: bool,
     tools: Option<HashSet<String>>,
     model_menu: bool,
+    thinking_menu: bool,
+    /// Which provider is unfolded under `model_menu`. The role editor's list lives in the form,
+    /// so its second level opens beneath its provider rather than beside it.
+    model_open: Option<String>,
 }
 fn field(label: &str, window: &mut Window, cx: &mut App, value: &str) -> Entity<InputState> {
     let input = cx.new(|cx| InputState::new(window, cx).placeholder(label.to_string()));
@@ -103,6 +110,8 @@ impl Editor {
             read_only: current.read_only,
             tools: current.tools.map(|v| v.into_iter().collect()),
             model_menu: false,
+            thinking_menu: false,
+            model_open: None,
         }
     }
     fn value(&self, cx: &App) -> SubagentRole {
@@ -282,233 +291,512 @@ impl Workspace {
         .detach();
         cx.notify();
     }
+    /// 设置 → 子 Agent below the switches: a heading with Refresh / Add, then the roles as
+    /// `Item` cards (or the dashed empty box), and the editor when one is open.
     pub(super) fn roles_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
         let s = &self.subagent_roles;
-        let english = self.app_settings.language == UiLanguage::English;
-        let mut pane = card(p)
-            .p(px(16.0))
-            .gap(px(12.0))
-            .text_size(px(TEXT_SM))
+        let english = self.english();
+        let tile = || {
+            div()
+                .size(px(36.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(12.0))
+                .bg(p.c(Token::Primary).opacity(0.1))
+                .border_1()
+                .border_color(p.c(Token::Primary).opacity(0.15))
+                .child(icon("bot", 20.0, p.c(Token::Primary)))
+        };
+        let header = div()
+            .pb(px(20.0))
+            .border_b_1()
+            .border_color(p.c(Token::Border))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(16.0))
             .child(
                 div()
                     .flex()
+                    .min_w_0()
                     .items_center()
-                    .justify_between()
-                    .child(trs!(english, "subagent_roles.role_templates"))
+                    .gap(px(12.0))
+                    .child(tile())
                     .child(
-                        outline_button("role-add", p)
+                        div()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SM))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(truncate(trs!(english, "subagent_roles.header"))),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(4.0))
+                                    .text_size(px(TEXT_XS))
+                                    .muted(p)
+                                    .child(truncate(trs!(english, "subagent_roles.fallback"))),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap(px(8.0))
+                    .child(
+                        outline_sm("role-refresh", p)
+                            .gap(px(4.0))
+                            .when(s.loading || s.busy, |d| d.opacity(0.5))
+                            .child(icon("refresh01", 14.0, p.c(Token::Foreground)))
+                            .child(trs!(english, "subagent_roles.refresh"))
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh_roles(cx))),
+                    )
+                    .child(
+                        primary_button("role-add", p)
+                            .child(icon("add01", 14.0, p.c(Token::PrimaryForeground)))
                             .child(trs!(english, "subagent_roles.new_role"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.edit_role(None, window, cx)),
                             ),
                     ),
-            )
-            .child(div().text_size(px(TEXT_XS)).muted(p).child(trs!(
-                english,
-                "subagent_roles.roles_can_define_instructions_model"
-            )));
-        if let Some(saved) = &s.saved {
-            for role in &saved.roles {
-                let edit = role.clone();
-                let remove = role.clone();
-                let confirm = s.confirm_delete.as_deref() == Some(&role.id);
-                pane = pane.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(format!(
-                                    "{} · {}{}",
-                                    role.name,
-                                    role.id,
-                                    if role.read_only {
-                                        trs!(english, "subagent_roles.read_only")
-                                    } else {
-                                        ""
-                                    }
-                                ))
-                                .child(
-                                    div()
-                                        .text_size(px(TEXT_XS))
-                                        .muted(p)
-                                        .child(role.description.clone()),
-                                ),
-                        )
-                        .child(
-                            outline_button(SharedString::from(format!("role-edit-{}", role.id)), p)
-                                .child(trs!(english, "subagent_roles.edit"))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.edit_role(Some(edit.clone()), window, cx)
-                                })),
-                        )
-                        .child(
-                            outline_button(
-                                SharedString::from(format!("role-remove-{}", role.id)),
-                                p,
-                            )
-                            .child(if confirm {
-                                trs!(english, "subagent_roles.confirm_delete")
-                            } else {
-                                trs!(english, "subagent_roles.delete")
-                            })
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| this.delete_role(remove.clone(), cx),
-                            )),
-                        ),
-                );
-            }
-        } else {
-            pane = pane.child(
-                div()
-                    .muted(p)
-                    .child(trs!(english, "subagent_roles.loading_roles")),
             );
-        }
+        let mut pane = div().flex().flex_col().gap(px(28.0)).child(header);
         if let Some(error) = &s.error {
             pane = pane.child(
                 div()
-                    .text_size(px(TEXT_XS))
+                    .text_size(px(TEXT_SM))
                     .text_color(p.c(Token::Destructive))
                     .child(error.clone()),
             );
         }
         if let Some(notice) = &s.notice {
-            pane = pane.child(div().text_size(px(TEXT_XS)).muted(p).child(notice.clone()));
+            pane = pane.child(div().text_size(px(TEXT_SM)).muted(p).child(notice.clone()));
         }
-        if let Some(editor) = &s.editor {
-            pane = pane.child(self.role_editor(editor, cx));
+        let fixture;
+        let saved = match &s.saved {
+            Some(saved) => Some(saved),
+            None if cfg!(feature = "capture") && self.backend.is_none() => {
+                fixture = capture_roles();
+                Some(&fixture)
+            }
+            None => None,
+        };
+        let Some(saved) = saved else {
+            return pane
+                .child(
+                    div()
+                        .text_size(px(TEXT_SM))
+                        .muted(p)
+                        .child(trs!(english, "subagent_roles.loading_roles")),
+                )
+                .into_any_element();
+        };
+        if saved.roles.is_empty() {
+            return pane
+                .child(
+                    div()
+                        .p(px(32.0))
+                        .rounded(px(12.0))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(p.c(Token::Border))
+                        .flex()
+                        .justify_center()
+                        .text_size(px(TEXT_SM))
+                        .muted(p)
+                        .child(trs!(english, "subagent_roles.empty")),
+                )
+                .into_any_element();
         }
-        pane.into_any_element()
+        let mut list = div().flex().flex_col().gap(px(10.0));
+        for role in &saved.roles {
+            list = list.child(self.role_card(role, tile(), cx));
+        }
+        pane.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(TEXT_SM))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(trs!(english, "subagent_roles.role_templates")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(TEXT_XS))
+                                .muted(p)
+                                .child(saved.roles.len().to_string()),
+                        ),
+                )
+                .child(list),
+        )
+        .into_any_element()
     }
-    fn role_editor(&self, e: &Editor, cx: &mut Context<Self>) -> Div {
+
+    /// One role as Electron's outline `Item`: icon tile, name + badge, description, tool chips,
+    /// and on the right the model · reasoning button with edit and delete.
+    fn role_card(&self, role: &SubagentRole, tile: Div, cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
-        let english = self.app_settings.language == UiLanguage::English;
-        let saved = self.subagent_roles.saved.as_ref();
-        let busy = self.subagent_roles.busy;
-        let conflict = e.expected.as_ref().is_some_and(|old| {
-            saved.is_some_and(|s| s.roles.iter().find(|r| r.id == old.id) != Some(old))
-        });
-        let mut form = div()
+        let english = self.english();
+        let confirm = self.subagent_roles.confirm_delete.as_deref() == Some(&role.id);
+        let chip = |text: SharedString| {
+            div()
+                .px(px(6.0))
+                .py(px(2.0))
+                .rounded(px(6.0))
+                .bg(p.c(Token::Muted).opacity(0.7))
+                .text_size(px(TEXT_XS))
+                .muted(p)
+                .child(text)
+        };
+        let mut chips = div()
             .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .border_t_1()
-            .border_color(p.c(Token::Border))
-            .pt(px(12.0));
-        if let Some(role) = &e.expected {
-            form = form.child(div().text_size(px(TEXT_XS)).muted(p).child(tr!(
-                english,
-                "subagent_roles.role_id_arg1",
-                arg1 = role.id
-            )));
-        } else if busy {
-            form = form.child(format!("角色 ID：{}", e.id.read(cx).value()));
-        } else {
-            form = form.child(Input::new(&e.id));
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.0))
+            .pt(px(4.0));
+        if role.read_only {
+            chips = chips.child(chip(trs!(english, "subagent_roles.read_only_chip").into()));
         }
-        form = form
-            .child(Input::new(&e.name))
-            .child(Input::new(&e.description))
-            .child(
-                div()
-                    .max_h(px(240.0))
-                    .child(Textarea::new(&e.prompt).aria_label("角色说明")),
-            );
-        let label = e
+        match &role.tools {
+            None => chips = chips.child(chip(trs!(english, "subagent_roles.all_tools").into())),
+            Some(tools) => {
+                for tool in tools {
+                    chips = chips.child(chip(tool.clone().into()));
+                }
+            }
+        }
+        let model = role
             .model
             .as_ref()
             .map(|id| {
                 self.models
                     .iter()
                     .find(|m| &m.label == id)
-                    .map(|m| format!("{} / {}", m.provider_name, m.model.id))
+                    .map(|m| format!("{}/{}", m.provider_name, m.model.id))
                     .unwrap_or_else(|| id.clone())
             })
             .unwrap_or_else(|| trs!(english, "subagent_roles.inherit_parent_model").into());
-        form = form.child(
-            outline_button("role-model", p)
-                .child(label)
-                .on_click(cx.listener(|this, _, _, cx| {
+        let thinking = role
+            .thinking
+            .map(|level| super::composer::thinking_label_in(level, english))
+            .unwrap_or(trs!(english, "subagent_roles.inherit_thinking_level"));
+        let edit = role.clone();
+        let edit2 = role.clone();
+        let remove = role.clone();
+        let destructive = p.c(Token::Destructive);
+        let hover = p.c(Token::Muted);
+        div()
+            .p(px(12.0))
+            .flex()
+            .items_start()
+            .gap(px(12.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(p.c(Token::Border))
+            .bg(p.c(Token::Card).opacity(0.8))
+            .child(div().mt(px(2.0)).child(tile))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .flex()
+                            .min_w_0()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_size(px(16.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(truncate(role.name.clone())),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .px(px(8.0))
+                                    .py(px(2.0))
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(p.c(Token::Border))
+                                    .text_size(px(TEXT_XS))
+                                    .child(role.id.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .muted(p)
+                            .child(truncate(role.description.clone())),
+                    )
+                    .child(chips),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .self_center()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("role-config-{}", role.id)))
+                            .max_w(px(256.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .px(px(12.0))
+                            .py(px(6.0))
+                            .rounded(px(8.0))
+                            .border_1()
+                            .border_color(p.c(Token::Border))
+                            .bg(p.c(Token::Background))
+                            .cursor_pointer()
+                            .text_size(px(TEXT_SM))
+                            .child(truncate(format!("{model} · {thinking}")).muted(p))
+                            .child(icon("arrow-right01", 16.0, p.c(Token::Primary)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.edit_role(Some(edit2.clone()), window, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("role-edit-{}", role.id)))
+                            .size(px(28.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.0))
+                            .cursor_pointer()
+                            .hover(move |d| d.bg(hover))
+                            .child(icon("edit02", 16.0, p.c(Token::Foreground)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.edit_role(Some(edit.clone()), window, cx)
+                            })),
+                    )
+                    .child(if confirm {
+                        outline_sm(SharedString::from(format!("role-remove-{}", role.id)), p)
+                            .text_color(destructive)
+                            .child(trs!(english, "subagent_roles.confirm_delete"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.delete_role(remove.clone(), cx)
+                            }))
+                    } else {
+                        div()
+                            .id(SharedString::from(format!("role-remove-{}", role.id)))
+                            .size(px(28.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.0))
+                            .cursor_pointer()
+                            .hover(move |d| d.bg(hover))
+                            .child(icon("delete02", 16.0, p.c(Token::MutedForeground)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.delete_role(remove.clone(), cx)
+                            }))
+                    }),
+            )
+    }
+
+    /// The role editor, drawn as a dialog by `settings_dialogs` while it is open.
+    pub(super) fn role_editor_dialog(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let editor = self.subagent_roles.editor.as_ref()?;
+        Some(self.role_editor(editor, cx))
+    }
+
+    pub(super) fn close_role_editor(&mut self) {
+        self.subagent_roles.editor = None;
+    }
+
+    fn role_editor(&self, e: &Editor, cx: &mut Context<Self>) -> Div {
+        let p = &self.palette;
+        let english = self.english();
+        let saved = self.subagent_roles.saved.as_ref();
+        let busy = self.subagent_roles.busy;
+        let hover = p.c(Token::Muted);
+        let conflict = e.expected.as_ref().is_some_and(|old| {
+            saved.is_some_and(|s| s.roles.iter().find(|r| r.id == old.id) != Some(old))
+        });
+        let label = |text: &'static str| {
+            div()
+                .text_size(px(TEXT_SM))
+                .font_weight(FontWeight::MEDIUM)
+                .child(text)
+        };
+        let hint = |text: SharedString| div().text_size(px(TEXT_XS)).muted(p).child(text);
+        let field =
+            |children: Vec<AnyElement>| div().flex().flex_col().gap(px(6.0)).children(children);
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.0))
+            .px(px(20.0))
+            .pb(px(16.0));
+        // The id is what the main agent passes to the tool; it is fixed once the role exists.
+        body = body.child(match &e.expected {
+            Some(role) => field(vec![
+                label(trs!(english, "subagent_roles.role_id")).into_any_element(),
+                div()
+                    .text_size(px(TEXT_SM))
+                    .child(role.id.clone())
+                    .into_any_element(),
+            ]),
+            None => field(vec![
+                label(trs!(english, "subagent_roles.role_id")).into_any_element(),
+                if busy {
+                    div()
+                        .text_size(px(TEXT_SM))
+                        .child(e.id.read(cx).value().to_string())
+                        .into_any_element()
+                } else {
+                    Input::new(&e.id).into_any_element()
+                },
+                hint(trs!(english, "subagent_roles.role_id_hint").into()).into_any_element(),
+            ]),
+        });
+        body = body
+            .child(field(vec![
+                label(trs!(english, "subagent_roles.display_name")).into_any_element(),
+                Input::new(&e.name).into_any_element(),
+            ]))
+            .child(field(vec![
+                label(trs!(english, "subagent_roles.description")).into_any_element(),
+                Input::new(&e.description).into_any_element(),
+            ]));
+
+        // 可用工具: one checkbox for "everything this host offers", then each tool.
+        let all = e.tools.is_none();
+        let available = saved
+            .map(|s| {
+                s.tools
+                    .iter()
+                    .filter(|t| !e.read_only || t.read_only_allowed)
+                    .map(|t| t.name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let check = |id: SharedString, on: bool, text: SharedString| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .cursor_pointer()
+                .text_size(px(TEXT_SM))
+                .child(checkbox(on, p))
+                .child(text)
+        };
+        let mut tools = div()
+            .flex()
+            .flex_wrap()
+            .gap_x(px(16.0))
+            .gap_y(px(8.0))
+            .child(
+                check(
+                    "role-tools-all".into(),
+                    all,
+                    trs!(english, "subagent_roles.all_tools").into(),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(e) = &mut this.subagent_roles.editor {
-                        e.model_menu = !e.model_menu;
+                        e.tools = if all { Some(HashSet::new()) } else { None };
                     }
                     cx.notify();
                 })),
-        );
-        if e.model_menu {
-            let mut choices = div()
-                .id("role-model-list")
-                .max_h(px(180.0))
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap(px(4.0));
-            for (i, (value, label)) in std::iter::once((
-                None,
-                trs!(english, "subagent_roles.inherit_parent_model").to_string(),
-            ))
-            .chain(self.models.iter().map(|m| {
-                (
-                    Some(m.label.clone()),
-                    format!("{} / {}", m.provider_name, m.model.id),
+            );
+        for name in &available {
+            let on = all || e.tools.as_ref().is_some_and(|t| t.contains(name));
+            let name = name.clone();
+            let everything = available.clone();
+            tools = tools.child(
+                check(
+                    SharedString::from(format!("role-tool-{name}")),
+                    on,
+                    name.clone().into(),
                 )
-            }))
-            .enumerate()
-            {
-                choices = choices.child(
-                    outline_button(SharedString::from(format!("role-model-choice-{i}")), p)
-                        .child(label)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(e) = &mut this.subagent_roles.editor {
-                                e.model = value.clone();
-                                e.model_menu = false;
-                            }
-                            cx.notify();
-                        })),
-                );
-            }
-            form = form.child(choices);
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(e) = &mut this.subagent_roles.editor {
+                        let tools = e
+                            .tools
+                            .get_or_insert_with(|| everything.iter().cloned().collect());
+                        if !tools.remove(&name) {
+                            tools.insert(name.clone());
+                        }
+                    }
+                    cx.notify();
+                })),
+            );
         }
-        let mut thinking = div().flex().flex_wrap().gap(px(4.0));
-        for (i, value) in [
-            None,
-            Some(ThinkingLevel::Minimal),
-            Some(ThinkingLevel::Low),
-            Some(ThinkingLevel::Medium),
-            Some(ThinkingLevel::High),
-            Some(ThinkingLevel::Xhigh),
-            Some(ThinkingLevel::Max),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let label = value
-                .map(|level| super::composer::thinking_label_in(level, self.english()))
-                .unwrap_or(trs!(english, "subagent_roles.inherit_thinking_level"));
-            thinking = thinking.child(
-                outline_button(SharedString::from(format!("role-thinking-{i}")), p)
-                    .when(e.thinking == value, |d| d.bg(p.c(Token::Accent)))
-                    .child(label)
+        if let Some(selected) = &e.tools {
+            for name in selected.iter().filter(|n| !available.contains(n)) {
+                let name = name.clone();
+                tools = tools.child(
+                    check(
+                        SharedString::from(format!("role-missing-{name}")),
+                        true,
+                        tr!(
+                            english,
+                            "subagent_roles.name_currently_unavailable_click_to",
+                            name = name
+                        )
+                        .into(),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(e) = &mut this.subagent_roles.editor {
-                            e.thinking = value;
+                        if let Some(e) = &mut this.subagent_roles.editor
+                            && let Some(tools) = &mut e.tools
+                        {
+                            tools.remove(&name);
                         }
                         cx.notify();
                     })),
-            );
+                );
+            }
         }
+        body = body.child(field(vec![
+            div()
+                .child(label(trs!(english, "subagent_roles.tools")))
+                .child(
+                    div()
+                        .mt(px(4.0))
+                        .child(hint(trs!(english, "subagent_roles.tools_hint").into())),
+                )
+                .into_any_element(),
+            tools.into_any_element(),
+        ]));
+
         let read_only = !e.read_only;
-        form = form.child(thinking).child(
+        body = body.child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
-                .child(trs!(english, "subagent_roles.read_only_workspace"))
+                .gap(px(16.0))
+                .child(
+                    div()
+                        .min_w_0()
+                        .child(label(trs!(english, "subagent_roles.read_only_workspace")))
+                        .child(div().mt(px(2.0)).child(hint(
+                            trs!(english, "subagent_roles.read_only_roles_use_restricted").into(),
+                        ))),
+                )
                 .child(
                     switch("role-read-only".into(), e.read_only, p).on_click(cx.listener(
                         move |this, _, _, cx| {
@@ -535,86 +823,184 @@ impl Workspace {
                     )),
                 ),
         );
-        if e.read_only {
-            form = form.child(div().text_size(px(TEXT_XS)).muted(p).child(trs!(
-                english,
-                "subagent_roles.read_only_roles_use_restricted"
-            )));
-        }
-        let all = e.tools.is_none();
-        form = form.child(
-            outline_button("role-tools-mode", p)
-                .child(if all {
-                    trs!(english, "subagent_roles.tools_inherit_all_available")
-                } else {
-                    trs!(english, "subagent_roles.tools_selected_only")
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
+
+        // 模型与推理强度: two selects side by side.
+        let model_label = e
+            .model
+            .as_ref()
+            .map(|id| {
+                self.models
+                    .iter()
+                    .find(|m| &m.label == id)
+                    .map(|m| format!("{}/{}", m.provider_name, m.model.id))
+                    .unwrap_or_else(|| id.clone())
+            })
+            .unwrap_or_else(|| trs!(english, "subagent_roles.inherit_parent_model").into());
+        let mut model = div().relative().child(
+            select_trigger("role-model", model_label, 240.0, p).on_click(cx.listener(
+                |this, _, _, cx| {
                     if let Some(e) = &mut this.subagent_roles.editor {
-                        e.tools = if all { Some(HashSet::new()) } else { None };
+                        e.model_menu = !e.model_menu;
+                        e.thinking_menu = false;
+                        if !e.model_menu {
+                            e.model_open = None;
+                        }
                     }
                     cx.notify();
-                })),
+                },
+            )),
         );
-        if let Some(selected) = &e.tools {
-            let mut tools = div()
-                .id("role-tools-list")
-                .max_h(px(200.0))
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap(px(4.0));
-            let available = saved
-                .map(|s| {
-                    s.tools
-                        .iter()
-                        .filter(|t| !e.read_only || t.read_only_allowed)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            for tool in available {
-                let name = tool.name.clone();
-                let checked = selected.contains(&name);
-                tools = tools.child(
-                    outline_button(SharedString::from(format!("role-tool-{name}")), p)
-                        .child(format!("{} {}", if checked { "✓" } else { "○" }, name))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(e) = &mut this.subagent_roles.editor
-                                && let Some(tools) = &mut e.tools
-                                && !tools.remove(&name)
-                            {
-                                tools.insert(name.clone());
+        if e.model_menu {
+            let inherit = e.model.is_none();
+            let mut choices = div().flex().flex_col().child(
+                menu_item("role-model-inherit".into(), inherit, hover)
+                    .justify_between()
+                    .child(trs!(english, "subagent_roles.inherit_parent_model"))
+                    .when(inherit, |d| {
+                        d.child(icon("tick02", 14.0, p.c(Token::Foreground)))
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(e) = &mut this.subagent_roles.editor {
+                            e.model = None;
+                            e.model_menu = false;
+                        }
+                        cx.notify();
+                    })),
+            );
+            // A role picks one model out of every provider's, so the list folds by provider the
+            // same way the composer's chip does.
+            let open = e.model_open.clone();
+            let current = e.model.clone();
+            for row in picker_rows(
+                &provider_groups(&self.models),
+                open.as_deref(),
+                current.as_deref(),
+            ) {
+                let view =
+                    super::personalization::as_menu_row(picker_row_view("role-model", &row, p));
+                choices = choices.child(match row {
+                    PickerRow::Provider { id, .. } => {
+                        view.on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(e) = &mut this.subagent_roles.editor {
+                                e.model_open = if e.model_open.as_deref() == Some(id.as_str()) {
+                                    None
+                                } else {
+                                    Some(id.clone())
+                                };
                             }
                             cx.notify();
-                        })),
-                );
-            }
-            for name in selected
-                .iter()
-                .filter(|name| !saved.is_some_and(|s| s.tools.iter().any(|t| &t.name == *name)))
-            {
-                let name = name.clone();
-                tools = tools.child(
-                    outline_button(SharedString::from(format!("role-missing-{name}")), p)
-                        .child(tr!(
-                            english,
-                            "subagent_roles.name_currently_unavailable_click_to",
-                            name = name
-                        ))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(e) = &mut this.subagent_roles.editor
-                                && let Some(tools) = &mut e.tools
-                            {
-                                tools.remove(&name);
+                        }))
+                    }
+                    PickerRow::Model { label, .. } => {
+                        view.on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(e) = &mut this.subagent_roles.editor {
+                                e.model = Some(label.clone());
+                                e.model_menu = false;
+                                e.model_open = None;
                             }
                             cx.notify();
-                        })),
-                );
+                        }))
+                    }
+                });
             }
-            form = form.child(tools);
+            model = model.child(crate::ui::float(
+                popover(p)
+                    .absolute()
+                    .top(px(34.0))
+                    .left(px(0.0))
+                    .w(px(260.0))
+                    .child(
+                        div()
+                            .id("role-model-list")
+                            .max_h(px(260.0))
+                            .overflow_y_scroll()
+                            .child(choices),
+                    ),
+            ));
         }
+        let thinking_label = e
+            .thinking
+            .map(|level| super::composer::thinking_label_in(level, english))
+            .unwrap_or(trs!(english, "subagent_roles.inherit_thinking_level"));
+        let mut thinking = div().relative().child(
+            select_trigger("role-thinking", thinking_label, 160.0, p).on_click(cx.listener(
+                |this, _, _, cx| {
+                    if let Some(e) = &mut this.subagent_roles.editor {
+                        e.thinking_menu = !e.thinking_menu;
+                        e.model_menu = false;
+                    }
+                    cx.notify();
+                },
+            )),
+        );
+        if e.thinking_menu {
+            let mut menu = popover(p)
+                .absolute()
+                .top(px(34.0))
+                .left(px(0.0))
+                .w(px(176.0));
+            for (i, value) in [
+                None,
+                Some(ThinkingLevel::Minimal),
+                Some(ThinkingLevel::Low),
+                Some(ThinkingLevel::Medium),
+                Some(ThinkingLevel::High),
+                Some(ThinkingLevel::Xhigh),
+                Some(ThinkingLevel::Max),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let text = value
+                    .map(|level| super::composer::thinking_label_in(level, english))
+                    .unwrap_or(trs!(english, "subagent_roles.inherit_thinking_level"));
+                let active = e.thinking == value;
+                menu = menu.child(
+                    menu_item(
+                        SharedString::from(format!("role-thinking-{i}")),
+                        active,
+                        hover,
+                    )
+                    .justify_between()
+                    .child(text)
+                    .when(active, |d| {
+                        d.child(icon("tick02", 14.0, p.c(Token::Foreground)))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(e) = &mut this.subagent_roles.editor {
+                            e.thinking = value;
+                            e.thinking_menu = false;
+                        }
+                        cx.notify();
+                    })),
+                );
+            }
+            thinking = thinking.child(crate::ui::float(menu));
+        }
+        body = body
+            .child(field(vec![
+                label(trs!(english, "subagent_roles.model_and_thinking")).into_any_element(),
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(8.0))
+                    .child(model)
+                    .child(thinking)
+                    .into_any_element(),
+            ]))
+            .child(field(vec![
+                label(trs!(english, "subagent_roles.prompt")).into_any_element(),
+                div()
+                    .max_h(px(240.0))
+                    .child(
+                        Textarea::new(&e.prompt)
+                            .text_size(px(TEXT_SM))
+                            .aria_label(trs!(english, "subagent_roles.prompt")),
+                    )
+                    .into_any_element(),
+            ]));
         if conflict {
-            form = form.child(
+            body = body.child(
                 div()
                     .text_size(px(TEXT_XS))
                     .text_color(p.c(Token::Destructive))
@@ -624,28 +1010,74 @@ impl Workspace {
                     )),
             );
         }
-        form.child(
-            div()
-                .flex()
-                .gap(px(8.0))
-                .child(
-                    outline_button("role-save", p)
-                        .when(busy, |d| d.opacity(0.5))
-                        .child(if busy {
-                            trs!(english, "subagent_roles.saving")
-                        } else {
-                            trs!(english, "subagent_roles.save_role")
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| this.save_role(cx))),
-                )
-                .child(
-                    outline_button("role-cancel", p)
-                        .child(trs!(english, "subagent_roles.close_editor"))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.subagent_roles.editor = None;
-                            cx.notify();
-                        })),
-                ),
-        )
+        card(p)
+            .child(dialog_head(
+                if e.expected.is_some() {
+                    trs!(english, "subagent_roles.edit_title")
+                } else {
+                    trs!(english, "subagent_roles.add_title")
+                },
+                trs!(english, "subagent_roles.form_desc"),
+                p,
+            ))
+            .child(body)
+            .child(
+                div()
+                    .px(px(16.0))
+                    .py(px(12.0))
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .border_t_1()
+                    .border_color(p.c(Token::Border))
+                    .bg(p.c(Token::Muted).opacity(0.5))
+                    .child(
+                        outline_button("role-cancel", p)
+                            .child(trs!(english, "subagent_roles.cancel"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.subagent_roles.editor = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        primary_button("role-save", p)
+                            .h(px(32.0))
+                            .when(busy, |d| d.opacity(0.5))
+                            .child(if busy {
+                                trs!(english, "subagent_roles.saving")
+                            } else {
+                                trs!(english, "subagent_roles.save")
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.save_role(cx))),
+                    ),
+            )
     }
+}
+
+/// What the capture harness draws in place of a host's answer: an empty list, or with
+/// `FV_FIXTURE_SAMPLE=1` one role, so the card can be compared too.
+fn capture_roles() -> SubagentRolesResponse {
+    let tools = ["read", "grep", "find", "ls", "bash", "edit", "write"]
+        .into_iter()
+        .map(|name| SubagentToolChoice {
+            name: name.into(),
+            description: String::new(),
+            read_only_allowed: !matches!(name, "bash" | "edit" | "write"),
+        })
+        .collect();
+    let roles = if std::env::var_os("FV_FIXTURE_SAMPLE").is_some() {
+        vec![SubagentRole {
+            id: "reviewer".into(),
+            name: "代码审查".into(),
+            description: "审查改动，找出缺陷与遗漏的测试。".into(),
+            system_prompt: String::new(),
+            model: None,
+            thinking: Some(ThinkingLevel::High),
+            read_only: true,
+            tools: Some(vec!["read".into(), "grep".into(), "find".into()]),
+        }]
+    } else {
+        Vec::new()
+    };
+    SubagentRolesResponse { roles, tools }
 }

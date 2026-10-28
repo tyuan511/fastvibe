@@ -1,4 +1,5 @@
 //! Long-term memory settings use the same protocol as every other client.
+use crate::ui::px;
 use fv_protocol::methods::{MemoryClear, MemoryConfigure, MemoryRead, MemoryRun};
 use fv_protocol::types::{Empty, MemoryConfig, MemoryPhase, MemoryState, UiLanguage};
 use fv_theme::Token;
@@ -6,15 +7,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::Workspace;
-use super::settings::{Section, card, outline_button, switch};
-use crate::ui::{Muted as _, TEXT_SM, TEXT_XS};
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
+use super::model_menu::{PickerRow, picker_row_view, picker_rows, provider_groups};
+use super::personalization::{group, local_time, model_trigger, outline_sm, rich_row};
+use super::settings::{Section, menu_item, popover, setting_row, switch};
+use crate::ui::{Muted as _, TEXT_SM, icon};
 
 fn next_id() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -28,6 +24,9 @@ pub struct MemorySettings {
     state: Option<MemoryState>,
     error: Option<String>,
     models: bool,
+    /// Which provider is unfolded under `models`. The pane lists its choices inline, so its second
+    /// level opens under its provider rather than beside it.
+    model_open: Option<String>,
     confirm_clear: bool,
 }
 
@@ -40,6 +39,7 @@ impl Default for MemorySettings {
             state: None,
             error: None,
             models: false,
+            model_open: None,
             confirm_clear: false,
         }
     }
@@ -55,6 +55,30 @@ impl MemorySettings {
             self.state = Some(state);
         }
     }
+
+    /// Dev capture: the pane's model list is behind a disclosure and folds by provider, so a
+    /// screenshot has to open both to show what a click would.
+    pub(super) fn show_models_for_capture(&mut self, provider: Option<String>) {
+        // The pane draws nothing until the host has answered, and the capture harness has no host.
+        if self.state.is_none() {
+            self.state = Some(MemoryState {
+                revision: 0,
+                config: MemoryConfig {
+                    enabled: true,
+                    model: Some("deepseek/deepseek-v4-pro".into()),
+                },
+                phase: MemoryPhase::Idle,
+                conversations: 3,
+                pending: 0,
+                ready: true,
+                last_run_at: None,
+                error: None,
+                folder: String::new(),
+            });
+        }
+        self.models = true;
+        self.model_open = provider;
+    }
 }
 
 impl Workspace {
@@ -67,6 +91,21 @@ impl Workspace {
             return;
         };
         let Some(backend) = self.backend.clone() else {
+            // The capture harness has no host; draw what a fresh install answers.
+            #[cfg(feature = "capture")]
+            if s.memory.state.is_none() {
+                s.memory.state = Some(MemoryState {
+                    revision: 0,
+                    config: MemoryConfig::default(),
+                    phase: MemoryPhase::Idle,
+                    conversations: 0,
+                    pending: 0,
+                    ready: false,
+                    last_run_at: None,
+                    error: None,
+                    folder: String::new(),
+                });
+            }
             return;
         };
         s.memory.read = next_id();
@@ -178,131 +217,132 @@ impl Workspace {
                     .unwrap_or_else(|| label.clone())
             })
             .unwrap_or_else(|| trs!(english, "memory.follow_default_model").into());
-        let mut model_choices = div().flex().flex_col().gap(px(4.0));
-        for (index, (label, name)) in std::iter::once((
-            None,
-            trs!(english, "memory.follow_default_model").to_string(),
-        ))
-        .chain(self.models.iter().map(|m| {
-            (
-                Some(m.label.clone()),
-                format!("{}/{}", m.provider_name, m.model.id),
-            )
-        }))
-        .enumerate()
-        {
-            let mut chosen = config.clone();
-            chosen.model = label;
-            model_choices = model_choices.child(
-                outline_button(SharedString::from(format!("memory-model-{index}")), p)
-                    .child(name)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.memory_action(Some(chosen.clone()), false, cx)
-                    })),
-            );
-        }
-        let status = match state.phase {
-            MemoryPhase::Extracting => {
-                trs!(english, "memory.extracting_memories")
-            }
-            MemoryPhase::Consolidating => {
-                trs!(english, "memory.consolidating_memories")
-            }
-            MemoryPhase::Idle if state.ready => {
-                trs!(english, "memory.memory_is_ready")
-            }
-            MemoryPhase::Idle => {
-                trs!(english, "memory.no_memories_generated_yet")
-            }
-        };
-        let status_text = tr!(
-            english,
-            "memory.status_arg1_conversations_consolidated_arg2",
-            arg1 = state.conversations,
-            arg2 = state.pending,
-            status = status
+        let mut model_choices = div().flex().flex_col();
+        let follow_current = config.model.is_none();
+        let mut follow = config.clone();
+        follow.model = None;
+        let hover = p.c(Token::Muted);
+        model_choices = model_choices.child(
+            menu_item("memory-model-follow".into(), follow_current, hover)
+                .justify_between()
+                .child(trs!(english, "memory.follow_default_model"))
+                .when(follow_current, |d| {
+                    d.child(icon("tick02", 14.0, p.c(Token::Foreground)))
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.memory_action(Some(follow.clone()), false, cx)
+                })),
         );
+        // Memory reads one model out of every provider's, so the list folds by provider the same
+        // way the composer's chip does — inline here, because this picker lives in the pane.
+        let open = memory.model_open.clone();
+        let current = config.model.as_deref();
+        for row in picker_rows(&provider_groups(&self.models), open.as_deref(), current) {
+            let view =
+                super::personalization::as_menu_row(picker_row_view("memory-model", &row, p));
+            model_choices = model_choices.child(match row {
+                PickerRow::Provider { id, .. } => {
+                    view.on_click(cx.listener(move |this, _, _, cx| {
+                        let Some(s) = this
+                            .settings
+                            .as_mut()
+                            .filter(|s| s.section == Section::Memory)
+                        else {
+                            return;
+                        };
+                        s.memory.model_open = if s.memory.model_open.as_deref() == Some(id.as_str())
+                        {
+                            None
+                        } else {
+                            Some(id.clone())
+                        };
+                        cx.notify();
+                    }))
+                }
+                PickerRow::Model { label, .. } => {
+                    let mut chosen = config.clone();
+                    chosen.model = Some(label.clone());
+                    view.on_click(cx.listener(move |this, _, _, cx| {
+                        this.memory_action(Some(chosen.clone()), false, cx)
+                    }))
+                }
+            });
+        }
+        let status: SharedString = match state.phase {
+            MemoryPhase::Extracting => trs!(english, "memory.extracting").into(),
+            MemoryPhase::Consolidating => trs!(english, "memory.consolidating").into(),
+            MemoryPhase::Idle if state.conversations == 0 => trs!(english, "memory.empty").into(),
+            MemoryPhase::Idle => tr!(
+                english,
+                "memory.counts",
+                count = state.conversations,
+                pending = state.pending
+            )
+            .into(),
+        };
         let root = state.folder.clone();
         let can_open = state.ready;
         let error = memory.error.clone().or_else(|| state.error.clone());
         let on = config.enabled;
+        let idle = state.phase == MemoryPhase::Idle;
         let toggle = switch("memory-enabled".into(), on, p)
             .when(busy, |d| d.opacity(0.5))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.memory_action(Some(enabled.clone()), false, cx)
             }));
-        let header = div()
-            .p(px(16.0))
-            .flex()
-            .items_center()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
+        let picker = model_trigger("memory-model-picker", model_label, 224.0, p).on_click(
+            cx.listener(|this, _, _, cx| {
+                if let Some(s) = &mut this.settings
+                    && s.memory.busy.is_none()
+                {
+                    s.memory.models = !s.memory.models;
+                    if !s.memory.models {
+                        s.memory.model_open = None;
+                    }
+                    cx.notify();
+                }
+            }),
+        );
+        let picker = div().relative().child(picker).when(memory.models, |d| {
+            d.child(crate::ui::float(
+                popover(p)
+                    .absolute()
+                    .top(px(36.0))
+                    .right(px(0.0))
+                    .w(px(224.0))
                     .child(
                         div()
-                            .text_size(px(TEXT_SM))
-                            .child(trs!(english, "memory.long_term_memory")),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(TEXT_XS))
-                            .muted(p)
-                            .child(trs!(english, "memory.extract_experience_from_chats_idle")),
+                            .id("memory-model-choices")
+                            .max_h(px(280.0))
+                            .overflow_y_scroll()
+                            .child(model_choices),
                     ),
-            )
-            .child(toggle);
-        let model_picker = div()
-            .p(px(16.0))
+            ))
+        });
+        let run_disabled = busy || !on || !idle;
+        let clear_disabled = busy || !idle || (!state.ready && state.conversations == 0);
+        let status_desc = div()
             .flex()
             .flex_col()
-            .gap(px(10.0))
-            .child(
-                div()
-                    .text_size(px(TEXT_SM))
-                    .child(trs!(english, "memory.consolidation_model")),
+            .gap(px(2.0))
+            .child(status)
+            .children(
+                state
+                    .last_run_at
+                    .map(|at| div().child(tr!(english, "memory.last_run", time = local_time(at)))),
             )
-            .child(
-                outline_button("memory-model-picker", p)
-                    .child(crate::ui::truncate(model_label))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(s) = &mut this.settings
-                            && s.memory.busy.is_none()
-                        {
-                            s.memory.models = !s.memory.models;
-                            cx.notify();
-                        }
-                    })),
-            )
-            .children(memory.models.then(|| {
+            .children(error.map(|error| div().text_color(p.c(Token::Destructive)).child(error)))
+            .children(memory.confirm_clear.then(|| {
                 div()
-                    .id("memory-model-choices")
-                    .max_h(px(240.0))
-                    .overflow_y_scroll()
-                    .child(model_choices)
+                    .text_color(p.c(Token::Destructive))
+                    .child(trs!(english, "memory.clear_confirm"))
             }));
-        let actions = div()
+        let files = div()
             .flex()
             .items_center()
-            .flex_wrap()
             .gap(px(8.0))
             .child(
-                outline_button("memory-run", p)
-                    .when(busy || !on || state.phase != MemoryPhase::Idle, |d| {
-                        d.opacity(0.5)
-                    })
-                    .child(trs!(english, "memory.run_now"))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if on {
-                            this.memory_action(None, false, cx);
-                        }
-                    })),
-            )
-            .child(
-                outline_button("memory-folder", p)
+                outline_sm("memory-folder", p)
                     .when(!can_open, |d| d.opacity(0.5))
                     .child(trs!(english, "memory.open_folder"))
                     .on_click(move |_, _, cx| {
@@ -312,14 +352,20 @@ impl Workspace {
                     }),
             )
             .child(
-                outline_button("memory-clear", p)
-                    .child(if memory.confirm_clear {
-                        trs!(english, "memory.confirm_clear_all_memories")
-                    } else {
-                        trs!(english, "memory.clear_memories")
+                outline_sm("memory-clear", p)
+                    .when(clear_disabled, |d| d.opacity(0.5))
+                    .when(memory.confirm_clear, |d| {
+                        d.text_color(p.c(Token::Destructive))
                     })
-                    .text_color(p.c(Token::Destructive))
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .child(if memory.confirm_clear {
+                        trs!(english, "memory.confirm_clear")
+                    } else {
+                        trs!(english, "memory.clear")
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if clear_disabled {
+                            return;
+                        }
                         let confirm = this
                             .settings
                             .as_ref()
@@ -332,42 +378,61 @@ impl Workspace {
                         }
                     })),
             );
-        let details = div()
-            .p(px(16.0))
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .child(div().text_size(px(TEXT_SM)).child(status_text))
-            .children(state.last_run_at.map(|at| {
-                div().text_size(px(TEXT_XS)).muted(p).child(tr!(
-                    english,
-                    "memory.last_run_arg1_minutes_ago",
-                    arg1 = ((now_ms() - at) / 60_000).max(0)
-                ))
-            }))
-            .children(error.map(|error| {
-                div()
-                    .text_size(px(TEXT_XS))
-                    .text_color(p.c(Token::Destructive))
-                    .child(error)
-            }))
-            .child(actions)
-            .children(memory.confirm_clear.then(|| {
-                div()
-                    .text_size(px(TEXT_XS))
-                    .text_color(p.c(Token::Destructive))
-                    .child(trs!(
-                        english,
-                        "memory.clearing_deletes_existing_memories_and"
-                    ))
-            }));
         div()
             .flex()
             .flex_col()
             .gap(px(16.0))
-            .child(card(p).child(header))
-            .child(card(p).child(model_picker))
-            .child(card(p).child(details))
+            .child(group(
+                Some(trs!(english, "memory.title")),
+                p,
+                [
+                    setting_row(
+                        trs!(english, "memory.enable"),
+                        trs!(english, "memory.enable_desc"),
+                        false,
+                        p,
+                        toggle,
+                    )
+                    .into_any_element(),
+                    setting_row(
+                        trs!(english, "memory.model"),
+                        trs!(english, "memory.model_desc"),
+                        true,
+                        p,
+                        picker,
+                    )
+                    .into_any_element(),
+                ],
+            ))
+            .child(group(
+                Some(trs!(english, "memory.data_title")),
+                p,
+                [
+                    rich_row(
+                        trs!(english, "memory.status"),
+                        Some(status_desc.into_any_element()),
+                        false,
+                        p,
+                        outline_sm("memory-run", p)
+                            .when(run_disabled, |d| d.opacity(0.5))
+                            .child(trs!(english, "memory.run_now"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !run_disabled {
+                                    this.memory_action(None, false, cx);
+                                }
+                            })),
+                    )
+                    .into_any_element(),
+                    setting_row(
+                        trs!(english, "memory.files"),
+                        trs!(english, "memory.files_desc"),
+                        true,
+                        p,
+                        files,
+                    )
+                    .into_any_element(),
+                ],
+            ))
             .into_any_element()
     }
 }

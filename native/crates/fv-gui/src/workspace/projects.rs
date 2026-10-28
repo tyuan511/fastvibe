@@ -2,6 +2,7 @@
 //! of folders, the first being the primary one. The project's conversations are listed under
 //! it, and the agent may work in every folder.
 
+use crate::ui::px;
 use fv_protocol::methods::{ProjectCreate, ProjectUpdate};
 use fv_protocol::types::{ProjectCreateParams, ProjectUpdateParams, UiLanguage};
 use fv_theme::Token;
@@ -10,7 +11,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::Workspace;
-use super::settings::{dialog_card, dialog_foot, dialog_head, modal};
+use super::settings::{dialog_card, modal};
 use super::transcript::project_name;
 use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon};
 
@@ -45,15 +46,9 @@ impl Workspace {
             ),
             None => (String::new(), Vec::new()),
         };
-        let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(
-                if self.app_settings.language == UiLanguage::English {
-                    "Project name"
-                } else {
-                    "项目名称"
-                },
-            )
-        });
+        // The placeholder is drawn by the dialog: it names the primary folder once there is one,
+        // which is what an empty name will become.
+        let input = cx.new(|cx| InputState::new(window, cx));
         input.update(cx, |st, cx| st.set_value(name, window, cx));
         cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, _, cx| {
             if matches!(ev, InputEvent::Change)
@@ -209,12 +204,19 @@ impl Workspace {
         let english = self.app_settings.language == UiLanguage::English;
         let hover = p.c(Token::Muted);
         let editing = d.editing.is_some();
-        // Said only while the name is blank: that is when it matters.
-        let placeholder_hint = d
+        // `placeholder`: the primary folder's name, which is what a blank name becomes.
+        let placeholder = d
             .folders
             .first()
-            .filter(|_| d.name.read(cx).value().trim().is_empty())
-            .map(|f| project_name(f).to_string());
+            .filter(|_| d.name.read(cx).value().is_empty())
+            .map(|f| project_name(f).to_string())
+            .or_else(|| {
+                d.name
+                    .read(cx)
+                    .value()
+                    .is_empty()
+                    .then(|| trs!(english, "projects.name_placeholder").to_string())
+            });
 
         let mut rows = div()
             .rounded(px(10.0))
@@ -225,6 +227,7 @@ impl Workspace {
             .flex_col();
         for (i, folder) in d.folders.iter().enumerate() {
             let group = SharedString::from(format!("folder-{i}"));
+            let missing = !std::path::Path::new(folder).exists();
             let (primary_of, remove_of) = (folder.clone(), folder.clone());
             rows = rows.child(
                 div()
@@ -241,8 +244,21 @@ impl Workspace {
                     .child(
                         ui::truncate(project_name(folder).to_string())
                             .flex_1()
-                            .text_color(p.c(Token::Foreground)),
+                            .text_color(if missing {
+                                p.c(Token::Destructive)
+                            } else {
+                                p.c(Token::Foreground)
+                            }),
                     )
+                    .when(missing, |d| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .text_size(px(TEXT_XS))
+                                .text_color(p.c(Token::Destructive))
+                                .child(trs!(english, "projects.missing")),
+                        )
+                    })
                     .child(if i == 0 {
                         div()
                             .flex_none()
@@ -259,8 +275,12 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(2.0))
+                            // Collapsed, not merely hidden: the label is wide enough to leave a
+                            // blank at the end of every row.
+                            .w(px(0.0))
+                            .overflow_hidden()
                             .invisible()
-                            .group_hover(group, |s| s.visible())
+                            .group_hover(group, |s| s.visible().w_auto())
                             .child(
                                 div()
                                     .id(SharedString::from(format!("primary-{i}")))
@@ -317,87 +337,128 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, _, cx| this.pick_folders(cx))),
         );
 
-        let body =
-            dialog_card(p, 448.0)
-                .child(dialog_head(
-                    if editing {
+        let disabled = d.folders.is_empty() || d.busy;
+        let body = dialog_card(p, 448.0)
+            .p(px(16.0))
+            .gap(px(16.0))
+            .text_size(px(TEXT_SM))
+            .child(
+                div()
+                    .text_size(px(16.0))
+                    .line_height(px(16.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(if editing {
                         trs!(english, "projects.edit_project")
                     } else {
                         trs!(english, "projects.create_project")
-                    },
-                    "",
-                    p,
-                ))
-                .child(
-                    div()
-                        .px(px(20.0))
-                        .pb(px(16.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(12.0))
-                        .child(
-                            div()
-                                .px(px(8.0))
-                                .flex()
-                                .items_center()
-                                .gap(px(8.0))
-                                .rounded(px(10.0))
-                                .border_1()
-                                .border_color(p.c(Token::Border))
-                                .child(icon("folder01", 16.0, p.c(Token::MutedForeground)))
-                                .child(
-                                    div().flex_1().child(
-                                        Input::new(&d.name).appearance(false).bordered(false),
-                                    ),
-                                ),
-                        )
-                        .when_some(placeholder_hint.filter(|_| !editing), |col, hint| {
-                            col.child(div().text_size(px(TEXT_XS)).muted(p).child(
-                                SharedString::from(tr!(
-                                    english,
-                                    "projects.leave_blank_to_use_hint",
-                                    hint = hint
-                                )),
-                            ))
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.0))
-                                .child(
+                    }),
+            )
+            .child(
+                div()
+                    .px(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(p.c(Token::Border))
+                    .child(icon("folder01", 16.0, p.c(Token::MutedForeground)))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&d.name).appearance(false).bordered(false))
+                            .when_some(placeholder, |d, text| {
+                                d.child(
                                     div()
+                                        .absolute()
+                                        .inset_0()
+                                        .flex()
+                                        .items_center()
                                         .text_size(px(TEXT_SM))
                                         .muted(p)
-                                        .child(trs!(english, "projects.source_folders")),
+                                        .child(ui::truncate(text)),
                                 )
-                                .child(rows),
-                        )
-                        .when_some(d.error.clone(), |col, e| {
-                            col.child(
-                                div()
-                                    .text_size(px(TEXT_SM))
-                                    .text_color(p.c(Token::Destructive))
-                                    .child(SharedString::from(e)),
-                            )
-                        }),
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .muted(p)
+                            .child(trs!(english, "projects.source_folders")),
+                    )
+                    .child(rows),
+            )
+            .when_some(d.error.clone(), |col, e| {
+                col.child(
+                    div()
+                        .text_size(px(TEXT_SM))
+                        .text_color(p.c(Token::Destructive))
+                        .child(SharedString::from(e)),
                 )
-                .child(dialog_foot(
-                    p,
-                    cx,
-                    |this, cx| {
-                        this.project_dialog = None;
-                        cx.notify();
-                    },
-                    if editing {
-                        trs!(english, "projects.confirm")
-                    } else {
-                        trs!(english, "projects.create_project")
-                    },
-                    |this, _, cx| this.save_project(cx),
-                    d.folders.is_empty() || d.busy,
-                    self.english(),
-                ));
+            })
+            // `DialogFooter`: a muted strip across the bottom, 取消 ghost, the action solid.
+            .child(
+                div()
+                    .mx(px(-16.0))
+                    .mb(px(-16.0))
+                    .p(px(16.0))
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .border_t_1()
+                    .border_color(p.c(Token::Border))
+                    .bg(p.c(Token::Muted).opacity(0.5))
+                    .rounded_b(px(16.0))
+                    .child(
+                        div()
+                            .id("project-cancel")
+                            .h(px(32.0))
+                            .px(px(10.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(8.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .hover(move |d| d.bg(hover))
+                            .child(trs!(english, "projects.cancel"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.project_dialog = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("project-confirm")
+                            .h(px(32.0))
+                            .px(px(10.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(8.0))
+                            .bg(p.c(Token::Primary))
+                            .text_color(p.c(Token::PrimaryForeground))
+                            .font_weight(FontWeight::MEDIUM)
+                            .when(disabled, |d| d.opacity(0.5))
+                            .when(!disabled, |d| d.cursor_pointer())
+                            .child(if editing {
+                                trs!(english, "projects.confirm")
+                            } else {
+                                trs!(english, "projects.create_project")
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !disabled {
+                                    this.save_project(cx)
+                                }
+                            })),
+                    ),
+            );
         Some(modal(body, p, cx, |this| this.project_dialog = None))
     }
 }

@@ -25,14 +25,14 @@ mcp_form.could_not_save_mcp_e:
   zh: "无法保存 MCP：%{e}"
   en: "Could not save MCP: %{e}"
 mcp_form.edit_server:
-  zh: "编辑服务器"
-  en: "Edit server"
+  zh: "编辑 MCP 服务器"
+  en: "Edit MCP server"
 mcp_form.add_server:
-  zh: "添加服务器"
-  en: "Add server"
+  zh: "添加 MCP 服务器"
+  en: "Add MCP server"
 mcp_form.local_process:
-  zh: "本地进程"
-  en: "Local process"
+  zh: "本地进程（stdio）"
+  en: "Local process (stdio)"
 mcp_form.remove:
   zh: "删除"
   en: "Remove"
@@ -61,17 +61,74 @@ mcp_form.cancel:
   zh: "取消"
   en: "Cancel"
 mcp_form.launch_command:
-  zh: "启动命令"
-  en: "Launch command"
+  zh: "命令"
+  en: "Command"
 mcp_form.server_url:
   zh: "服务器地址"
   en: "Server URL"
 mcp_form.arguments:
-  zh: "参数（每行一个，按原样传给进程）"
-  en: "Arguments (one per line, passed as entered)"
+  zh: "参数（每项一个，按原样传给进程）"
+  en: "Arguments (one per field, passed as entered)"
 mcp_form.environment_variables:
   zh: "环境变量"
   en: "Environment variables"
 mcp_form.request_headers:
   zh: "请求头"
   en: "Request headers"
+mcp_form.view_form:
+  zh: "表单"
+  en: "Form"
+mcp_form.transport:
+  zh: "传输"
+  en: "Transport"
+mcp_form.json_hint:
+  zh: "粘贴 MCP 服务器文档里的配置；同名服务器会被替换。"
+  en: "Paste the config from an MCP server's docs. A server with the same name is replaced."
+mcp_form.dialog_desc:
+  zh: "支持本地进程（stdio）与 HTTP 两种传输。"
+  en: "Supports a local process (stdio) or HTTP."
+mcp_form.json_merge_hint:
+  zh: "支持 mcpServers / servers 格式。"
+  en: "Accepts the mcpServers / servers shape."
+mcp_form.json_full_hint:
+  zh: "正在编辑完整配置数组，保存会替换全部服务器。"
+  en: "Editing the full list; saving replaces every server."
+mcp_form.load_full:
+  zh: "编辑完整配置"
+  en: "Edit full list"
+mcp_form.env_hint:
+  zh: "每个变量一行；值默认隐藏。"
+  en: "One variable per row; values are hidden by default."
+mcp_form.headers_hint:
+  zh: "每个请求头一行，例如 Authorization: Bearer …"
+  en: "One header per row, e.g. Authorization: Bearer …"
+mcp_form.exposure:
+  zh: "工具提供方式"
+  en: "How tools are provided"
+mcp_form.exposure_direct:
+  zh: "直接提供"
+  en: "Directly"
+mcp_form.exposure_deferred:
+  zh: "按需加载（工具搜索）"
+  en: "On demand (tool search)"
+mcp_form.exposure_direct_hint:
+  zh: "所有工具都会交给模型。"
+  en: "Every tool is given to the model."
+mcp_form.exposure_deferred_hint:
+  zh: "模型先搜索，再使用找到的工具。"
+  en: "The model searches first, then uses what it finds."
+mcp_form.enabled:
+  zh: "启用"
+  en: "Enabled"
+mcp_form.enable_after:
+  zh: "添加后启用"
+  en: "Enable after adding"
+mcp_form.save_all:
+  zh: "保存全部"
+  en: "Save all"
+mcp_form.save_connect:
+  zh: "保存并连接"
+  en: "Save and connect"
+mcp_form.add_connect:
+  zh: "添加并连接"
+  en: "Add and connect"

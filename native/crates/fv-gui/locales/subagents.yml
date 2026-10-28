@@ -81,3 +81,12 @@ subagents.back_to_main_chat:
 subagents.this_chat_has_no_side:
   zh: "当前对话还没有辅助对话；让 Agent 使用 spawn_agent 创建一个子任务后即可在这里打开。"
   en: "This chat has no side chats yet. Ask the agent to start a sub-task with spawn_agent and it can be opened here."
+subagents.allow_desc:
+  zh: "让主 Agent 委派子任务。关闭后不再提供这些工具。"
+  en: "Let the main agent delegate subtasks. When off, those tools are not offered."
+subagents.max_desc:
+  zh: "同时未关闭的子 Agent 数量；关闭一个即释放名额。"
+  en: "Sub-agents open at once; closing one frees a slot."
+subagents.depth_desc:
+  zh: "子 Agent 还能继续委派的层数。"
+  en: "How many levels a sub-agent may delegate further."

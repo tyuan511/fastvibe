@@ -56,6 +56,7 @@ fn search_reads_visible_messages_but_never_thoughts_arguments_or_summaries() {
             usage: Default::default(),
             user_messages: vec!["HiddenCopy".into()],
             summary: "HiddenSummary".into(),
+            stats: None,
         },
     ];
     store.transcripts.append("test", &history).unwrap();

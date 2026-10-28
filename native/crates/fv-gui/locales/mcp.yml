@@ -99,3 +99,21 @@ mcp.could_not_save_mcp_e:
 mcp.could_not_read_the_resource:
   zh: "无法读取资源：%{e}"
   en: "Could not read the resource: %{e}"
+mcp.configured:
+  zh: "已配置"
+  en: "Configured"
+mcp.empty:
+  zh: "尚未配置 MCP 服务器"
+  en: "No MCP servers configured"
+mcp.empty_hint:
+  zh: "添加服务器后会出现在这里"
+  en: "Add a server to see it here"
+mcp.tools_count:
+  zh: "%{count} 个工具"
+  en: "%{count} tools"
+mcp.connect_failed:
+  zh: "连接失败"
+  en: "Failed"
+mcp.no_diagnostics:
+  zh: "暂无进程诊断输出"
+  en: "No process diagnostics yet"

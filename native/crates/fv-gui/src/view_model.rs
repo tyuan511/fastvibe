@@ -290,7 +290,7 @@ pub fn item_id(item: &Item) -> &str {
         | Item::Audio { id, .. }
         | Item::Image { id, .. }
         | Item::Error { id, .. }
-        | Item::ContextCompaction { id } => id,
+        | Item::ContextCompaction { id, .. } => id,
     }
 }
 

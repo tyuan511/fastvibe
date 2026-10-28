@@ -142,12 +142,15 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
             }
             // A divider where the conversation was summarized. The messages before it are
             // still in the transcript, and still drawn: only the model stops seeing them.
-            Message::Compaction { .. } => {
+            Message::Compaction { stats, .. } => {
                 let turn = format!("t{}", turns.len());
                 let mut t = Turn::new(
                     turn.clone(),
                     vec![Item::ContextCompaction {
                         id: format!("{turn}i0"),
+                        reason: stats.as_ref().map(|s| s.reason.clone()),
+                        tokens_before: stats.as_ref().map(|s| s.tokens_before),
+                        tokens_after: stats.as_ref().map(|s| s.tokens_after),
                     }],
                 );
                 t.started_at = at;

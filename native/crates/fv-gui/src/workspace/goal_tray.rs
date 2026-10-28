@@ -5,6 +5,7 @@
 //! open and never reach the model as text. The strip is the only place a goal can be paused,
 //! resumed or cleared with the mouse.
 
+use crate::ui::px;
 use fv_protocol::methods::*;
 use fv_protocol::types::{
     Goal, GoalSetParams, GoalStatus, ReviewTarget, ThreadIdParams, ThreadMode, ThreadModeParams,
@@ -14,7 +15,7 @@ use fv_theme::Token;
 use gpui_kit::*;
 
 use super::Workspace;
-use crate::ui::{Muted as _, TEXT_XS, icon, truncate};
+use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon, truncate};
 
 /// What a typed line asks for, parsed apart from the window so it can be tested.
 #[derive(Debug, PartialEq, Eq)]
@@ -222,31 +223,37 @@ impl Workspace {
         .detach();
     }
 
+    /// `IconButton size="icon-xs" variant="ghost"` with a tooltip-sized label.
     fn strip_button(
         &self,
         id: &'static str,
+        glyph: &'static str,
         label: &'static str,
+        color: Hsla,
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
-        let p = &self.palette;
-        let hover = p.c(Token::Accent);
+        let hover = self.palette.c(Token::Muted);
         div()
             .id(id)
-            .h(px(20.0))
-            .px(px(8.0))
+            .size(px(24.0))
+            .flex_none()
             .flex()
             .items_center()
-            .rounded(px(6.0))
-            .text_size(px(TEXT_XS))
-            .muted(p)
+            .justify_center()
+            .rounded(px(8.0))
             .cursor_pointer()
-            .hover(move |d| d.bg(hover).text_color(p.c(Token::Foreground)))
-            .child(label)
+            .hover(move |d| d.bg(hover))
+            .child(icon(glyph, 14.0, color))
+            .aria_label(label)
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(label).build(window, cx)
+            })
             .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
     }
 
-    /// The goal and plan-mode strip above the composer; `None` when neither is in force.
+    /// `GoalPanel`: one bordered row above the composer — the target glyph, a status badge,
+    /// the round, the objective, and its controls as icons.
     pub(super) fn goal_tray(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let view = self.selected.as_ref().and_then(|id| self.views.get(id))?;
         let goal: Option<Goal> = view.goal.clone();
@@ -256,93 +263,124 @@ impl Workspace {
         }
         let english = self.english();
         let p = &self.palette;
-        let mut strip = div()
-            .mb(px(8.0))
-            .rounded(px(14.0))
-            .border_1()
-            .border_color(p.c(Token::Border))
-            .bg(p.c(Token::Card))
-            .overflow_hidden()
-            .flex()
-            .flex_col();
-        if let Some(goal) = goal {
-            let (state, tone) = match goal.status {
-                GoalStatus::Running => (trs!(english, "goal.running"), Token::MutedForeground),
-                GoalStatus::Paused => (trs!(english, "goal.paused"), Token::Warning),
-                GoalStatus::Complete => (trs!(english, "goal.complete"), Token::MutedForeground),
-            };
-            let mut row = div()
-                .h(px(32.0))
-                .px(px(10.0))
+        let row = || {
+            div()
+                .mb(px(8.0))
+                .px(px(12.0))
+                .py(px(6.0))
                 .flex()
                 .items_center()
                 .gap(px(8.0))
+                .rounded(px(12.0))
+                .border_1()
+                .border_color(p.c(Token::Border))
+                .bg(p.c(Token::Card))
+        };
+        let badge = |label: &'static str, tone: Token| {
+            div()
+                .h(px(20.0))
+                .px(px(8.0))
+                .flex()
+                .flex_none()
+                .items_center()
+                .rounded_full()
+                .bg(p.c(Token::Secondary))
+                .text_color(p.c(tone))
                 .text_size(px(TEXT_XS))
-                .child(icon("target01", 12.0, p.c(tone)))
+                .font_weight(FontWeight::MEDIUM)
+                .child(label)
+        };
+        let mut strip = div().flex().flex_col();
+        if let Some(goal) = goal {
+            let (state, tone) = match goal.status {
+                GoalStatus::Running => (trs!(english, "goal.running"), Token::Primary),
+                GoalStatus::Paused => (trs!(english, "goal.paused"), Token::Warning),
+                GoalStatus::Complete => (trs!(english, "goal.complete"), Token::Success),
+            };
+            let mut line = row()
+                .child(icon("target01", 16.0, p.c(Token::Primary)))
+                .child(badge(state, tone))
+                .child(div().flex_none().text_size(px(TEXT_XS)).muted(p).child(tr!(
+                    english,
+                    "goal.round",
+                    n = goal.round.max(1)
+                )))
                 .child(
-                    div()
-                        .flex_none()
-                        .text_color(p.c(tone))
-                        .child(SharedString::from(format!(
-                            "{} · {} · {}",
-                            trs!(english, "goal.label"),
-                            tr!(english, "goal.round", n = goal.round),
-                            state
-                        ))),
-                )
-                .child(
-                    div()
+                    truncate(goal.objective.clone())
                         .flex_1()
-                        .min_w_0()
-                        .child(truncate(goal.objective.clone())),
+                        .text_size(px(TEXT_SM))
+                        .muted(p),
                 );
+            let ink = p.c(Token::Foreground);
             match goal.status {
                 GoalStatus::Running => {
-                    row = row.child(self.strip_button(
+                    line = line.child(self.strip_button(
                         "goal-pause",
+                        "pause",
                         trs!(english, "goal.pause"),
+                        ink,
                         cx,
                         |this, cx| this.goal_call(Some(false), cx),
                     ));
                 }
                 GoalStatus::Paused => {
-                    row = row.child(self.strip_button(
+                    line = line.child(self.strip_button(
                         "goal-resume",
+                        "play",
                         trs!(english, "goal.resume"),
+                        ink,
                         cx,
                         |this, cx| this.goal_call(Some(true), cx),
                     ));
                 }
                 GoalStatus::Complete => {}
             }
-            row = row.child(self.strip_button(
+            line = line.child(self.strip_button(
                 "goal-clear",
+                "delete02",
                 trs!(english, "goal.clear"),
+                p.c(Token::Destructive),
                 cx,
                 |this, cx| this.goal_call(None, cx),
             ));
-            strip = strip.child(row);
+            strip = strip.child(line);
         }
         if plan {
+            // Native-only: plan mode, drawn as the same row.
             strip = strip.child(
-                div()
-                    .h(px(32.0))
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .text_size(px(TEXT_XS))
-                    .child(icon("list", 12.0, p.c(Token::MutedForeground)))
-                    .child(div().flex_1().child(trs!(english, "goal.plan_mode")))
+                row()
+                    .child(icon("list", 16.0, p.c(Token::Primary)))
+                    .child(
+                        truncate(trs!(english, "goal.plan_mode"))
+                            .flex_1()
+                            .text_size(px(TEXT_SM))
+                            .muted(p),
+                    )
                     .child(self.strip_button(
                         "plan-leave",
+                        "cancel01",
                         trs!(english, "goal.leave_plan"),
+                        p.c(Token::Foreground),
                         cx,
                         |this, cx| this.leave_plan(cx),
                     )),
             );
         }
         Some(strip.into_any_element())
+    }
+}
+
+impl Workspace {
+    /// Dev only (`--fixture goal`): a running goal on the chat on screen, as `?goal=1` shows it.
+    pub fn show_goal_fixture(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = self.selected.as_ref().and_then(|id| self.views.get_mut(id)) {
+            view.goal = Some(Goal {
+                objective: "分析下作为一个智能体客户端还有哪些比较重要的需求没做的，并把它们拆成本周可以完成的任务".into(),
+                status: GoalStatus::Running,
+                round: 3,
+            });
+        }
+        cx.notify();
     }
 }
 

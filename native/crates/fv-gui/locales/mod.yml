@@ -1,3 +1,4 @@
+_version: 2
 mod.the_app_update_is_not:
   zh: "应用更新尚未完成。请等待任务结束、关闭仍在运行的终端后重新打开窗口，以启用最新功能。"
   en: "The app update is not finished yet. Wait for running tasks to end, close any running terminals, then reopen the window to use the latest features."
@@ -133,3 +134,18 @@ mod.delete:
 mod.pin:
   zh: "置顶"
   en: "Pin"
+mod.notify_chat:
+  zh: "会话"
+  en: "Chat"
+mod.notify_done:
+  zh: "任务已完成，可以回来查看结果。"
+  en: "The task is done. Come back to see the result."
+mod.notify_failed:
+  zh: "任务出错了，可以回来看看。"
+  en: "The task failed. Come back to see what happened."
+mod.notify_waiting_title:
+  zh: "有一个会话在等你"
+  en: "A chat is waiting for you"
+mod.notify_waiting_body:
+  zh: "切换到这个会话继续处理。"
+  en: "Switch to that conversation to continue."

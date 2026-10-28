@@ -41,7 +41,13 @@ text.thinking:
   en: "Thinking"
 text.compacted:
   zh: "已压缩上下文"
-  en: "Context compacted"
+  en: "Compacted context"
+text.compact_threshold:
+  zh: "接近上限"
+  en: "Near the limit"
+text.compact_overflow:
+  zh: "超出窗口"
+  en: "Over the window"
 text.compacting:
   zh: "正在压缩上下文"
   en: "Compacting context"
@@ -69,7 +75,7 @@ office.reading_selection:
   en: "Reading selection"
 office.quote_selection:
   zh: "引用选中内容"
-  en: "Quote selection"
+  en: "Cite selection"
 office.preparing:
   zh: "正在准备文档预览…"
   en: "Preparing document preview…"

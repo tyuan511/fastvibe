@@ -198,6 +198,7 @@ fn reused_call_id_cannot_match_an_older_batch_and_compaction_boundary_is_preserv
                     summary: "summary".into(),
                     usage: Usage::default(),
                     model: None,
+                    stats: None,
                 },
                 Message::User {
                     text: "after summary".into(),

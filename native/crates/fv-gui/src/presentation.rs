@@ -346,16 +346,26 @@ pub enum Part<'a> {
 /// `collapseToolRuns`: consecutive settled calls between two stretches of prose fold into one
 /// row. A call still running stands on its own below the fold (and breaks the batch), so the
 /// row only ever counts what has landed; a single call stays a row. A thought splits the batch
-/// as prose does (folding thoughts in is a setting this app does not have). A part nobody
-/// would see (a blank thought or reply) does not split anything.
-pub fn fold_runs<'a>(items: &[&'a Item], streaming_tail: bool) -> Vec<Part<'a>> {
+/// as prose does, unless 折叠思考内容 (`collapse_thinking`) folds a finished one into the batch
+/// it sits in — and only into a batch that has a call, so two lone thoughts keep their rows. A
+/// thought still being written always stands on its own line. A part nobody would see (a blank
+/// thought or reply) does not split anything.
+pub fn fold_runs<'a>(
+    items: &[&'a Item],
+    streaming_tail: bool,
+    collapse_thinking: bool,
+) -> Vec<Part<'a>> {
     let mut out = Vec::new();
     let mut pending: Vec<&'a Item> = Vec::new();
     fn flush<'a>(pending: &mut Vec<&'a Item>, out: &mut Vec<Part<'a>>) {
-        match pending.len() {
-            0 => {}
-            1 => out.push(Part::Item(pending[0])),
-            _ => out.push(Part::Run(std::mem::take(pending))),
+        let calls = pending
+            .iter()
+            .filter(|i| matches!(i, Item::ToolCall { .. }))
+            .count();
+        if pending.len() > 1 && calls > 0 {
+            out.push(Part::Run(std::mem::take(pending)));
+        } else {
+            out.extend(pending.drain(..).map(Part::Item));
         }
         pending.clear();
     }
@@ -368,6 +378,7 @@ pub fn fold_runs<'a>(items: &[&'a Item], streaming_tail: bool) -> Vec<Part<'a>> 
             Item::ToolCall { name, output, .. } if output.is_some() && folds_into_run(name) => {
                 pending.push(item);
             }
+            Item::Reasoning { .. } if collapse_thinking && !live => pending.push(item),
             other => {
                 flush(&mut pending, &mut out);
                 out.push(Part::Item(other));
@@ -382,11 +393,15 @@ pub fn fold_runs<'a>(items: &[&'a Item], streaming_tail: bool) -> Vec<Part<'a>> 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Piece {
     Text(String),
+    /// A file the call read or wrote.
+    Path(String),
+    /// A query or a tool name.
     Name(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Category {
+    Think,
     Command,
     Read,
     Write,
@@ -399,6 +414,13 @@ enum Category {
 pub fn run_summary(items: &[&Item], english: bool) -> Vec<Piece> {
     let mut order: Vec<(Category, Vec<&Item>)> = Vec::new();
     for item in items {
+        if matches!(item, Item::Reasoning { .. }) {
+            match order.iter_mut().find(|(c, _)| *c == Category::Think) {
+                Some((_, v)) => v.push(item),
+                None => order.push((Category::Think, vec![item])),
+            }
+            continue;
+        }
         let Item::ToolCall { name, is_error, .. } = item else {
             continue;
         };
@@ -444,7 +466,7 @@ pub fn run_summary(items: &[&Item], english: bool) -> Vec<Piece> {
             template.replace("%{count}", &count.to_string())
         };
         let named = match (category, batch.as_slice()) {
-            (Category::Command, _) => None,
+            (Category::Command | Category::Think, _) => None,
             (
                 _,
                 [
@@ -456,18 +478,23 @@ pub fn run_summary(items: &[&Item], english: bool) -> Vec<Piece> {
             _ => None,
         };
         match (category, named) {
+            (Category::Think, _) => pieces.push(Piece::Text(counted(if count == 1 {
+                "thought_one"
+            } else {
+                "thought"
+            }))),
             (Category::Command, _) => {
                 let base = if count == 1 { "ran_one" } else { "ran" };
                 pieces.push(Piece::Text(counted(base)))
             }
             (Category::Read, Some(s)) => {
                 pieces.push(Piece::Text(word("read_named").into()));
-                pieces.push(Piece::Name(s));
+                pieces.push(Piece::Path(s));
             }
             (Category::Read, None) => pieces.push(Piece::Text(counted("read"))),
             (Category::Write, Some(s)) => {
                 pieces.push(Piece::Text(word("write_named").into()));
-                pieces.push(Piece::Name(s));
+                pieces.push(Piece::Path(s));
             }
             (Category::Write, None) => pieces.push(Piece::Text(counted("write"))),
             (Category::Search, Some(s)) => {

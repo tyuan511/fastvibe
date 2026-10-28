@@ -1,0 +1,53 @@
+_version: 2
+
+palette.placeholder:
+  zh: "搜索聊天"
+  en: "Search chats"
+palette.include_archived:
+  zh: "包括已归档对话"
+  en: "Include archived chats"
+palette.empty:
+  zh: "没有匹配的结果"
+  en: "No matching results"
+palette.searching:
+  zh: "正在搜索正文…"
+  en: "Searching chats…"
+palette.offline:
+  zh: "连接服务器后可搜索正文"
+  en: "Connect to the server to search transcript text"
+palette.failed:
+  zh: "搜索失败：%{error}"
+  en: "Search failed: %{error}"
+palette.group_chats:
+  zh: "聊天"
+  en: "Chats"
+palette.group_actions:
+  zh: "快捷操作"
+  en: "Actions"
+palette.group_settings:
+  zh: "设置"
+  en: "Settings"
+palette.new_chat:
+  zh: "新对话"
+  en: "New chat"
+palette.open_folder:
+  zh: "打开文件夹"
+  en: "Open folder"
+palette.settings:
+  zh: "设置"
+  en: "Settings"
+palette.new_session:
+  zh: "新会话"
+  en: "New chat"
+palette.archived:
+  zh: "已归档"
+  en: "Archived"
+palette.keywords.new:
+  zh: "新聊天 新建 新会话 new chat"
+  en: "新聊天 新建 新会话 new chat"
+palette.keywords.folder:
+  zh: "打开项目 添加项目 文件夹 open folder project"
+  en: "打开项目 添加项目 文件夹 open folder project"
+palette.keywords.settings:
+  zh: "偏好 通用 settings preferences"
+  en: "偏好 通用 settings preferences"

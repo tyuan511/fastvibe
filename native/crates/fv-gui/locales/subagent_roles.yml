@@ -13,11 +13,11 @@ subagent_roles.description_shown_when_the_main:
   zh: "供主 Agent 选择角色时参考的说明"
   en: "Description shown when the main Agent chooses a role"
 subagent_roles.role_templates:
-  zh: "角色模板"
-  en: "Role templates"
+  zh: "自定义子 Agent"
+  en: "Custom subagents"
 subagent_roles.new_role:
-  zh: "新建角色"
-  en: "New role"
+  zh: "添加子 Agent"
+  en: "Add subagent"
 subagent_roles.roles_can_define_instructions_model:
   zh: "角色可指定说明、模型、思考强度和工具范围。修改或删除模板不影响已有子任务；主 Agent 创建任务时可按角色 ID 选择。"
   en: "Roles can define instructions, model, thinking level, and tool scope. Editing or deleting a template does not affect existing subtasks; the main Agent can choose a role by ID."
@@ -37,11 +37,11 @@ subagent_roles.loading_roles:
   zh: "正在读取角色…"
   en: "Loading roles…"
 subagent_roles.inherit_parent_model:
-  zh: "继承父任务模型"
-  en: "Inherit parent model"
+  zh: "跟随主模型"
+  en: "Follow parent model"
 subagent_roles.inherit_thinking_level:
-  zh: "继承思考强度"
-  en: "Inherit thinking level"
+  zh: "跟随主 Agent"
+  en: "Follow parent agent"
 subagent_roles.read_only_workspace:
   zh: "只读工作区"
   en: "Read-only workspace"
@@ -72,3 +72,57 @@ subagent_roles.close_editor:
 subagent_roles.role_id_arg1:
   zh: "角色 ID：%{arg1}"
   en: "Role ID: %{arg1}"
+subagent_roles.header:
+  zh: "管理可委派的角色，每个角色可独立设置模型和推理强度。"
+  en: "Manage delegatable roles, each with its own model and reasoning level."
+subagent_roles.fallback:
+  zh: "未指定模型或推理强度时跟随主 Agent。"
+  en: "An unset model or reasoning level follows the parent agent."
+subagent_roles.refresh:
+  zh: "刷新"
+  en: "Refresh"
+subagent_roles.empty:
+  zh: "还没有自定义子 Agent"
+  en: "No custom subagents yet"
+subagent_roles.read_only_chip:
+  zh: "只读"
+  en: "Read-only"
+subagent_roles.all_tools:
+  zh: "全部可用工具"
+  en: "All available tools"
+subagent_roles.role_id:
+  zh: "名称"
+  en: "Name"
+subagent_roles.role_id_hint:
+  zh: "仅限字母、数字、下划线和连字符"
+  en: "Letters, numbers, underscores and hyphens only"
+subagent_roles.description:
+  zh: "描述"
+  en: "Description"
+subagent_roles.tools:
+  zh: "可用工具"
+  en: "Available tools"
+subagent_roles.tools_hint:
+  zh: "这个角色可以使用的工具"
+  en: "Tools this role can use"
+subagent_roles.model_and_thinking:
+  zh: "模型与推理强度"
+  en: "Model and reasoning"
+subagent_roles.prompt:
+  zh: "系统提示词"
+  en: "System prompt"
+subagent_roles.edit_title:
+  zh: "编辑子 Agent"
+  en: "Edit subagent"
+subagent_roles.add_title:
+  zh: "添加子 Agent"
+  en: "Add subagent"
+subagent_roles.form_desc:
+  zh: "主 Agent 调用 subagent 时使用的角色名。"
+  en: "The role name the main agent passes to the subagent tool."
+subagent_roles.cancel:
+  zh: "取消"
+  en: "Cancel"
+subagent_roles.save:
+  zh: "保存"
+  en: "Save"

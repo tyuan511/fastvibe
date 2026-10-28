@@ -205,16 +205,33 @@ impl EventMapper {
             },
             AgentEvent::CompactionStarted { id } => vec![LogEvent::ItemStarted {
                 turn_id,
-                item: Item::ContextCompaction { id },
+                item: Item::ContextCompaction {
+                    id,
+                    reason: None,
+                    tokens_before: None,
+                    tokens_after: None,
+                },
+            }],
+            AgentEvent::CompactionDone { id, stats, .. } => vec![LogEvent::ItemCompleted {
+                turn_id,
+                item: Item::ContextCompaction {
+                    id,
+                    reason: stats.as_ref().map(|s| s.reason.clone()),
+                    tokens_before: stats.as_ref().map(|s| s.tokens_before),
+                    tokens_after: stats.as_ref().map(|s| s.tokens_after),
+                },
             }],
             // A failed one is closed too, so no client is left showing it in progress; the
             // turn reports the failure itself.
-            AgentEvent::CompactionDone { id, .. } | AgentEvent::CompactionFailed { id } => {
-                vec![LogEvent::ItemCompleted {
-                    turn_id,
-                    item: Item::ContextCompaction { id },
-                }]
-            }
+            AgentEvent::CompactionFailed { id } => vec![LogEvent::ItemCompleted {
+                turn_id,
+                item: Item::ContextCompaction {
+                    id,
+                    reason: None,
+                    tokens_before: None,
+                    tokens_after: None,
+                },
+            }],
             AgentEvent::NestedToolStarted {
                 call_id,
                 name,

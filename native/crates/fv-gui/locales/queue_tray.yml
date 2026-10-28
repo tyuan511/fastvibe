@@ -1,0 +1,17 @@
+_version: 2
+
+queue_tray.stopped:
+  zh: "由于你中断了当前响应，队列已暂停"
+  en: "The queue is paused because you interrupted the current reply"
+queue_tray.error:
+  zh: "由于当前响应出错，队列已暂停（内容未丢失）"
+  en: "The queue is paused because the current reply failed (nothing was lost)"
+queue_tray.now:
+  zh: "立即发送"
+  en: "Send now"
+queue_tray.remove:
+  zh: "移除待发送消息"
+  en: "Remove queued message"
+queue_tray.continue:
+  zh: "继续发送"
+  en: "Continue sending"

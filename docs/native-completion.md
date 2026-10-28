@@ -846,3 +846,22 @@ Electron 版滚动转写时把最近一条滚出视口的用户提示词 pin 在
 - **一致只有一个方向是硬性的**：有构建的平台**必须**显示这一页，否则用户没法装——`every_os_with_a_build_shows_the_pane` 钉住 `artifact()` 成功的每个 os/arch 都被共享判定认为支持。反过来允许不同：共享判定按 OS 回答，所以 32 位 Windows 保留这一页并在页内读到不支持的原因，那正是 `unsupported_reason` 存在的理由。
 
 **验证**：`fv-server` 两个新单测（回退工具的四态真值表、构建与页可见性一致），`fv-gui/tests/settings_sections.rs` 三个用例（驱动平台每一页都可见、Linux 只少电脑操控这一页、未知平台同样隐藏）；后者遍历 `all_sections()` 而不是手写变体列表，所以以后新增一页会自动被覆盖。
+
+## 第五十八批：界面逐屏对照 Electron 版
+
+方法：Electron 预览（`mock.html`，`pnpm exec vite src/renderer --config vite.config.ts --port 5199`）与原生 `--fixture … --settings …` 在同一 1100×720 窗口截图，逐屏对比后改原生。新增的开发用入口：`--settings <任一分区 id>`（与 Electron 路由同名）、`import-sample`、`mcp-form`、`usage[-en][-tail]`，`--fixture schedules|schedules-empty|schedules-detail|schedules-edit|goal|skills`。
+
+**协议与服务端**（schema 已重新生成）：
+- `AppSettings` 增加 `aiLanguage`（AI 偏好语言，每轮作为系统提示的语言要求，与 Electron `output-language` 措辞一致）、`toolSearchEnabled`（关掉则不提供 `tool_search`）、`collapseThinking`（折叠思考内容，仅界面）、`notifications`（系统通知）；`keepAwake` 默认改为开，与 Electron 一致。
+- 压缩记录 `Message::Compaction.stats`（原因 `threshold|overflow|manual`、压缩前后请求 token），`Item::ContextCompaction` 带出 `reason/tokensBefore/tokensAfter`，分隔线显示「已压缩上下文 · 接近上限 · 128.0K → 24.4K」。
+
+**界面**：
+- 设置导航宽度跟随主侧栏、行距/图标与 Electron 一致；卡片圆角 12；行标题 14/20。
+- 偏好设置按 语言 / 外观 / 运行时 / 对话 分组，补齐 AI 偏好语言、系统通知、工具搜索、折叠思考内容；自动归档挪到「归档对话」页并改为天数选单（永不/7/14/30/90/180/365）。
+- 快捷键页改为 Electron 的分组卡片行（发送/通用/对话/视图），文案与说明按 Electron；导入页按来源分行（品牌图标、会话数、最近日期）+ 勾选导入；网络代理改为 开关 → 协议/主机/端口 → 应用；浏览器设置改为行式。
+- 会话模型选择器、供应商行字号；回复下方「用时」与「从此处分叉」文案；推荐回复的 Tab 键帽。
+- 工具折叠行：文件名是下划线路径链接（查询仍是 chip），折叠箭头紧跟文字；折叠思考内容打开时已写完的思考并入批次并计为「思考 N 次」。
+- 系统通知（`notify.rs`，`NSUserNotification`）：窗口失焦时任务完成/出错提醒；会话在等回答且不在屏幕上时提醒。
+- 使用统计、子 Agent、长期记忆、MCP（表单改为对话框）、技能、关于、个性化、定时任务、⌘K 面板、`/` 与 `@` 菜单、项目对话框、队列/目标托盘、右侧面板逐一按 Electron 重排（详见各文件）。
+
+**仍不同的（功能缺口，不是样式）**：插件页（原生无 pi 扩展）、电脑操控的后台投递/剪贴板开关、浏览器的系统浏览器与 Cookie 导入、按项目默认模型、CC Switch 导入、远程访问与 SSH 页（按计划后置）、内置子 Agent 角色、队列拖动排序/编辑。

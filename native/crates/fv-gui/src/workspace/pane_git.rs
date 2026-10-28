@@ -18,6 +18,7 @@
 //! - **History's refs are drawn from git's own topology.** A merge has two parent lines; the graph
 //!   does not invent a straight line through it.
 
+use crate::ui::px;
 use fv_protocol::methods::*;
 use fv_protocol::types::*;
 use fv_theme::Token;
@@ -216,9 +217,9 @@ enum Group {
 impl Group {
     fn label(self) -> &'static str {
         match self {
-            Group::Conflicted => "冲突",
+            Group::Conflicted => "合并冲突",
             Group::Staged => "已暂存",
-            Group::Unstaged => "未暂存",
+            Group::Unstaged => "变更",
         }
     }
 
@@ -227,9 +228,9 @@ impl Group {
             return self.label();
         }
         match self {
-            Group::Conflicted => "Conflicted",
+            Group::Conflicted => "Merge conflicts",
             Group::Staged => "Staged",
-            Group::Unstaged => "Unstaged",
+            Group::Unstaged => "Changes",
         }
     }
 
@@ -264,29 +265,24 @@ enum TreeNode {
 /// Same inset as `git-change-list.tsx`: `paddingLeft: 6 + depth * 14`.
 const TREE_BASE: f32 = 6.0;
 const TREE_STEP: f32 = 14.0;
-/// The directory row's chevron, and the gap before the icon that follows it.
+/// The chevron slot every tree row keeps (`w-3`), and the row's own gap (`gap-1.5`).
 const TREE_CHEVRON: f32 = 12.0;
-const TREE_ICON_GAP: f32 = 4.0;
-/// File rows draw a 2px selection border; directory rows do not. The file's padding
-/// gives that width back so the two icons share an x.
+const ROW_GAP: f32 = 6.0;
+/// Every row draws a 2px left rule (the selection's), directories as well as files.
+#[cfg(test)]
 const TREE_FILE_BORDER: f32 = 2.0;
 
 fn tree_pad(depth: usize) -> f32 {
     TREE_BASE + depth as f32 * TREE_STEP
 }
 
-/// Left padding of a tree file, so its icon lands on the folder icon at the same depth.
-fn tree_file_pad(depth: usize) -> f32 {
-    tree_pad(depth) + TREE_CHEVRON + TREE_ICON_GAP - TREE_FILE_BORDER
-}
-
-/// Where a tree icon starts, measured from the row's left edge.
+/// Where a tree icon starts, measured from the row's left edge. Both kinds of row carry the
+/// border, the inset and the chevron slot, so a file's icon lands on its folder's at one depth.
+/// Nothing on screen reads it; it is the invariant, stated once, that `git_state`'s test checks.
+#[cfg(test)]
 fn tree_icon_x(depth: usize, file: bool) -> f32 {
-    if file {
-        TREE_FILE_BORDER + tree_file_pad(depth)
-    } else {
-        tree_pad(depth) + TREE_CHEVRON + TREE_ICON_GAP
-    }
+    let _ = file;
+    TREE_FILE_BORDER + tree_pad(depth) + TREE_CHEVRON + ROW_GAP
 }
 
 /// Build the tree from the rows, so a deleted file still shows its directories (they exist only in
@@ -370,6 +366,26 @@ fn compact(node: TreeNode) -> TreeNode {
                 children,
             }
         }
+    }
+}
+
+/// Every file under a tree node, in order: what staging a folder stages.
+fn collect_paths(node: &TreeNode, out: &mut Vec<String>) {
+    match node {
+        TreeNode::File(row) => out.push(row.path.clone()),
+        TreeNode::Directory { children, .. } => {
+            for child in children {
+                collect_paths(child, out);
+            }
+        }
+    }
+}
+
+/// The group a directory's rows belong to; a tree is built per group, so the first file says.
+fn first_group(node: &TreeNode) -> Option<Group> {
+    match node {
+        TreeNode::File(row) => Some(row.group),
+        TreeNode::Directory { children, .. } => children.iter().find_map(first_group),
     }
 }
 
@@ -459,18 +475,19 @@ impl Workspace {
         container.select(&cwd);
         let view: &mut state::GitRepoView = container;
         view.editor = Some(editor.clone());
-        editor.update(cx, |state, cx| {
-            state.set_value("feat(native): read git in the side pane", window, cx)
-        });
+        // Empty, as Electron's mock: the capture shows the hint naming the branch.
+        let _ = &editor;
         view.status = fixture_status(&cwd);
-        view.message = "feat(native): read git in the side pane".into();
-        view.show_history = false;
-        // The fixture opens the pane wide enough for side-by-side, so that mode is what the capture
-        // shows. At the default width the pane refuses it (two 150px columns are not readable), and
-        // a fixture that forced it would be photographing a layout the app will not draw.
+        view.message = String::new();
+        view.show_history = true;
+        // The default capture is Electron's `?pane=git`: the pane at its default width, unified.
+        // `FV_FIXTURE_GIT=split` maximizes it for side-by-side, which the default width refuses
+        // (two 150px columns are not readable).
         self.side_pane_width = Some(super::pane::DEFAULT_WIDTH);
-        self.side_pane_maximized = true;
-        view.split = true;
+        if std::env::var("FV_FIXTURE_GIT").is_ok_and(|v| v == "split") {
+            self.side_pane_maximized = true;
+            view.split = true;
+        }
         if let Some(status) = &view.status
             && let Some(first) = status
                 .files
@@ -568,6 +585,17 @@ impl Workspace {
                 &editor,
                 window,
                 move |this, source, event: &InputEvent, _, cx| {
+                    if matches!(
+                        event,
+                        InputEvent::PressEnter {
+                            secondary: true,
+                            ..
+                        }
+                    ) {
+                        // ⌘Enter commits, exactly as the hint says.
+                        this.git_commit(&owner, false, cx);
+                        return;
+                    }
                     if !matches!(event, InputEvent::Change) {
                         return;
                     }
@@ -585,6 +613,54 @@ impl Workspace {
             )
             .detach();
             self.git_repo_mut(&target).unwrap().editor = Some(editor);
+        }
+        // The hint names the branch a ⌘Enter commits to, and turns into a progress line while a
+        // message is being written.
+        let english = self.english();
+        let hint = self.git_repo_mut(&target).map(|view| {
+            let branch = view
+                .status
+                .as_ref()
+                .and_then(|s| s.branch.clone())
+                .unwrap_or_else(|| "HEAD".into());
+            // `@min-[13rem]/commit-input`: below 208px the hint would wrap, so it is the label.
+            let width = if view.tree_width > 0.0 {
+                view.tree_width
+            } else {
+                224.0
+            };
+            let roomy = width - 16.0 >= 208.0;
+            match (view.generating, roomy, english) {
+                (true, _, false) => "正在生成提交信息…".to_string(),
+                (true, _, true) => "Generating commit message…".to_string(),
+                (false, true, false) => format!("提交信息（⌘Enter 提交到 {branch}）"),
+                (false, true, true) => format!("Message (⌘Enter to commit on {branch})"),
+                (false, false, false) => "提交信息".to_string(),
+                (false, false, true) => "Commit message".to_string(),
+            }
+        });
+        if let Some(hint) = hint
+            && let Some(view) = self.git_repo_mut(&target)
+            && view.hint_shown != hint
+            && let Some(editor) = view.editor.clone()
+        {
+            // The hint is drawn over the field by the commit box, on one truncated line: the
+            // editor's own placeholder wraps, and a two-line empty field is twice as tall.
+            if view.hint_shown.is_empty() {
+                editor.update(cx, |state, cx| state.set_placeholder("", window, cx));
+            }
+            view.hint_shown = hint;
+        }
+        let generated = self
+            .git_repo_mut(&target)
+            .and_then(|view| view.generated.take().zip(view.editor.clone()));
+        if let Some(((expected, message), editor)) = generated
+            && editor.read(cx).value().as_ref() == expected
+        {
+            if let Some(view) = self.git_repo_mut(&target) {
+                view.message = message.clone();
+            }
+            editor.update(cx, |state, cx| state.set_value(message, window, cx));
         }
         let editor = self
             .git_repo_mut(&target)
@@ -700,11 +776,13 @@ impl Workspace {
         let (Some(target), Some(backend)) = (self.git_target(), self.backend.clone()) else {
             return;
         };
-        let Some(epoch) = self
-            .git_repo_mut(&target)
-            .unwrap()
-            .begin_history(skip, tips.as_deref())
-        else {
+        let view = self.git_repo_mut(&target).unwrap();
+        let scope = if view.history_current {
+            HistoryScope::Current
+        } else {
+            HistoryScope::All
+        };
+        let Some(epoch) = view.begin_history(skip, tips.as_deref()) else {
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -712,7 +790,7 @@ impl Workspace {
                 .call::<WorkspaceGitHistory>(GitHistoryParams {
                     cwd: target.cwd.clone(),
                     skip: Some(skip),
-                    scope: HistoryScope::All,
+                    scope,
                     tips,
                 })
                 .await;
@@ -783,15 +861,18 @@ impl Workspace {
         .detach();
     }
 
-    fn git_commit(&mut self, target: &GitTarget, cx: &mut Context<Self>) {
-        let english = self.english();
+    /// Stage everything, write a message if there is none, commit, and push when asked — the
+    /// one path Electron's `performGitCommit` takes for 提交 and 提交并推送 alike.
+    fn git_commit(&mut self, target: &GitTarget, push: bool, cx: &mut Context<Self>) {
         if !self.git_target_is_current(target) {
             return;
         }
         let Some(backend) = self.backend.clone() else {
             return;
         };
+        let conversation = target.conversation.clone();
         let view = self.git_repo_mut(target).unwrap();
+        view.commit_menu = false;
         let draft = view
             .editor
             .as_ref()
@@ -799,47 +880,75 @@ impl Workspace {
             .unwrap_or_else(|| view.message.clone());
         view.message = draft.clone();
         let message = draft.trim().to_string();
-        if message.is_empty() {
-            view.notice = Some(trs!(english, "pane_git.write_a_commit_message_first").into());
-            cx.notify();
-            return;
-        }
         if !view.begin_write() {
             cx.notify();
             return;
         }
+        view.generating = message.is_empty();
         let target = target.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = match backend
-                .call::<WorkspaceGitStage>(GitPathsParams {
-                    cwd: target.cwd.clone(),
-                    paths: Vec::new(),
-                    all: true,
-                })
-                .await
-            {
-                Ok(_) => {
+            let result: Result<(GitStatus, Option<String>), String> = async {
+                backend
+                    .call::<WorkspaceGitStage>(GitPathsParams {
+                        cwd: target.cwd.clone(),
+                        paths: Vec::new(),
+                        all: true,
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let message = if message.is_empty() {
                     backend
-                        .call::<WorkspaceGitCommit>(GitCommitParams {
+                        .call::<WorkspaceGitGenerateCommitMessage>(GitGenerateCommitMessageParams {
                             cwd: target.cwd.clone(),
-                            message,
-                            amend: false,
+                            conversation_id: conversation,
+                            include_unstaged: false,
                         })
                         .await
+                        .map_err(|e| e.to_string())?
+                        .message
+                } else {
+                    message
+                };
+                let committed = backend
+                    .call::<WorkspaceGitCommit>(GitCommitParams {
+                        cwd: target.cwd.clone(),
+                        message,
+                        amend: false,
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if !push {
+                    return Ok((committed, None));
                 }
-                Err(error) => Err(error),
-            };
+                match backend
+                    .call::<WorkspaceGitPush>(CwdParams {
+                        cwd: target.cwd.clone(),
+                    })
+                    .await
+                {
+                    Ok(status) => Ok((status, None)),
+                    Err(error) => Ok((committed, Some(error.to_string()))),
+                }
+            }
+            .await;
             this.update(cx, |this, cx| {
                 let english = this.english();
                 let current = this.git_target_is_current(&target);
                 let mut refresh_history = false;
                 if let Some(view) = this.git_repo_mut(&target) {
                     view.end_write();
+                    view.generating = false;
                     match result {
-                        Ok(status) => {
+                        Ok((status, push_error)) => {
                             view.status = Some(status);
-                            view.notice = None;
+                            view.notice = push_error.map(|error| {
+                                if english {
+                                    format!("Commit succeeded, but push failed: {error}")
+                                } else {
+                                    format!("提交已完成，但推送失败：{error}")
+                                }
+                            });
                             // Keep anything typed while the commit was running.
                             let editor_text = view
                                 .editor
@@ -858,6 +967,100 @@ impl Workspace {
                 if refresh_history {
                     this.load_git_history(0, None, cx);
                 }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// AI 生成提交信息: describe the whole tree into the editor, unless the draft changed meanwhile.
+    fn git_generate(&mut self, target: &GitTarget, cx: &mut Context<Self>) {
+        if !self.git_target_is_current(target) {
+            return;
+        }
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let view = self.git_repo_mut(target).unwrap();
+        if view.generating || view.write_busy {
+            return;
+        }
+        let original = view
+            .editor
+            .as_ref()
+            .map(|editor| editor.read(cx).value().to_string())
+            .unwrap_or_else(|| view.message.clone());
+        view.generating = true;
+        let target = target.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = backend
+                .call::<WorkspaceGitGenerateCommitMessage>(GitGenerateCommitMessageParams {
+                    cwd: target.cwd.clone(),
+                    conversation_id: target.conversation.clone(),
+                    include_unstaged: true,
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let english = this.english();
+                if let Some(view) = this.git_repo_mut(&target) {
+                    view.generating = false;
+                    match result {
+                        Ok(generated) => view.generated = Some((original, generated.message)),
+                        Err(error) => {
+                            view.notice = Some(if english {
+                                format!("Could not generate a commit message: {error}")
+                            } else {
+                                format!("生成提交信息失败：{error}")
+                            })
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// 拉取 / 推送 from the pane's header: the status that comes back replaces the one drawn, and a
+    /// failure is the pane's notice, as every other write here.
+    fn git_sync(&mut self, target: &GitTarget, push: bool, cx: &mut Context<Self>) {
+        if !self.git_target_is_current(target) {
+            return;
+        }
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let view = self.git_repo_mut(target).unwrap();
+        if !view.begin_write() {
+            cx.notify();
+            return;
+        }
+        let target = target.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let params = CwdParams {
+                cwd: target.cwd.clone(),
+            };
+            let result = if push {
+                backend.call::<WorkspaceGitPush>(params).await
+            } else {
+                backend.call::<WorkspaceGitPull>(params).await
+            };
+            this.update(cx, |this, cx| {
+                if let Some(view) = this.git_repo_mut(&target) {
+                    view.end_write();
+                    match result {
+                        Ok(status) => {
+                            view.status = Some(status);
+                            view.notice = None;
+                        }
+                        Err(error) => view.notice = Some(error.to_string()),
+                    }
+                }
+                this.load_git_history(0, None, cx);
                 cx.notify();
             })
             .ok();
@@ -942,6 +1145,7 @@ impl Workspace {
             view.navigation.anchor.scroll_to(window, cx);
         }
         let p = self.palette.clone();
+        let selector_count = roots.len();
         let mut selector = div()
             .id("git-repositories")
             .h(px(32.0))
@@ -999,11 +1203,13 @@ impl Workspace {
                     })),
             );
         }
+        // The switcher exists only when there is something to switch between.
+        let several = selector_count >= 2;
         div()
             .size_full()
             .flex()
             .flex_col()
-            .child(selector)
+            .when(several, |d| d.child(selector))
             .child(
                 div()
                     .flex_1()
@@ -1077,6 +1283,8 @@ impl Workspace {
         let tree = !view.flat;
         let tree_hidden = view.tree_hidden;
         let history_open = view.show_history;
+        let view_history_current = view.history_current;
+        let selected_revision = view.selected_revision.clone();
         let collapsed = view.collapsed.clone();
         let selected_source = view
             .selected_source
@@ -1091,7 +1299,8 @@ impl Workspace {
         } else {
             224.0
         }
-        .clamp(120.0, (self.pane_content_width - 192.0).max(120.0));
+        // `min-w-[120px] max-w-[75%]`, as Electron's list column.
+        .clamp(120.0, (self.pane_content_width * 0.75).max(120.0));
         // Side by side needs two columns that can each hold a line of code; a narrow pane wraps
         // every line into a stack of words instead, so it keeps the unified view.
         let wide_enough = self.pane_content_width >= super::pane::SPLIT_MIN_WIDTH;
@@ -1108,25 +1317,48 @@ impl Workspace {
             let group_paths: Vec<String> = grouped.iter().map(|r| r.path.clone()).collect();
             let key = group_key.clone();
             let group_target = target.clone();
+            // `GitChangeGroup`: a muted band, the title, a count pill, and the group's one write.
             list = list.child(
                 div()
                     .id(SharedString::from(group_key))
-                    .h(px(28.0))
+                    .h(px(32.0))
+                    .flex_none()
                     .px(px(8.0))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(4.0))
+                    .bg(p.c(Token::Muted))
+                    .border_b_1()
+                    .border_color(p.c(Token::Border).opacity(0.4))
                     .text_size(px(TEXT_XS))
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
-                    .child(ui::chevron(open, 12.0, p.c(Token::MutedForeground)))
-                    .child(group.label_for(english))
                     .child(
                         div()
-                            .text_color(p.c(Token::MutedForeground))
-                            .child(grouped.len().to_string()),
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(ui::chevron(open, 12.0, p.c(Token::Foreground)))
+                            .child(ui::truncate(group.label_for(english)))
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .min_w(px(20.0))
+                                    .px(px(6.0))
+                                    .py(px(2.0))
+                                    .rounded_full()
+                                    .bg(p.c(Token::Foreground).opacity(0.07))
+                                    .flex()
+                                    .justify_center()
+                                    .text_size(px(10.0))
+                                    .line_height(px(10.0))
+                                    .font_weight(FontWeight::NORMAL)
+                                    .text_color(p.c(Token::MutedForeground))
+                                    .child(grouped.len().to_string()),
+                            ),
                     )
-                    .child(div().flex_1())
                     .when(group != Group::Conflicted, |d| {
                         d.child(
                             icon_button_xs(
@@ -1208,6 +1440,28 @@ impl Workspace {
             status.changed > 0 && !write_busy,
             cx,
         );
+        let history_current = view_history_current;
+        let history_branch = history.as_ref().and_then(|h| h.branch.clone());
+        let history_button = |id: &'static str, glyph: &'static str, label: &'static str| {
+            icon_button_xs(id, glyph, &p)
+                .aria_label(label)
+                .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+        };
+        // `GitHistoryPanel`'s header: the fold, the branch scope, 定位 HEAD and its own refresh.
+        let set_scope = |current: bool| {
+            move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
+                if let Some(view) = this
+                    .selected
+                    .as_ref()
+                    .and_then(|id| this.git_views.get_mut(id))
+                {
+                    view.history_current = current;
+                    view.show_history = true;
+                }
+                this.load_git_history(0, None, cx);
+                cx.notify();
+            }
+        };
         let mut history_column = div()
             .flex_none()
             .border_t_1()
@@ -1216,34 +1470,114 @@ impl Workspace {
             .flex_col()
             .child(
                 div()
-                    .id("git-history-toggle")
                     .h(px(32.0))
                     .flex_none()
-                    .px(px(8.0))
+                    .px(px(6.0))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .text_size(px(TEXT_XS))
-                    .font_weight(FontWeight::MEDIUM)
-                    .cursor_pointer()
-                    .child(ui::chevron(history_open, 12.0, p.c(Token::MutedForeground)))
-                    .child(trs!(english, "pane_git.commit_history"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(view) = this
-                            .selected
-                            .as_ref()
-                            .and_then(|id| this.git_views.get_mut(id))
-                        {
-                            view.show_history = !view.show_history;
-                        }
-                        this.load_git_history(0, None, cx);
-                        cx.notify();
-                    })),
+                    .gap(px(2.0))
+                    .bg(p.c(Token::Muted))
+                    .border_b_1()
+                    .border_color(p.c(Token::Border).opacity(0.4))
+                    .child(
+                        div()
+                            .id("git-history-toggle")
+                            .h(px(28.0))
+                            .flex_1()
+                            .min_w_0()
+                            .px(px(2.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .text_size(px(TEXT_XS))
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .child(ui::chevron(history_open, 12.0, p.c(Token::Foreground)))
+                            .child(ui::truncate(trs!(english, "pane_git.commit_history")))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(view) = this
+                                    .selected
+                                    .as_ref()
+                                    .and_then(|id| this.git_views.get_mut(id))
+                                {
+                                    view.show_history = !view.show_history;
+                                }
+                                this.load_git_history(0, None, cx);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("git-history-scope")
+                            .h(px(24.0))
+                            .max_w(px(112.0))
+                            .px(px(4.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .rounded(px(6.0))
+                            .text_size(px(11.0))
+                            .cursor_pointer()
+                            .hover(|d| d.bg(p.c(Token::Accent)))
+                            .aria_label(if english {
+                                "History branch scope"
+                            } else {
+                                "历史分支范围"
+                            })
+                            .child(icon("git-branch", 12.0, p.c(Token::Foreground)))
+                            .child(ui::truncate(match (history_current, english) {
+                                (false, false) => "全部分支".to_string(),
+                                (false, true) => "All branches".to_string(),
+                                (true, _) => history_branch.clone().unwrap_or_else(|| {
+                                    if english {
+                                        "Current branch"
+                                    } else {
+                                        "当前分支"
+                                    }
+                                    .to_string()
+                                }),
+                            }))
+                            .on_click(cx.listener(set_scope(!history_current))),
+                    )
+                    .child(
+                        history_button(
+                            "git-history-head",
+                            "target01",
+                            if english {
+                                "Locate HEAD"
+                            } else {
+                                "定位当前提交 HEAD"
+                            },
+                        )
+                        .on_click(cx.listener(set_scope(true))),
+                    )
+                    .child(
+                        history_button(
+                            "git-history-refresh",
+                            "refresh",
+                            if english {
+                                "Refresh commit history"
+                            } else {
+                                "刷新提交历史"
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(view) = this
+                                .selected
+                                .as_ref()
+                                .and_then(|id| this.git_views.get_mut(id))
+                            {
+                                view.show_history = true;
+                            }
+                            this.load_git_history(0, None, cx);
+                            cx.notify();
+                        })),
+                    ),
             );
         if history_open {
             history_column = history_column
                 .h(relative(0.36))
-                .child(self.git_history_panel(history, cx));
+                .child(self.git_history_panel(history, selected_revision, cx));
         }
         let sidebar = div()
             .w(px(list_width))
@@ -1306,6 +1640,40 @@ impl Workspace {
                 .iter()
                 .filter(|r| matches!(r.kind, super::diff::RowKind::Removed))
                 .count();
+            let english_header = english;
+            let untracked = status
+                .files
+                .iter()
+                .any(|f| f.path == path && f.index == "?");
+            let absolute = if path.starts_with('/') {
+                path.clone()
+            } else {
+                format!("{}/{}", target.cwd.trim_end_matches('/'), path)
+            };
+            let local = std::path::Path::new(&target.cwd).is_dir();
+            let header_button = |id: &'static str, glyph: &'static str, label: &'static str| {
+                let label = SharedString::from(label);
+                icon_button_xs(id, glyph, &p)
+                    .aria_label(label.clone())
+                    .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
+            };
+            let stage_label = if source == DiffSource::Staged {
+                if english_header {
+                    "Unstage"
+                } else {
+                    "取消暂存"
+                }
+            } else if english_header {
+                "Stage"
+            } else {
+                "暂存"
+            };
+            let discard_target = target.clone();
+            let discard_path = path.clone();
+            let open_path = absolute.clone();
+            let open_name = name.clone();
+            let reveal_path = absolute.clone();
+            // `DiffPane`'s header: the file, its counts, and what can be done to it.
             detail = detail.child(
                 div()
                     .h(px(36.0))
@@ -1338,13 +1706,102 @@ impl Workspace {
                             .text_size(px(TEXT_XS))
                             .text_color(p.c(Token::Destructive))
                             .child(format!("−{removals}"))
-                    })),
+                    }))
+                    .when(
+                        source == DiffSource::Staged || source == DiffSource::Unstaged,
+                        |d| {
+                            let stage_path = path.clone();
+                            d.child(
+                                header_button(
+                                    "git-diff-stage",
+                                    if source == DiffSource::Staged {
+                                        "minus-sign"
+                                    } else {
+                                        "add01"
+                                    },
+                                    stage_label,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.git_paths_call(
+                                            &patch_target,
+                                            Some(source != DiffSource::Staged),
+                                            vec![stage_path.clone()],
+                                            false,
+                                            cx,
+                                        )
+                                    },
+                                )),
+                            )
+                        },
+                    )
+                    .when(source == DiffSource::Unstaged, |d| {
+                        d.child(
+                            header_button(
+                                "git-diff-discard",
+                                "delete02",
+                                if english_header { "Discard" } else { "丢弃" },
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    if !this.git_target_is_current(&discard_target) {
+                                        return;
+                                    }
+                                    let action = if untracked {
+                                        GitAction::DeleteUntracked
+                                    } else {
+                                        GitAction::Discard
+                                    };
+                                    if let Some(conversation) = this.selected.clone()
+                                        && let Some(view) = this.git_views.get_mut(&conversation)
+                                    {
+                                        view.pending = Some((action, vec![discard_path.clone()]));
+                                        cx.notify();
+                                    }
+                                },
+                            )),
+                        )
+                    })
+                    .child(
+                        header_button(
+                            "git-diff-open",
+                            "file01",
+                            if english_header {
+                                "Open current file"
+                            } else {
+                                "打开当前文件"
+                            },
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.open_in_pane(open_path.clone(), open_name.clone(), window, cx);
+                            },
+                        )),
+                    )
+                    .when(local, |d| {
+                        d.child(
+                            header_button(
+                                "git-diff-reveal",
+                                "folder01",
+                                if english_header {
+                                    "Show in Finder"
+                                } else {
+                                    "在访达中显示"
+                                },
+                            )
+                            .on_click(move |_, _, cx| {
+                                cx.reveal_path(std::path::Path::new(&reveal_path));
+                            }),
+                        )
+                    }),
             );
+            // The mode toggle and the change counter with its arrows, as `DiffPane`'s second row.
             detail = detail.child(
                 div()
-                    .h(px(32.0))
+                    .min_h(px(32.0))
                     .flex_none()
                     .px(px(8.0))
+                    .py(px(4.0))
                     .flex()
                     .items_center()
                     .gap(px(4.0))
@@ -1360,12 +1817,14 @@ impl Workspace {
                             .items_center()
                             .rounded(px(6.0))
                             .text_size(px(11.0))
+                            .font_weight(FontWeight::MEDIUM)
                             .cursor_pointer()
-                            .hover(|d| d.bg(p.c(Token::Accent)))
-                            .child(if split {
-                                "并排差异"
-                            } else {
-                                "统一差异"
+                            .hover(|d| d.bg(p.c(Token::Muted)))
+                            .child(match (split, english_header) {
+                                (true, false) => "并排对比",
+                                (true, true) => "Side by side",
+                                (false, false) => "合并视图",
+                                (false, true) => "Unified diff",
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !wide_enough {
@@ -1380,77 +1839,94 @@ impl Workspace {
                                 cx.notify();
                             })),
                     )
+                    .child(div().flex_1())
                     .children((hunk_count > 0).then(|| {
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .child(
-                                icon_button_xs("git-previous-hunk", "arrow-up01", &p)
-                                    .aria_label("上一个改动块")
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if this.git_target_is_current(&previous_target)
-                                            && let Some(view) = this.git_repo_mut(&previous_target)
-                                            && view.navigation.step(hunk_count, false)
-                                        {
-                                            cx.notify();
-                                        }
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(TEXT_XS))
-                                    .child(format!("{} / {hunk_count}", hunk)),
-                            )
-                            .child(
-                                icon_button_xs("git-next-hunk", "arrow-down01", &p)
-                                    .aria_label("下一个改动块")
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if this.git_target_is_current(&next_target)
-                                            && let Some(view) = this.git_repo_mut(&next_target)
-                                            && view.navigation.step(hunk_count, true)
-                                        {
-                                            cx.notify();
-                                        }
-                                    })),
-                            )
+                            .text_size(px(10.0))
+                            .text_color(p.c(Token::MutedForeground))
+                            .child(format!("{hunk}/{hunk_count}"))
                     }))
-                    .child(div().flex_1())
-                    .when(
-                        source == DiffSource::Staged || source == DiffSource::Unstaged,
-                        |d| {
-                            d.child(
-                                icon_button_xs(
-                                    "git-diff-stage",
-                                    if source == DiffSource::Staged {
-                                        "minus-sign"
-                                    } else {
-                                        "add01"
-                                    },
-                                    &p,
-                                )
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.git_paths_call(
-                                            &patch_target,
-                                            Some(source != DiffSource::Staged),
-                                            vec![path.clone()],
-                                            false,
-                                            cx,
-                                        )
-                                    },
-                                )),
-                            )
-                        },
+                    .child(
+                        header_button(
+                            "git-previous-hunk",
+                            "arrow-up02",
+                            if english_header {
+                                "Previous change"
+                            } else {
+                                "上一处变更"
+                            },
+                        )
+                        .when(hunk_count == 0, |d| d.opacity(0.5))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this.git_target_is_current(&previous_target)
+                                && let Some(view) = this.git_repo_mut(&previous_target)
+                                && view.navigation.step(hunk_count, false)
+                            {
+                                cx.notify();
+                            }
+                        })),
+                    )
+                    .child(
+                        header_button(
+                            "git-next-hunk",
+                            "arrow-down02",
+                            if english_header {
+                                "Next change"
+                            } else {
+                                "下一处变更"
+                            },
+                        )
+                        .when(hunk_count == 0, |d| d.opacity(0.5))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this.git_target_is_current(&next_target)
+                                && let Some(view) = this.git_repo_mut(&next_target)
+                                && view.navigation.step(hunk_count, true)
+                            {
+                                cx.notify();
+                            }
+                        })),
                     ),
             );
+            // Side by side names the two versions it compares, above the columns.
+            if split {
+                let (left, right) = match (source, english_header) {
+                    (DiffSource::Unstaged, false) => ("暂存区", "工作区"),
+                    (DiffSource::Unstaged, true) => ("Index", "Working tree"),
+                    (DiffSource::Staged, false) => ("HEAD", "暂存区"),
+                    (DiffSource::Staged, true) => ("HEAD", "Index"),
+                    (DiffSource::LastTurn, false) => ("HEAD", "工作区"),
+                    (DiffSource::LastTurn, true) => ("HEAD", "Working tree"),
+                    (DiffSource::Branch, false) => ("基准版本", "HEAD"),
+                    (DiffSource::Branch, true) => ("Base version", "HEAD"),
+                };
+                let cell = |text: &'static str| {
+                    div()
+                        .flex_1()
+                        .flex_basis(px(0.0))
+                        .min_w_0()
+                        .px(px(12.0))
+                        .py(px(4.0))
+                        .child(text)
+                };
+                detail = detail.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .border_b_1()
+                        .border_color(p.c(Token::Border))
+                        .bg(p.c(Token::Muted).opacity(0.3))
+                        .text_size(px(10.0))
+                        .text_color(p.c(Token::MutedForeground))
+                        .child(cell(left).border_r_1().border_color(p.c(Token::Border)))
+                        .child(cell(right)),
+                );
+            }
             detail = detail.child(
                 div()
                     .id("git-diff")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .overflow_x_scroll()
                     .track_scroll(&diff_scroll)
                     .child(self.git_patch_view(&patch_text)),
             );
@@ -1538,12 +2014,40 @@ impl Workspace {
                             .muted(&p)
                             .child(format!("↑{}", status.ahead))
                     }))
+                    .child({
+                        let pull_target = target.clone();
+                        let label = if english { "Pull" } else { "拉取" };
+                        icon_button_xs("git-pull", "arrow-down02", &p)
+                            .aria_label(label)
+                            .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+                            .when(write_busy, |d| d.opacity(0.5))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.git_sync(&pull_target, false, cx)
+                            }))
+                    })
+                    .child({
+                        let push_target = target.clone();
+                        let label = if english { "Push" } else { "推送" };
+                        icon_button_xs("git-push", "arrow-up02", &p)
+                            .aria_label(label)
+                            .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+                            .when(write_busy, |d| d.opacity(0.5))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.git_sync(&push_target, true, cx)
+                            }))
+                    })
                     .child(
                         icon_button_xs(
                             "git-tree-toggle",
                             if tree { "list" } else { "folder-tree" },
                             &p,
                         )
+                        .aria_label(match (tree, english) {
+                            (true, false) => "切换为列表",
+                            (true, true) => "Switch to list",
+                            (false, false) => "切换为目录树",
+                            (false, true) => "Switch to tree",
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(view) = this
                                 .selected
@@ -1593,53 +2097,13 @@ impl Workspace {
         collapsed: &std::collections::HashSet<String>,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let p = &self.palette;
-        let hover = p.c(Token::Accent);
         match node {
-            TreeNode::Directory {
-                name,
-                path,
-                children,
-            } => {
-                let open = !collapsed.contains(path);
-                let key = path.clone();
-                let mut rows = vec![
-                    div()
-                        .id(SharedString::from(format!("git-dir-{path}")))
-                        .h(px(24.0))
-                        .px(px(8.0))
-                        .pl(px(tree_pad(depth)))
-                        .flex()
-                        .items_center()
-                        .gap(px(TREE_ICON_GAP))
-                        .rounded(px(6.0))
-                        .text_size(px(TEXT_XS))
-                        .muted(p)
-                        .cursor_pointer()
-                        .hover(move |d| d.bg(hover))
-                        .child(ui::chevron(open, TREE_CHEVRON, p.c(Token::MutedForeground)))
-                        .child(
-                            img(crate::file_icons::folder_path(
-                                name.rsplit('/').next().unwrap_or(name),
-                                open,
-                                !p.is_dark(),
-                            ))
-                            .size(px(16.0))
-                            .flex_none(),
-                        )
-                        .child(ui::truncate(name.clone()))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(conversation) = this.selected.clone()
-                                && let Some(view) = this.git_views.get_mut(&conversation)
-                            {
-                                if !view.collapsed.remove(&key) {
-                                    view.collapsed.insert(key.clone());
-                                }
-                                cx.notify();
-                            }
-                        }))
-                        .into_any_element(),
-                ];
+            TreeNode::Directory { children, .. } => {
+                let open = match node {
+                    TreeNode::Directory { path, .. } => !collapsed.contains(path),
+                    TreeNode::File(_) => false,
+                };
+                let mut rows = vec![self.git_list_row(node, false, Some(depth), open, cx)];
                 if open {
                     for child in children {
                         rows.extend(self.git_tree_rows(child, depth + 1, selected, collapsed, cx));
@@ -1648,18 +2112,18 @@ impl Workspace {
                 rows
             }
             TreeNode::File(row) => {
-                // The row keeps its group letter: in the tree, `M` and `?` sit beside the same
-                // directories, and which layer a change is in is not visible from the path.
-                // Depth still applies: a file with no inset sits on the left edge while its
-                // folder steps right, which reads as a broken indent.
-                vec![self.git_row(row, selected == Some(row.path.as_str()), Some(depth), cx)]
+                vec![self.git_list_row(
+                    node,
+                    selected == Some(row.path.as_str()),
+                    Some(depth),
+                    false,
+                    cx,
+                )]
             }
         }
     }
 
-    /// One row: its letter, its name, and the two writes it offers on hover.
-    ///
-    /// `depth` is set only in the tree. The flat list has no folders to line up under.
+    /// One row of the flat list.
     fn git_row(
         &self,
         row: &Row,
@@ -1667,165 +2131,283 @@ impl Workspace {
         depth: Option<usize>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.git_list_row(&TreeNode::File(row.clone()), selected, depth, false, cx)
+    }
+
+    /// One row of `git-change-list.tsx`: the chevron slot (tree only), the icon, the name (the
+    /// flat list adds its folder), a fixed-width action slot that hover fills — so hover never
+    /// shifts the name — and the status column (a directory's is its file count).
+    ///
+    /// `depth` is set only in the tree.
+    fn git_list_row(
+        &self,
+        node: &TreeNode,
+        selected: bool,
+        depth: Option<usize>,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let p = &self.palette;
-        let hover = p.c(Token::Accent);
-        let (path, group, letter) = (row.path.clone(), row.group, row.letter.clone());
-        let (stage_path, stage_group) = (path.clone(), group);
-        let (discard_path, discard_group) = (path.clone(), group);
+        let english = self.app_settings.language == UiLanguage::English;
         let Some(target) = self.git_target() else {
             return div().into_any_element();
         };
-        let stage_target = target.clone();
-        let discard_target = target.clone();
-        let letter_color = match letter.as_str() {
-            "?" | "A" => p.c(Token::Success),
-            "D" => p.c(Token::Destructive),
-            "U" => p.c(Token::Destructive),
-            "M" | "T" => p.c(Token::Warning),
-            _ => p.c(Token::MutedForeground),
+        let tree = depth.is_some();
+        let (id, name, group, letter, paths, directory_key) = match node {
+            TreeNode::Directory { name, path, .. } => {
+                let mut files = Vec::new();
+                collect_paths(node, &mut files);
+                let group = first_group(node).unwrap_or(Group::Unstaged);
+                (
+                    format!("git-dir-{path}"),
+                    name.clone(),
+                    group,
+                    String::new(),
+                    files,
+                    Some(path.clone()),
+                )
+            }
+            TreeNode::File(row) => (
+                format!("git-{:?}-{}", row.group, row.path),
+                row.path.rsplit('/').next().unwrap_or(&row.path).to_string(),
+                row.group,
+                row.letter.clone(),
+                vec![row.path.clone()],
+                None,
+            ),
         };
+        let directory = directory_key.is_some();
+        let parent = match node {
+            TreeNode::File(row) if !tree => {
+                row.path.rsplit_once('/').map(|(dir, _)| dir.to_string())
+            }
+            _ => None,
+        };
+        let tone = match letter.as_str() {
+            "?" | "A" => p.c(Token::Success),
+            "D" | "U" => p.c(Token::Destructive),
+            "M" | "T" => p.c(Token::Warning),
+            "R" | "C" => p.c(Token::Info),
+            _ => p.c(Token::MutedForeground).opacity(0.65),
+        };
+        let status = if directory {
+            paths.len().to_string()
+        } else if letter == "?" {
+            "U".to_string()
+        } else {
+            letter.clone()
+        };
+        let icon_name = name.rsplit('/').next().unwrap_or(&name).to_string();
+        let icon_path = if directory {
+            crate::file_icons::folder_path(&icon_name, open, !p.is_dark())
+        } else {
+            crate::file_icons::path(&icon_name, !p.is_dark())
+        };
+        let staging = group != Group::Staged;
+        let editable = group != Group::Conflicted;
+        let stage_label = match (directory, staging, english) {
+            (true, true, false) => format!("暂存目录下 {} 个文件", paths.len()),
+            (true, true, true) => format!("Stage {} files in folder", paths.len()),
+            (true, false, false) => format!("取消目录下 {} 个文件的暂存", paths.len()),
+            (true, false, true) => format!("Unstage {} files in folder", paths.len()),
+            (false, true, false) => format!("暂存 {name}"),
+            (false, true, true) => format!("Stage {name}"),
+            (false, false, false) => format!("取消暂存 {name}"),
+            (false, false, true) => format!("Unstage {name}"),
+        };
+        let group_name = SharedString::from(format!("{id}-row"));
+        let guides = depth.unwrap_or(0);
+        let stage_target = target.clone();
+        let stage_paths = paths.clone();
+        let deleted = letter == "D";
         div()
-            .group(SharedString::from(format!("git-row-{group:?}-{path}")))
-            .id(SharedString::from(format!("git-{group:?}-{path}")))
+            .group(group_name.clone())
+            .id(SharedString::from(id))
+            .relative()
             .h(px(28.0))
             .flex_none()
-            .px(px(8.0))
-            .when_some(depth, |row, depth| row.pl(px(tree_file_pad(depth))))
+            .pl(px(tree_pad(guides)))
+            .pr(px(8.0))
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(ROW_GAP))
             .text_size(px(TEXT_XS))
-            .cursor_pointer()
             .border_l_2()
             .border_color(if selected {
                 p.c(Token::Primary)
             } else {
-                p.c(Token::Primary).opacity(0.0)
+                gpui::transparent_black()
             })
             .when(selected, |d| d.bg(p.c(Token::Primary).opacity(0.1)))
-            .hover(move |d| d.bg(hover))
+            .hover({
+                let fill = if selected {
+                    p.c(Token::Primary).opacity(0.15)
+                } else {
+                    p.c(Token::Foreground).opacity(0.05)
+                };
+                move |d| d.bg(fill)
+            })
+            .when(guides > 0, |d| {
+                let mut lines = div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(10.0))
+                    .flex()
+                    .opacity(0.4);
+                for _ in 0..guides {
+                    lines = lines.child(
+                        div()
+                            .w(px(TREE_STEP))
+                            .h_full()
+                            .border_l_1()
+                            .border_color(p.c(Token::Border).opacity(0.7)),
+                    );
+                }
+                d.child(lines)
+            })
+            .when(tree, |d| {
+                d.child(
+                    div()
+                        .w(px(TREE_CHEVRON))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .when(directory, |d| {
+                            d.child(ui::chevron(open, TREE_CHEVRON, p.c(Token::Foreground)))
+                        }),
+                )
+            })
+            .child(img(icon_path).size(px(16.0)).flex_none())
             .child(
-                img(crate::file_icons::path(
-                    path.rsplit('/').next().unwrap_or(&path),
-                    !p.is_dark(),
-                ))
-                .size(px(16.0))
-                .flex_none(),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .when(directory, |d| {
+                                d.text_color(p.c(Token::Foreground).opacity(0.85))
+                            })
+                            .when(deleted, |d| {
+                                d.text_color(p.c(Token::MutedForeground)).line_through()
+                            })
+                            .child(ui::truncate(name.clone())),
+                    )
+                    .children(parent.map(|parent| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(11.0))
+                            .text_color(p.c(Token::MutedForeground).opacity(0.7))
+                            .child(ui::truncate(parent))
+                    })),
             )
-            .child(div().flex_1().min_w_0().child(ui::truncate(
-                path.rsplit('/').next().unwrap_or(&path).to_string(),
-            )))
+            .when(editable, |d| {
+                d.child(
+                    div()
+                        .w(px(24.0))
+                        .flex_none()
+                        .flex()
+                        .justify_end()
+                        .invisible()
+                        .group_hover(group_name.clone(), |d| d.visible())
+                        .child(
+                            icon_button_xs(
+                                "git-stage",
+                                if staging { "add01" } else { "minus-sign" },
+                                p,
+                            )
+                            .aria_label(SharedString::from(stage_label.clone()))
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(stage_label.clone()).build(window, cx)
+                            })
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    // A staged row goes back to the worktree; an unstaged one goes
+                                    // into the index.
+                                    cx.stop_propagation();
+                                    this.git_paths_call(
+                                        &stage_target,
+                                        Some(staging),
+                                        stage_paths.clone(),
+                                        false,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        ),
+                )
+            })
             .child(
                 div()
                     .w(px(16.0))
                     .flex_none()
-                    .text_size(px(TEXT_XS))
-                    .text_color(letter_color)
-                    .child(SharedString::from(letter)),
-            )
-            .child(
-                div()
                     .flex()
-                    .items_center()
-                    .gap(px(2.0))
-                    .invisible()
-                    .group_hover(
-                        SharedString::from(format!("git-row-{group:?}-{path}")),
-                        |d| d.visible(),
-                    )
-                    .child(
-                        icon_button_xs(
-                            "git-stage",
-                            if group == Group::Staged {
-                                "minus-sign"
-                            } else {
-                                "add01"
-                            },
-                            p,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            // A staged row goes back to the worktree; an unstaged one goes
-                            // into the index.
-                            let staging = stage_group != Group::Staged;
-                            cx.stop_propagation();
-                            this.git_paths_call(
-                                &stage_target,
-                                Some(staging),
-                                vec![stage_path.clone()],
-                                false,
-                                cx,
-                            );
-                        })),
-                    )
-                    .child(
-                        icon_button_xs("git-discard", "delete02", p).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                // What discarding means depends on where the change lives, and
-                                // the dialog says which: a tracked file returns to the index, an
-                                // untracked one is deleted.
-                                cx.stop_propagation();
-                                if !this.git_target_is_current(&discard_target) {
-                                    return;
-                                }
-                                let action = if discard_group == Group::Unstaged
-                                    && this
-                                        .git_views
-                                        .get(&this.selected.clone().unwrap_or_default())
-                                        .and_then(|v| v.status.as_ref())
-                                        .and_then(|s| {
-                                            s.files.iter().find(|f| f.path == discard_path).cloned()
-                                        })
-                                        .is_some_and(|f| f.index == "?")
-                                {
-                                    GitAction::DeleteUntracked
-                                } else {
-                                    GitAction::Discard
-                                };
-                                if let Some(conversation) = this.selected.clone()
-                                    && let Some(view) = this.git_views.get_mut(&conversation)
-                                {
-                                    view.pending = Some((action, vec![discard_path.clone()]));
-                                    cx.notify();
-                                }
-                            },
-                        )),
-                    ),
+                    .justify_end()
+                    .font_family(crate::assets::MONO_FONT)
+                    .text_size(px(11.0))
+                    .text_color(tone)
+                    .child(SharedString::from(status)),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.git_target_is_current(&target) {
                     return;
                 }
-                if let Some(conversation) = this.selected.clone()
-                    && let Some(view) = this.git_views.get_mut(&conversation)
-                {
+                let Some(conversation) = this.selected.clone() else {
+                    return;
+                };
+                if let Some(key) = &directory_key {
+                    if let Some(view) = this.git_views.get_mut(&conversation)
+                        && !view.collapsed.remove(key)
+                    {
+                        view.collapsed.insert(key.clone());
+                    }
+                    cx.notify();
+                    return;
+                }
+                let path = paths[0].clone();
+                if let Some(view) = this.git_views.get_mut(&conversation) {
                     view.selected = Some(path.clone());
                 }
-                this.load_git_diff(path.clone(), group.source(), None, cx);
+                this.load_git_diff(path, group.source(), None, cx);
             }))
             .into_any_element()
     }
 
     /// A patch, drawn by the one diff renderer: real line numbers from the diff itself, wrapped
-    /// lines, and the side-by-side mode the reader can switch to.
+    /// lines, and the side-by-side mode the reader can switch to. Electron's `DiffView` with
+    /// `hideFileHeaders`: the pane's own header already names the file, so `diff --git`,
+    /// `index`, `---` and `+++` are not drawn again. Every line wraps; nothing scrolls sideways.
     fn git_patch_view(&self, text: &str) -> AnyElement {
+        use super::diff::RowKind;
         let p = &self.palette;
-        let doc = super::diff::parse(text);
+        let mut doc = super::diff::parse(text);
+        doc.rows.retain(|row| {
+            row.kind != RowKind::Meta
+                || !["diff --git ", "index ", "--- ", "+++ "]
+                    .iter()
+                    .any(|head| row.text.starts_with(head))
+        });
         let view = self.selected.as_ref().and_then(|id| self.git_views.get(id));
         let split = self.pane_content_width >= super::pane::SPLIT_MIN_WIDTH
             && view.is_some_and(|view| view.split);
         let hunk = view.map(|view| view.navigation.current).unwrap_or(0);
         let anchor = view.map(|view| view.navigation.anchor.clone());
         // Hunks are numbered from 1, the same way the 跳转 control counts them.
-        let chunk: AnyElement = if split {
-            let rows = super::diff::split(&doc.rows);
-            let mut table = div().flex().flex_col().py(px(4.0)).min_w(px(720.0));
-            for row in rows {
-                let selected = row.header.as_ref().is_some_and(|header| {
-                    header.kind == super::diff::RowKind::Hunk && header.hunk == hunk
-                });
+        let mut lines = div().w_full().flex().flex_col();
+        if split {
+            for row in super::diff::split(&doc.rows) {
+                let selected = row
+                    .header
+                    .as_ref()
+                    .is_some_and(|header| header.kind == RowKind::Hunk && header.hunk == hunk);
                 let row = self.diff_split_row(&row, doc.number_width, p);
-                table = if selected {
-                    table.child(
+                lines = if selected {
+                    lines.child(
                         div()
                             .id("git-target-hunk-split")
                             .w_full()
@@ -1833,22 +2415,12 @@ impl Workspace {
                             .child(row),
                     )
                 } else {
-                    table.child(row)
+                    lines.child(row)
                 };
             }
-            div()
-                .id("git-diff-split")
-                .w_full()
-                .whitespace_nowrap()
-                .text_size(px(TEXT_XS))
-                .line_height(px(18.0))
-                .font_family(crate::assets::MONO_FONT)
-                .child(table)
-                .into_any_element()
         } else {
-            let mut lines = div().flex().flex_col().py(px(4.0)).min_w(px(480.0));
             for row in &doc.rows {
-                let selected = row.kind == super::diff::RowKind::Hunk && row.hunk == hunk;
+                let selected = row.kind == RowKind::Hunk && row.hunk == hunk;
                 let row = self.diff_row(row, doc.number_width, p);
                 lines = if selected {
                     lines.child(
@@ -1862,41 +2434,61 @@ impl Workspace {
                     lines.child(row)
                 };
             }
-            div()
-                .id("git-diff-unified")
-                .w_full()
-                .whitespace_nowrap()
-                .text_size(px(TEXT_XS))
-                .line_height(px(18.0))
-                .font_family(crate::assets::MONO_FONT)
-                .child(lines)
-                .into_any_element()
-        };
-        chunk
+        }
+        div()
+            .id(if split {
+                "git-diff-split"
+            } else {
+                "git-diff-unified"
+            })
+            .w_full()
+            .text_size(px(TEXT_XS))
+            .line_height(px(20.0))
+            .font_family(crate::assets::MONO_FONT)
+            .child(lines)
+            .into_any_element()
     }
 
-    /// The gutter's two number cells. Blank where the side has no line, exactly as a unified diff
-    /// reads — a row whose number is invented is worse than no gutter.
-    fn diff_gutter(
-        &self,
-        old: Option<u64>,
-        new: Option<u64>,
-        width: usize,
+    /// The row's fill and its left rule, as `ROW_STYLE` in Electron's `diff-view.tsx`.
+    fn diff_row_style(
+        kind: super::diff::RowKind,
         p: &crate::theme::Palette,
-    ) -> Div {
-        if width == 0 {
-            return div();
+    ) -> (Option<Hsla>, Option<Hsla>, Option<Hsla>) {
+        use super::diff::RowKind;
+        match kind {
+            RowKind::Added => (
+                Some(p.c(Token::Success).opacity(0.10)),
+                Some(p.c(Token::Success)),
+                None,
+            ),
+            RowKind::Removed => (
+                Some(p.c(Token::Destructive).opacity(0.10)),
+                Some(p.c(Token::Destructive)),
+                None,
+            ),
+            RowKind::Hunk => (
+                Some(p.c(Token::Muted).opacity(0.6)),
+                None,
+                Some(p.c(Token::MutedForeground)),
+            ),
+            RowKind::Meta => (None, None, Some(p.c(Token::MutedForeground).opacity(0.7))),
+            RowKind::Skip => (None, None, Some(p.c(Token::MutedForeground).opacity(0.5))),
+            RowKind::Context => (None, None, None),
         }
-        let cell = |value: Option<u64>| -> Div {
-            let text = value.map(|n| n.to_string()).unwrap_or_default();
-            div()
-                .w(px(9.0 + width as f32 * 7.0))
-                .flex_none()
-                .pr(px(6.0))
-                .text_color(p.c(Token::MutedForeground).opacity(0.45))
-                .child(SharedString::from(text))
-        };
-        div().flex().flex_none().child(cell(old)).child(cell(new))
+    }
+
+    /// One gutter cell: `calc(<digits>ch + 0.75rem)` wide, right-aligned.
+    fn diff_number(value: Option<u64>, width: usize, color: Hsla) -> Div {
+        div()
+            .min_w(px(width as f32 * 7.2 + 12.0))
+            .flex_none()
+            .px(px(6.0))
+            .flex()
+            .justify_end()
+            .text_color(color)
+            .child(SharedString::from(
+                value.map(|n| n.to_string()).unwrap_or_default(),
+            ))
     }
 
     fn diff_row(
@@ -1906,34 +2498,55 @@ impl Workspace {
         p: &crate::theme::Palette,
     ) -> AnyElement {
         use super::diff::RowKind;
-        let (bg, fg) = match row.kind {
-            RowKind::Added => (
-                Some(p.c(Token::Success).opacity(0.18)),
-                Some(p.c(Token::Success)),
-            ),
-            RowKind::Removed => (
-                Some(p.c(Token::Destructive).opacity(0.16)),
-                Some(p.c(Token::Destructive)),
-            ),
-            RowKind::Hunk => (
-                Some(p.c(Token::Muted).opacity(0.6)),
-                Some(p.c(Token::MutedForeground)),
-            ),
-            RowKind::Meta | RowKind::Skip => (None, Some(p.c(Token::MutedForeground).opacity(0.7))),
-            RowKind::Context => (None, None),
+        let (bg, rule, fg) = Self::diff_row_style(row.kind, p);
+        let marker = match row.kind {
+            RowKind::Added => Some(p.c(Token::Success)),
+            RowKind::Removed => Some(p.c(Token::Destructive)),
+            RowKind::Context => Some(p.c(Token::MutedForeground).opacity(0.6)),
+            _ => None,
         };
         div()
             .w_full()
-            .whitespace_nowrap()
             .flex()
+            .border_l_2()
+            .border_color(rule.unwrap_or(gpui::transparent_black()))
             .when_some(bg, |d, bg| d.bg(bg))
-            .child(self.diff_gutter(row.old_number, row.new_number, width, p))
+            .when_some(fg, |d, fg| d.text_color(fg))
+            .when(width > 0, |d| {
+                d.child(Self::diff_number(
+                    row.old_number,
+                    width,
+                    p.c(Token::MutedForeground).opacity(0.4),
+                ))
+                .child(
+                    Self::diff_number(
+                        row.new_number,
+                        width,
+                        p.c(Token::MutedForeground).opacity(0.6),
+                    )
+                    .border_r_1()
+                    .border_color(p.c(Token::Border)),
+                )
+            })
+            .child(
+                div()
+                    .w(px(16.0))
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .when_some(marker, |d, c| d.text_color(c))
+                    .child(SharedString::from(row.marker.to_string())),
+            )
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .when_some(fg, |d, fg| d.text_color(fg))
-                    .child(SharedString::from(format!("{}{}", row.marker, row.text))),
+                    .px(px(8.0))
+                    .child(SharedString::from(if row.text.is_empty() {
+                        " ".to_string()
+                    } else {
+                        row.text.clone()
+                    })),
             )
             .into_any_element()
     }
@@ -1945,122 +2558,326 @@ impl Workspace {
         width: usize,
         p: &crate::theme::Palette,
     ) -> AnyElement {
+        use super::diff::RowKind;
         if let Some(header) = &row.header {
-            return self.diff_row(header, width, p);
+            let (bg, _, fg) = Self::diff_row_style(header.kind, p);
+            return div()
+                .w_full()
+                .px(px(12.0))
+                .py(px(2.0))
+                .when_some(bg, |d, bg| d.bg(bg))
+                .when_some(fg, |d, fg| d.text_color(fg))
+                .child(SharedString::from(header.text.clone()))
+                .into_any_element();
         }
-        let half = |row: Option<&super::diff::DiffRow>, right: bool| -> Div {
-            let mut cell = div()
+        let half = |row: Option<&super::diff::DiffRow>,
+                    other: Option<&super::diff::DiffRow>,
+                    right: bool|
+         -> Div {
+            let cell = div()
                 .flex_1()
+                .flex_basis(px(0.0))
                 .min_w_0()
-                .px(px(4.0))
-                .border_r_1()
-                .border_color(p.c(Token::Border));
+                .flex()
+                .border_l_2()
+                .when(!right, |d| d.border_r_1());
             // An empty half stays empty rather than being filled with a neighbour: the alignment
             // is the information.
-            if let Some(row) = row {
-                let bg = match row.kind {
-                    super::diff::RowKind::Added => Some(p.c(Token::Success).opacity(0.18)),
-                    super::diff::RowKind::Removed => Some(p.c(Token::Destructive).opacity(0.16)),
-                    _ => None,
-                };
-                cell = cell.when_some(bg, |d, bg| d.bg(bg)).child(
-                    div()
-                        .flex()
-                        .child(
-                            div()
-                                .w(px(9.0 + width as f32 * 7.0))
-                                .flex_none()
-                                .pr(px(6.0))
-                                .text_color(p.c(Token::MutedForeground).opacity(0.45))
-                                .child(SharedString::from(
-                                    if right {
-                                        row.new_number
-                                    } else {
-                                        row.old_number
-                                    }
-                                    .map(|n| n.to_string())
-                                    .unwrap_or_default(),
-                                )),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(SharedString::from(row.text.clone())),
-                        ),
-                );
-            }
-            cell
+            let Some(row) = row else {
+                return cell
+                    .border_color(p.c(Token::Border))
+                    .bg(p.c(Token::Muted).opacity(0.4));
+            };
+            let (bg, rule, _) = Self::diff_row_style(row.kind, p);
+            // The rule is drawn on the left edge only; the left half's right border is the
+            // column divider, which the theme's border colour draws.
+            let cell = cell
+                .border_color(rule.unwrap_or(gpui::transparent_black()))
+                .when_some(bg, |d, bg| d.bg(bg));
+            let changed = matches!(row.kind, RowKind::Added | RowKind::Removed);
+            let text: AnyElement = match other.filter(|_| changed) {
+                Some(other) => {
+                    let (start, end) = super::diff::changed_range(&row.text, &other.text);
+                    let mark = if row.kind == RowKind::Added {
+                        p.c(Token::Success).opacity(0.25)
+                    } else {
+                        p.c(Token::Destructive).opacity(0.25)
+                    };
+                    gpui::StyledText::new(SharedString::from(row.text.clone()))
+                        .with_highlights([(
+                            start..end,
+                            gpui::HighlightStyle {
+                                background_color: Some(mark),
+                                ..Default::default()
+                            },
+                        )])
+                        .into_any_element()
+                }
+                None => SharedString::from(if row.text.is_empty() {
+                    " ".to_string()
+                } else {
+                    row.text.clone()
+                })
+                .into_any_element(),
+            };
+            cell.when(width > 0, |d| {
+                d.child(
+                    Self::diff_number(
+                        if right {
+                            row.new_number
+                        } else {
+                            row.old_number
+                        },
+                        width,
+                        p.c(Token::MutedForeground).opacity(0.6),
+                    )
+                    .border_r_1()
+                    .border_color(p.c(Token::Border)),
+                )
+            })
+            .child(div().flex_1().min_w_0().px(px(8.0)).child(text))
         };
         div()
             .w_full()
-            .whitespace_nowrap()
             .flex()
-            .child(half(row.left.as_ref(), false))
-            .child(half(row.right.as_ref(), true))
+            .child(half(row.left.as_ref(), row.right.as_ref(), false))
+            .child(half(row.right.as_ref(), row.left.as_ref(), true))
             .into_any_element()
     }
 
-    /// The commit box: the message, and the button that stages everything and commits.
+    /// The commit box (`git-commit-form.tsx`): a one-line message that grows, the AI button
+    /// inside its right edge, and a split 提交 button whose ⌄ offers 提交并推送.
     fn git_commit_box(
         &mut self,
         conversation: &str,
-        message: &str,
+        _message: &str,
         has_changes: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = self.palette.clone();
+        let english = self.english();
         let target = self.git_target();
-        let text_state = self
-            .git_views
-            .get(conversation)
-            .and_then(|v| v.editor.clone());
-        let box_ = div()
+        let view = self.git_views.get(conversation);
+        let text_state = view.and_then(|v| v.editor.clone());
+        let generating = view.is_some_and(|v| v.generating);
+        let busy = view.is_some_and(|v| v.write_busy);
+        let menu_open = view.is_some_and(|v| v.commit_menu);
+        let hint = view
+            .filter(|v| v.generating || v.message.is_empty())
+            .map(|v| v.hint_shown.clone())
+            .filter(|hint| !hint.is_empty());
+        let editor = text_state.map(|editor| {
+            let generate_target = target.clone();
+            let label: SharedString = if english {
+                "Generate commit message with AI".into()
+            } else {
+                "AI 生成提交信息".into()
+            };
+            div()
+                .relative()
+                .min_h(px(32.0))
+                .pl(px(10.0))
+                .pr(px(36.0))
+                .py(px(1.0))
+                .flex()
+                .flex_col()
+                .justify_center()
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(p.c(Token::Input))
+                .text_size(px(TEXT_XS))
+                .child(
+                    Textarea::new(&editor)
+                        .appearance(false)
+                        .bordered(false)
+                        .text_size(px(TEXT_XS)),
+                )
+                .children(hint.map(|hint| {
+                    div()
+                        .absolute()
+                        .left(px(10.0))
+                        .right(px(36.0))
+                        .top_0()
+                        .bottom_0()
+                        .flex()
+                        .items_center()
+                        .text_size(px(TEXT_XS))
+                        .text_color(p.c(Token::MutedForeground))
+                        .child(ui::truncate(hint))
+                }))
+                .child(
+                    div().absolute().top(px(3.0)).right(px(3.0)).child(
+                        div()
+                            .id("git-generate")
+                            .size(px(24.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .hover(|d| d.bg(p.c(Token::Accent)))
+                            .when(!has_changes || busy, |d| d.opacity(0.5))
+                            .aria_label(label.clone())
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(label.clone()).build(window, cx)
+                            })
+                            .child(if generating {
+                                ui::spinner("git-generating", 14.0, p.c(Token::MutedForeground))
+                                    .into_any_element()
+                            } else {
+                                icon("sparkles", 16.0, p.c(Token::MutedForeground))
+                                    .into_any_element()
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if has_changes && let Some(target) = &generate_target {
+                                    this.git_generate(target, cx);
+                                }
+                            })),
+                    ),
+                )
+        });
+        let can_commit = has_changes && !busy;
+        let commit_target = target.clone();
+        let toggle_target = target.clone();
+        let fg = p.c(Token::PrimaryForeground);
+        let button = div()
+            .relative()
+            .h(px(32.0))
+            .w_full()
+            .flex()
+            .rounded(px(6.0))
+            .bg(p.c(Token::Primary))
+            .text_color(fg)
+            .text_size(px(TEXT_XS))
+            .font_weight(FontWeight::MEDIUM)
+            .child(
+                div()
+                    .id("git-commit")
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.0))
+                    .cursor_pointer()
+                    .when(!can_commit, |d| d.opacity(0.5))
+                    .child(if busy && !generating {
+                        ui::spinner("git-committing", 14.0, fg).into_any_element()
+                    } else {
+                        icon("tick02", 14.0, fg).into_any_element()
+                    })
+                    .child(text::git_commit(self.app_settings.language))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if can_commit && let Some(target) = &commit_target {
+                            this.git_commit(target, false, cx);
+                        }
+                    })),
+            )
+            .child(
+                div()
+                    .id("git-commit-options")
+                    .w(px(32.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .border_l_1()
+                    .border_color(fg.opacity(0.25))
+                    .cursor_pointer()
+                    .aria_label(if english {
+                        "More commit actions"
+                    } else {
+                        "更多提交操作"
+                    })
+                    .child(icon("arrow-down01", 16.0, fg))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(target) = &toggle_target
+                            && this.git_target_is_current(target)
+                            && let Some(view) = this.git_repo_mut(target)
+                        {
+                            view.commit_menu = !view.commit_menu;
+                            cx.notify();
+                        }
+                    })),
+            )
+            .when(menu_open, |d| {
+                let item = |id: &'static str, label: &'static str, push: bool| {
+                    let target = target.clone();
+                    div()
+                        .id(id)
+                        .h(px(30.0))
+                        .px(px(8.0))
+                        .flex()
+                        .items_center()
+                        .rounded(px(6.0))
+                        .text_size(px(TEXT_SM))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(p.c(Token::PopoverForeground))
+                        .cursor_pointer()
+                        .when(!has_changes, |d| d.opacity(0.5))
+                        .hover(|d| d.bg(p.c(Token::Accent)))
+                        .child(label)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(target) = &target {
+                                if has_changes {
+                                    this.git_commit(target, push, cx);
+                                } else if let Some(view) = this.git_repo_mut(target) {
+                                    view.commit_menu = false;
+                                    cx.notify();
+                                }
+                            }
+                        }))
+                };
+                d.child(ui::float(
+                    div()
+                        .absolute()
+                        .top(px(37.0))
+                        .right_0()
+                        .min_w(px(176.0))
+                        .p(px(4.0))
+                        .rounded(px(10.0))
+                        .bg(p.overlay())
+                        .border_1()
+                        .border_color(p.c(Token::Border))
+                        .shadow_md()
+                        .flex()
+                        .flex_col()
+                        .child(item(
+                            "git-menu-commit",
+                            if english { "Commit" } else { "提交" },
+                            false,
+                        ))
+                        .child(item(
+                            "git-menu-commit-push",
+                            if english {
+                                "Commit & Push"
+                            } else {
+                                "提交并推送"
+                            },
+                            true,
+                        )),
+                ))
+            });
+        div()
             .flex_none()
             .border_b_1()
             .border_color(p.c(Token::Border))
             .p(px(8.0))
             .flex()
             .flex_col()
-            .gap(px(8.0));
-        let editor = text_state.map(|editor| {
-            div()
-                .min_h(px(32.0))
-                .px(px(8.0))
-                .py(px(6.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(p.c(Token::Border))
-                .text_size(px(TEXT_XS))
-                .child(Textarea::new(&editor).appearance(false).bordered(false))
-        });
-        let can_commit = !message.trim().is_empty() && has_changes;
-        let button = div()
-            .id("git-commit")
-            .h(px(32.0))
-            .px(px(12.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(8.0))
-            .bg(p.c(Token::Primary))
-            .text_color(p.c(Token::PrimaryForeground))
-            .text_size(px(TEXT_XS))
-            .cursor_pointer()
-            .when(!can_commit, |d| d.opacity(0.5))
-            .gap(px(6.0))
-            .child(icon("tick02", 14.0, p.c(Token::PrimaryForeground)))
-            .child(text::git_commit(self.app_settings.language))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if can_commit && let Some(target) = &target {
-                    this.git_commit(target, cx);
-                }
-            }));
-        box_.children(editor).child(button).into_any_element()
+            .gap(px(8.0))
+            .children(editor)
+            .child(button)
+            .into_any_element()
     }
 
-    /// The graph, one commit per row, with its parents' lines kept.
-    fn git_history_panel(&self, history: Option<GitHistory>, cx: &mut Context<Self>) -> AnyElement {
+    /// The graph, one commit per row, with its parents' lines kept (`git-history.tsx`).
+    fn git_history_panel(
+        &self,
+        history: Option<GitHistory>,
+        selected_revision: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
         let scroll = self
@@ -2073,68 +2890,263 @@ impl Workspace {
             return div().into_any_element();
         };
         let Some(history) = history else {
-            return div().into_any_element();
+            return div()
+                .flex_1()
+                .flex()
+                .justify_center()
+                .p(px(12.0))
+                .child(ui::spinner(
+                    "git-history-loading",
+                    14.0,
+                    p.c(Token::MutedForeground),
+                ))
+                .into_any_element();
         };
         // Each row owns its commit: a click handler outlives this call, and a borrow of the page
         // cannot travel with it. What the "more" row needs is taken first.
         let count = history.commits.len() as u32;
         let has_more = history.has_more;
         let tips = history.tips.clone();
-        let mut rows = div().flex().flex_col();
-        for commit in history.commits.into_iter() {
+        let shape: Vec<(String, Vec<String>)> = history
+            .commits
+            .iter()
+            .map(|c| (c.hash.clone(), c.parents.clone()))
+            .collect();
+        let (graph, columns) = state::layout_graph(&shape);
+        let colors = [
+            p.c(Token::Info),
+            p.c(Token::Chart2),
+            p.c(Token::Chart3),
+            p.c(Token::Chart4),
+            p.c(Token::Chart5),
+            p.c(Token::Primary),
+        ];
+        let background = p.c(Token::Background);
+        let empty = history.commits.is_empty();
+        let mut rows = div().flex().flex_col().pb(px(4.0));
+        for (commit, row) in history.commits.into_iter().zip(graph) {
             let target = target.clone();
-            let short: String = commit.hash.chars().take(7).collect();
-            let mut refs = div().flex().items_center().gap(px(3.0));
-            for reference in &commit.refs {
-                refs = refs.child(
+            let selected = selected_revision.as_deref() == Some(commit.hash.as_str());
+            let mut refs: Vec<GitReference> = commit.refs.clone();
+            refs.sort_by_key(|r| {
+                (
+                    !r.current,
+                    match r.kind {
+                        GitRefKind::Local => 0,
+                        GitRefKind::Remote => 1,
+                        GitRefKind::Tag => 2,
+                    },
+                )
+            });
+            let mut badges = div().flex_none().flex().items_center().gap(px(4.0));
+            if commit.is_head && !refs.iter().any(|r| r.current) {
+                badges = badges.child(
                     div()
                         .px(px(4.0))
-                        .rounded(px(3.0))
-                        .bg(if reference.current {
-                            p.c(Token::Primary).opacity(0.15)
-                        } else {
-                            p.c(Token::Muted)
-                        })
-                        .text_size(px(10.0))
-                        .child(SharedString::from(reference.name.clone())),
+                        .rounded(px(4.0))
+                        .bg(p.c(Token::Primary).opacity(0.15))
+                        .text_color(p.c(Token::Primary))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("HEAD"),
                 );
             }
+            let hidden = refs.len().saturating_sub(2);
+            for reference in refs.iter().take(2) {
+                let (bg, fg, glyph) = if reference.current {
+                    (p.c(Token::Info), gpui::white(), "target01")
+                } else {
+                    match reference.kind {
+                        GitRefKind::Remote => (
+                            p.c(Token::Chart2).opacity(0.15),
+                            p.c(Token::Chart2),
+                            "cloud",
+                        ),
+                        GitRefKind::Tag => (
+                            p.c(Token::Warning).opacity(0.15),
+                            p.c(Token::Warning),
+                            "tag01",
+                        ),
+                        GitRefKind::Local => (
+                            p.c(Token::Info).opacity(0.1),
+                            p.c(Token::Info),
+                            "git-branch",
+                        ),
+                    }
+                };
+                // A remote that only mirrors a local branch on the same row is its cloud alone.
+                let mirror = reference.kind == GitRefKind::Remote
+                    && refs.iter().any(|local| {
+                        local.kind == GitRefKind::Local
+                            && reference.name.ends_with(&format!("/{}", local.name))
+                    });
+                badges = badges.child(
+                    div()
+                        .max_w(px(112.0))
+                        .px(px(4.0))
+                        .py(px(2.0))
+                        .rounded(px(4.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(2.0))
+                        .bg(bg)
+                        .text_color(fg)
+                        .line_height(px(12.0))
+                        .child(icon(glyph, 12.0, fg))
+                        .when(!mirror, |d| d.child(ui::truncate(reference.name.clone()))),
+                );
+            }
+            if hidden > 0 {
+                badges = badges.child(div().muted(p).child(format!("+{hidden}")));
+            }
+            let has_refs = !refs.is_empty();
+            let lanes = row.clone();
+            let head = commit.is_head;
+            let step = if columns > 6 { 14.0 } else { 18.0 };
+            let graph_width = 22.0 + (columns.saturating_sub(1)) as f32 * step;
+            let palette_colors = colors;
+            let cell = canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let ox = f32::from(bounds.origin.x);
+                    let oy = f32::from(bounds.origin.y);
+                    let x = |column: usize| ox + 11.0 + column as f32 * step;
+                    let pt = |x: f32, y: f32| point(gpui_kit::px(x), gpui_kit::px(y));
+                    let color = |i: usize| palette_colors[i % palette_colors.len()];
+                    let radius = if head { 6.0 } else { 4.0 };
+                    let cy = oy + 14.0;
+                    for edge in &lanes.edges {
+                        let (from, to) = (x(edge.from), x(edge.to));
+                        let mut path = PathBuilder::stroke(gpui_kit::px(2.0));
+                        match edge.kind {
+                            state::EdgeKind::In => {
+                                path.move_to(pt(from, oy));
+                                // A hollow HEAD ring keeps the lane out of its middle.
+                                path.line_to(pt(from, if head { cy - radius - 1.2 } else { cy }));
+                            }
+                            state::EdgeKind::Through => {
+                                path.move_to(pt(from, oy));
+                                path.cubic_bezier_to(
+                                    pt(to, oy + 28.0),
+                                    pt(from, oy + 14.0),
+                                    pt(to, oy + 14.0),
+                                );
+                            }
+                            state::EdgeKind::Out => {
+                                let start = if head && edge.from == edge.to {
+                                    cy + radius + 1.2
+                                } else {
+                                    cy
+                                };
+                                path.move_to(pt(from, start));
+                                path.cubic_bezier_to(
+                                    pt(to, oy + 28.0),
+                                    pt(from, oy + 23.0),
+                                    pt(to, oy + 20.0),
+                                );
+                            }
+                        }
+                        if let Ok(path) = path.build() {
+                            window.paint_path(path, color(edge.color));
+                        }
+                    }
+                    let circle = |r: f32| {
+                        let cx = x(lanes.column);
+                        (0..=32)
+                            .map(|i| {
+                                let a = i as f32 / 32.0 * std::f32::consts::TAU;
+                                pt(cx + r * a.cos(), cy + r * a.sin())
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let dot = color(lanes.color);
+                    if head {
+                        let mut ring = PathBuilder::stroke(gpui_kit::px(2.25));
+                        ring.add_polygon(&circle(radius), true);
+                        if let Ok(path) = ring.build() {
+                            window.paint_path(path, dot);
+                        }
+                    } else {
+                        let mut fill = PathBuilder::fill();
+                        fill.add_polygon(&circle(radius), true);
+                        if let Ok(path) = fill.build() {
+                            window.paint_path(path, dot);
+                        }
+                    }
+                    if lanes
+                        .edges
+                        .iter()
+                        .filter(|e| e.kind == state::EdgeKind::Out)
+                        .count()
+                        > 1
+                    {
+                        let mut merge = PathBuilder::fill();
+                        merge.add_polygon(&circle(1.6), true);
+                        if let Ok(path) = merge.build() {
+                            window.paint_path(path, if head { dot } else { background });
+                        }
+                    }
+                },
+            )
+            .w(px(graph_width))
+            .h(px(28.0))
+            .flex_none();
             rows = rows.child(
                 div()
                     .id(SharedString::from(format!("commit-{}", commit.hash)))
-                    .px(px(10.0))
-                    .py(px(4.0))
+                    .h(px(28.0))
+                    .flex_none()
+                    .pl(px(4.0))
+                    .pr(px(8.0))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(4.0))
                     .text_size(px(TEXT_XS))
                     .cursor_pointer()
-                    .hover(move |d| d.bg(p.c(Token::Accent)))
-                    .child(
-                        div()
-                            .w(px(52.0))
-                            .flex_none()
-                            .font_family(crate::assets::MONO_FONT)
-                            .text_color(p.c(Token::MutedForeground))
-                            .child(SharedString::from(short.clone())),
-                    )
-                    // A merge is drawn with both of its lines: the count is the graph's own
-                    // statement about topology, not a decoration.
-                    .when(commit.parents.len() > 1, |d| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .text_color(p.c(Token::Warning))
-                                .child(SharedString::from(format!("⑂{}", commit.parents.len()))),
-                        )
+                    .border_l_2()
+                    .border_color(if selected {
+                        p.c(Token::Primary)
+                    } else {
+                        gpui::transparent_black()
                     })
+                    .when(selected, |d| d.bg(p.c(Token::Primary).opacity(0.1)))
+                    .hover({
+                        let fill = p.c(Token::Foreground).opacity(0.05);
+                        move |d| d.bg(fill)
+                    })
+                    .tooltip({
+                        let short: String = commit.hash.chars().take(7).collect();
+                        let text = format!(
+                            "{}\n{} · {}\n{}",
+                            commit.subject, commit.author, commit.date, short
+                        );
+                        move |window, cx| Tooltip::new(text.clone()).build(window, cx)
+                    })
+                    .child(cell)
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(ui::truncate(commit.subject.clone())),
+                            .flex()
+                            .items_baseline()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .when(head, |d| d.font_weight(FontWeight::MEDIUM))
+                                    .child(ui::truncate(commit.subject.clone())),
+                            )
+                            .when(!has_refs, |d| {
+                                d.child(
+                                    div()
+                                        .max_w(px(64.0))
+                                        .flex_none()
+                                        .text_size(px(11.0))
+                                        .text_color(p.c(Token::MutedForeground).opacity(0.7))
+                                        .child(ui::truncate(commit.author.clone())),
+                                )
+                            }),
                     )
-                    .child(refs)
+                    .child(badges)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.git_target_is_current(&target) {
                             return;
@@ -2150,12 +3162,18 @@ impl Workspace {
             let tips = tips.clone();
             div()
                 .id("git-more")
-                .px(px(10.0))
-                .py(px(6.0))
+                .h(px(24.0))
+                .flex()
+                .items_center()
+                .justify_center()
                 .text_size(px(TEXT_XS))
-                .muted(p)
                 .cursor_pointer()
-                .child(trs!(english, "pane_git.load_more"))
+                .hover(|d| d.bg(p.c(Token::Muted)))
+                .child(if english {
+                    "Load earlier commits"
+                } else {
+                    "加载更早的提交"
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.git_target_is_current(&target) {
                         this.load_git_history(skip, Some(tips.clone()), cx);
@@ -2168,8 +3186,19 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .border_t_1()
-            .border_color(p.c(Token::Border))
+            .when(empty, |d| {
+                d.child(
+                    div()
+                        .p(px(12.0))
+                        .text_size(px(TEXT_XS))
+                        .muted(p)
+                        .child(if english {
+                            "No commits yet"
+                        } else {
+                            "还没有提交记录"
+                        }),
+                )
+            })
             .child(rows)
             .children(more)
             .into_any_element()

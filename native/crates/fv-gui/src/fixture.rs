@@ -169,7 +169,12 @@ pub fn theme_conversation() -> Fixture {
         ),
         Turn::new(
             "turn-compact".into(),
-            vec![Item::ContextCompaction { id: "c1".into() }],
+            vec![Item::ContextCompaction {
+                id: "c1".into(),
+                reason: Some("threshold".into()),
+                tokens_before: Some(128_000),
+                tokens_after: Some(24_400),
+            }],
         ),
         timed(
             Turn::new(
@@ -240,12 +245,32 @@ pub fn theme_conversation() -> Fixture {
         suggestion: None,
         draft: None,
         terminal: false,
-        models: vec![ModelEntry {
-            provider_id: "deepseek".into(),
-            provider_name: "DeepSeek".into(),
-            model: serde_json::from_value(json!({ "id": "deepseek-v4-pro" })).expect("model"),
-            label: "deepseek/deepseek-v4-pro".into(),
-        }],
+        // Two providers, so a capture of the model menu shows what it looks like grouped: one row
+        // each, with the models behind a hover.
+        models: vec![
+            ModelEntry {
+                provider_id: "deepseek".into(),
+                provider_name: "DeepSeek".into(),
+                model: serde_json::from_value(json!({ "id": "deepseek-v4-pro" })).expect("model"),
+                label: "deepseek/deepseek-v4-pro".into(),
+            },
+            ModelEntry {
+                provider_id: "deepseek".into(),
+                provider_name: "DeepSeek".into(),
+                model: serde_json::from_value(json!({ "id": "deepseek-v4-flash" })).expect("model"),
+                label: "deepseek/deepseek-v4-flash".into(),
+            },
+            ModelEntry {
+                provider_id: "packy".into(),
+                provider_name: "Packy".into(),
+                model: serde_json::from_value(json!({
+                    "id": "claude-opus-5-5",
+                    "name": "Claude Opus 5.5"
+                }))
+                .expect("model"),
+                label: "packy/claude-opus-5-5".into(),
+            },
+        ],
         defaults: ModelDefaults {
             model: Some("deepseek/deepseek-v4-pro".into()),
             thinking: Some(ThinkingLevel::High),

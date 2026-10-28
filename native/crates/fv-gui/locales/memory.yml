@@ -1,50 +1,65 @@
 _version: 2
 
 memory.loading_memory_status:
-  zh: "正在读取记忆状态…"
-  en: "Loading memory status…"
+  zh: "正在读取记忆设置…"
+  en: "Loading memory settings…"
 memory.follow_default_model:
   zh: "跟随默认模型"
-  en: "Follow default model"
-memory.extracting_memories:
-  zh: "正在提取会话记忆…"
-  en: "Extracting memories…"
-memory.consolidating_memories:
-  zh: "正在整理记忆…"
-  en: "Consolidating memories…"
-memory.memory_is_ready:
-  zh: "记忆已就绪"
-  en: "Memory is ready"
-memory.no_memories_generated_yet:
-  zh: "尚未生成记忆"
-  en: "No memories generated yet"
-memory.long_term_memory:
+  en: "Follow the default model"
+memory.title:
   zh: "长期记忆"
   en: "Long-term memory"
-memory.extract_experience_from_chats_idle:
-  zh: "从近 10 天内、已闲置 6 小时的对话中整理经验，在后续对话中按需参考。"
-  en: "Extract experience from chats idle for six hours within the last ten days, then reference it when useful."
-memory.consolidation_model:
-  zh: "整理模型"
-  en: "Consolidation model"
+memory.enable:
+  zh: "启用长期记忆"
+  en: "Enable long-term memory"
+memory.enable_desc:
+  zh: "对话安静一段时间后，整理出其中值得长期记住的内容，之后的对话会参考。"
+  en: "Once a conversation has been quiet for a while, keep what is worth remembering and let later conversations use it."
+memory.model:
+  zh: "整理用的模型"
+  en: "Model for memory"
+memory.model_desc:
+  zh: "读取对话和汇总记忆时使用的模型。"
+  en: "Reads conversations and consolidates memory with this model."
+memory.data_title:
+  zh: "记忆库"
+  en: "Memory"
+memory.status:
+  zh: "整理状态"
+  en: "Status"
+memory.extracting:
+  zh: "正在读取最近的对话…"
+  en: "Reading recent conversations…"
+memory.consolidating:
+  zh: "正在汇总记忆…"
+  en: "Consolidating memory…"
+memory.empty:
+  zh: "还没有整理出记忆。对话安静六小时后才会被读取。"
+  en: "Nothing remembered yet. A conversation is read after it has been quiet for six hours."
+memory.counts:
+  zh: "已从 %{count} 个对话整理出记忆，%{pending} 个等待整理。"
+  en: "Memory from %{count} conversations; %{pending} waiting."
+memory.last_run:
+  zh: "上次整理 %{time}"
+  en: "Last run %{time}"
 memory.run_now:
   zh: "立即整理"
   en: "Run now"
+memory.files:
+  zh: "记忆文件"
+  en: "Memory files"
+memory.files_desc:
+  zh: "保存在本机的 Markdown 文件；关闭记忆不会删除它们。"
+  en: "Markdown files on this computer. Turning memory off does not delete them."
 memory.open_folder:
   zh: "打开文件夹"
   en: "Open folder"
-memory.confirm_clear_all_memories:
-  zh: "确认清除全部记忆"
-  en: "Confirm clear all memories"
-memory.clear_memories:
-  zh: "清除记忆"
-  en: "Clear memories"
-memory.clearing_deletes_existing_memories_and:
-  zh: "清除后会删除已有记忆和整理记录，后续将重新学习。"
-  en: "Clearing deletes existing memories and consolidation records; the system will learn again later."
-memory.status_arg1_conversations_consolidated_arg2:
-  zh: "%{status} · 已整理 %{arg1} 个对话 · 待处理 %{arg2} 个"
-  en: "%{status} · %{arg1} conversations consolidated · %{arg2} pending"
-memory.last_run_arg1_minutes_ago:
-  zh: "上次整理：%{arg1} 分钟前"
-  en: "Last run: %{arg1} minutes ago"
+memory.clear:
+  zh: "清除"
+  en: "Clear"
+memory.confirm_clear:
+  zh: "确认清除"
+  en: "Confirm"
+memory.clear_confirm:
+  zh: "确定清除全部长期记忆吗？再点一次「确认清除」。"
+  en: "Clear all long-term memory? Click Confirm to proceed."

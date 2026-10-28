@@ -1,8 +1,8 @@
 _version: 2
 
 file_mention.searching:
-  zh: "正在查找…"
-  en: "Searching…"
+  zh: "正在查找文件"
+  en: "Searching files"
 file_mention.no_matching_files:
   zh: "没有匹配的文件"
   en: "No matching files"

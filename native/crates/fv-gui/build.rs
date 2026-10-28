@@ -24,6 +24,23 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
 
 fn main() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The copy in `locales/` is baked into the binary by the `i18n!` macro at compile time, and
+    // nothing on cargo's side knows those files were read: editing a string and rebuilding left
+    // the *previous* table in the executable, so the change only appeared once some `.rs` file
+    // happened to change too. Naming them here is what makes 改文案 → 重新构建 actually work.
+    let locales = crate_dir.join("locales");
+    println!("cargo:rerun-if-changed={}", locales.display());
+    if let Ok(entries) = std::fs::read_dir(&locales) {
+        let mut files: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        files.sort();
+        for path in files {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
     // One copy of the file icons serves both apps.
     let roots = [
         (crate_dir.join("assets"), ""),

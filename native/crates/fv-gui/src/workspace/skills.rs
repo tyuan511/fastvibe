@@ -1,16 +1,22 @@
 //! Skills settings use the same server catalog the model receives, including collisions and
 //! per-project precedence. Reading an instruction does not execute any of its commands.
 
+use crate::ui::px;
 use fv_protocol::methods::*;
 use fv_protocol::types::Empty;
 use fv_protocol::types::*;
 use fv_theme::Token;
 use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::Workspace;
-use super::settings::{Section, card, outline_button};
-use crate::ui::{Muted as _, TEXT_SM, TEXT_XS};
+use super::personalization::{
+    BadgeKind, badge, empty_box, field_label, ghost_icon, item_card, item_tile, outline_sm,
+    primary_button,
+};
+use super::settings::{Section, card, dialog_head, menu_item, outline_button, popover};
+use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon, truncate};
 
 fn request_id() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -31,6 +37,12 @@ pub struct SkillSettings {
     pub import_path: Entity<InputState>,
     pub query: Entity<InputState>,
     folder_context: Option<(Option<String>, Vec<String>)>,
+    /// The 添加技能 form is open.
+    creating: bool,
+    /// The ⋯ menu beside the search is open.
+    menu: bool,
+    /// The language the placeholders were last written in.
+    placeholder_english: Option<bool>,
     /// Requests for another project's catalog must not paint this project's settings.
     generation: u64,
 }
@@ -45,24 +57,15 @@ impl SkillSettings {
             notice: None,
             busy: false,
             confirm_remove: None,
-            name: cx
-                .new(|cx| InputState::new(window, cx).placeholder("名称 / Name, e.g. review-code")),
-            description: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("何时使用 / When to use this skill")
-            }),
-            body: cx.new(|cx| {
-                TextareaState::new(window, cx)
-                    .auto_grow(4, 12)
-                    .placeholder("技能指令 / Skill instructions")
-            }),
-            import_path: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("包含 SKILL.md 的文件夹 / Folder containing SKILL.md")
-            }),
-            query: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("搜索技能名称或说明 / Search skills")
-            }),
+            name: cx.new(|cx| InputState::new(window, cx)),
+            description: cx.new(|cx| InputState::new(window, cx)),
+            body: cx.new(|cx| TextareaState::new(window, cx).auto_grow(6, 12)),
+            import_path: cx.new(|cx| InputState::new(window, cx)),
+            query: cx.new(|cx| InputState::new(window, cx)),
             folder_context: None,
+            creating: false,
+            menu: false,
+            placeholder_english: None,
             generation: 0,
         }
     }
@@ -277,6 +280,8 @@ impl Workspace {
                 let _ = cx.update_window(window_handle, |_, window, cx| {
                     input.update(cx, |state, cx| state.set_value(path, window, cx));
                 });
+                // Electron's 导入文件夹 imports what was picked; there is no second step.
+                this.update(cx, |this, cx| this.import_skill(cx)).ok();
             }
         })
         .detach();
@@ -321,6 +326,9 @@ impl Workspace {
             && s.skills.session == session
         {
             s.skills.busy = false;
+            if result.is_ok() {
+                s.skills.creating = false;
+            }
             s.skills.notice = Some(match result {
                 Ok(_) => {
                     if self.app_settings.language == UiLanguage::English {
@@ -342,211 +350,465 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Keep the inputs' placeholders in the interface language (they are made before it is known).
+    pub(super) fn sync_skill_placeholders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let english = self.english();
+        let Some(s) = self.settings.as_mut() else {
+            return;
+        };
+        if s.skills.placeholder_english == Some(english) {
+            return;
+        }
+        s.skills.placeholder_english = Some(english);
+        let k = &s.skills;
+        for (input, key) in [
+            (&k.name, "skills.name_placeholder"),
+            (&k.description, "skills.description_placeholder"),
+            (&k.import_path, "skills.import_placeholder"),
+            (&k.query, "skills.search"),
+        ] {
+            input.update(cx, |state, cx| {
+                state.set_placeholder(trs!(english, key), window, cx)
+            });
+        }
+        k.body.update(cx, |state, cx| {
+            state.set_placeholder(trs!(english, "skills.instructions_placeholder"), window, cx)
+        });
+    }
+
     pub(super) fn skills_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(settings) = &self.settings else {
             return div().into_any_element();
         };
         let s = &settings.skills;
         let p = &self.palette;
-        let english = self.app_settings.language == UiLanguage::English;
-        let mut pane = div()
-            .flex()
-            .flex_col()
-            .gap(px(16.0))
-            .child(
-                div()
-                    .text_size(px(TEXT_SM))
-                    .muted(p)
-                    .child(trs!(english, "skills.skills_are_loaded_for_the")),
-            )
-            .child(Input::new(&s.query))
-            .child(
-                outline_button("refresh-skills", p)
-                    .child(trs!(english, "skills.refresh"))
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh_skills(cx))),
-            );
-        if let Some(notice) = &s.notice {
-            pane = pane.child(
-                div()
-                    .text_size(px(TEXT_SM))
-                    .child(SharedString::from(notice.clone())),
-            );
-        }
-        let query = s.query.read(cx).value().to_lowercase();
-        if let Some(catalog) = &s.catalog {
-            let mut list = card(p).p(px(12.0)).flex().flex_col().gap(px(12.0));
-            for skill in catalog.skills.iter().filter(|skill| {
-                query.is_empty()
-                    || skill.name.to_lowercase().contains(&query)
-                    || skill.description.to_lowercase().contains(&query)
-            }) {
-                let name = skill.name.clone();
-                let remove = name.clone();
-                let scope = match skill.scope {
-                    SkillScope::Project => {
-                        trs!(english, "skills.project")
+        let english = self.english();
+        let fg = p.c(Token::Foreground);
+        let fixture;
+        let catalog = match &s.catalog {
+            Some(catalog) => Some(catalog),
+            None if cfg!(feature = "capture") && self.backend.is_none() => {
+                fixture = capture_skills();
+                Some(&fixture)
+            }
+            None => None,
+        };
+        let count = catalog.map(|c| c.skills.len()).unwrap_or(0);
+        let mut more = div().relative().child(
+            outline_button("skills-more", p)
+                .size(px(28.0))
+                .px_0()
+                .justify_center()
+                .child(icon("more-horizontal", 16.0, fg))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(s) = this.settings.as_mut() {
+                        s.skills.menu = !s.skills.menu;
                     }
-                    SkillScope::Managed => {
-                        trs!(english, "skills.private")
-                    }
-                    SkillScope::Global => {
-                        trs!(english, "skills.global")
-                    }
-                    SkillScope::Builtin => {
-                        trs!(english, "skills.built_in")
-                    }
-                };
-                let mut row = div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
+                    cx.notify();
+                })),
+        );
+        if s.menu {
+            more = more.child(crate::ui::float(
+                popover(p)
+                    .absolute()
+                    .top(px(32.0))
+                    .right(px(0.0))
+                    .w(px(176.0))
                     .child(
-                        div().flex().items_center().justify_between().child(
-                            outline_button(SharedString::from(format!("skill-{name}")), p)
-                                .child(SharedString::from(format!("{name} · {scope}")))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.read_skill(name.clone(), cx)
-                                })),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(TEXT_SM))
-                            .child(SharedString::from(skill.description.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(TEXT_XS))
-                            .muted(p)
-                            .child(SharedString::from(skill.path.clone())),
-                    );
-                if skill.manual_only {
-                    row = row.child(
-                        div()
-                            .text_size(px(TEXT_XS))
-                            .muted(p)
-                            .child(trs!(english, "skills.used_only_when_selected")),
-                    );
-                }
-                if skill.removable {
-                    row = row.child(
-                        outline_button(SharedString::from(format!("remove-{remove}")), p)
-                            .child(trs!(english, "skills.delete"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                        menu_item("skills-import-folder".into(), false, p.c(Token::Muted))
+                            .when(s.busy, |d| d.opacity(0.5))
+                            .child(icon("folder01", 16.0, fg))
+                            .child(trs!(english, "skills.import_folder"))
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 if let Some(s) = this.settings.as_mut() {
-                                    s.skills.confirm_remove = Some(remove.clone());
+                                    s.skills.menu = false;
                                 }
+                                this.pick_skill_folder(window, cx);
                                 cx.notify();
                             })),
-                    );
-                }
-                list = list.child(row);
-            }
-            if catalog.skills.is_empty() {
-                list = list.child(
-                    div()
-                        .text_size(px(TEXT_SM))
-                        .muted(p)
-                        .child(trs!(english, "skills.no_skills_yet_create_one")),
-                );
-            }
-            pane = pane.child(list);
-            for message in &catalog.diagnostics {
-                pane = pane.child(
-                    div()
-                        .text_size(px(TEXT_XS))
-                        .text_color(p.c(Token::Warning))
-                        .child(SharedString::from(message.clone())),
-                );
-            }
-        } else {
-            pane = pane.child(
+                    ),
+            ));
+        }
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(12.0))
+            .child(
                 div()
                     .text_size(px(TEXT_SM))
-                    .child(trs!(english, "skills.loading_skills")),
-            );
-        }
-        if let Some(name) = &s.confirm_remove {
-            let name = name.clone();
-            pane = pane.child(
-                card(p)
-                    .p(px(12.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(tr!(english, "skills.installed", count = count)),
+            )
+            .child(
+                div()
                     .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(SharedString::from(tr!(
-                        english,
-                        "skills.delete_skill_name_and_all",
-                        name = name
-                    )))
+                    .items_center()
+                    .gap(px(6.0))
                     .child(
-                        outline_button("confirm-remove-skill", p)
-                            .child(trs!(english, "skills.confirm_delete"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.remove_skill(name.clone(), cx)
-                            })),
+                        div()
+                            .w(px(224.0))
+                            .h(px(32.0))
+                            .px(px(10.0))
+                            .flex()
+                            .items_center()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(p.c(Token::Input))
+                            .child(Input::new(&s.query).appearance(false).prefix(icon(
+                                "search01",
+                                16.0,
+                                p.c(Token::MutedForeground),
+                            ))),
+                    )
+                    .child(more)
+                    .child(
+                        outline_button("refresh-skills", p)
+                            .size(px(28.0))
+                            .px_0()
+                            .justify_center()
+                            .when(s.busy, |d| d.opacity(0.5))
+                            .child(icon("refresh01", 16.0, fg))
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh_skills(cx))),
                     )
                     .child(
-                        outline_button("cancel-remove-skill", p)
-                            .child(trs!(english, "skills.cancel"))
+                        primary_button("create-skill-open", p)
+                            .when(s.busy, |d| d.opacity(0.5))
+                            .child(icon("add01", 14.0, p.c(Token::PrimaryForeground)))
+                            .child(trs!(english, "skills.new"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(s) = this.settings.as_mut() {
-                                    s.skills.confirm_remove = None;
+                                    s.skills.creating = true;
                                 }
                                 cx.notify();
                             })),
                     ),
+            );
+        let mut pane = div().flex().flex_col().gap(px(16.0)).child(header);
+        if let Some(notice) = &s.notice {
+            pane = pane.child(
+                div()
+                    .text_size(px(TEXT_SM))
+                    .muted(p)
+                    .child(SharedString::from(notice.clone())),
+            );
+        }
+        if s.creating {
+            pane = pane.child(self.skill_create_card(cx));
+        }
+        let query = s.query.read(cx).value().to_lowercase();
+        let Some(catalog) = catalog else {
+            return pane
+                .child(
+                    div()
+                        .text_size(px(TEXT_SM))
+                        .muted(p)
+                        .child(trs!(english, "skills.loading_skills")),
+                )
+                .into_any_element();
+        };
+        let visible: Vec<_> = catalog
+            .skills
+            .iter()
+            .filter(|skill| {
+                query.is_empty()
+                    || skill.name.to_lowercase().contains(&query)
+                    || skill.description.to_lowercase().contains(&query)
+            })
+            .collect();
+        if visible.is_empty() {
+            pane = pane.child(if catalog.skills.is_empty() {
+                empty_box(
+                    "magic-wand02",
+                    trs!(english, "skills.none"),
+                    trs!(english, "skills.empty_hint"),
+                    p,
+                )
+            } else {
+                empty_box(
+                    "magic-wand02",
+                    trs!(english, "skills.none_match"),
+                    trs!(english, "skills.try_other"),
+                    p,
+                )
+            });
+        } else {
+            let mut list = div().flex().flex_col().gap(px(10.0));
+            for skill in visible {
+                list = list.child(self.skill_card(skill, cx));
+            }
+            pane = pane.child(list);
+        }
+        for message in &catalog.diagnostics {
+            pane = pane.child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .text_color(p.c(Token::Warning))
+                    .child(SharedString::from(message.clone())),
             );
         }
         if let Some(preview) = &s.preview {
             pane = pane.child(
                 card(p)
                     .p(px(16.0))
-                    .text_size(px(TEXT_SM))
-                    .child(SharedString::from(preview.content.clone())),
+                    .gap(px(8.0))
+                    .child(
+                        div().flex().items_center().justify_end().child(
+                            ghost_icon(
+                                "close-skill-preview",
+                                "cancel01",
+                                24.0,
+                                12.0,
+                                p.c(Token::MutedForeground),
+                                p,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(s) = this.settings.as_mut() {
+                                    s.skills.preview = None;
+                                }
+                                cx.notify();
+                            })),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .child(SharedString::from(preview.content.clone())),
+                    ),
             );
         }
-        pane.child(
-            card(p)
-                .p(px(16.0))
-                .flex()
-                .flex_col()
-                .gap(px(10.0))
-                .child(trs!(english, "skills.create_skill"))
-                .child(Input::new(&s.name))
-                .child(Input::new(&s.description))
-                .child(Textarea::new(&s.body))
-                .child(
-                    outline_button("create-skill", p)
-                        .child(if s.busy {
-                            trs!(english, "skills.saving")
-                        } else {
-                            trs!(english, "skills.create")
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| this.create_skill(cx))),
-                ),
-        )
-        .child(
-            card(p)
-                .p(px(16.0))
-                .flex()
-                .flex_col()
-                .gap(px(10.0))
-                .child(trs!(english, "skills.import_skill"))
-                .child(Input::new(&s.import_path))
-                .child(
-                    outline_button("pick-skill-folder", p)
-                        .child(trs!(english, "skills.choose_folder"))
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.pick_skill_folder(window, cx)),
-                        ),
+        pane.into_any_element()
+    }
+
+    /// One skill as Electron's `SkillCard`. Clicking it reads the instructions underneath.
+    fn skill_card(&self, skill: &SkillInfo, cx: &mut Context<Self>) -> AnyElement {
+        let p = &self.palette;
+        let english = self.english();
+        let Some(settings) = &self.settings else {
+            return div().into_any_element();
+        };
+        let s = &settings.skills;
+        let scope = match skill.scope {
+            SkillScope::Project => trs!(english, "skills.project"),
+            SkillScope::Managed => trs!(english, "skills.private"),
+            SkillScope::Global => trs!(english, "skills.global"),
+            SkillScope::Builtin => trs!(english, "skills.built_in"),
+        };
+        let name = skill.name.clone();
+        let remove = name.clone();
+        let confirm = s.confirm_remove.as_deref() == Some(&name);
+        let fg = p.c(Token::Foreground);
+        let mut card = item_card(p)
+            .id(SharedString::from(format!("skill-{name}")))
+            .cursor_pointer()
+            .child(div().mt(px(2.0)).child(item_tile("magic-wand02", 16.0, p)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .flex()
+                            .min_w_0()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_size(px(16.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(truncate(skill.name.clone())),
+                            )
+                            .child(badge(BadgeKind::Secondary, None, scope, p))
+                            .when(skill.manual_only, |d| {
+                                d.child(badge(
+                                    BadgeKind::Outline,
+                                    None,
+                                    trs!(english, "skills.used_only_when_selected"),
+                                    p,
+                                ))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(TEXT_SM))
+                            .muted(p)
+                            .child(truncate(skill.description.clone())),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.read_skill(name.clone(), cx)));
+        if skill.removable {
+            card = card.child(div().flex_none().self_center().child(if confirm {
+                let cancel = remove.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        outline_sm(SharedString::from(format!("confirm-remove-{remove}")), p)
+                            .text_color(p.c(Token::Destructive))
+                            .child(trs!(english, "skills.confirm_delete"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.remove_skill(remove.clone(), cx)
+                            })),
+                    )
+                    .child(
+                        ghost_icon(
+                            SharedString::from(format!("cancel-remove-{cancel}")),
+                            "cancel01",
+                            24.0,
+                            12.0,
+                            p.c(Token::MutedForeground),
+                            p,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(s) = this.settings.as_mut() {
+                                s.skills.confirm_remove = None;
+                            }
+                            cx.notify();
+                        })),
+                    )
+            } else {
+                div().child(
+                    ghost_icon(
+                        SharedString::from(format!("remove-{remove}")),
+                        "delete02",
+                        24.0,
+                        12.0,
+                        fg,
+                        p,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(s) = this.settings.as_mut() {
+                            s.skills.confirm_remove = Some(remove.clone());
+                        }
+                        cx.notify();
+                    })),
                 )
-                .child(
-                    outline_button("import-skill", p)
-                        .child(trs!(english, "skills.import"))
-                        .on_click(cx.listener(|this, _, _, cx| this.import_skill(cx))),
-                ),
-        )
-        .into_any_element()
+            }));
+        }
+        card.into_any_element()
+    }
+
+    /// Electron's 添加技能 dialog, drawn in the pane.
+    fn skill_create_card(&self, cx: &mut Context<Self>) -> Div {
+        let p = &self.palette;
+        let english = self.english();
+        let Some(settings) = &self.settings else {
+            return div();
+        };
+        let s = &settings.skills;
+        let field = |label: &'static str| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(field_label(label))
+        };
+        card(p)
+            .child(dialog_head(
+                trs!(english, "skills.dialog_title"),
+                trs!(english, "skills.dialog_desc"),
+                p,
+            ))
+            .child(
+                div()
+                    .px(px(20.0))
+                    .pb(px(16.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.0))
+                    .child(
+                        field(trs!(english, "skills.name"))
+                            .child(Input::new(&s.name))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_XS))
+                                    .muted(p)
+                                    .child(trs!(english, "skills.name_hint")),
+                            ),
+                    )
+                    .child(
+                        field(trs!(english, "skills.description"))
+                            .child(Input::new(&s.description)),
+                    )
+                    .child(
+                        field(trs!(english, "skills.instructions"))
+                            .child(Textarea::new(&s.body).text_size(px(TEXT_SM))),
+                    ),
+            )
+            .child(
+                div()
+                    .px(px(16.0))
+                    .py(px(12.0))
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .border_t_1()
+                    .border_color(p.c(Token::Border))
+                    .bg(p.c(Token::Muted).opacity(0.5))
+                    .child(
+                        outline_button("cancel-create-skill", p)
+                            .child(trs!(english, "skills.cancel"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(s) = this.settings.as_mut() {
+                                    s.skills.creating = false;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        primary_button("create-skill", p)
+                            .h(px(32.0))
+                            .when(s.busy, |d| d.opacity(0.5))
+                            .child(if s.busy {
+                                trs!(english, "skills.saving")
+                            } else {
+                                trs!(english, "skills.add")
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.create_skill(cx))),
+                    ),
+            )
+    }
+}
+
+/// What the capture harness draws without a host: the three skills the Electron mock lists.
+fn capture_skills() -> SkillListResponse {
+    let skill = |name: &str, description: &str, scope, removable| SkillInfo {
+        name: name.into(),
+        description: description.into(),
+        path: String::new(),
+        scope,
+        removable,
+        manual_only: false,
+    };
+    SkillListResponse {
+        skills: vec![
+            skill(
+                "frontend-design",
+                "Create distinctive, production-grade frontend interfaces with high design quality.",
+                SkillScope::Global,
+                true,
+            ),
+            skill(
+                "excalidraw",
+                "Generate architecture diagrams as .excalidraw files from codebase analysis.",
+                SkillScope::Global,
+                true,
+            ),
+            skill(
+                "changelog",
+                "Turn a changelog markdown into a short branded video.",
+                SkillScope::Project,
+                false,
+            ),
+        ],
+        diagnostics: Vec::new(),
     }
 }

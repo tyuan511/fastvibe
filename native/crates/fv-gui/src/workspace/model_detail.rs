@@ -5,6 +5,7 @@ use super::settings::{
     checkbox, dialog_card, dialog_foot, dialog_head, menu_item, modal, outline_button, popover,
     protocol_label,
 };
+use crate::ui::px;
 use crate::ui::{Muted as _, TEXT_SM, TEXT_XS};
 use fv_protocol::methods::{ProviderModelGet, ProviderModelUpdate};
 use fv_protocol::models::*;

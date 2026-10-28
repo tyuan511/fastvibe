@@ -309,6 +309,26 @@ pub fn parse(text: &str) -> DiffDocument {
     }
 }
 
+/// The byte range of `text` that differs from `other`: the common prefix and suffix are left
+/// out, so a side-by-side pair can mark only what was rewritten. Always on char boundaries.
+pub fn changed_range(text: &str, other: &str) -> (usize, usize) {
+    let prefix: usize = text
+        .chars()
+        .zip(other.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    let (rest, other_rest) = (&text[prefix..], &other[prefix.min(other.len())..]);
+    let suffix: usize = rest
+        .chars()
+        .rev()
+        .zip(other_rest.chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    (prefix, text.len() - suffix)
+}
+
 /// One row of a side-by-side view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SplitRow {
@@ -367,6 +387,14 @@ pub fn split(rows: &[DiffRow]) -> Vec<SplitRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_changed_range_leaves_the_shared_ends_out() {
+        assert_eq!(changed_range("let a = 1;", "let a = 2;"), (8, 9));
+        assert_eq!(changed_range("same", "same"), (4, 4));
+        assert_eq!(changed_range("中文a", "中文b"), (6, 7));
+        assert_eq!(changed_range("aXa", "aa"), (1, 2));
+    }
 
     #[test]
     fn a_real_diff_carries_its_own_line_numbers() {

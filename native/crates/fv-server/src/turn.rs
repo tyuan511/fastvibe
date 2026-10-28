@@ -939,6 +939,12 @@ async fn build_context(
         mcp.tools
             .retain(|name| !matches!(name, "code_mode" | "wait"));
     }
+    if !crate::settings::read(state)
+        .map(|s| s.tool_search_enabled)
+        .unwrap_or(true)
+    {
+        mcp.tools.retain(|name| name != "tool_search");
+    }
     let role = crate::subagents::roles::of_thread(state, thread_id);
     crate::subagents::roles::restrict(role.as_ref(), &mut mcp.tools);
     let ceiling = state
@@ -994,14 +1000,21 @@ async fn build_context(
     let tools = Arc::new(mcp.tools);
     // Re-read per turn, including queued runs and manual compaction. Do not put this in a
     // transcript: updating or clearing a preference must not leave old instructions behind.
-    let personalization = crate::settings::read(state)
-        .map(|s| s.custom_system_prompt)
-        .unwrap_or_default();
-    let personalization = personalization.trim();
+    let settings = crate::settings::read(state).unwrap_or_default();
+    let personalization = settings.custom_system_prompt.trim();
+    // AI 偏好语言, worded as the desktop's `output-language` extension words it.
+    let language = match settings.ai_language {
+        fv_protocol::types::UiLanguage::Chinese => {
+            "Language requirement: always write your replies in Simplified Chinese (简体中文), regardless of the language the user writes in, the language of the code, or the messages before this one."
+        }
+        fv_protocol::types::UiLanguage::English => {
+            "Language requirement: always write your replies in English, regardless of the language the user writes in, the language of the code, or the messages before this one."
+        }
+    };
     let personalization = if personalization.is_empty() {
-        String::new()
+        format!("\n\n{language}")
     } else {
-        format!("\n\n{personalization}")
+        format!("\n\n{language}\n\n{personalization}")
     };
     let hooks: Option<Arc<dyn fv_agent::Hooks>> =
         crate::hooks::ConfigHooks::load(&state.data_dir, cwd.as_deref(), thread_id)

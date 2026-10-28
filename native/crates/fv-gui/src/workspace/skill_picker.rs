@@ -1,5 +1,6 @@
 //! Composer skills: one canonical command, an atomic input badge, and a scoped catalog.
 
+use crate::ui::px;
 use fv_protocol::methods::SkillList;
 use fv_protocol::types::{SkillInfo, SkillListParams, SkillListResponse};
 use fv_theme::Token;
@@ -12,7 +13,7 @@ use crate::skill_draft;
 use crate::theme::Palette;
 use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon};
 
-pub(super) fn bindings() -> [KeyBinding; 5] {
+pub(super) fn bindings() -> [KeyBinding; 7] {
     [
         KeyBinding::new("up", super::MentionUp, Some("MentionOpen > Input")),
         KeyBinding::new("down", super::MentionDown, Some("MentionOpen > Input")),
@@ -23,6 +24,8 @@ pub(super) fn bindings() -> [KeyBinding; 5] {
             super::AcceptSuggestion,
             Some("EmptyComposer > Input"),
         ),
+        KeyBinding::new("up", super::HistoryPrev, Some("HistoryComposer > Input")),
+        KeyBinding::new("down", super::HistoryNext, Some("HistoryComposer > Input")),
     ]
 }
 
@@ -65,7 +68,12 @@ impl Picker {
 
     fn hits(&self) -> Vec<&SkillInfo> {
         match (&self.catalog, &self.query) {
-            (Some(catalog), Some(query)) => skill_draft::matching(&catalog.skills, query),
+            // Eight rows at most, as in Electron: the list sits in the layout, so an unbounded
+            // one would push the composer up the window.
+            (Some(catalog), Some(query)) => skill_draft::matching(&catalog.skills, query)
+                .into_iter()
+                .take(8)
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -313,7 +321,9 @@ impl Workspace {
         let p = &self.palette;
         let picker = &self.skill_picker;
         let hits = picker.hits();
-        let mut rows = div().flex().flex_col().gap(px(2.0));
+        // The composer's slash palette: an `overlay-surface` list of `px-3 py-2` rows, each a
+        // glyph, the bold `/command` and its description on one line.
+        let mut rows = div().flex().flex_col();
         let message = picker.error.clone().or_else(|| {
             if picker.catalog.is_none() {
                 Some(trs!(self.english(), "skill_picker.loading_skills").into())
@@ -326,46 +336,46 @@ impl Workspace {
         if let Some(message) = message {
             rows = rows.child(
                 div()
-                    .px(px(10.0))
+                    .px(px(12.0))
                     .py(px(8.0))
-                    .text_size(px(TEXT_XS))
+                    .text_size(px(TEXT_SM))
                     .muted(p)
                     .child(message),
             );
         }
         for (index, skill) in hits.iter().enumerate() {
-            let hover = p.c(Token::Accent);
+            let hover = p.c(Token::Muted).opacity(0.6);
             let hint = skill.description.clone();
             rows = rows.child(
                 div()
                     .id(SharedString::from(format!("skill-choice-{index}")))
-                    .px(px(8.0))
-                    .py(px(7.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .rounded(px(6.0))
+                    .text_size(px(TEXT_SM))
+                    .line_height(px(20.0))
                     .cursor_pointer()
-                    .when(index == picker.index, |d| d.bg(p.c(Token::SidebarAccent)))
-                    .hover(move |d| d.bg(hover))
-                    .child(icon("sparkles", 14.0, p.c(Token::Warning)))
+                    .when(index == picker.index, |d| d.bg(p.c(Token::Muted)))
+                    .when(index != picker.index, |d| d.hover(move |d| d.bg(hover)))
+                    .child(icon("magic-wand02", 14.0, p.c(Token::MutedForeground)))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .flex()
-                            .flex_col()
+                            .items_baseline()
+                            .gap(px(8.0))
                             .child(
                                 div()
-                                    .text_size(px(TEXT_SM))
+                                    .flex_none()
+                                    .font_weight(FontWeight::MEDIUM)
                                     .child(format!("/skill:{}", skill.name)),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(TEXT_XS))
-                                    .muted(p)
-                                    .child(ui::truncate(hint)),
-                            ),
+                            .when(!hint.is_empty(), |d| {
+                                d.child(ui::truncate(hint).flex_1().text_size(px(TEXT_XS)).muted(p))
+                            }),
                     )
                     // Preserve the input caret until the command has been applied.
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
@@ -376,16 +386,46 @@ impl Workspace {
             );
         }
         Some(
-            div()
+            super::settings::popover(p)
+                .p(px(0.0))
                 .mb(px(8.0))
-                .p(px(4.0))
-                .rounded(px(12.0))
-                .border_1()
-                .border_color(p.c(Token::Border))
-                .bg(p.overlay())
+                .overflow_hidden()
                 .child(rows)
                 .into_any_element(),
         )
+    }
+}
+
+impl Workspace {
+    /// Dev only (`--fixture skills`): the `/` palette open over a few skills, with no server.
+    pub fn show_skill_picker_fixture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_fixture_draft = None;
+        self.input.update(cx, |state, cx| {
+            state.focus(window, cx);
+            state.set_value("/", window, cx);
+            let end = gpui_kit::component::input::RopeExt::offset_to_position(state.text(), 1);
+            state.set_cursor_position(end, window, cx);
+        });
+        self.composer_changed(window, cx);
+        let skill = |name: &str, description: &str| SkillInfo {
+            name: name.into(),
+            description: description.into(),
+            path: format!("/skills/{name}/SKILL.md"),
+            scope: fv_protocol::types::SkillScope::Project,
+            removable: false,
+            manual_only: false,
+        };
+        self.skill_picker.query = Some(String::new());
+        self.skill_picker.catalog = Some(SkillListResponse {
+            skills: vec![
+                skill("office", "读写 Word / Excel / PowerPoint 文档"),
+                skill("browser-use", "操作侧栏浏览器完成网页任务"),
+                skill("skill-creator", "创建、修改技能并评估效果"),
+                skill("find-skills", "从社区搜索并安装技能"),
+            ],
+            diagnostics: Vec::new(),
+        });
+        cx.notify();
     }
 }
 

@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 
+use crate::ui::px;
 use fv_protocol::shortcuts::{CATALOG, Chord, ShortcutEdit, ShortcutId, resolve};
 use fv_protocol::types::AppSettingsPatch;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -10,7 +11,9 @@ use gpui_kit::*;
 
 use super::Workspace;
 use super::settings::{Section, card, outline_button, switch};
-use crate::ui::{Muted as _, TEXT_SM, TEXT_XS};
+use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon};
+use fv_theme::Token;
+use gpui_kit::prelude::FluentBuilder as _;
 
 pub struct ShortcutSettings {
     query: Entity<InputState>,
@@ -354,67 +357,100 @@ impl Workspace {
         let p = &self.palette;
         let english = self.app_settings.language == fv_protocol::types::UiLanguage::English;
         let query = state.query.read(cx).value().trim().to_lowercase();
+        let muted = p.c(Token::Muted);
+        let heading = |label: &'static str| {
+            div()
+                .px(px(4.0))
+                .text_size(px(TEXT_SM))
+                .font_weight(FontWeight::MEDIUM)
+                .child(label)
+        };
         let mut pane = div()
             .track_focus(&state.focus)
             .flex()
             .flex_col()
-            .gap(px(16.0))
-            .child(Input::new(&state.query))
+            .gap(px(24.0))
+            .child(Input::new(&state.query).prefix(icon(
+                "search01",
+                14.0,
+                p.c(Token::MutedForeground),
+            )))
             .child(
-                card(p)
-                    .p(px(16.0))
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(heading(trs!(english, "shortcuts.send_group")))
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(trs!(english, "shortcuts.send_on_enter"))
-                            .child(
-                                div()
-                                    .text_size(px(TEXT_XS))
-                                    .muted(p)
-                                    .child(trs!(english, "shortcuts.enter_sends_and_shift_enter")),
-                            ),
-                    )
-                    .child(
-                        switch("send-on-enter".into(), self.app_settings.send_on_enter, p)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.patch_settings(
-                                    AppSettingsPatch {
-                                        send_on_enter: Some(!this.app_settings.send_on_enter),
-                                        ..Default::default()
-                                    },
-                                    cx,
-                                );
-                            })),
+                        card(p).child(super::settings::setting_row(
+                            trs!(english, "shortcuts.send_on_enter"),
+                            trs!(english, "shortcuts.enter_sends_and_shift_enter"),
+                            false,
+                            p,
+                            switch("send-on-enter".into(), self.app_settings.send_on_enter, p)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.patch_settings(
+                                        AppSettingsPatch {
+                                            send_on_enter: Some(!this.app_settings.send_on_enter),
+                                            ..Default::default()
+                                        },
+                                        cx,
+                                    );
+                                })),
+                        )),
                     ),
             );
         let mut count = 0;
-        for group in ["通用", "对话", "视图"] {
-            let mut rows = card(p).p(px(12.0)).gap(px(10.0));
+        for (group, group_key) in [
+            ("通用", "shortcuts.group_general"),
+            ("对话", "shortcuts.group_chat"),
+            ("视图", "shortcuts.group_view"),
+        ] {
+            let mut rows = card(p);
             let mut group_count = 0;
-            for &(id, section, label, fallback) in CATALOG {
+            for &(id, section, _, fallback) in CATALOG {
+                let label = trs!(english, &format!("shortcuts.id_{id:?}"));
+                let desc_key = format!("shortcuts.id_{id:?}_desc");
+                let desc = crate::workspace::static_text(english, &desc_key);
+                let desc = if desc != desc_key { desc } else { "" };
                 if group != section
                     || (!query.is_empty()
                         && !format!("{label} {id:?}").to_lowercase().contains(&query))
                 {
                     continue;
                 }
-                group_count += 1;
                 let binding = resolve(id, &self.app_settings.shortcuts);
                 let recording = state.recording == Some(id);
-                let display = binding
-                    .and_then(|s| Chord::parse(s).ok())
-                    .map(|c| c.label(cfg!(target_os = "macos")))
-                    .unwrap_or_else(|| trs!(english, "shortcuts.unassigned").into());
-                let mut buttons = div().flex().gap(px(8.0));
+                let display: SharedString = if recording {
+                    trs!(english, "shortcuts.press_a_key_combination").into()
+                } else {
+                    binding
+                        .and_then(|s| Chord::parse(s).ok())
+                        .map(|c| c.label(cfg!(target_os = "macos")))
+                        .unwrap_or_else(|| trs!(english, "shortcuts.unassigned").into())
+                        .into()
+                };
+                let bound = binding.is_some() && !recording;
+                let mut buttons = div().flex().items_center().gap(px(4.0));
                 if binding != Some(fallback) {
                     buttons = buttons.child(
-                        outline_button(SharedString::from(format!("restore-{id:?}")), p)
-                            .child(trs!(english, "shortcuts.restore_default"))
+                        div()
+                            .id(SharedString::from(format!("restore-{id:?}")))
+                            .size(px(24.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.0))
+                            .cursor_pointer()
+                            .hover(move |d| d.bg(muted))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(trs!(
+                                    english,
+                                    "shortcuts.restore_default"
+                                ))
+                                .build(window, cx)
+                            })
+                            .child(icon("undo02", 14.0, p.c(Token::MutedForeground)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(s) = this.settings.as_mut() {
                                     s.shortcuts.cancel();
@@ -429,13 +465,29 @@ impl Workspace {
                             })),
                     );
                 }
+                let chord = if bound {
+                    div()
+                        .px(px(4.0))
+                        .h(px(20.0))
+                        .flex()
+                        .items_center()
+                        .rounded(px(4.0))
+                        .bg(p.c(Token::Muted))
+                        .text_size(px(TEXT_XS))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(display)
+                } else {
+                    div().text_size(px(TEXT_XS)).muted(p).child(display)
+                };
                 buttons = buttons.child(
                     outline_button(SharedString::from(format!("record-{id:?}")), p)
-                        .child(SharedString::from(if recording {
-                            trs!(english, "shortcuts.press_a_key_combination").into()
-                        } else {
-                            display
-                        }))
+                        .min_w(px(96.0))
+                        .h(px(30.0))
+                        .px(px(8.0))
+                        .justify_center()
+                        .font_weight(FontWeight::NORMAL)
+                        .when(recording, |d| d.bg(p.c(Token::Secondary)))
+                        .child(chord)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if let Some(s) = this.settings.as_mut() {
                                 let state = &mut s.shortcuts;
@@ -450,25 +502,35 @@ impl Workspace {
                             cx.notify();
                         })),
                 );
-                rows = rows.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(16.0))
-                        .child(div().text_size(px(TEXT_SM)).child(label))
-                        .child(buttons),
-                );
+                rows = rows.child(super::settings::setting_row(
+                    label,
+                    desc,
+                    group_count > 0,
+                    p,
+                    buttons,
+                ));
+                group_count += 1;
             }
             if group_count > 0 {
                 count += group_count;
-                pane = pane
-                    .child(div().text_size(px(TEXT_SM)).child(group))
-                    .child(rows);
+                pane = pane.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .child(heading(trs!(english, group_key)))
+                        .child(rows),
+                );
             }
         }
         if count == 0 {
-            pane = pane.child(trs!(english, "shortcuts.no_shortcuts_found"));
+            pane = pane.child(
+                div()
+                    .px(px(4.0))
+                    .text_size(px(TEXT_SM))
+                    .muted(p)
+                    .child(trs!(english, "shortcuts.no_shortcuts_found")),
+            );
         }
         if let Some(error) = &state.error {
             pane = pane.child(

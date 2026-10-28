@@ -90,7 +90,7 @@ pub async fn compact(
     cancel: &CancellationToken,
 ) -> Result<(), CompactError> {
     let mut probe = ctx.budget.probe(ctx.model.as_ref());
-    let result = compact_inner(ctx, history, events, cancel, false).await;
+    let result = compact_inner(ctx, history, events, cancel, false, "manual").await;
     if result.is_ok() {
         probe.commit();
     }
@@ -149,13 +149,17 @@ fn retained_answer(history: &[Message]) -> Option<Message> {
     }))
 }
 
+/// `overflow` when the provider already refused the request, `threshold` when it was only
+/// getting close.
 pub(crate) async fn compact_auto(
     ctx: &AgentContext,
     history: &mut Vec<Message>,
     events: &mpsc::UnboundedSender<AgentEvent>,
     cancel: &CancellationToken,
+    overflow: bool,
 ) -> Result<(), CompactError> {
-    compact_inner(ctx, history, events, cancel, true).await
+    let reason = if overflow { "overflow" } else { "threshold" };
+    compact_inner(ctx, history, events, cancel, true, reason).await
 }
 
 async fn compact_inner(
@@ -164,6 +168,7 @@ async fn compact_inner(
     events: &mpsc::UnboundedSender<AgentEvent>,
     cancel: &CancellationToken,
     require_smaller: bool,
+    reason: &str,
 ) -> Result<(), CompactError> {
     let id = uuid::Uuid::new_v4().to_string();
     let _ = events.send(AgentEvent::CompactionStarted { id: id.clone() });
@@ -179,8 +184,8 @@ async fn compact_inner(
                 _ => {}
             }
         }
-        let message = Message::Compaction {
-            usage, model: ctx.model.label().map(str::to_owned), user_messages, summary: summary.clone(),
+        let mut message = Message::Compaction {
+            usage, model: ctx.model.label().map(str::to_owned), user_messages, summary: summary.clone(), stats: None,
         };
         let retained = retained_answer(history);
         // Check the ordinary request's projection, including the memory map that will be
@@ -195,6 +200,10 @@ async fn compact_inner(
             return Err(CompactError::Capacity("The summary and required instructions still do not leave enough context space to continue.".into()));
         }
         if cancel.is_cancelled() { return Err(CompactError::Interrupted); }
+        let stats = fv_core::CompactionStats { reason: reason.into(), tokens_before: before, tokens_after: after };
+        if let Message::Compaction { stats: slot, .. } = &mut message {
+            *slot = Some(stats.clone());
+        }
         let _ = events.send(AgentEvent::Committed(message.clone()));
         history.clear();
         history.push(message);
@@ -202,7 +211,7 @@ async fn compact_inner(
             let _ = events.send(AgentEvent::Committed(answer.clone()));
             history.push(answer);
         }
-        let _ = events.send(AgentEvent::CompactionDone { id: id.clone(), summary });
+        let _ = events.send(AgentEvent::CompactionDone { id: id.clone(), summary, stats: Some(stats) });
         let _ = events.send(AgentEvent::ContextBudgetChanged { used: after, window: effective_context_window(ctx) });
         Ok(())
     }.await;

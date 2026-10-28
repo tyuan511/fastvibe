@@ -36,10 +36,11 @@ use native_input::{InputEvent as TerminalInputEvent, TerminalInput};
 
 /// How often the terminal on screen asks the server for its frame.
 const POLL: std::time::Duration = std::time::Duration::from_millis(60);
-/// A monospace cell at `text-xs`: the pane computes its grid from these.
-const CELL_WIDTH: f32 = 7.4;
-const LINE_HEIGHT: f32 = 17.0;
-const FONT_SIZE: f32 = 12.0;
+/// xterm's cell in the Electron pane: 13px (`13 / 16` of the root size) at line height 1. The
+/// pane computes its grid from these; the width is a fallback until the font is measured.
+const CELL_WIDTH: f32 = 7.8;
+const LINE_HEIGHT: f32 = 16.0;
+const FONT_SIZE: f32 = 13.0;
 
 /// These two global workspace actions would otherwise consume the key before low-level
 /// terminal handling runs. NoAction suppresses those bindings in the terminal context only.
@@ -227,7 +228,7 @@ fn paint_grid(
             }
             let span = row.spans.get(span_index).unwrap_or(&default);
             byte += text.len();
-            let (base_fg, base_bg) = (p.c(Token::Foreground), p.c(Token::Background));
+            let (base_fg, base_bg) = (p.c(Token::Foreground), p.c(Token::CodeBg));
             let mut fg = resolve(span.fg, base_fg, p.is_dark());
             let mut bg = resolve(span.bg, base_bg, p.is_dark());
             if span.inverse {
@@ -798,7 +799,8 @@ impl Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .bg(p.c(Token::Background))
+            // `bg-[var(--code-bg)]`, as the Electron terminal: the same surface a code block has.
+            .bg(p.c(Token::CodeBg))
             .track_focus(&self.terminal_focus)
             .key_context("Terminal")
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
@@ -828,7 +830,7 @@ impl Workspace {
                                 .absolute()
                                 .left(px(8.0 + cursor_col as f32 * cell_width))
                                 .top(px(8.0 + cursor_row as f32 * LINE_HEIGHT))
-                                .bg(p.c(Token::Background))
+                                .bg(p.c(Token::CodeBg))
                                 .text_color(p.c(Token::Foreground))
                                 .font_family(crate::assets::MONO_FONT)
                                 .text_size(px(FONT_SIZE))

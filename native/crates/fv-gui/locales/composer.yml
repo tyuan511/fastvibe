@@ -45,3 +45,69 @@ composer.thinking_xhigh:
 composer.thinking_max:
   zh: "最高"
   en: "Maximum"
+composer.placeholder_queued:
+  zh: "继续输入以排队后续修改"
+  en: "Keep typing to queue a follow-up"
+composer.attach:
+  zh: "添加附件"
+  en: "Add attachment"
+composer.remove_attachment:
+  zh: "移除附件"
+  en: "Remove attachment"
+composer.clear_project:
+  zh: "清除项目"
+  en: "Clear project"
+composer.new_project:
+  zh: "新建项目"
+  en: "New project"
+composer.resume:
+  zh: "继续"
+  en: "Continue"
+composer.resume_prompt:
+  zh: "继续"
+  en: "Continue"
+composer.search_project:
+  zh: "搜索项目"
+  en: "Search projects"
+composer.used:
+  zh: "已用 %{count}"
+  en: "Used %{count}"
+composer.remaining:
+  zh: "剩余 %{remaining} / %{window}"
+  en: "%{remaining} of %{window} left"
+composer.turn_tokens:
+  zh: "本轮 Token"
+  en: "This turn"
+composer.session_tokens:
+  zh: "会话 Token"
+  en: "Session tokens"
+composer.output_speed:
+  zh: "输出速度"
+  en: "Output speed"
+composer.steps:
+  zh: "步骤"
+  en: "Steps"
+composer.cache_hit:
+  zh: "缓存命中率"
+  en: "Cache hit rate"
+composer.cost:
+  zh: "费用"
+  en: "Cost"
+composer.turn_scope:
+  zh: "本轮：自你最近一次输入起"
+  en: "This turn: since your last message"
+composer.session_scope:
+  zh: "整个会话累计"
+  en: "Whole conversation"
+composer.request_speed_scope:
+  zh: "最近一次已完成的模型请求：输出 token ÷ 请求耗时（含首 token 等待）"
+  en: "Latest completed request: output tokens ÷ request time, first-token wait included"
+composer.cache_scope:
+  zh: "整个会话累计；缓存读取 /（输入 + 缓存读取）"
+  en: "Whole conversation; cache read ÷ (input + cache read)"
+composer.cost_scope:
+  zh: "整个会话累计，按 models.dev 价格估算"
+  en: "Whole conversation, estimated from models.dev prices"
+composer.cost_unknown:
+  zh: "models.dev 没有这个模型的价格"
+  en: "models.dev has no price for this model"

@@ -10,6 +10,13 @@ use gpui_kit::*;
 use crate::assets;
 use crate::theme::Palette;
 
+/// A length in the design's 16px-root units. Every size in the UI goes through this, so the
+/// window's `rem_size` (界面字号) scales the whole interface the way the root font size does in
+/// Electron. Use `gpui_kit::px` only for a real device pixel (terminal cells, measured bounds).
+pub fn px(v: f32) -> Rems {
+    rems(v / 16.0)
+}
+
 pub const TEXT_SM: f32 = 14.0;
 pub const TEXT_XS: f32 = 12.0;
 
@@ -140,11 +147,14 @@ pub fn ring(fraction: f32, size: f32, track: Hsla, color: Hsla) -> impl IntoElem
                 let c = bounds.center();
                 let arc = |from: f32, to: f32, color: Hsla, window: &mut Window| {
                     let steps = (((to - from).abs() * 48.0).ceil() as usize).max(2);
-                    let mut path = PathBuilder::stroke(px(stroke));
+                    let mut path = PathBuilder::stroke(gpui_kit::px(stroke));
                     for i in 0..=steps {
                         let t = from + (to - from) * (i as f32 / steps as f32);
                         let a = t * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-                        let p = point(c.x + px(r * a.cos()), c.y + px(r * a.sin()));
+                        let p = point(
+                            c.x + gpui_kit::px(r * a.cos()),
+                            c.y + gpui_kit::px(r * a.sin()),
+                        );
                         if i == 0 {
                             path.move_to(p);
                         } else {
@@ -201,16 +211,16 @@ pub fn glass_rim(radius: f32, p: &Palette) -> Option<Div> {
                     corner(ox + r, oy + h - r, FRAC_PI_2, &mut ring);
                     corner(ox + r, oy + r, PI, &mut ring);
                     let paint = |bg: Background, window: &mut Window| {
-                        let mut path = PathBuilder::stroke(px(1.0));
+                        let mut path = PathBuilder::stroke(gpui_kit::px(1.0));
                         for (i, (x, y)) in ring.iter().enumerate() {
-                            let pt = point(px(*x), px(*y));
+                            let pt = point(gpui_kit::px(*x), gpui_kit::px(*y));
                             if i == 0 {
                                 path.move_to(pt);
                             } else {
                                 path.line_to(pt);
                             }
                         }
-                        path.line_to(point(px(ring[0].0), px(ring[0].1)));
+                        path.line_to(point(gpui_kit::px(ring[0].0), gpui_kit::px(ring[0].1)));
                         if let Ok(path) = path.build() {
                             window.paint_path(path, bg);
                         }
@@ -255,17 +265,25 @@ pub fn glass_edge(radius: f32, p: &Palette) -> Option<Div> {
                 ..edge
             })
             .overflow_hidden()
-            .child(div().w_full().h(px(26.0)).bg(linear_gradient(
-                180.0,
-                linear_color_stop(
-                    Hsla {
-                        a: sheen.a * 0.6,
-                        ..sheen
-                    },
-                    0.0,
-                ),
-                linear_color_stop(clear, 1.0),
-            ))),
+            // GPUI clips to a rectangle, not to the rounded box, so the strip carries the
+            // pane's top corners itself or its square ends show past them.
+            .child(
+                div()
+                    .w_full()
+                    .h(px(26.0))
+                    .rounded_t(px(radius))
+                    .bg(linear_gradient(
+                        180.0,
+                        linear_color_stop(
+                            Hsla {
+                                a: sheen.a * 0.6,
+                                ..sheen
+                            },
+                            0.0,
+                        ),
+                        linear_color_stop(clear, 1.0),
+                    )),
+            ),
     )
 }
 

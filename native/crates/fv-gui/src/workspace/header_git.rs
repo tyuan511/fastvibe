@@ -6,9 +6,10 @@ use super::Workspace;
 use super::gpui::prelude::*;
 use super::gpui::{
     AnyElement, ClickEvent, Context, Entity, FontWeight, IntoElement, Pixels, Point, Window, div,
-    point, px,
+    point,
 };
 use super::{settings, sidebar_actions};
+use crate::ui::px;
 use crate::ui::{self, TEXT_SM, TEXT_XS, icon, icon_button_xs};
 use fv_protocol::methods::{
     WorkspaceGitCommit, WorkspaceGitGenerateCommitMessage, WorkspaceGitPull, WorkspaceGitPush,
@@ -59,7 +60,10 @@ pub(super) struct HeaderGit {
 
 impl Workspace {
     fn header_git_cwd(&self) -> Option<String> {
-        let id = self.selected.as_ref()?;
+        // A new conversation has no folder of its own yet: the chosen project is where it will run.
+        let Some(id) = self.selected.as_ref() else {
+            return self.draft_project.clone();
+        };
         self.project_roots_for(id).into_iter().next()
     }
 
@@ -591,7 +595,7 @@ impl Workspace {
 
     /// Dev only: open the popover where the chip sits.
     pub fn show_header_git_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.toggle_header_git_menu(point(px(430.0), px(36.0)), window, cx);
+        self.toggle_header_git_menu(point(gpui_kit::px(430.0), gpui_kit::px(36.0)), window, cx);
     }
 
     /// The capture fixture has no server to ask, so the chip is given a status by hand.
@@ -682,7 +686,11 @@ impl Workspace {
         Some(
             chip.on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                 let at = event.position();
-                this.toggle_header_git_menu(point(at.x - px(12.0), at.y + px(18.0)), window, cx)
+                this.toggle_header_git_menu(
+                    point(at.x - gpui_kit::px(12.0), at.y + gpui_kit::px(18.0)),
+                    window,
+                    cx,
+                )
             }))
             .into_any_element(),
         )

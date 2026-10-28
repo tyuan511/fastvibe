@@ -28,13 +28,13 @@ about.new_version_v_version_available:
   zh: "发现新版本 v%{version}"
   en: "New version v%{version} available"
 about.already_up_to_date:
-  zh: "当前已是最新版本"
-  en: "Already up to date"
+  zh: "已是最新版本"
+  en: "You are up to date"
 about.check_the_latest_github_release:
-  zh: "从 GitHub 检查最新发布版本"
-  en: "Check the latest GitHub release"
+  zh: "从已发布的版本检查更新"
+  en: "Check against published releases"
 about.checking:
-  zh: "检查中…"
+  zh: "正在检查…"
   en: "Checking…"
 about.check_for_updates:
   zh: "检查更新"
@@ -61,8 +61,8 @@ about.preferences:
   zh: "偏好设置"
   en: "Preferences"
 about.reset_themes_sandbox_shortcuts_browser:
-  zh: "恢复主题、沙箱、快捷键、浏览器和 Agent 说明的默认值；供应商与对话不会删除。"
-  en: "Reset themes, sandbox, shortcuts, browser, and Agent instructions; providers and chats are kept."
+  zh: "恢复外观、沙箱、快捷键与 Agent 说明等偏好，不会删除供应商和对话"
+  en: "Restore appearance, sandbox, shortcut and instruction defaults; providers and conversations are untouched"
 about.reset:
   zh: "恢复默认"
   en: "Reset"
@@ -102,3 +102,27 @@ about.model_catalog_is_up_to:
 about.model_catalog_updated:
   zh: "模型目录已更新"
   en: "Model catalog updated"
+about.tagline:
+  zh: "桌面智能体工作台"
+  en: "Desktop client for agent work, code, and cowork"
+about.open_source:
+  zh: "开源"
+  en: "Open source"
+about.star:
+  zh: "Star"
+  en: "Star"
+about.updates:
+  zh: "更新"
+  en: "Updates"
+about.more:
+  zh: "更多"
+  en: "More"
+about.model_catalog_desc:
+  zh: "模型参数和参考价格来自 models.dev，每小时自动刷新。"
+  en: "Model parameters and reference prices come from models.dev and refresh hourly."
+about.diagnostics_desc:
+  zh: "读取版本、平台与配置数量，并复制到剪贴板"
+  en: "Read the version, platform and configuration counts, and copy them"
+about.reset_title:
+  zh: "恢复默认设置"
+  en: "Reset settings"

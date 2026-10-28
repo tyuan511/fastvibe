@@ -16,14 +16,14 @@ pane_git.this_directory_is_not_a:
   zh: "这个目录不在 Git 仓库里"
   en: "This directory is not a Git repository"
 pane_git.unstage_all:
-  zh: "取消暂存全部"
+  zh: "取消全部暂存"
   en: "Unstage all"
 pane_git.stage_all:
   zh: "暂存全部"
   en: "Stage all"
 pane_git.no_uncommitted_changes:
-  zh: "没有未提交的改动"
-  en: "No uncommitted changes"
+  zh: "工作区干净"
+  en: "Working tree clean"
 pane_git.commit_history:
   zh: "提交历史"
   en: "Commit history"
@@ -31,8 +31,8 @@ pane_git.reading_diff:
   zh: "正在读取差异…"
   en: "Reading diff…"
 pane_git.select_a_file_to_view:
-  zh: "选择一个文件查看差异"
-  en: "Select a file to view its diff"
+  zh: "选择文件以查看 Diff"
+  en: "Select a file to view the diff"
 pane_git.expand_file_tree:
   zh: "展开文件树"
   en: "Expand file tree"

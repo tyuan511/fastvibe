@@ -80,7 +80,9 @@ pub fn apply(palette: &Palette, cx: &mut App) {
     let theme = Theme::global_mut(cx);
     theme.mode = mode;
     theme.font_family = crate::assets::UI_FONT.into();
-    theme.font_size = gpui_kit::px(14.0);
+    // The root font size (界面字号): `Root` turns it into the window's rem. `Workspace` replaces
+    // it with the user's choice; this is the default until settings arrive.
+    theme.font_size = gpui_kit::px(fv_theme::DEFAULT_UI_FONT_SIZE);
     theme.mono_font_family = crate::assets::MONO_FONT.into();
     theme.radius = gpui_kit::px(8.0);
     let c = |t| palette.c(t);

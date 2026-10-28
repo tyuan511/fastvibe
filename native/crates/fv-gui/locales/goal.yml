@@ -1,18 +1,19 @@
+_version: 2
 goal.label:
   zh: "目标"
   en: "Goal"
 goal.round:
   zh: "第 %{n} 轮"
-  en: "round %{n}"
+  en: "Round %{n}"
 goal.running:
   zh: "进行中"
-  en: "Running"
+  en: "In progress"
 goal.paused:
   zh: "已暂停"
   en: "Paused"
 goal.complete:
   zh: "已完成"
-  en: "Complete"
+  en: "Done"
 goal.pause:
   zh: "暂停"
   en: "Pause"

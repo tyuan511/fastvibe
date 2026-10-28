@@ -43,6 +43,8 @@ pub enum AgentEvent {
     CompactionDone {
         id: String,
         summary: String,
+        /// Why and by how much, when the summary was measured.
+        stats: Option<fv_core::CompactionStats>,
     },
     CompactionFailed {
         id: String,

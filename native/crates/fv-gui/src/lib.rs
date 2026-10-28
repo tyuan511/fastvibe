@@ -22,6 +22,17 @@ macro_rules! trs {
     };
 }
 
+/// What `key` resolves to in `locale`, or `None` when the table holds nothing for it.
+///
+/// rust-i18n bakes the table in at compile time and answers a miss with the key itself, so a
+/// row that reads `settings.some_key` on screen is a *missing* entry rather than English copy.
+/// An entire file disappears that way when its `_version: 2` header is absent: the loader then
+/// reads it as a locale named after the file, and every key in it becomes unreachable.
+/// `tests/i18n_keys.rs` walks the source and asks this for each key it finds.
+pub fn translation(locale: &str, key: &str) -> Option<String> {
+    _rust_i18n_try_translate(locale, key).map(|text| text.into_owned())
+}
+
 pub mod assets;
 pub mod backend;
 pub mod computer_host;
@@ -30,6 +41,7 @@ pub mod dock;
 pub mod file_icons;
 pub mod fixture;
 pub mod markdown;
+pub mod notify;
 pub mod pane_layout;
 pub mod presentation;
 pub mod sidebar_state;

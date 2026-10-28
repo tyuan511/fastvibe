@@ -4,6 +4,7 @@ use super::{
     Workspace,
     pane::{PaneTab, PaneTabKind, new_tab_id},
 };
+use crate::ui::px;
 use crate::{
     ui::{self, Muted as _, TEXT_XS, icon_button_xs},
     web_content::Document,
@@ -13,10 +14,7 @@ use fv_protocol::types::{FilePreview, FilePreviewKind, UiLanguage};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    component::{
-        Sizable as _,
-        input::{Input, InputEvent, InputState},
-    },
+    component::input::{Input, InputEvent, InputState},
     *,
 };
 use std::{
@@ -218,22 +216,22 @@ impl Workspace {
         let url = std::env::var("FV_FIXTURE_URL").unwrap_or_else(|_| "https://example.com".into());
         self.open_browser_tab(&conversation, &url, cx);
         // `FV_FIXTURE_BROWSER_MENU=1` also opens the ⋯ menu, and a bookmark gives its star a state.
-        if std::env::var_os("FV_FIXTURE_BROWSER_MENU").is_some() {
-            if let Some(tab) = self.panes.get(&conversation).and_then(|p| p.active.clone()) {
-                self.browser_bookmarks.push(crate::pane_layout::Bookmark {
-                    title: "Example".into(),
-                    url: "https://example.com/".into(),
-                });
-                self.browser_history.push(crate::pane_layout::HistoryEntry {
-                    title: "Example Domain".into(),
-                    url: "https://example.com/".into(),
-                    visited_at: 1,
-                });
-                self.browser_menu = Some((
-                    gpui_kit::point(gpui_kit::px(1180.0), gpui_kit::px(96.0)),
-                    tab,
-                ));
-            }
+        if std::env::var_os("FV_FIXTURE_BROWSER_MENU").is_some()
+            && let Some(tab) = self.panes.get(&conversation).and_then(|p| p.active.clone())
+        {
+            self.browser_bookmarks.push(crate::pane_layout::Bookmark {
+                title: "Example".into(),
+                url: "https://example.com/".into(),
+            });
+            self.browser_history.push(crate::pane_layout::HistoryEntry {
+                title: "Example Domain".into(),
+                url: "https://example.com/".into(),
+                visited_at: 1,
+            });
+            self.browser_menu = Some((
+                gpui_kit::point(gpui_kit::px(1180.0), gpui_kit::px(96.0)),
+                tab,
+            ));
         }
     }
     fn web_events(
@@ -739,16 +737,27 @@ impl Workspace {
             .any(|entry| entry.url == current);
         let notice = view.notice.clone();
         let p = self.palette.clone();
+        // The Electron browser's bar: back / forward / reload in one pill, then the address as a
+        // rounded field that carries 在默认浏览器中打开 at its end.
         let mut toolbar = div()
+            .relative()
             .flex()
             .items_center()
-            .gap(px(4.))
-            .px(px(6.))
-            .h(px(38.))
+            .gap(px(6.))
+            .px(px(8.))
+            .h(px(48.))
             .flex_none()
             .border_b_1()
-            .border_color(p.c(fv_theme::Token::Border));
+            .border_color(p.c(fv_theme::Token::Border).opacity(0.6));
         let (can_back, can_forward) = (view.can_back, view.can_forward);
+        let mut nav = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .p(px(2.))
+            .rounded_full()
+            .border_1()
+            .border_color(p.c(fv_theme::Token::Border).opacity(0.6));
         for (command, glyph, label) in [
             ("back", "arrow-left01", trs!(english, "pane_web.back")),
             (
@@ -758,7 +767,7 @@ impl Workspace {
             ),
             (
                 if loading { "stop" } else { "reload" },
-                if loading { "cancel01" } else { "refresh" },
+                if loading { "cancel01" } else { "refresh01" },
                 if loading {
                     trs!(english, "pane_web.stop_loading")
                 } else {
@@ -772,14 +781,15 @@ impl Workspace {
                 "forward" => can_forward,
                 _ => true,
             };
-            toolbar = toolbar.child(
+            nav = nav.child(
                 icon_button_xs(
                     SharedString::from(format!("browser-{id}-{command}")),
                     glyph,
                     &p,
                 )
+                .rounded_full()
                 .aria_label(label)
-                .when(!enabled, |d| d.opacity(0.4).cursor_default())
+                .when(!enabled, |d| d.opacity(0.5).cursor_default())
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if enabled {
                         this.web_command(&key, command, cx);
@@ -787,16 +797,48 @@ impl Workspace {
                 })),
             );
         }
-        toolbar = toolbar.child(div().flex_1().min_w_0().child(Input::new(&address).small()));
+        toolbar = toolbar.child(nav);
         let external_url = current.clone();
         toolbar = toolbar.child(
-            icon_button_xs("browser-external", "link-square02", &p)
-                .aria_label(trs!(english, "pane_web.open_in_system_browser"))
-                .on_click(move |_, _, cx| {
-                    if let Some(url) = fv_core::safe_web_url(&external_url) {
-                        cx.open_url(&url);
-                    }
-                }),
+            div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .h(px(32.))
+                .pl(px(12.))
+                .pr(px(28.))
+                .flex()
+                .items_center()
+                .rounded_full()
+                .border_1()
+                .border_color(p.c(fv_theme::Token::Input))
+                .bg(p.c(fv_theme::Token::Muted).opacity(0.4))
+                .child(
+                    div().flex_1().min_w_0().child(
+                        Input::new(&address)
+                            .appearance(false)
+                            .bordered(false)
+                            .text_size(px(TEXT_XS)),
+                    ),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right(px(2.))
+                        .flex()
+                        .items_center()
+                        .child(
+                            icon_button_xs("browser-external", "link-square02", &p)
+                                .aria_label(trs!(english, "pane_web.open_in_system_browser"))
+                                .on_click(move |_, _, cx| {
+                                    if let Some(url) = fv_core::safe_web_url(&external_url) {
+                                        cx.open_url(&url);
+                                    }
+                                }),
+                        ),
+                ),
         );
         let bookmark_url = current.clone();
         let bookmark_title = title;

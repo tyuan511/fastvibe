@@ -164,6 +164,7 @@ mod tests {
 // above the composer because that is where the caret is looking; a popover below it would cover
 // the draft.
 
+use crate::ui::px;
 use fv_protocol::methods::WorkspaceSearchFiles;
 use fv_protocol::types::{FileHit, SearchFilesParams};
 use fv_theme::Token;
@@ -304,6 +305,106 @@ impl Workspace {
         true
     }
 
+    /// Files chosen with 添加附件 or dropped on the card travel exactly like `@` picks: as
+    /// references in the reference block, once each.
+    pub(super) fn attach_paths(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
+        for path in paths.iter().filter(|p| p.is_file()) {
+            let abs = path.display().to_string();
+            if self.attached_files.iter().any(|f| f.path == abs) {
+                continue;
+            }
+            let relative = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| abs.clone());
+            self.attached_files.push(fv_protocol::types::FileHit {
+                relative,
+                path: abs,
+            });
+        }
+        cx.notify();
+    }
+
+    /// 添加附件: the system file picker.
+    pub(super) fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            this.update(cx, |this, cx| this.attach_paths(&paths, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// The chips above the text: what will be sent along, each removable.
+    pub(super) fn attachment_chips(&self, cx: &mut Context<Self>) -> Option<Div> {
+        if self.attached_files.is_empty() {
+            return None;
+        }
+        let p = &self.palette;
+        let english = self.english();
+        let hover = p.c(Token::Accent);
+        let mut row = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(8.0))
+            .px(px(12.0))
+            .pt(px(12.0));
+        for (index, file) in self.attached_files.iter().enumerate() {
+            row = row.child(
+                div()
+                    .h(px(28.0))
+                    .max_w(px(220.0))
+                    .pl(px(8.0))
+                    .pr(px(4.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(p.c(Token::Border))
+                    .bg(p.c(Token::Muted).opacity(0.5))
+                    .text_size(px(TEXT_XS))
+                    .child(icon("file-01", 13.0, p.c(Token::MutedForeground)))
+                    .child(ui::truncate(file.relative.clone()))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("attachment-remove-{index}")))
+                            .size(px(18.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .cursor_pointer()
+                            .hover(move |d| d.bg(hover))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(trs!(
+                                    english,
+                                    "composer.remove_attachment"
+                                ))
+                                .build(window, cx)
+                            })
+                            .child(icon("cancel01", 12.0, p.c(Token::MutedForeground)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if index < this.attached_files.len() {
+                                    this.attached_files.remove(index);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        Some(row)
+    }
+
     /// Up / down in the list.
     pub(super) fn move_mention(&mut self, delta: i32, cx: &mut Context<Self>) {
         let Some(state) = &mut self.mention else {
@@ -339,65 +440,77 @@ impl Workspace {
         // While the files for the current query are still being read, say so rather than showing
         // the previous query's rows: a list that answers a different question is worse than none.
         let ready = state.hits_query.as_deref() == Some(state.token.as_ref()?.query.as_str());
-        let hover = p.c(Token::Accent);
+        let hover = p.c(Token::Muted).opacity(0.6);
         let mut rows = div().flex().flex_col();
+        let note = |text: &'static str| {
+            div()
+                .px(px(12.0))
+                .py(px(8.0))
+                .text_size(px(crate::ui::TEXT_SM))
+                .muted(p)
+                .child(text)
+        };
         if !ready {
-            rows = rows.child(
-                div()
-                    .px(px(10.0))
-                    .py(px(8.0))
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(trs!(english, "file_mention.searching")),
-            );
+            rows = rows.child(note(trs!(english, "file_mention.searching")));
         } else if state.hits.is_empty() {
-            rows = rows.child(
-                div()
-                    .px(px(10.0))
-                    .py(px(8.0))
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(trs!(english, "file_mention.no_matching_files")),
-            );
+            rows = rows.child(note(trs!(english, "file_mention.no_matching_files")));
         }
         for (index, hit) in state.hits.iter().enumerate() {
             let selected = index == state.index;
-            let name = hit.relative.rsplit('/').next().unwrap_or(&hit.relative);
-            let dir = hit
-                .relative
-                .rsplit_once('/')
-                .map(|(dir, _)| dir.to_string())
-                .unwrap_or_default();
+            let (dir, name) = match hit.relative.rsplit_once('/') {
+                Some((dir, name)) => (format!("{dir}/"), name.to_string()),
+                None => (String::new(), hit.relative.clone()),
+            };
+            // `dir/` muted, then the name: the directory is what tells two same-named files apart.
+            let label = StyledText::new(format!("{dir}{name}")).with_highlights(
+                [
+                    (
+                        0..dir.len(),
+                        HighlightStyle {
+                            color: Some(p.c(Token::MutedForeground)),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        dir.len()..dir.len() + name.len(),
+                        HighlightStyle {
+                            font_weight: Some(FontWeight::MEDIUM),
+                            ..Default::default()
+                        },
+                    ),
+                ]
+                .into_iter()
+                .filter(|(r, _)| !r.is_empty()),
+            );
             rows = rows.child(
                 div()
                     .id(SharedString::from(format!("mention-{index}")))
-                    .h(px(28.0))
-                    .px(px(8.0))
+                    .px(px(12.0))
+                    .py(px(8.0))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .rounded(px(6.0))
+                    .gap(px(8.0))
                     .text_size(px(crate::ui::TEXT_SM))
+                    .line_height(px(20.0))
                     .cursor_pointer()
-                    .when(selected, |d| d.bg(p.c(Token::SidebarAccent)))
-                    .hover(move |d| d.bg(hover))
-                    .child(icon("file-01", 13.0, p.c(Token::MutedForeground)))
+                    .when(selected, |d| d.bg(p.c(Token::Muted)))
+                    .when(!selected, |d| d.hover(move |d| d.bg(hover)))
+                    .child(
+                        img(crate::file_icons::path(&name, !p.is_dark()))
+                            .size(px(16.0))
+                            .flex_none(),
+                    )
                     .child(
                         div()
-                            .flex_none()
-                            .child(SharedString::from(name.to_string())),
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(label),
                     )
-                    // The directory is what tells two same-named files apart.
-                    .when(!dir.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_size(px(TEXT_XS))
-                                .muted(p)
-                                .child(ui::truncate(dir)),
-                        )
-                    })
+                    // Keep the composer's caret where the token is until the file is applied.
+                    .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Some(state) = &mut this.mention {
                             state.index = index;
@@ -407,18 +520,15 @@ impl Workspace {
             );
         }
         Some(
-            div()
+            super::settings::popover(p)
+                .p(px(0.0))
                 .mb(px(8.0))
-                .rounded(px(12.0))
-                .border_1()
-                .border_color(p.c(Token::Border))
-                .bg(p.overlay())
                 .overflow_hidden()
                 .child(
                     div()
                         .id("mention-list")
-                        // Twelve rows would cover the conversation; the list scrolls instead.
-                        .max_h(px(28.0 * 7.0 + 2.0))
+                        // `max-h-72`: the list scrolls rather than covering the conversation.
+                        .max_h(px(288.0))
                         .overflow_y_scroll()
                         .child(rows),
                 )

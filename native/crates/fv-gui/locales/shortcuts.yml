@@ -4,23 +4,77 @@ shortcuts.send_on_enter:
   zh: "回车发送"
   en: "Send on Enter"
 shortcuts.enter_sends_and_shift_enter:
-  zh: "开启后 Enter 发送、Shift+Enter 换行；关闭后 Enter 换行，使用发送快捷键。"
-  en: "Enter sends and Shift+Enter inserts a newline; when off, Enter inserts a newline and the send shortcut is used."
+  zh: "关闭后用发送快捷键发送，Enter 换行"
+  en: "When off, send with the shortcut and Enter adds a new line"
 shortcuts.unassigned:
   zh: "未设置"
-  en: "Unassigned"
+  en: "Not set"
 shortcuts.restore_default:
   zh: "恢复默认"
   en: "Restore default"
 shortcuts.press_a_key_combination:
-  zh: "请按组合键…"
-  en: "Press a key combination…"
+  zh: "按下快捷键"
+  en: "Press keys"
 shortcuts.no_shortcuts_found:
-  zh: "未找到快捷键"
-  en: "No shortcuts found"
+  zh: "没有匹配的快捷键"
+  en: "No matching shortcuts"
 shortcuts.esc_cancels_backspace_or_delete:
-  zh: "Esc 取消；Backspace 或 Delete 清除。设置重复组合键会取消原操作的绑定。"
-  en: "Esc cancels; Backspace or Delete clears. Assigning a duplicate chord unbinds the previous action."
+  zh: "Backspace 清除 · Esc 取消"
+  en: "Backspace clears · Esc cancels"
 shortcuts.restore_all_default_shortcuts:
-  zh: "恢复全部默认快捷键"
-  en: "Restore all default shortcuts"
+  zh: "恢复默认快捷键"
+  en: "Restore default shortcuts"
+shortcuts.send_group:
+  zh: "发送"
+  en: "Send"
+shortcuts.search:
+  zh: "搜索快捷键"
+  en: "Search shortcuts"
+shortcuts.group_general:
+  zh: "通用"
+  en: "General"
+shortcuts.group_chat:
+  zh: "对话"
+  en: "Chat"
+shortcuts.group_view:
+  zh: "视图"
+  en: "View"
+shortcuts.id_CommandPalette:
+  zh: "命令面板"
+  en: "Command palette"
+shortcuts.id_CommandPalette_desc:
+  zh: "搜索对话、操作和设置"
+  en: "Search chats, actions and settings"
+shortcuts.id_Settings:
+  zh: "打开设置"
+  en: "Open settings"
+shortcuts.id_NewChat:
+  zh: "新对话"
+  en: "New chat"
+shortcuts.id_OpenFolder:
+  zh: "打开文件夹"
+  en: "Open folder"
+shortcuts.id_FocusComposer:
+  zh: "聚焦输入框"
+  en: "Focus composer"
+shortcuts.id_Send:
+  zh: "发送消息"
+  en: "Send message"
+shortcuts.id_Send_desc:
+  zh: "始终发送；回车发送可单独开关"
+  en: "Always sends; Enter-to-send is a separate toggle"
+shortcuts.id_Stop:
+  zh: "停止生成"
+  en: "Stop generating"
+shortcuts.id_PrevChat:
+  zh: "上一个对话"
+  en: "Previous chat"
+shortcuts.id_NextChat:
+  zh: "下一个对话"
+  en: "Next chat"
+shortcuts.id_ToggleSidebar:
+  zh: "切换侧边栏"
+  en: "Toggle sidebar"
+shortcuts.id_ToggleSidePane:
+  zh: "切换侧边面板"
+  en: "Toggle side pane"

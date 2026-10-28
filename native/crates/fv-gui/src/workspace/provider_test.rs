@@ -2,6 +2,7 @@
 //! endpoint, provider pane, backend connection or closed/reopened settings form.
 use super::Workspace;
 use super::settings::{Section, outline_button};
+use crate::ui::px;
 use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS};
 use fv_protocol::methods::ProviderModelTest;
 use fv_protocol::provider_test::*;

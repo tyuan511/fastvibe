@@ -106,6 +106,7 @@ impl ThreadRuntime {
     pub fn restored(thread_id: ThreadId, history: Vec<Message>, turns: Vec<Turn>) -> Self {
         let mut log = ThreadLog::with_turns(thread_id.clone(), turns);
         log.stats = fv_store::stats_from_history(&history);
+        log.stats_after_compaction = matches!(history.last(), Some(Message::Compaction { .. }));
         Self {
             thread_id,
             commits: tokio::sync::watch::channel(0).0,
@@ -543,6 +544,7 @@ fn price_history(history: &[Message]) -> Vec<Message> {
                 model: model.clone(),
                 summary: String::new(),
                 user_messages: Vec::new(),
+                stats: None,
             }),
             _ => None,
         })

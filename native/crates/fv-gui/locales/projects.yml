@@ -2,10 +2,10 @@ _version: 2
 
 projects.main:
   zh: "主"
-  en: "Main"
+  en: "Primary"
 projects.make_primary_folder:
   zh: "设为主文件夹"
-  en: "Make primary folder"
+  en: "Set as primary"
 projects.add_folder:
   zh: "添加文件夹"
   en: "Add folder"
@@ -24,3 +24,12 @@ projects.source_folders:
 projects.confirm:
   zh: "确认"
   en: "Confirm"
+projects.name_placeholder:
+  zh: "项目名称"
+  en: "Project name"
+projects.missing:
+  zh: "目录不存在"
+  en: "Folder is missing"
+projects.cancel:
+  zh: "取消"
+  en: "Cancel"

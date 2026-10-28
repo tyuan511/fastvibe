@@ -56,6 +56,17 @@
       "AppSettingsPatch": {
         "description": "`settings/set`: the fields to change; the rest stay.",
         "properties": {
+          "aiLanguage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UiLanguage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "approvalPolicy": {
             "anyOf": [
               {
@@ -112,6 +123,13 @@
             ]
           },
           "codeModeEnabled": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "collapseThinking": {
             "default": null,
             "type": [
               "boolean",
@@ -176,6 +194,13 @@
             "default": null,
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "notifications": {
+            "default": null,
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -326,6 +351,22 @@
               }
             ],
             "default": null
+          },
+          "toolSearchEnabled": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "uiFontSize": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -6200,6 +6241,11 @@
       "AppSettings": {
         "description": "What every client of this server shares about how the app looks. Ids name themes from the\nclients' own catalog; one a client does not know falls back to its default.",
         "properties": {
+          "aiLanguage": {
+            "$ref": "#/$defs/UiLanguage",
+            "default": "chinese",
+            "description": "AI 偏好语言: the language every reply is asked to be written in, whatever the user types."
+          },
           "approvalPolicy": {
             "$ref": "#/$defs/ApprovalPolicy",
             "default": "onRequest",
@@ -6245,6 +6291,11 @@
             "description": "JavaScript orchestration. Changes take effect at the next turn boundary.",
             "type": "boolean"
           },
+          "collapseThinking": {
+            "default": false,
+            "description": "折叠思考内容: fold finished thoughts into the tool batch they sit in. Display only.",
+            "type": "boolean"
+          },
           "computerControl": {
             "default": false,
             "description": "允许操作电脑: the master switch for the desktop-control driver. Off, the driver is not\nrunning and the agent has no desktop tools; on, the app that holds the OS permissions\nruns it (`computer/host`).",
@@ -6263,7 +6314,8 @@
             "type": "boolean"
           },
           "keepAwake": {
-            "default": false,
+            "default": true,
+            "description": "运行时保持唤醒: on unless turned off, as in the desktop app.",
             "type": "boolean"
           },
           "language": {
@@ -6272,6 +6324,11 @@
           },
           "lightTheme": {
             "type": "string"
+          },
+          "notifications": {
+            "default": true,
+            "description": "系统通知: tell the user when a run finishes, fails or waits for an answer while no\nwindow has their attention.",
+            "type": "boolean"
           },
           "proxyUrl": {
             "default": "",
@@ -6384,6 +6441,18 @@
           },
           "themeMode": {
             "$ref": "#/$defs/ThemeMode"
+          },
+          "toolSearchEnabled": {
+            "default": true,
+            "description": "工具搜索: offer `tool_search`, so deferred tools can be found and loaded on demand.",
+            "type": "boolean"
+          },
+          "uiFontSize": {
+            "default": 16,
+            "description": "界面字号: the root font size in px that every rem-based size scales from.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -6745,6 +6814,29 @@
             "properties": {
               "id": {
                 "type": "string"
+              },
+              "reason": {
+                "description": "`threshold`, `overflow` or `manual`; absent while it runs and on old transcripts.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tokensAfter": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tokensBefore": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "type": {
                 "const": "contextCompaction",

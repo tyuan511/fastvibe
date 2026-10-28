@@ -3,14 +3,21 @@
 
 use std::collections::BTreeMap;
 
+use crate::ui::px;
 use fv_protocol::methods::McpUpdate;
 use fv_protocol::types::*;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::*;
 
 use super::super::Workspace;
-use super::super::settings::{card, outline_button};
-use crate::ui::TEXT_SM;
+use super::super::personalization::{
+    field_label, ghost_icon, outline_sm, primary_button, select_trigger,
+};
+use super::super::settings::{card, dialog_head, menu_item, outline_button, popover, switch};
+use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon};
+use fv_theme::Token;
+use gpui_kit::component::input::Textarea;
+use gpui_kit::prelude::FluentBuilder as _;
 
 pub(super) struct Form {
     original: Option<McpServerConfig>,
@@ -25,6 +32,8 @@ pub(super) struct Form {
     enabled: bool,
     deferred: bool,
     english: bool,
+    /// The open select: 0 transport, 1 how tools are provided.
+    menu: Option<u8>,
 }
 
 struct Pair {
@@ -152,6 +161,7 @@ impl Form {
             deferred: config.as_ref().is_none_or(|c| c.deferred),
             original: config,
             english,
+            menu: None,
         }
     }
 
@@ -211,6 +221,8 @@ impl Workspace {
         let english = self.app_settings.language == UiLanguage::English;
         s.mcp.form = Some(Form::new(config, english, window, cx));
         s.mcp.notice = None;
+        s.mcp.json_view = false;
+        s.mcp.json_full = false;
         cx.notify();
     }
 
@@ -271,214 +283,458 @@ impl Workspace {
             return div().into_any_element();
         };
         let p = &self.palette;
-        let english = self.app_settings.language == UiLanguage::English;
-        let label = |key: &'static str| div().text_size(px(TEXT_SM)).child(trs!(english, key));
-        let mut body = card(p)
-            .p(px(16.0))
+        let english = self.english();
+        let hover = p.c(Token::Muted);
+        let busy = s.mcp.busy;
+        let json = s.mcp.json_view;
+        let hint = |text: SharedString| div().text_size(px(TEXT_XS)).muted(p).child(text);
+        let field = |label: SharedString| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(field_label(label))
+        };
+
+        // `TabsList`: a muted track with the chosen view raised on it.
+        let tab = |id: &'static str, text: SharedString, active: bool, to_json: bool| {
+            div()
+                .id(id)
+                .flex_1()
+                .h(px(26.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .text_size(px(TEXT_SM))
+                .font_weight(FontWeight::MEDIUM)
+                .when(active, |d| d.bg(p.c(Token::Background)).shadow_sm())
+                .when(!active, |d| d.muted(p))
+                .child(text)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy) {
+                        s.mcp.json_view = to_json;
+                        if let Some(form) = &mut s.mcp.form {
+                            form.menu = None;
+                        }
+                    }
+                    cx.notify();
+                }))
+        };
+        let tabs = div()
+            .h(px(32.0))
+            .p(px(3.0))
+            .flex()
+            .rounded(px(8.0))
+            .bg(p.c(Token::Muted))
+            .child(tab(
+                "mcp-view-form",
+                trs!(english, "mcp_form.view_form").into(),
+                !json,
+                false,
+            ))
+            .child(tab("mcp-view-json", "JSON".into(), json, true));
+
+        let mut body = div()
+            .px(px(20.0))
+            .pb(px(16.0))
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(if form.original.is_some() {
-                trs!(english, "mcp_form.edit_server")
-            } else {
-                trs!(english, "mcp_form.add_server")
-            })
-            .child(
-                div()
-                    .child(label("mcp_form.name"))
-                    .child(Input::new(&form.name)),
-            );
-        let mut transports = div().flex().gap(px(8.0));
-        for (transport, title) in [
-            (McpTransport::Stdio, trs!(english, "mcp_form.local_process")),
-            (McpTransport::Http, "Streamable HTTP"),
-        ] {
-            transports = transports.child(
-                outline_button(
-                    SharedString::from(format!("mcp-transport-{transport:?}")),
-                    p,
-                )
-                .child(SharedString::from(format!(
-                    "{}{title}",
-                    if form.transport == transport {
-                        "✓ "
-                    } else {
-                        ""
-                    }
-                )))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
-                        && let Some(form) = &mut s.mcp.form
-                    {
-                        form.transport = transport;
-                    }
-                    cx.notify();
-                })),
-            );
-        }
-        body = body.child(transports);
-        if form.transport == McpTransport::Stdio {
+            .child(tabs);
+        if json {
             body = body
                 .child(
-                    div()
-                        .child(label("mcp_form.launch_command"))
-                        .child(Input::new(&form.command)),
+                    div().max_h(px(320.0)).child(
+                        Textarea::new(&s.mcp.editor)
+                            .font_family("monospace")
+                            .text_size(px(TEXT_XS)),
+                    ),
                 )
-                .child(label("mcp_form.arguments"));
-            for (i, arg) in form.args.iter().enumerate() {
-                body = body.child(
+                .child(
                     div()
                         .flex()
-                        .gap(px(8.0))
-                        .child(div().flex_1().child(Input::new(arg)))
+                        .items_center()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .child(hint(
+                            if s.mcp.json_full {
+                                trs!(english, "mcp_form.json_full_hint")
+                            } else {
+                                trs!(english, "mcp_form.json_merge_hint")
+                            }
+                            .into(),
+                        ))
                         .child(
-                            outline_button(SharedString::from(format!("mcp-remove-arg-{i}")), p)
-                                .child(trs!(english, "mcp_form.remove"))
+                            outline_sm("edit-mcp-configs", p)
+                                .child(trs!(english, "mcp_form.load_full"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.edit_mcp(window, cx);
+                                    if let Some(s) = this.settings.as_mut() {
+                                        s.mcp.json_full = true;
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                );
+        } else {
+            let transport_label: SharedString = match form.transport {
+                McpTransport::Stdio => trs!(english, "mcp_form.local_process").into(),
+                McpTransport::Http => "HTTP（Streamable HTTP）".into(),
+            };
+            let mut transport = div().relative().child(
+                select_trigger("mcp-transport", transport_label, 0.0, p)
+                    .w_full()
+                    .h(px(36.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
+                            && let Some(form) = &mut s.mcp.form
+                        {
+                            form.menu = if form.menu == Some(0) { None } else { Some(0) };
+                        }
+                        cx.notify();
+                    })),
+            );
+            if form.menu == Some(0) {
+                let mut menu = popover(p)
+                    .absolute()
+                    .top(px(40.0))
+                    .left(px(0.0))
+                    .right(px(0.0));
+                for (value, text) in [
+                    (
+                        McpTransport::Stdio,
+                        SharedString::from(trs!(english, "mcp_form.local_process")),
+                    ),
+                    (
+                        McpTransport::Http,
+                        SharedString::from("HTTP（Streamable HTTP）"),
+                    ),
+                ] {
+                    let active = form.transport == value;
+                    menu = menu.child(
+                        menu_item(
+                            SharedString::from(format!("mcp-transport-{value:?}")),
+                            active,
+                            hover,
+                        )
+                        .justify_between()
+                        .child(text)
+                        .when(active, |d| {
+                            d.child(icon("tick02", 14.0, p.c(Token::Foreground)))
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
+                                && let Some(form) = &mut s.mcp.form
+                            {
+                                form.transport = value;
+                                form.menu = None;
+                            }
+                            cx.notify();
+                        })),
+                    );
+                }
+                transport = transport.child(crate::ui::float(menu));
+            }
+            body = body.child(
+                div()
+                    .flex()
+                    .gap(px(12.0))
+                    .child(
+                        field(trs!(english, "mcp_form.name").into())
+                            .flex_1()
+                            .child(Input::new(&form.name)),
+                    )
+                    .child(
+                        field(trs!(english, "mcp_form.transport").into())
+                            .flex_1()
+                            .child(transport),
+                    ),
+            );
+            let remove_glyph = |id: SharedString| {
+                ghost_icon(id, "cancel01", 28.0, 14.0, p.c(Token::MutedForeground), p)
+            };
+            if form.transport == McpTransport::Stdio {
+                body = body.child(
+                    field(trs!(english, "mcp_form.launch_command").into())
+                        .child(Input::new(&form.command)),
+                );
+                let mut args = field(trs!(english, "mcp_form.arguments").into());
+                for (i, arg) in form.args.iter().enumerate() {
+                    args = args.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(div().flex_1().child(Input::new(arg)))
+                            .child(
+                                remove_glyph(SharedString::from(format!("mcp-remove-arg-{i}")))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(s) =
+                                            this.settings.as_mut().filter(|s| !s.mcp.busy)
+                                            && let Some(form) = &mut s.mcp.form
+                                            && i < form.args.len()
+                                        {
+                                            form.args.remove(i);
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                    );
+                }
+                args = args.child(
+                    div().child(
+                        outline_sm("mcp-add-arg", p)
+                            .gap(px(4.0))
+                            .child(icon("add01", 14.0, p.c(Token::Foreground)))
+                            .child(trs!(english, "mcp_form.add_argument"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
+                                    && let Some(form) = &mut s.mcp.form
+                                {
+                                    let placeholder = trs!(form.english, "mcp_form.argument");
+                                    form.args.push(input("", placeholder, false, window, cx));
+                                }
+                                cx.notify();
+                            })),
+                    ),
+                );
+                body = body.child(args);
+            } else {
+                body = body.child(field("URL".into()).child(Input::new(&form.url)));
+            }
+            let local = form.transport == McpTransport::Stdio;
+            let rows = if local { &form.env } else { &form.headers };
+            let mut pairs_field = field(
+                if local {
+                    trs!(english, "mcp_form.environment_variables")
+                } else {
+                    trs!(english, "mcp_form.request_headers")
+                }
+                .into(),
+            );
+            for (i, row) in rows.iter().enumerate() {
+                pairs_field = pairs_field.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(div().flex_1().child(Input::new(&row.key)))
+                        .child(div().flex_1().child(Input::new(&row.value).mask_toggle()))
+                        .child(
+                            remove_glyph(SharedString::from(format!("mcp-remove-pair-{i}")))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
                                         && let Some(form) = &mut s.mcp.form
-                                        && i < form.args.len()
                                     {
-                                        form.args.remove(i);
+                                        let rows = if local {
+                                            &mut form.env
+                                        } else {
+                                            &mut form.headers
+                                        };
+                                        if i < rows.len() {
+                                            rows.remove(i);
+                                        }
                                     }
                                     cx.notify();
                                 })),
                         ),
                 );
             }
-            body = body.child(
-                outline_button("mcp-add-arg", p)
-                    .child(trs!(english, "mcp_form.add_argument"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
-                            && let Some(form) = &mut s.mcp.form
-                        {
-                            form.args.push(input(
-                                "",
-                                if form.english { "Argument" } else { "参数" },
-                                false,
-                                window,
-                                cx,
-                            ));
-                        }
-                        cx.notify();
-                    })),
-            );
-        } else {
-            body = body.child(
-                div()
-                    .child(label("mcp_form.server_url"))
-                    .child(Input::new(&form.url)),
-            );
-        }
-        let local = form.transport == McpTransport::Stdio;
-        let rows = if local { &form.env } else { &form.headers };
-        body = body.child(label(if local {
-            "mcp_form.environment_variables"
-        } else {
-            "mcp_form.request_headers"
-        }));
-        for (i, row) in rows.iter().enumerate() {
-            body = body.child(
-                div()
-                    .flex()
-                    .gap(px(8.0))
-                    .child(div().flex_1().child(Input::new(&row.key)))
-                    .child(div().flex_1().child(Input::new(&row.value).mask_toggle()))
-                    .child(
-                        outline_button(SharedString::from(format!("mcp-remove-pair-{i}")), p)
-                            .child(trs!(english, "mcp_form.remove"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
+            pairs_field = pairs_field
+                .child(
+                    div().child(
+                        outline_sm("mcp-add-pair", p)
+                            .gap(px(4.0))
+                            .child(icon("add01", 14.0, p.c(Token::Foreground)))
+                            .child(if local {
+                                trs!(english, "mcp_form.add_environment_variable")
+                            } else {
+                                trs!(english, "mcp_form.add_request_header")
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
                                     && let Some(form) = &mut s.mcp.form
                                 {
+                                    let english = form.english;
                                     let rows = if local {
                                         &mut form.env
                                     } else {
                                         &mut form.headers
                                     };
-                                    if i < rows.len() {
-                                        rows.remove(i);
-                                    }
+                                    rows.push(pair("", "", english, window, cx));
                                 }
                                 cx.notify();
                             })),
                     ),
-            );
-        }
-        body = body.child(
-            outline_button("mcp-add-pair", p)
-                .child(if local {
-                    trs!(english, "mcp_form.add_environment_variable")
-                } else {
-                    trs!(english, "mcp_form.add_request_header")
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
-                        && let Some(form) = &mut s.mcp.form
-                    {
-                        let rows = if local {
-                            &mut form.env
-                        } else {
-                            &mut form.headers
-                        };
-                        rows.push(pair("", "", form.english, window, cx));
+                )
+                .child(hint(
+                    if local {
+                        trs!(english, "mcp_form.env_hint")
+                    } else {
+                        trs!(english, "mcp_form.headers_hint")
                     }
-                    cx.notify();
-                })),
-        );
-        for (deferred, active, label) in [
-            (false, form.enabled, trs!(english, "mcp_form.enable_server")),
-            (
-                true,
-                form.deferred,
-                trs!(english, "mcp_form.search_and_load_tools_on"),
-            ),
-        ] {
-            body = body.child(
-                outline_button(SharedString::from(format!("mcp-form-toggle-{deferred}")), p)
-                    .child(SharedString::from(format!(
-                        "{} {label}",
-                        if active { "✓" } else { "○" }
-                    )))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .into(),
+                ));
+            body = body.child(pairs_field);
+
+            // 工具提供方式: a select, as Electron's; this host knows direct and on-demand.
+            let exposure_text = |deferred: bool| -> SharedString {
+                if deferred {
+                    trs!(english, "mcp_form.exposure_deferred")
+                } else {
+                    trs!(english, "mcp_form.exposure_direct")
+                }
+                .into()
+            };
+            let mut exposure = div().relative().child(
+                select_trigger("mcp-exposure", exposure_text(form.deferred), 0.0, p)
+                    .w_full()
+                    .h(px(36.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
                         if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
                             && let Some(form) = &mut s.mcp.form
                         {
-                            if deferred {
-                                form.deferred = !form.deferred;
-                            } else {
-                                form.enabled = !form.enabled;
-                            }
+                            form.menu = if form.menu == Some(1) { None } else { Some(1) };
                         }
                         cx.notify();
                     })),
             );
-        }
-        body.child(
-            div()
-                .flex()
-                .gap(px(8.0))
-                .child(
-                    outline_button("mcp-save-form", p)
-                        .child(if s.mcp.busy {
-                            trs!(english, "mcp_form.saving")
-                        } else {
-                            trs!(english, "mcp_form.save_server")
+            if form.menu == Some(1) {
+                let mut menu = popover(p)
+                    .absolute()
+                    .top(px(40.0))
+                    .left(px(0.0))
+                    .right(px(0.0));
+                for value in [false, true] {
+                    let active = form.deferred == value;
+                    menu = menu.child(
+                        menu_item(
+                            SharedString::from(format!("mcp-exposure-{value}")),
+                            active,
+                            hover,
+                        )
+                        .justify_between()
+                        .child(exposure_text(value))
+                        .when(active, |d| {
+                            d.child(icon("tick02", 14.0, p.c(Token::Foreground)))
                         })
-                        .on_click(cx.listener(|this, _, _, cx| this.save_mcp_form(cx))),
-                )
-                .child(
-                    outline_button("mcp-cancel-form", p)
-                        .child(trs!(english, "mcp_form.cancel"))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy) {
-                                s.mcp.form = None;
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
+                                && let Some(form) = &mut s.mcp.form
+                            {
+                                form.deferred = value;
+                                form.menu = None;
                             }
                             cx.notify();
                         })),
-                ),
-        )
-        .into_any_element()
+                    );
+                }
+                exposure = exposure.child(crate::ui::float(menu));
+            }
+            body = body.child(
+                field(trs!(english, "mcp_form.exposure").into())
+                    .child(exposure)
+                    .child(hint(
+                        if form.deferred {
+                            trs!(english, "mcp_form.exposure_deferred_hint")
+                        } else {
+                            trs!(english, "mcp_form.exposure_direct_hint")
+                        }
+                        .into(),
+                    )),
+            );
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .text_size(px(TEXT_XS))
+                    .child(switch("mcp-form-enabled".into(), form.enabled, p).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy)
+                                && let Some(form) = &mut s.mcp.form
+                            {
+                                form.enabled = !form.enabled;
+                            }
+                            cx.notify();
+                        }),
+                    ))
+                    .child(if form.original.is_some() {
+                        trs!(english, "mcp_form.enabled")
+                    } else {
+                        trs!(english, "mcp_form.enable_after")
+                    }),
+            );
+        }
+        let editing = form.original.is_some();
+        card(p)
+            .child(dialog_head(
+                if editing {
+                    trs!(english, "mcp_form.edit_server")
+                } else {
+                    trs!(english, "mcp_form.add_server")
+                },
+                if json {
+                    trs!(english, "mcp_form.json_hint")
+                } else {
+                    trs!(english, "mcp_form.dialog_desc")
+                },
+                p,
+            ))
+            .child(body)
+            .child(
+                div()
+                    .px(px(16.0))
+                    .py(px(12.0))
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .border_t_1()
+                    .border_color(p.c(Token::Border))
+                    .bg(p.c(Token::Muted).opacity(0.5))
+                    .child(
+                        outline_button("mcp-cancel-form", p)
+                            .child(trs!(english, "mcp_form.cancel"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(s) = this.settings.as_mut().filter(|s| !s.mcp.busy) {
+                                    s.mcp.form = None;
+                                    s.mcp.json_view = false;
+                                    s.mcp.json_full = false;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        primary_button("mcp-save-form", p)
+                            .h(px(32.0))
+                            .when(busy, |d| d.opacity(0.5))
+                            .when(busy, |d| {
+                                d.child(crate::ui::spinner(
+                                    "mcp-saving",
+                                    14.0,
+                                    p.c(Token::PrimaryForeground),
+                                ))
+                            })
+                            .child(if json && s.mcp.json_full {
+                                trs!(english, "mcp_form.save_all")
+                            } else if editing && !json {
+                                trs!(english, "mcp_form.save_connect")
+                            } else {
+                                trs!(english, "mcp_form.add_connect")
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if json {
+                                    let full =
+                                        this.settings.as_ref().is_some_and(|s| s.mcp.json_full);
+                                    this.save_mcp_editor(full, cx)
+                                } else {
+                                    this.save_mcp_form(cx)
+                                }
+                            })),
+                    ),
+            )
+            .into_any_element()
     }
 }
