@@ -55,7 +55,8 @@ fn fork_snapshot_is_exact_complete_independent_and_does_not_double_bill() {
                 images: vec![ImagePart {
                     mime: "image/png".into(),
                     source: ImageSource::Base64 {
-                        data: "eA==".into(),
+                        // A real 1×1 PNG: saving decodes and shrinks the picture.
+                        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into(),
                     },
                 }],
             },
@@ -139,7 +140,7 @@ fn fork_snapshot_is_exact_complete_independent_and_does_not_double_bill() {
                 let ImageSource::File { path } = &i.source else {
                     panic!("picture must be owned")
                 };
-                assert_eq!(std::fs::read(path).unwrap(), b"x");
+                assert!(std::fs::read(path).unwrap().starts_with(b"\x89PNG"));
             }
         }
     }

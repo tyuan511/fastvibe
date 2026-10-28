@@ -188,11 +188,21 @@ async fn existing_and_new_threads_use_the_latest_suffix_without_polluting_transc
     say(&c, &mut notes, &id, "one").await;
     let request = &model.requests()[0];
     assert!(request.system.starts_with("You are FastVibe"));
-    assert!(request.system.contains("PROJECT_INSTRUCTIONS"));
+    assert!(
+        request
+            .project_context()
+            .is_some_and(|c| c.contains("PROJECT_INSTRUCTIONS"))
+    );
+    // The AI 偏好语言 requirement sits between the server's instructions and the user's own.
     assert!(
         request
             .system
-            .ends_with("SERVER_INSTRUCTIONS\n\nFIRST_CUSTOM_INSTRUCTIONS")
+            .contains("SERVER_INSTRUCTIONS\n\nLanguage requirement:")
+    );
+    assert!(
+        request
+            .system
+            .ends_with("before this one.\n\nFIRST_CUSTOM_INSTRUCTIONS")
     );
     assert_eq!(
         request.system.matches("FIRST_CUSTOM_INSTRUCTIONS").count(),
@@ -224,7 +234,12 @@ async fn existing_and_new_threads_use_the_latest_suffix_without_polluting_transc
     set_prompt(&c, " \n\t").await;
     say(&c, &mut notes, &id, "three").await;
     let request = &model.requests()[4];
-    assert!(request.system.ends_with("SERVER_INSTRUCTIONS"));
+    assert!(
+        request
+            .system
+            .contains("SERVER_INSTRUCTIONS\n\nLanguage requirement:")
+    );
+    assert!(request.system.ends_with("before this one."));
     assert!(!request.system.contains("CUSTOM_INSTRUCTIONS"));
     let transcript =
         std::fs::read_to_string(dir.path().join("sessions").join(format!("{id}.jsonl"))).unwrap();

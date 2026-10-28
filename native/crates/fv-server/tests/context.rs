@@ -336,18 +336,35 @@ async fn public_skill_methods_and_model_requests_use_the_same_per_thread_context
         .await
         .unwrap();
     idle(&mut notes).await;
-    assert!(model.requests()[0].system.contains("PROJECT_RULE_ONE"));
-    assert_eq!(
+    let requests = model.requests();
+    let context = requests[0].project_context().unwrap_or_default();
+    assert!(context.contains("PROJECT_RULE_ONE"));
+    assert!(!requests[0].system.contains("PROJECT_RULE_ONE"));
+    assert_eq!(context.matches("PROJECT_RULE_ONE").count(), 1);
+    assert!(
         model.requests()[0]
-            .system
-            .matches("PROJECT_RULE_ONE")
-            .count(),
-        1
+            .project_context()
+            .unwrap_or_default()
+            .contains("EXPLICIT_SKILL_BODY")
     );
-    assert!(model.requests()[0].system.contains("EXPLICIT_SKILL_BODY"));
-    assert!(model.requests()[0].system.contains("SUPPORT_FOLDER_RULE"));
-    assert!(model.requests()[0].system.contains("Support workflow"));
-    assert!(!model.requests()[0].system.contains("SUPPORT_SKILL_BODY"));
+    assert!(
+        model.requests()[0]
+            .project_context()
+            .unwrap_or_default()
+            .contains("SUPPORT_FOLDER_RULE")
+    );
+    assert!(
+        model.requests()[0]
+            .project_context()
+            .unwrap_or_default()
+            .contains("Support workflow")
+    );
+    assert!(
+        !model.requests()[0]
+            .project_context()
+            .unwrap_or_default()
+            .contains("SUPPORT_SKILL_BODY")
+    );
     write(repo.join("AGENTS.md"), "PROJECT_RULE_TWO");
     client
         .call::<TurnStart>(TurnStartParams {
@@ -357,8 +374,18 @@ async fn public_skill_methods_and_model_requests_use_the_same_per_thread_context
         .await
         .unwrap();
     idle(&mut notes).await;
-    assert!(model.requests()[1].system.contains("PROJECT_RULE_TWO"));
-    assert!(!model.requests()[1].system.contains("PROJECT_RULE_ONE"));
+    assert!(
+        model.requests()[1]
+            .project_context()
+            .unwrap_or_default()
+            .contains("PROJECT_RULE_TWO")
+    );
+    assert!(
+        !model.requests()[1]
+            .project_context()
+            .unwrap_or_default()
+            .contains("PROJECT_RULE_ONE")
+    );
     let other = data.path().join("other");
     write(other.join(".git"), "");
     write(other.join("AGENTS.md"), "OTHER_PROJECT_RULE");
@@ -380,10 +407,30 @@ async fn public_skill_methods_and_model_requests_use_the_same_per_thread_context
         .unwrap();
     idle(&mut notes).await;
     let other_request = &model.requests()[2];
-    assert!(other_request.system.contains("OTHER_PROJECT_RULE"));
-    assert!(!other_request.system.contains("PROJECT_RULE_TWO"));
-    assert!(!other_request.system.contains("EXPLICIT_SKILL_BODY"));
-    assert!(!other_request.system.contains("SUPPORT_FOLDER_RULE"));
+    assert!(
+        other_request
+            .project_context()
+            .unwrap_or_default()
+            .contains("OTHER_PROJECT_RULE")
+    );
+    assert!(
+        !other_request
+            .project_context()
+            .unwrap_or_default()
+            .contains("PROJECT_RULE_TWO")
+    );
+    assert!(
+        !other_request
+            .project_context()
+            .unwrap_or_default()
+            .contains("EXPLICIT_SKILL_BODY")
+    );
+    assert!(
+        !other_request
+            .project_context()
+            .unwrap_or_default()
+            .contains("SUPPORT_FOLDER_RULE")
+    );
     client
         .call::<SkillRemove>(SkillNameParams {
             cwd: None,

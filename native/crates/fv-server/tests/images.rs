@@ -102,10 +102,10 @@ async fn a_viewed_picture_is_a_file_on_disk_and_survives_a_restart() {
 
         // The model was shown the picture right after the tool's result.
         let second = &model.requests()[1];
-        assert!(
-            matches!(&second.messages[2], Message::ToolResult { call_id, .. } if call_id == "v1")
-        );
-        let Message::ToolImages { images, .. } = &second.messages[3] else {
+        // Past the per-turn project context the request leads with.
+        let messages = &second.messages[usize::from(second.project_context().is_some())..];
+        assert!(matches!(&messages[2], Message::ToolResult { call_id, .. } if call_id == "v1"));
+        let Message::ToolImages { images, .. } = &messages[3] else {
             panic!("{:?}", second.messages)
         };
         assert!(matches!(&images[0].source, ImageSource::Base64 { .. }));

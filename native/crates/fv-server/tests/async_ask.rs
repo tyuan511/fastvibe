@@ -106,19 +106,6 @@ async fn new_thread(c: &Client) -> String {
     .id
 }
 
-fn tool_result(h: &Harness) -> (String, bool) {
-    h.model.requests()[1]
-        .messages
-        .iter()
-        .find_map(|m| match m {
-            fv_core::Message::ToolResult {
-                content, is_error, ..
-            } => Some((content.clone(), *is_error)),
-            _ => None,
-        })
-        .expect("the model saw a result")
-}
-
 #[tokio::test]
 async fn a_question_asked_without_waiting_comes_back_as_a_message() {
     let h = start(ScriptedModel::new([

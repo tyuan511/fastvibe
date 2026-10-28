@@ -234,7 +234,7 @@ async fn a_queued_prompt_is_sent_once_the_reply_in_flight_ends() {
             .requests()
             .last()
             .unwrap()
-            .messages
+            .conversation()
             .iter()
             .filter(|m| matches!(m, fv_core::Message::User { .. }))
             .count(),
@@ -523,7 +523,7 @@ async fn retry_reruns_the_turn_from_its_own_user_message() {
     let requests = h.model.requests();
     let request = requests.last().unwrap();
     let prompts: Vec<&str> = request
-        .messages
+        .conversation()
         .iter()
         .filter_map(|m| match m {
             fv_core::Message::User { text } => Some(text.as_str()),

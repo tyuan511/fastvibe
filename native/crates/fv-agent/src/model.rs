@@ -12,6 +12,22 @@ pub struct ModelRequest {
     pub max_output_tokens: Option<u32>,
 }
 
+impl ModelRequest {
+    /// The per-turn project context the request leads with (AGENTS.md, skills, MCP notes,
+    /// folders), which is sent as a user message rather than as part of `system`.
+    pub fn project_context(&self) -> Option<&str> {
+        match self.messages.first() {
+            Some(Message::User { text }) if text.starts_with("<project_context>") => Some(text),
+            _ => None,
+        }
+    }
+
+    /// The history the request carries, without the leading project context.
+    pub fn conversation(&self) -> &[Message] {
+        &self.messages[usize::from(self.project_context().is_some())..]
+    }
+}
+
 /// What a provider streams back. `Done` carries the complete message and is authoritative:
 /// the deltas before it exist only so a client can draw the reply as it arrives.
 #[derive(Clone, Debug, PartialEq)]

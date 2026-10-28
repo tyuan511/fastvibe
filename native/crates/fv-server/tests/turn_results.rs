@@ -187,7 +187,7 @@ async fn failures_before_and_after_partial_output_survive_restart_fork_and_retry
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
     assert!(
-        matches!(requests[0].messages.as_slice(), [fv_core::Message::User { text }] if text == "replacement")
+        matches!(requests[0].conversation(), [fv_core::Message::User { text }] if text == "replacement")
     );
     drop(run);
     let run = Run::open(dir.path(), "third", Arc::new(ScriptedModel::default())).await;

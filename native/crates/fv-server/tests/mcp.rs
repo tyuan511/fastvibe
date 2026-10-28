@@ -181,8 +181,8 @@ async fn mcp_configuration_discovery_and_resource_tools_reach_a_real_model_turn(
     assert_eq!(requests.len(), 5);
     assert!(
         requests[0]
-            .system
-            .contains("Use the fixture tools for testing.")
+            .project_context()
+            .is_some_and(|c| c.contains("Use the fixture tools for testing."))
     );
     assert!(!requests[0].tools.iter().any(|s| s.name == "mcp_wire_echo"));
     assert!(requests[0].tools.iter().any(|s| s.name == "tool_search"));

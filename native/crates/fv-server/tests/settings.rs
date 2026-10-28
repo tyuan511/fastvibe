@@ -385,9 +385,12 @@ async fn projects_hold_several_folders_and_the_agent_is_told_about_them() {
     })
     .await
     .unwrap();
-    let system = model.requests()[0].system.clone();
-    assert!(system.contains("more than one folder"), "{system}");
-    assert!(system.contains(&path(&b)), "{system}");
+    let context = model.requests()[0]
+        .project_context()
+        .unwrap_or_default()
+        .to_string();
+    assert!(context.contains("more than one folder"), "{context}");
+    assert!(context.contains(&path(&b)), "{context}");
 
     // Sidebar state follows a changed primary folder, too.
     client
@@ -548,7 +551,8 @@ async fn a_fork_has_independent_history_images_and_subscription() {
                 images: vec![ImagePart {
                     mime: "image/png".into(),
                     source: ImageSource::Base64 {
-                        data: "aGVsbG8=".into(),
+                        // A real 1×1 PNG: saving decodes and shrinks the picture.
+                        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into(),
                     },
                 }],
             },
@@ -601,7 +605,10 @@ async fn a_fork_has_independent_history_images_and_subscription() {
     })
     .await
     .unwrap();
-    assert_eq!(std::fs::read(path).unwrap(), b"hello");
+    assert!(
+        std::fs::read(path).unwrap().starts_with(b"\x89PNG"),
+        "the fork's copy outlives the original"
+    );
     assert!(
         !c.call::<ThreadResume>(ThreadIdParams {
             thread_id: fork.id.clone()

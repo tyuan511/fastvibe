@@ -205,17 +205,19 @@ async fn threads_and_their_history_survive_a_restart() {
     say(&c, &mut notes, &thread, "and then?").await;
     let request = &second.model.requests()[0];
     assert_eq!(
-        request.messages.len(),
+        request.conversation().len(),
         5,
         "user, assistant+call, result, assistant, user"
     );
     assert!(
-        matches!(&request.messages[0], fv_core::Message::User { text } if text.starts_with("What is in"))
+        matches!(&request.conversation()[0], fv_core::Message::User { text } if text.starts_with("What is in"))
     );
     assert!(
-        matches!(&request.messages[2], fv_core::Message::ToolResult { call_id, .. } if call_id == "c1")
+        matches!(&request.conversation()[2], fv_core::Message::ToolResult { call_id, .. } if call_id == "c1")
     );
-    assert!(matches!(&request.messages[4], fv_core::Message::User { text } if text == "and then?"));
+    assert!(
+        matches!(&request.conversation()[4], fv_core::Message::User { text } if text == "and then?")
+    );
 
     // A later prompt does not rename the thread.
     let listed = c

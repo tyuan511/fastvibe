@@ -350,7 +350,7 @@ async fn interrupt_stops_the_turn_and_frees_the_thread() {
     until(&mut notes, idle).await;
     let second = &h.model.as_ref().unwrap().requests()[1];
     assert!(
-        matches!(&second.messages[1], fv_core::Message::Assistant(a) if a.text().starts_with("working"))
+        matches!(&second.conversation()[1], fv_core::Message::Assistant(a) if a.text().starts_with("working"))
     );
 }
 
@@ -503,11 +503,16 @@ async fn history_carries_over_between_turns() {
     until(&mut notes, idle).await;
 
     let requests = h.model.as_ref().unwrap().requests();
-    assert_eq!(requests[1].messages.len(), 3);
-    assert!(matches!(&requests[1].messages[0], fv_core::Message::User { text } if text == "q1"));
-    assert!(matches!(&requests[1].messages[2], fv_core::Message::User { text } if text == "q2"));
+    assert_eq!(requests[1].conversation().len(), 3);
     assert!(
-        requests[1].system.starts_with("You are FastVibe") && requests[1].system.ends_with("sys"),
+        matches!(&requests[1].conversation()[0], fv_core::Message::User { text } if text == "q1")
+    );
+    assert!(
+        matches!(&requests[1].conversation()[2], fv_core::Message::User { text } if text == "q2")
+    );
+    assert!(
+        requests[1].system.starts_with("You are FastVibe")
+            && requests[1].system.contains("sys\n\nLanguage requirement:"),
         "{}",
         requests[1].system
     );
