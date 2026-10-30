@@ -41,11 +41,84 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("dev") => dev(args.collect()),
+        Some("dist-mac-local") => dist_mac_local(args.collect()),
         other => {
-            eprintln!("usage: cargo dev [app args]   (got {other:?})");
+            eprintln!("usage: cargo dev [app args] | cargo dist:mac:local (got {other:?})");
             ExitCode::FAILURE
         }
     }
+}
+
+/// Build the same native layout as CI, for the host Mac, without signing or publishing.
+fn dist_mac_local(args: Vec<String>) -> ExitCode {
+    if args == ["--help"] || args == ["-h"] {
+        println!(
+            "usage: cargo dist:mac:local\nBuild an unsigned native macOS release bundle for this Mac."
+        );
+        return ExitCode::SUCCESS;
+    }
+    if !args.is_empty() {
+        eprintln!("usage: cargo dist:mac:local");
+        return ExitCode::FAILURE;
+    }
+    if !cfg!(target_os = "macos") {
+        eprintln!("cargo dist:mac:local must run on macOS");
+        return ExitCode::FAILURE;
+    }
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        arch => {
+            eprintln!("unsupported macOS architecture: {arch}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let root = workspace_root()
+        .parent()
+        .expect("native workspace has a parent")
+        .to_path_buf();
+    let output = format!("release/native/mac-{arch}");
+    let steps: Vec<Vec<String>> = vec![
+        vec![
+            "scripts/fetch-officecli.mjs".into(),
+            format!("--platforms=mac-{arch}"),
+        ],
+        vec![
+            "scripts/stage-native-app.mjs".into(),
+            "--platform".into(),
+            "mac".into(),
+            "--arch".into(),
+            arch.into(),
+            "--profile".into(),
+            "release".into(),
+            "--bundle".into(),
+            "--output".into(),
+            output.clone(),
+        ],
+        vec![
+            "scripts/check-native-bundle.mjs".into(),
+            "--bundle".into(),
+            output.clone(),
+        ],
+    ];
+    for step in steps {
+        match Command::new("node").args(&step).current_dir(&root).status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                eprintln!("{} failed: {status}", step[0]);
+                return ExitCode::FAILURE;
+            }
+            Err(error) => {
+                eprintln!("could not run {}: {error}", step[0]);
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    println!(
+        "Native macOS release bundle: {}",
+        root.join(output).display()
+    );
+    ExitCode::SUCCESS
 }
 
 #[derive(Debug, PartialEq, Eq)]

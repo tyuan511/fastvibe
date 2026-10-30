@@ -2,6 +2,8 @@
 //! draw them, and the sequence number of the last event. This is what `thread/resume` returns,
 //! so a client that connects mid-reply sees the reply so far and then only newer events.
 
+use std::collections::HashMap;
+
 use fv_protocol::ServerNotification;
 use fv_protocol::types::*;
 
@@ -92,6 +94,8 @@ pub struct ThreadLog {
     /// Whether the last message folded into `stats` was a summary (see `record_stats`).
     pub stats_after_compaction: bool,
     pub token_usage: Option<TokenUsage>,
+    /// Server-clock start times for reasoning blocks that are currently streaming.
+    reasoning_starts: HashMap<ItemId, i64>,
 }
 
 pub fn item_id(item: &Item) -> &str {
@@ -118,6 +122,7 @@ impl ThreadLog {
             stats: SessionStats::default(),
             stats_after_compaction: false,
             token_usage: None,
+            reasoning_starts: HashMap::new(),
         }
     }
 
@@ -131,6 +136,7 @@ impl ThreadLog {
             stats: SessionStats::default(),
             stats_after_compaction: false,
             token_usage: None,
+            reasoning_starts: HashMap::new(),
         }
     }
 
@@ -185,17 +191,29 @@ impl ThreadLog {
                 ServerNotification::TurnStarted(ev!(TurnRef { turn_id, at }))
             }
             LogEvent::ItemStarted { turn_id, item } => {
+                let at = now_ms();
                 if let Some(t) = self.turn_mut(&turn_id) {
                     t.items.push(item.clone());
+                }
+                if let Item::Reasoning { id, .. } = &item {
+                    self.reasoning_starts.insert(id.clone(), at);
                 }
                 ServerNotification::ItemStarted(ev!(ItemRef {
                     turn_id,
                     item,
-                    at: Some(now_ms()),
+                    at: Some(at),
+                    duration_ms: None,
                 }))
             }
             LogEvent::ItemCompleted { turn_id, item } => {
-                let at = Some(now_ms());
+                let at = now_ms();
+                let duration_ms = match &item {
+                    Item::Reasoning { id, .. } => self
+                        .reasoning_starts
+                        .remove(id)
+                        .map(|start| (at - start).max(0) as u64),
+                    _ => None,
+                };
                 if let Some(t) = self.turn_mut(&turn_id) {
                     if matches!(
                         item,
@@ -204,14 +222,26 @@ impl ThreadLog {
                             ..
                         }
                     ) {
-                        t.process_ended_at = at;
+                        t.process_ended_at = Some(at);
                     }
                     match t.items.iter_mut().find(|i| item_id(i) == item_id(&item)) {
                         Some(slot) => *slot = item.clone(),
                         None => t.items.push(item.clone()),
                     }
                 }
-                ServerNotification::ItemCompleted(ev!(ItemRef { turn_id, item, at }))
+                if let Item::Reasoning { id, .. } = &item {
+                    if let Some(duration_ms) = duration_ms {
+                        if let Some(t) = self.turn_mut(&turn_id) {
+                            t.reasoning_durations.insert(id.clone(), duration_ms);
+                        }
+                    }
+                }
+                ServerNotification::ItemCompleted(ev!(ItemRef {
+                    turn_id,
+                    item,
+                    at: Some(at),
+                    duration_ms,
+                }))
             }
             LogEvent::TextDelta {
                 turn_id,
@@ -254,6 +284,7 @@ impl ThreadLog {
                 error,
             } => {
                 let at = Some(now_ms());
+                self.reasoning_starts.clear();
                 if let Some(t) = self.turn_mut(&turn_id) {
                     t.completed_at = at;
                 }

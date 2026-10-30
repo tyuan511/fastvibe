@@ -1,0 +1,148 @@
+_version: 2
+browser.auto:
+  zh: "自动选择"
+  en: "Automatic"
+browser.use_system:
+  zh: "使用系统浏览器"
+  en: "Use system browser"
+browser.use_system_desc:
+  zh: "让智能体在已安装的浏览器中操作网页；关闭时使用内嵌浏览器。"
+  en: "Let the agent operate an installed browser. Turn off to use the embedded browser."
+browser.engine:
+  zh: "浏览器"
+  en: "Browser"
+browser.engine_desc:
+  zh: "使用独立的 FastVibe 配置目录，可从下方导入登录态。"
+  en: "Uses a separate FastVibe profile. Import login cookies below."
+browser.import_title:
+  zh: "从浏览器导入"
+  en: "Import from browser"
+browser.import_desc:
+  zh: "将现有浏览器的 Cookie 导入内嵌浏览器，复用网站登录状态。"
+  en: "Import cookies from an existing browser into the embedded browser."
+browser.import_system_desc:
+  zh: "将现有浏览器的 Cookie 导入所选系统浏览器的 FastVibe 配置目录。"
+  en: "Import cookies into the selected system browser's FastVibe profile."
+browser.refresh:
+  zh: "刷新"
+  en: "Refresh"
+browser.loading:
+  zh: "正在查找浏览器配置…"
+  en: "Finding browser profiles…"
+browser.no_profiles:
+  zh: "未找到可导入的浏览器配置"
+  en: "No browser profiles found"
+browser.profile_desc:
+  zh: "导入网站 Cookie；系统可能请求钥匙串访问权限。"
+  en: "Import website cookies. The system may request Keychain access."
+browser.importing:
+  zh: "正在导入…"
+  en: "Importing…"
+browser.import_action:
+  zh: "导入"
+  en: "Import"
+browser.import_done:
+  zh: "已导入 %{count} 个 Cookie，跳过 %{skipped} 个无法解密或已失效的 Cookie"
+  en: "Imported %{count} cookies; skipped %{skipped} unreadable or expired cookies"
+browser.pick:
+  zh: "选取网页元素"
+  en: "Pick page element"
+browser.pick_cancel:
+  zh: "取消选取"
+  en: "Cancel selection"
+browser.pick_hint:
+  zh: "将鼠标移到网页上，点击元素即可附加到对话；再次点击选取按钮可取消。"
+  en: "Hover over the page and click an element to attach it to the chat. Click the picker again to cancel."
+browser.downloads:
+  zh: "下载内容"
+  en: "Downloads"
+browser.no_downloads:
+  zh: "暂无下载记录"
+  en: "No downloads yet"
+browser.downloading:
+  zh: "下载中…"
+  en: "Downloading…"
+browser.download_complete:
+  zh: "下载完成 · 在文件夹中显示"
+  en: "Completed · Show in folder"
+browser.download_failed:
+  zh: "下载失败"
+  en: "Download failed"
+browser.find:
+  zh: "在页面中查找"
+  en: "Find in page"
+browser.find_placeholder:
+  zh: "在页面中查找…"
+  en: "Find in page…"
+browser.found:
+  zh: "找到匹配"
+  en: "Match found"
+browser.not_found:
+  zh: "没有匹配项"
+  en: "No matches"
+browser.find_prev:
+  zh: "上一个"
+  en: "Previous match"
+browser.find_next:
+  zh: "下一个"
+  en: "Next match"
+browser.find_close:
+  zh: "关闭查找"
+  en: "Close find"
+browser.device:
+  zh: "设备工具栏"
+  en: "Device toolbar"
+browser.responsive:
+  zh: "自适应"
+  en: "Responsive"
+browser.mobile:
+  zh: "手机 · 375 × 812"
+  en: "Mobile · 375 × 812"
+browser.tablet:
+  zh: "平板 · 768 × 1024"
+  en: "Tablet · 768 × 1024"
+browser.rotate:
+  zh: "旋转设备"
+  en: "Rotate device"
+browser.device_close:
+  zh: "关闭设备工具栏"
+  en: "Close device toolbar"
+browser.capture:
+  zh: "保存页面截图"
+  en: "Save page screenshot"
+browser.capture_saved:
+  zh: "截图已保存：%{path}"
+  en: "Screenshot saved: %{path}"
+browser.history:
+  zh: "历史记录"
+  en: "History"
+browser.clear_cache:
+  zh: "缓存"
+  en: "Cache"
+browser.clear_cookies:
+  zh: "Cookie 和网站数据"
+  en: "Cookies and site data"
+browser.clear_history:
+  zh: "浏览历史"
+  en: "Browsing history"
+browser.clear_downloads:
+  zh: "下载记录（保留文件）"
+  en: "Download history (keep files)"
+browser.cleared:
+  zh: "已清除所选浏览数据"
+  en: "Selected browsing data cleared"
+browser.pause_download:
+  zh: "暂停下载"
+  en: "Pause download"
+browser.resume_download:
+  zh: "继续下载"
+  en: "Resume download"
+browser.cancel_download:
+  zh: "取消下载"
+  en: "Cancel download"
+browser.download_paused:
+  zh: "已暂停"
+  en: "Paused"
+browser.embedded_settings:
+  zh: "内嵌浏览器设置"
+  en: "Embedded browser settings"

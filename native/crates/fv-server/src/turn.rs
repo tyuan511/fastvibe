@@ -1,4 +1,5 @@
 use futures_util::FutureExt;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use fv_agent::{AgentContext, AgentEvent, TurnOutcome, base_instructions, run_turn};
@@ -123,6 +124,11 @@ async fn drive(
     .await;
     let first_prompt = text.clone();
     let mut history = rt.history();
+    // Whether this is the conversation's first turn: the one that names it. A later prompt never
+    // renames a chat the first one already spoke for.
+    let first_turn = !history
+        .iter()
+        .any(|m| matches!(m, fv_core::Message::User { .. }));
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut mapper = EventMapper::new(turn_id.clone(), fv_agent::effective_context_window(&ctx));
     let outcome = {
@@ -171,6 +177,11 @@ async fn drive(
     };
     finish_turn(&state, &rt, &thread_id, &turn_id, status, error.clone()).await;
     state.touch_thread(&thread_id, Some(&first_prompt));
+    // The catalog now holds the prompt's first line. A chat whose first message says more than a
+    // name is named by the conversation's own model instead — see `session_title`.
+    if first_turn {
+        spawn_session_title(&state, &thread_id, &first_prompt);
+    }
     // Whatever was queued behind this turn goes next — unless this turn failed, in which case
     // the queue stops where it is rather than being fed to a run that is already broken.
     //
@@ -234,6 +245,52 @@ fn spawn_suggestion(state: Arc<ServerState>, rt: Arc<ThreadRuntime>, thread_id: 
         }
         rt.publish(&state, LogEvent::SuggestionChanged(answer))
             .await;
+    });
+}
+
+/// Name the conversation from its first prompt with a short side request to its own model.
+///
+/// `touch_thread` has already written the prompt's first line as a fallback, so a chat is named
+/// either way; this only replaces that with a real title. Fire-and-forget: nothing waits for it,
+/// every failure is swallowed, and the name is written only while the fallback is still what the
+/// catalog holds — a rename that landed meanwhile is the user's own answer and wins.
+fn spawn_session_title(state: &Arc<ServerState>, thread_id: &str, first_prompt: &str) {
+    if crate::subagents::is_child(state, thread_id) || state.schedules.owns(thread_id) {
+        return;
+    }
+    let Some(prompt) = crate::session_title::prompt_text(first_prompt) else {
+        return;
+    };
+    let fallback = crate::state::title_from(first_prompt);
+    // A first message this short is already the title the fallback wrote.
+    if crate::session_title::is_short(&prompt) {
+        return;
+    }
+    let Ok(Some(thread)) = state.thread(thread_id) else {
+        return;
+    };
+    let Some(model) = crate::providers::chosen_model(state, &thread) else {
+        return;
+    };
+    let (state, thread_id) = (state.clone(), thread_id.to_string());
+    tokio::spawn(async move {
+        let Some(title) = crate::session_title::generate(model, &prompt).await else {
+            return;
+        };
+        let Ok(Some(mut thread)) = state.thread(&thread_id) else {
+            return;
+        };
+        if !crate::session_title::should_apply(&thread.title, &fallback, &title) {
+            return;
+        }
+        thread.title = title;
+        if let Err(e) = state.store.db.put_thread(&thread) {
+            eprintln!("cannot name {thread_id}: {e}");
+            return;
+        }
+        state.broadcast(fv_protocol::ServerNotification::CatalogChanged(
+            fv_protocol::types::CatalogChanged {},
+        ));
     });
 }
 
@@ -661,12 +718,36 @@ async fn finish_turn(
             id: uuid::Uuid::new_v4().to_string(),
             message: message.clone(),
         });
-    if let Err(e) =
-        state
-            .store
-            .transcripts
-            .finish_turn(thread_id, turn_id, status, recorded_error.clone())
-    {
+    let reasoning_durations = rt
+        .turns()
+        .into_iter()
+        .find(|turn| turn.id == turn_id)
+        .map(|turn| {
+            let mut durations = BTreeMap::new();
+            let mut ordinal = 0;
+            for item in turn.items {
+                if let Item::Reasoning { id, text } = item {
+                    // The stored history projection omits blank thoughts, so they must not
+                    // consume an ordinal here or shift every later duration onto another block.
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    if let Some(&duration_ms) = turn.reasoning_durations.get(&id) {
+                        durations.insert(ordinal, duration_ms);
+                    }
+                    ordinal += 1;
+                }
+            }
+            durations
+        })
+        .unwrap_or_default();
+    if let Err(e) = state.store.transcripts.finish_turn_with_reasoning(
+        thread_id,
+        turn_id,
+        status,
+        recorded_error.clone(),
+        reasoning_durations,
+    ) {
         eprintln!("cannot record the result of {thread_id}/{turn_id}: {e}");
     }
     if let Some(error) = recorded_error {

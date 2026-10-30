@@ -199,6 +199,11 @@ impl Workspace {
         let layout = storage.last.clone();
         self.browser_bookmarks = layout.browser_bookmarks.clone();
         self.browser_history = layout.browser_history.clone();
+        self.browser_services.downloads = layout.browser_downloads.clone();
+        for download in &mut self.browser_services.downloads {
+            download.paused=false;download.can_resume=false;
+            if download.complete.is_none() {download.complete = Some(false);}
+        }
         self.side_pane_collapsed = layout.collapsed;
         self.side_pane_width = layout
             .width
@@ -206,6 +211,7 @@ impl Workspace {
             .filter(|width| *width != super::DEFAULT_WIDTH)
             .map(|width| finite_width(width, super::DEFAULT_WIDTH).max(super::MIN_WIDTH));
         self.side_pane_maximized = layout.maximized;
+        self.resources.requested_open = layout.resources_open;
         if self.selected.is_none() {
             self.selected = layout.selected;
         }
@@ -250,8 +256,10 @@ impl Workspace {
             collapsed: self.side_pane_collapsed,
             width: self.side_pane_width,
             maximized: self.side_pane_maximized,
+            resources_open: self.resources.requested_open,
             browser_bookmarks: self.browser_bookmarks.clone(),
             browser_history: self.browser_history.clone(),
+            browser_downloads: self.browser_services.downloads.clone(),
             panes,
             ..Default::default()
         }

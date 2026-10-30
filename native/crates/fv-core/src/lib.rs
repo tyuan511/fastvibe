@@ -5,9 +5,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod attachment;
 pub mod image;
 mod memory;
 mod web_search;
+pub use attachment::{attachment_paths, strip_attachment_block};
 pub use memory::{memory_citation_ids, strip_memory_citation};
 pub use web_search::*;
 

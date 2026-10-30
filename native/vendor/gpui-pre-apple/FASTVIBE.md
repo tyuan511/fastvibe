@@ -18,3 +18,18 @@ entire fill instead of only outside its edge. Inset shadows are unchanged.
 Remove this patch when the dependency fixes both final pipelines. The opt-in
 `fv-gui` glass integration test checks the actual rendered alpha against the theme
 tokens so a dependency update cannot silently reintroduce the issue.
+
+## Graphics memory
+
+Path targets are allocated on demand from visible, clipped path bounds, rounded
+up to 64-pixel buckets with sampling padding. Unused right/bottom pixels are
+omitted; the origin stays at the window origin. Path sprites sample by window
+pixel position divided by the actual texture dimensions. Gradients, masks,
+premultiplied blending, 4x MSAA, and triple buffering remain unchanged. Same-size
+targets are reused, and a scene without visible paths releases them. GPU command
+buffers retain textures still in flight when the renderer releases its copy.
+
+The shared instance buffer pool retains at most 8 MiB of completed buffers;
+in-flight buffers and large scenes are unrestricted. This avoids keeping peak
+frame allocations alive after closing a busy view. Pure unit tests check target
+geometry without creating a window or GPU device.

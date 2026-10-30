@@ -45,6 +45,25 @@ struct GitTarget {
 ///
 /// The same commands the server's `git` module runs, so the screenshot shows a real change list
 /// and a real patch rather than a shape somebody invented.
+/// Prefer the worktree, then the index; otherwise show the first current change.
+fn transcript_change(status: &GitStatus, absolute: &str) -> Option<(String, DiffSource)> {
+    let path = std::path::Path::new(absolute)
+        .strip_prefix(&status.cwd)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    let rows = rows_of(status);
+    for exact in [true, false] {
+        for group in [Group::Conflicted, Group::Unstaged, Group::Staged] {
+            if let Some(row) = rows.iter().find(|row| {
+                row.group == group && (!exact || path.as_deref() == Some(row.path.as_str()))
+            }) {
+                return Some((row.path.clone(), group.source()));
+            }
+        }
+    }
+    None
+}
+
 fn git_out(cwd: &str, args: &[&str]) -> String {
     std::process::Command::new("git")
         .args(["--no-optional-locks", "--literal-pathspecs", "-C", cwd])
@@ -532,6 +551,74 @@ impl Workspace {
         self.ensure_git_editor(window, cx);
         self.load_git_status(cx);
         cx.notify();
+    }
+
+    /// A later turn may have staged, committed or reverted the transcript's file.
+    pub(super) fn review_transcript_file(
+        &mut self,
+        absolute: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        let roots = self.project_roots_for(&id);
+        let root = roots
+            .iter()
+            .filter(|root| std::path::Path::new(&absolute).starts_with(root))
+            .max_by_key(|root| root.len())
+            .or_else(|| roots.first())
+            .cloned();
+        let Some(root) = root else { return };
+        self.git_views.entry(id).or_default().select(&root);
+        self.open_git_tab(window, cx);
+        let (Some(target), Some(backend)) = (self.git_target(), self.backend.clone()) else {
+            return;
+        };
+        let epoch = self.git_repo_mut(&target).unwrap().begin_status();
+        cx.spawn(async move |this, cx| {
+            let result = backend
+                .call::<WorkspaceGitStatus>(CwdParams {
+                    cwd: target.cwd.clone(),
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.git_target().as_ref() != Some(&target) {
+                    return;
+                }
+                let english = this.english();
+                let Some(view) = this.git_repo_mut(&target) else {
+                    return;
+                };
+                if !view.accepts_status(epoch) {
+                    return;
+                }
+                match result {
+                    Ok(status) => {
+                        let choice = transcript_change(&status, &absolute);
+                        view.status = Some(status);
+                        view.notice = None;
+                        if choice.is_none() {
+                            view.clear_patch();
+                        }
+                        if let Some((path, source)) = choice {
+                            this.load_git_diff(path, source, None, cx);
+                        }
+                    }
+                    Err(error) => {
+                        view.notice = Some(tr!(
+                            english,
+                            "pane_git.could_not_read_the_git",
+                            error = error
+                        ))
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn git_cwd(&self) -> Option<String> {
@@ -2421,7 +2508,7 @@ impl Workspace {
         } else {
             for row in &doc.rows {
                 let selected = row.kind == RowKind::Hunk && row.hunk == hunk;
-                let row = self.diff_row(row, doc.number_width, p);
+                let row = super::diff::row(row, doc.number_width, p);
                 lines = if selected {
                     lines.child(
                         div()
@@ -2449,108 +2536,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The row's fill and its left rule, as `ROW_STYLE` in Electron's `diff-view.tsx`.
-    fn diff_row_style(
-        kind: super::diff::RowKind,
-        p: &crate::theme::Palette,
-    ) -> (Option<Hsla>, Option<Hsla>, Option<Hsla>) {
-        use super::diff::RowKind;
-        match kind {
-            RowKind::Added => (
-                Some(p.c(Token::Success).opacity(0.10)),
-                Some(p.c(Token::Success)),
-                None,
-            ),
-            RowKind::Removed => (
-                Some(p.c(Token::Destructive).opacity(0.10)),
-                Some(p.c(Token::Destructive)),
-                None,
-            ),
-            RowKind::Hunk => (
-                Some(p.c(Token::Muted).opacity(0.6)),
-                None,
-                Some(p.c(Token::MutedForeground)),
-            ),
-            RowKind::Meta => (None, None, Some(p.c(Token::MutedForeground).opacity(0.7))),
-            RowKind::Skip => (None, None, Some(p.c(Token::MutedForeground).opacity(0.5))),
-            RowKind::Context => (None, None, None),
-        }
-    }
-
-    /// One gutter cell: `calc(<digits>ch + 0.75rem)` wide, right-aligned.
-    fn diff_number(value: Option<u64>, width: usize, color: Hsla) -> Div {
-        div()
-            .min_w(px(width as f32 * 7.2 + 12.0))
-            .flex_none()
-            .px(px(6.0))
-            .flex()
-            .justify_end()
-            .text_color(color)
-            .child(SharedString::from(
-                value.map(|n| n.to_string()).unwrap_or_default(),
-            ))
-    }
-
-    fn diff_row(
-        &self,
-        row: &super::diff::DiffRow,
-        width: usize,
-        p: &crate::theme::Palette,
-    ) -> AnyElement {
-        use super::diff::RowKind;
-        let (bg, rule, fg) = Self::diff_row_style(row.kind, p);
-        let marker = match row.kind {
-            RowKind::Added => Some(p.c(Token::Success)),
-            RowKind::Removed => Some(p.c(Token::Destructive)),
-            RowKind::Context => Some(p.c(Token::MutedForeground).opacity(0.6)),
-            _ => None,
-        };
-        div()
-            .w_full()
-            .flex()
-            .border_l_2()
-            .border_color(rule.unwrap_or(gpui::transparent_black()))
-            .when_some(bg, |d, bg| d.bg(bg))
-            .when_some(fg, |d, fg| d.text_color(fg))
-            .when(width > 0, |d| {
-                d.child(Self::diff_number(
-                    row.old_number,
-                    width,
-                    p.c(Token::MutedForeground).opacity(0.4),
-                ))
-                .child(
-                    Self::diff_number(
-                        row.new_number,
-                        width,
-                        p.c(Token::MutedForeground).opacity(0.6),
-                    )
-                    .border_r_1()
-                    .border_color(p.c(Token::Border)),
-                )
-            })
-            .child(
-                div()
-                    .w(px(16.0))
-                    .flex_none()
-                    .flex()
-                    .justify_center()
-                    .when_some(marker, |d, c| d.text_color(c))
-                    .child(SharedString::from(row.marker.to_string())),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .px(px(8.0))
-                    .child(SharedString::from(if row.text.is_empty() {
-                        " ".to_string()
-                    } else {
-                        row.text.clone()
-                    })),
-            )
-            .into_any_element()
-    }
-
     /// One row of the side-by-side view: a header spans both columns, everything else is a pair.
     fn diff_split_row(
         &self,
@@ -2560,7 +2545,7 @@ impl Workspace {
     ) -> AnyElement {
         use super::diff::RowKind;
         if let Some(header) = &row.header {
-            let (bg, _, fg) = Self::diff_row_style(header.kind, p);
+            let (bg, _, fg) = super::diff::row_style(header.kind, p);
             return div()
                 .w_full()
                 .px(px(12.0))
@@ -2588,7 +2573,7 @@ impl Workspace {
                     .border_color(p.c(Token::Border))
                     .bg(p.c(Token::Muted).opacity(0.4));
             };
-            let (bg, rule, _) = Self::diff_row_style(row.kind, p);
+            let (bg, rule, _) = super::diff::row_style(row.kind, p);
             // The rule is drawn on the left edge only; the left half's right border is the
             // column divider, which the theme's border colour draws.
             let cell = cell
@@ -2622,7 +2607,7 @@ impl Workspace {
             };
             cell.when(width > 0, |d| {
                 d.child(
-                    Self::diff_number(
+                    super::diff::number(
                         if right {
                             row.new_number
                         } else {
@@ -3316,5 +3301,59 @@ impl Workspace {
                     ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod transcript_selection_tests {
+    use super::{DiffSource, GitFileChange, GitStatus, state, transcript_change};
+
+    #[test]
+    fn transcript_review_chooses_the_current_layer_and_falls_back() {
+        let mut status = GitStatus {
+            cwd: "/repo/sub".into(),
+            files: vec![
+                GitFileChange {
+                    path: "other.rs".into(),
+                    index: " ".into(),
+                    worktree: "M".into(),
+                },
+                GitFileChange {
+                    path: "nested/a.rs".into(),
+                    index: "M".into(),
+                    worktree: " ".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            transcript_change(&status, "/repo/sub/nested/a.rs"),
+            Some(("nested/a.rs".into(), DiffSource::Staged))
+        );
+        status.files[1].worktree = "M".into();
+        assert_eq!(
+            transcript_change(&status, "/repo/sub/nested/a.rs"),
+            Some(("nested/a.rs".into(), DiffSource::Unstaged))
+        );
+        assert_eq!(
+            transcript_change(&status, "/repo/sub/committed.rs"),
+            Some(("nested/a.rs".into(), DiffSource::Unstaged))
+        );
+        status.files.clear();
+        assert_eq!(transcript_change(&status, "/repo/sub/committed.rs"), None);
+    }
+
+    #[test]
+    fn a_clean_review_cannot_be_overwritten_by_a_pending_old_patch() {
+        let mut view = state::GitRepoView::default();
+        let epoch = view.begin_patch("old.rs", DiffSource::Unstaged, None);
+        view.clear_patch();
+        view.finish_patch(
+            epoch,
+            Ok(("old.rs".into(), DiffSource::Unstaged, "old diff".into())),
+        );
+        assert!(view.patch.is_none());
+        assert!(view.selected.is_none());
+        assert!(!view.patch_loading);
     }
 }

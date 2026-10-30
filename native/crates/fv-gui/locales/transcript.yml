@@ -36,6 +36,46 @@ transcript.edit:
 transcript.copy:
   zh: "复制"
   en: "Copy"
+transcript.no_output:
+  zh: "没有输出。"
+  en: "No output."
+transcript.waiting_for_output:
+  zh: "等待新输出"
+  en: "Waiting for output"
+transcript.terminal_running:
+  zh: "运行中"
+  en: "Running"
+transcript.terminal_sending:
+  zh: "正在发送输入"
+  en: "Sending input"
+transcript.terminal_interrupting:
+  zh: "正在中断"
+  en: "Interrupting"
+transcript.terminal_exited:
+  zh: "已结束 · 退出码 %{code}"
+  en: "Exited · code %{code}"
+transcript.terminal_timed_out:
+  zh: "已超时"
+  en: "Timed out"
+transcript.terminal_session:
+  zh: "终端会话 #%{session}"
+  en: "Terminal session #%{session}"
+transcript.terminal_interaction:
+  zh: "终端交互"
+  en: "Terminal interaction"
+transcript.expand:
+  zh: "展开"
+  en: "Expand"
+transcript.collapse:
+  zh: "收起"
+  en: "Collapse"
 transcript.just_now:
   zh: "刚刚"
   en: "Just now"
+
+transcript.path_preview:
+  zh: "预览文件"
+  en: "Preview file"
+transcript.path_copy:
+  zh: "复制路径"
+  en: "Copy path"

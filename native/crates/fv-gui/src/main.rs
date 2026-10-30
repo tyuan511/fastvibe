@@ -165,7 +165,7 @@ fn main() {
             let palette_open = args.palette;
             let search = args.search.clone();
             let (handle, workspace) = gpui_kit::open_window(options, cx, move |window, cx| {
-                fv_gui::vibrancy::set(window, glass);
+                fv_gui::vibrancy::set(window, &palette);
                 let ws = cx.new(|cx| {
                     match fixture.as_deref() {
                         Some("theme") => {

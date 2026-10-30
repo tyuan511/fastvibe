@@ -7543,6 +7543,15 @@
               "null"
             ]
           },
+          "durationMs": {
+            "description": "Exact server-measured duration for a completed reasoning item, in milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "item": {
             "$ref": "#/$defs/Item"
           },

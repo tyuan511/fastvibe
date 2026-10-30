@@ -1,5 +1,18 @@
 _version: 2
 
+presentation.tool_browser:
+  zh: "浏览器"
+  en: "Browser"
+presentation.tool_browser_live:
+  zh: "正在操作浏览器"
+  en: "Using browser"
+presentation.tool_computer:
+  zh: "电脑操控"
+  en: "Computer control"
+presentation.tool_computer_live:
+  zh: "正在操作电脑"
+  en: "Using computer"
+
 presentation.tool_code_mode:
   zh: "代码模式"
   en: "Code mode"

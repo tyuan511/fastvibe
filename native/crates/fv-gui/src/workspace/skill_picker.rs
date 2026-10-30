@@ -385,12 +385,21 @@ impl Workspace {
                     })),
             );
         }
+        // A floating layer over the conversation, not a row in the composer's column: the list
+        // answers the `/` being typed, and giving it layout height pushed the card (and the text
+        // under the caret) down by eight rows the moment the palette opened. The caller anchors
+        // it to the card's top edge; the cap keeps a long catalog from running up the window.
         Some(
             super::settings::popover(p)
                 .p(px(0.0))
-                .mb(px(8.0))
                 .overflow_hidden()
-                .child(rows)
+                .child(
+                    div()
+                        .id("skill-list")
+                        .max_h(px(288.0))
+                        .overflow_y_scroll()
+                        .child(rows),
+                )
                 .into_any_element(),
         )
     }

@@ -225,6 +225,9 @@ impl GitRepoView {
     fn invalidate_reads(&mut self) {
         self.status_epoch = self.status_epoch.wrapping_add(1);
         self.status_loading = false;
+        self.clear_patch();
+    }
+    pub fn clear_patch(&mut self) {
         self.patch_epoch = self.patch_epoch.wrapping_add(1);
         self.patch_loading = false;
         self.patch = None;

@@ -362,6 +362,20 @@ pub fn any_configured(state: &ServerState) -> bool {
         .unwrap_or(false)
 }
 
+/// The model a side request for this conversation runs on, when the conversation actually has
+/// one: its own pick, else the user's default.
+///
+/// `None` is a real answer here — a chat on a server with no provider has nothing to ask, and
+/// the caller then keeps the title the server wrote from the prompt. It is deliberately not
+/// `model_for`, whose fallback to the server's own command-line model would spend a scripted
+/// model's next reply on naming in a test, and name a chat with a model the user never chose.
+pub fn chosen_model(state: &ServerState, thread: &Thread) -> Option<Arc<dyn Model>> {
+    let defaults = read_defaults(state).unwrap_or_default();
+    let label = thread.model.clone().or(defaults.model)?;
+    let thinking = thread.thinking.or(defaults.thinking);
+    resolve(state, &label, thinking).ok()
+}
+
 /// Turn `provider_id/model_id` into a model that can be called, or say why it cannot.
 pub fn resolve(
     state: &ServerState,

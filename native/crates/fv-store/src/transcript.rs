@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -125,6 +125,8 @@ enum Line {
         timestamp: i64,
         status: TurnStatus,
         error: Option<RecordedError>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        reasoning_durations: BTreeMap<usize, u64>,
     },
 }
 
@@ -465,6 +467,17 @@ impl TranscriptStore {
         status: TurnStatus,
         error: Option<RecordedError>,
     ) -> Result<(), StoreError> {
+        self.finish_turn_with_reasoning(conversation_id, turn_id, status, error, BTreeMap::new())
+    }
+
+    pub fn finish_turn_with_reasoning(
+        &self,
+        conversation_id: &str,
+        turn_id: &str,
+        status: TurnStatus,
+        error: Option<RecordedError>,
+        reasoning_durations: BTreeMap<usize, u64>,
+    ) -> Result<(), StoreError> {
         self.append_record(
             conversation_id,
             Line::TurnCompleted {
@@ -472,6 +485,7 @@ impl TranscriptStore {
                 timestamp: now_ms(),
                 status,
                 error,
+                reasoning_durations,
             },
         )
     }
@@ -511,6 +525,7 @@ impl TranscriptStore {
                         timestamp,
                         status: record.status,
                         error: record.error.clone(),
+                        reasoning_durations: record.reasoning_durations.clone(),
                     },
                 )?;
             }
@@ -784,6 +799,7 @@ impl TranscriptStore {
                             record.completed_at = None;
                             record.status = TurnStatus::Interrupted;
                             record.error = None;
+                            record.reasoning_durations.clear();
                         }
                     }
                 }
@@ -799,6 +815,7 @@ impl TranscriptStore {
                         completed_at: None,
                         status: TurnStatus::Interrupted,
                         error: None,
+                        reasoning_durations: BTreeMap::new(),
                     });
                 }
                 Ok(Line::TurnCompleted {
@@ -806,6 +823,7 @@ impl TranscriptStore {
                     timestamp,
                     status,
                     error,
+                    reasoning_durations,
                 }) => {
                     if let Some(record) = turn_records.last_mut()
                         && record.id == turn_id
@@ -815,6 +833,7 @@ impl TranscriptStore {
                         record.completed_at = Some(timestamp);
                         record.status = status;
                         record.error = error;
+                        record.reasoning_durations = reasoning_durations;
                     }
                 }
                 Ok(Line::ToolActivity {

@@ -60,6 +60,7 @@ fn item_started(seq: u64, turn: &str, item: Item) -> N {
             turn_id: turn.into(),
             item,
             at: None,
+            duration_ms: None,
         },
     ))
 }
@@ -116,6 +117,7 @@ fn a_reply_streams_into_place() {
                 text: "Hello!".into(),
             },
             at: None,
+            duration_ms: None,
         },
     )));
     assert!(matches!(&v.turns[0].items[0], Item::AgentMessage { text, .. } if text == "Hello!"));
@@ -275,6 +277,7 @@ fn a_tool_call_item_is_replaced_by_its_finished_form() {
                 is_error: false,
             },
             at: None,
+            duration_ms: None,
         },
     )));
     assert_eq!(v.turns[0].items.len(), 1);
@@ -333,6 +336,7 @@ fn reasoning_tracks_duration_and_timing() {
                 text: String::new(),
             },
             at: Some(1000),
+            duration_ms: None,
         },
     )));
     assert_eq!(v.reasoning_starts.get("r1").copied(), Some(1000));
@@ -354,13 +358,14 @@ fn reasoning_tracks_duration_and_timing() {
                 text: "Thinking...".into(),
             },
             at: Some(4500),
+            duration_ms: None,
         },
     )));
     assert_eq!(v.reasoning_durations.get("r1").copied(), Some(4));
 }
 
 #[test]
-fn reasoning_falls_back_to_turn_started_at_if_item_start_missing() {
+fn reasoning_uses_server_duration_if_item_start_missing() {
     let mut v = view(0, vec![]);
     v.apply(&N::TurnStarted(ev(
         1,
@@ -378,10 +383,77 @@ fn reasoning_falls_back_to_turn_started_at_if_item_start_missing() {
                 text: "Thought".into(),
             },
             at: Some(5100),
+            duration_ms: Some(1100),
         },
     )));
-    // 5100 - 2000 = 3100ms -> ceil is 4s
-    assert_eq!(v.reasoning_durations.get("r2").copied(), Some(4));
+    // Reconnecting mid-thought misses the start event; use the measured block, not the turn.
+    assert_eq!(v.reasoning_durations.get("r2").copied(), Some(2));
+    assert_eq!(v.turns[0].reasoning_durations.get("r2"), Some(&1100));
+}
+
+#[test]
+fn reasoning_blocks_keep_distinct_durations_after_snapshot_round_trip() {
+    let mut v = view(0, vec![]);
+    v.apply(&started(1, "u1"));
+    for (index, id, start, end) in [(0, "r1", 1000, 4500), (1, "r2", 9000, 10100)] {
+        v.apply(&N::ItemStarted(ev(
+            2 + index * 2,
+            ItemRef {
+                turn_id: "u1".into(),
+                item: Item::Reasoning {
+                    id: id.into(),
+                    text: String::new(),
+                },
+                at: Some(start),
+                duration_ms: None,
+            },
+        )));
+        v.apply(&N::ItemCompleted(ev(
+            3 + index * 2,
+            ItemRef {
+                turn_id: "u1".into(),
+                item: Item::Reasoning {
+                    id: id.into(),
+                    text: "Thought".into(),
+                },
+                at: Some(end),
+                duration_ms: None,
+            },
+        )));
+    }
+    assert_eq!(v.reasoning_durations.get("r1"), Some(&4));
+    assert_eq!(v.reasoning_durations.get("r2"), Some(&2));
+    let turns = serde_json::from_str(&serde_json::to_string(&v.turns).unwrap()).unwrap();
+    let restored = view(v.seq, turns);
+    assert_eq!(restored.reasoning_durations, v.reasoning_durations);
+    assert_eq!(restored.turns[0].reasoning_durations.get("r1"), Some(&3500));
+    assert_eq!(restored.turns[0].reasoning_durations.get("r2"), Some(&1100));
+}
+
+#[test]
+fn missing_block_timing_does_not_use_the_turn_duration() {
+    let mut v = view(0, vec![]);
+    v.apply(&N::TurnStarted(ev(
+        1,
+        TurnRef {
+            turn_id: "u1".into(),
+            at: Some(2000),
+        },
+    )));
+    v.apply(&N::ItemCompleted(ev(
+        2,
+        ItemRef {
+            turn_id: "u1".into(),
+            item: Item::Reasoning {
+                id: "r1".into(),
+                text: "Old thought".into(),
+            },
+            at: Some(5100),
+            duration_ms: None,
+        },
+    )));
+    assert!(v.reasoning_durations.is_empty());
+    assert!(v.turns[0].reasoning_durations.is_empty());
 }
 
 /// A retry takes the turn and everything after it out of the drawn transcript, so the run that

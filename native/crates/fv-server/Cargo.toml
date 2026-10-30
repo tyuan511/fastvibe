@@ -26,7 +26,7 @@ fv-tools = { path = "../fv-tools" }
 fv-mcp = { path = "../fv-mcp" }
 fv-import = { path = "../fv-import" }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "unbounded_depth"] }
 base64 = "0.22"
 serde_yaml = "0.9"
 tokio.workspace = true

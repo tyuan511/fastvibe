@@ -1044,6 +1044,15 @@ impl Workspace {
         if let Some(next) = next {
             self.activate_pane_tab(&next, window, cx);
         }
+        // Match Electron: closing the last tab collapses the pane and exits maximised mode.
+        if self
+            .panes
+            .get(&conversation)
+            .is_some_and(|state| state.tabs.is_empty())
+        {
+            self.side_pane_collapsed = true;
+            self.side_pane_maximized = false;
+        }
         cx.notify();
     }
 

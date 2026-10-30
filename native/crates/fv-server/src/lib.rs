@@ -33,6 +33,7 @@ mod queue;
 mod runtime;
 mod schedules;
 mod search;
+mod session_title;
 mod settings;
 mod state;
 mod subagents;

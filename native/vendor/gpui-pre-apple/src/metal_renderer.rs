@@ -38,6 +38,51 @@ const PATH_SAMPLE_COUNT: u32 = 4;
 /// Metal requires the offset a buffer is bound at to be 256-byte aligned.
 const INSTANCE_BUFFER_ALIGNMENT: usize = 256;
 const MAX_INSTANCE_BUFFER_SIZE: usize = 256 * 1024 * 1024;
+const INITIAL_INSTANCE_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+// Completed frames need only a small warm pool. A large scene must not leave its
+// peak allocation resident for the rest of the process (the pool spans windows).
+const MAX_POOLED_INSTANCE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Paths use window coordinates, so crop only unused right/bottom pixels. Leave
+/// one pixel for edge sampling and round up to limit reallocations during motion.
+fn path_target_size(scene: &Scene, viewport: Size<DevicePixels>) -> Size<DevicePixels> {
+    if scene.paths.is_empty() || viewport.width.0 <= 0 || viewport.height.0 <= 0 {
+        return size(DevicePixels(0), DevicePixels(0));
+    }
+    let mut right = 0.0_f32;
+    let mut bottom = 0.0_f32;
+    for path in &scene.paths {
+        let bounds = path.clipped_bounds();
+        if bounds.size.width.0 <= 0.0
+            || bounds.size.height.0 <= 0.0
+            || bounds.right().0 <= 0.0
+            || bounds.bottom().0 <= 0.0
+            || bounds.origin.x.0 >= viewport.width.0 as f32
+            || bounds.origin.y.0 >= viewport.height.0 as f32
+        {
+            continue;
+        }
+        if !bounds.right().0.is_finite() || !bounds.bottom().0.is_finite() {
+            return viewport;
+        }
+        right = right.max(bounds.right().0);
+        bottom = bottom.max(bounds.bottom().0);
+    }
+    let dimension = |edge: f32, limit: i32| {
+        if edge <= 0.0 {
+            DevicePixels(0)
+        } else {
+            DevicePixels(
+                (((edge.min(limit as f32).ceil() as i64 + 1 + 63) / 64) * 64).min(i64::from(limit))
+                    as i32,
+            )
+        }
+    };
+    size(
+        dimension(right, viewport.width.0),
+        dimension(bottom, viewport.height.0),
+    )
+}
 
 pub type Context = Arc<Mutex<InstanceBufferPool>>;
 pub type Renderer = MetalRenderer;
@@ -60,7 +105,7 @@ pub struct InstanceBufferPool {
 impl Default for InstanceBufferPool {
     fn default() -> Self {
         Self {
-            buffer_size: 2 * 1024 * 1024,
+            buffer_size: INITIAL_INSTANCE_BUFFER_SIZE,
             buffers: Vec::new(),
         }
     }
@@ -101,7 +146,19 @@ impl InstanceBufferPool {
     }
 
     pub(crate) fn release(&mut self, buffer: InstanceBuffer) {
-        if buffer.size == self.buffer_size {
+        if buffer.size == self.buffer_size && buffer.size > MAX_POOLED_INSTANCE_BYTES {
+            // Do not keep allocating the previous peak size on every small frame
+            // after a large scene. Buffers already encoded remain GPU-owned.
+            self.reset(INITIAL_INSTANCE_BUFFER_SIZE);
+        }
+        if buffer.size == self.buffer_size
+            && self
+                .buffers
+                .len()
+                .saturating_add(1)
+                .saturating_mul(buffer.size)
+                <= MAX_POOLED_INSTANCE_BYTES
+        {
             self.buffers.push(buffer.metal_buffer)
         }
     }
@@ -464,7 +521,12 @@ impl MetalRenderer {
         if let Some(layer) = &self.layer {
             layer.set_drawable_size(CGSize::new(size.width.0 as f64, size.height.0 as f64));
         }
-        self.update_path_intermediate_textures(size);
+        // Allocate path targets from the next scene, rather than allocating full
+        // window targets even for a page consisting entirely of text/sprites.
+        if size.width.0 <= 0 || size.height.0 <= 0 {
+            self.path_intermediate_texture = None;
+            self.path_intermediate_msaa_texture = None;
+        }
     }
 
     fn update_path_intermediate_textures(&mut self, size: Size<DevicePixels>) {
@@ -474,6 +536,15 @@ impl MetalRenderer {
         if size.width.0 <= 0 || size.height.0 <= 0 {
             self.path_intermediate_texture = None;
             self.path_intermediate_msaa_texture = None;
+            return;
+        }
+        if self
+            .path_intermediate_texture
+            .as_ref()
+            .is_some_and(|texture| {
+                texture.width() == size.width.0 as u64 && texture.height() == size.height.0 as u64
+            })
+        {
             return;
         }
 
@@ -565,6 +636,7 @@ impl MetalRenderer {
         texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
+        self.update_path_intermediate_textures(path_target_size(scene, viewport_size));
         let mut writer = InstanceBufferWriter::new(
             &self.device,
             &self.instance_buffer_pool,
@@ -652,9 +724,6 @@ impl MetalRenderer {
         // Headless callers do not have a Cocoa event-loop pool to release
         // autoreleased command buffers and render-pass descriptors.
         objc2::rc::autoreleasepool(|_| {
-            // Update path intermediate textures for this size
-            self.update_path_intermediate_textures(size);
-
             // Create an offscreen texture as render target
             let texture_descriptor = metal::TextureDescriptor::new();
             texture_descriptor.set_width(size.width.0 as u64);
@@ -706,8 +775,6 @@ impl MetalRenderer {
         }
 
         objc2::rc::autoreleasepool(|_| {
-            self.update_path_intermediate_textures(size);
-
             let needs_new_target = self.headless_render_target.as_ref().is_none_or(|texture| {
                 texture.width() != size.width.0 as u64 || texture.height() != size.height.0 as u64
             });
@@ -776,6 +843,9 @@ impl MetalRenderer {
                     );
                 }
                 PrimitiveBatch::Paths(range) => {
+                    if self.path_intermediate_texture.is_none() {
+                        continue;
+                    }
                     let paths = &scene.paths[range];
                     command_encoder.end_encoding();
 
@@ -844,7 +914,7 @@ impl MetalRenderer {
         &self,
         paths: &[Path<ScaledPixels>],
         writer: &mut InstanceBufferWriter,
-        viewport_size: Size<DevicePixels>,
+        _viewport_size: Size<DevicePixels>,
         command_buffer: &metal::CommandBufferRef,
     ) -> Result<bool> {
         if paths.is_empty() {
@@ -854,6 +924,12 @@ impl MetalRenderer {
             .path_intermediate_texture
             .as_ref()
             .context("missing path intermediate texture")?;
+        // Raster coordinates stay in window pixels. Only the target's unused
+        // right/bottom area is removed; gradients, clips and MSAA are unchanged.
+        let viewport_size = size(
+            DevicePixels(intermediate_texture.width() as i32),
+            DevicePixels(intermediate_texture.height() as i32),
+        );
 
         let mut vertices = Vec::new();
         for path in paths {
@@ -1843,7 +1919,9 @@ impl InstanceBufferWriter {
 
     fn grow(&mut self, required: usize) -> Result<()> {
         let mut pool = self.pool.lock();
-        let buffer_size = (pool.buffer_size * 2)
+        // A completed large frame may have shrunk the shared pool while this
+        // writer was still encoding; growth must also exceed our current buffer.
+        let buffer_size = (pool.buffer_size.max(self.current.size) * 2)
             .max(required.next_power_of_two())
             .min(MAX_INSTANCE_BUFFER_SIZE);
         anyhow::ensure!(
@@ -2002,6 +2080,66 @@ mod tests {
         CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
         CVPixelBufferUnlockBaseAddress, kCVPixelBufferIOSurfacePropertiesKey,
     };
+
+    fn path_at(x: f32, y: f32, width: f32, height: f32) -> Path<ScaledPixels> {
+        let mut path = Path::new(point(gpui::px(0.0), gpui::px(0.0))).scale(1.0);
+        path.bounds = Bounds {
+            origin: point(ScaledPixels(x), ScaledPixels(y)),
+            size: size(ScaledPixels(width), ScaledPixels(height)),
+        };
+        path.content_mask = ContentMask {
+            bounds: path.bounds,
+        };
+        path
+    }
+
+    #[test]
+    fn path_targets_only_cover_visible_pixels_with_sampling_padding() {
+        let viewport = size(DevicePixels(4096), DevicePixels(2160));
+        let mut scene = Scene::default();
+        assert_eq!(
+            path_target_size(&scene, viewport),
+            size(DevicePixels(0), DevicePixels(0))
+        );
+        scene.paths.push(path_at(10.25, 20.75, 30.0, 50.0));
+        assert_eq!(
+            path_target_size(&scene, viewport),
+            size(DevicePixels(64), DevicePixels(128))
+        );
+        let path = &mut scene.paths[0];
+        path.bounds = Bounds {
+            origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size: size(ScaledPixels(8000.0), ScaledPixels(8000.0)),
+        };
+        // The clip, rather than the unclipped path, bounds the allocation.
+        assert_eq!(
+            path_target_size(&scene, viewport),
+            size(DevicePixels(64), DevicePixels(128))
+        );
+        scene.paths.push(path_at(4090.0, 2150.0, 100.0, 100.0));
+        assert_eq!(path_target_size(&scene, viewport), viewport);
+        assert_eq!(
+            path_target_size(&scene, size(DevicePixels(0), DevicePixels(2160))),
+            size(DevicePixels(0), DevicePixels(0))
+        );
+    }
+
+    #[test]
+    fn path_targets_ignore_offscreen_paths_and_keep_fractional_edge_pixels() {
+        let viewport = size(DevicePixels(1000), DevicePixels(1000));
+        let mut scene = Scene::default();
+        scene.paths.push(path_at(-100.0, -100.0, 10.0, 10.0));
+        scene.paths.push(path_at(1100.0, 1100.0, 10.0, 10.0));
+        assert_eq!(
+            path_target_size(&scene, viewport),
+            size(DevicePixels(0), DevicePixels(0))
+        );
+        scene.paths.push(path_at(-2.5, -1.5, 66.75, 65.75));
+        assert_eq!(
+            path_target_size(&scene, viewport),
+            size(DevicePixels(128), DevicePixels(128))
+        );
+    }
 
     #[test]
     fn render_core_video_surface() {

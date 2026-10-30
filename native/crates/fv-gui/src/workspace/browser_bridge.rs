@@ -29,8 +29,8 @@ const SNAPSHOT: &str = r#"(() => {
     if (r.width < 2 || r.height < 2 || st.visibility === 'hidden' || st.display === 'none') continue;
     if (r.bottom < 0 || r.top > innerHeight * 3) continue;
     const ref = 'e' + (n++); el.setAttribute('data-fv-ref', ref);
-    const label = (el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || el.title || el.alt || '').trim().replace(/\s+/g, ' ').slice(0, 80);
-    out.push(ref + ' ' + el.tagName.toLowerCase() + (el.type ? '[' + el.type + ']' : '') + ' "' + label + '"' + (el.href ? ' -> ' + String(el.href).slice(0, 120) : ''));
+    const label = (el.getAttribute('aria-label') || el.innerText || (/^(password|file)$/i.test(el.type || '') ? '' : el.value) || el.placeholder || el.title || el.alt || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    out.push(ref + ' selector=' + JSON.stringify(el.id ? '#' + CSS.escape(el.id) : '[data-fv-ref=\"' + ref + '\"]') + ' ' + el.tagName.toLowerCase() + (el.type ? '[' + el.type + ']' : '') + ' "' + label + '"' + (el.href ? ' -> ' + String(el.href).slice(0, 120) : ''));
     if (n >= 150) break;
   }
   return location.href + '\n' + document.title + '\n' + (out.join('\n') || '(no interactive elements)');
@@ -53,6 +53,12 @@ fn quoted(value: &str) -> String {
 pub(super) fn script_for(action: &str, args: &Value) -> Result<String, String> {
     let text = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("");
     let element = |args_ref: &str| -> Result<String, String> {
+        if args_ref.is_empty() && !text("selector").is_empty() {
+            return Ok(format!(
+                "let el; try {{ el = document.querySelector({}); }} catch (_) {{ return 'ERR:invalid selector'; }} if (!el) return 'ERR:no element matches selector';",
+                quoted(text("selector"))
+            ));
+        }
         if !valid_ref(args_ref) {
             return Err("`ref` must be an element ref from the latest snapshot, like e3".into());
         }
@@ -62,6 +68,12 @@ pub(super) fn script_for(action: &str, args: &Value) -> Result<String, String> {
     };
     match action {
         "snapshot" => Ok(SNAPSHOT.into()),
+        "evaluate" => {
+            if text("script").trim().is_empty() {
+                return Err("script is required".into());
+            }
+            Ok(format!("(() => {{ {} }})()", text("script")))
+        }
         "text" => Ok(TEXT.into()),
         "click" => Ok(format!(
             "(() => {{ {} el.scrollIntoView({{block:'center'}}); el.click(); return 'Clicked {}'; }})()",
@@ -130,8 +142,7 @@ impl Workspace {
         }
     }
 
-    /// The key of the browser tab the agent works in for this conversation, made and shown if
-    /// there is none: the native view only exists while its tab is on screen.
+    /// Reuse a conversation-owned tab, mounting it hidden when the pane is collapsed.
     fn browser_tab_for_agent(&mut self, thread: &str, cx: &mut Context<Self>) -> Option<String> {
         let has_browser = self.panes.get(thread).is_some_and(|p| {
             p.tabs
@@ -154,7 +165,6 @@ impl Workspace {
                 .clone();
             state.activate(id);
         }
-        self.side_pane_collapsed = false;
         cx.notify();
         self.panes.get(thread)?.active_tab().map(|t| t.id.clone())
     }
@@ -165,20 +175,116 @@ impl Workspace {
         request: BrowserRequest,
         cx: &mut Context<Self>,
     ) {
-        if self.selected.as_deref() != Some(request.thread_id.as_str()) {
-            self.browser_answer(
-                id,
-                "The user is not looking at this conversation, so its browser cannot be shown. Ask them to open it.",
-                true,
-            );
+        if self.app_settings.browser_use_system {
+            let Some(backend) = self.backend.clone() else {
+                self.browser_answer(id, "Backend unavailable", true);
+                return;
+            };
+            let browser = self.browser_services.system.clone();
+            let engine = self.app_settings.browser_engine.clone();
+            let url = if ["open", "navigate", "search"].contains(&request.action.as_str()) {
+                let raw = if request.action == "search" {
+                    request.args["text"]
+                        .as_str()
+                        .or_else(|| request.args["url"].as_str())
+                        .unwrap_or("")
+                } else {
+                    request.args["url"].as_str().unwrap_or("about:blank")
+                };
+                match crate::webview::address_with_search(
+                    raw,
+                    &self.app_settings.browser_search_engine,
+                ) {
+                    Ok(url) => Some(url),
+                    Err(e) => {
+                        self.browser_answer(id, e, true);
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            let script = if [
+                "open", "navigate", "search", "back", "forward", "reload", "list",
+            ]
+            .contains(&request.action.as_str())
+            {
+                None
+            } else {
+                match script_for(&request.action, &request.args) {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        self.browser_answer(id, e, true);
+                        return;
+                    }
+                }
+            };
+            let task = backend.spawn(async move {
+                browser
+                    .lock()
+                    .await
+                    .run(
+                        &engine,
+                        &request.thread_id,
+                        &request.action,
+                        url.as_deref(),
+                        script.as_deref(),
+                        request.args["newTab"].as_bool().unwrap_or(false),
+                        request.args["tabId"].as_str(),
+                    )
+                    .await
+            });
+            cx.spawn(async move |this, cx| {
+                let result = task.await.unwrap_or_else(|e| Err(e.to_string()));
+                let _ = this.update(cx, |this, _| match result {
+                    Ok(text) => this.browser_answer(id, text, false),
+                    Err(e) => this.browser_answer(id, e, true),
+                });
+            })
+            .detach();
             return;
+        }
+        if request.action == "list" {
+            let tabs: Vec<_> = self
+                .panes
+                .get(&request.thread_id)
+                .into_iter()
+                .flat_map(|p| &p.tabs)
+                .filter_map(|t| match &t.kind {
+                    PaneTabKind::Browser { url } => {
+                        Some(serde_json::json!({"tabId":t.id,"title":t.title,"url":url}))
+                    }
+                    _ => None,
+                })
+                .collect();
+            self.browser_answer(id, serde_json::to_string(&tabs).unwrap_or_default(), false);
+            return;
+        }
+        if request.args["newTab"].as_bool() == Some(true) {
+            self.open_browser_tab(&request.thread_id, "about:blank", cx);
+        }
+        if let Some(tab_id) = request.args["tabId"].as_str()
+            && let Some(pane) = self.panes.get_mut(&request.thread_id)
+            && pane
+                .tabs
+                .iter()
+                .any(|t| t.id == tab_id && matches!(t.kind, PaneTabKind::Browser { .. }))
+        {
+            pane.activate(tab_id.to_string());
         }
         let Some(key) = self.browser_tab_for_agent(&request.thread_id, cx) else {
             self.browser_answer(id, "Could not open a browser tab.", true);
             return;
         };
+        self.browser_services.agent_tabs.insert(key.clone());
+        if let Some(view) = self.web_views.get_mut(&key)
+            && view.surface.error.is_some()
+        {
+            view.surface.retry();
+        }
+        cx.notify();
         cx.spawn(async move |this, cx| {
-            // The view is made when the tab is first painted.
+            // Rendering mounts requested tabs even while their conversation is in the background.
             let mut waited = Duration::ZERO;
             loop {
                 let ready = this
@@ -221,10 +327,10 @@ async fn run_action(
     let action = request.action.as_str();
     let gone = || "The browser tab was closed.".to_string();
     match action {
-        "open" => {
+        "open" | "navigate" | "search" => {
             let url = request
                 .args
-                .get("url")
+                .get(if action == "search" { "text" } else { "url" })
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
@@ -237,14 +343,17 @@ async fn run_action(
             loop {
                 cx.background_executor().timer(POLL).await;
                 waited += POLL;
-                let (loading, location) = this
+                let (loading, location, notice) = this
                     .update(cx, |this, _| {
                         this.web_views
                             .get(key)
-                            .map(|v| (v.loading, v.url.clone()))
-                            .unwrap_or((false, String::new()))
+                            .map(|v| (v.loading, v.url.clone(), v.notice.clone()))
+                            .unwrap_or((false, String::new(), Some(gone())))
                     })
                     .map_err(|_| gone())?;
+                if let Some(error) = notice {
+                    return Err(error);
+                }
                 if !loading || waited >= LOAD_WAIT {
                     return Ok(format!(
                         "{} {location}",

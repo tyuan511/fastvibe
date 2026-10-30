@@ -20,6 +20,8 @@ futures-util = { version = "0.3", features = ["sink"] }
 all = { level = "warn", priority = -1 }
 
 [patch.crates-io]
+# Fix the uninhabited extern static in block 0.1.6; see vendor/block/FASTVIBE.md.
+block = { path = "vendor/block" }
 # 0.3.9 adds destination alpha in the final Metal pass, making layered glass opaque/grey.
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 # Backdrop blur for glass overlays: a `Backdrop` primitive and `Window::paint_backdrop`,

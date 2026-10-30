@@ -27,6 +27,14 @@ pub(crate) fn read_db(db: &fv_store::Db) -> Result<AppSettings, fv_store::StoreE
 pub fn set(state: &ServerState, mut patch: AppSettingsPatch) -> Result<AppSettings, ErrorObject> {
     use fv_protocol::shortcuts::{self, Chord, ShortcutEdit};
     let invalid = |e| ErrorObject::new(code::INVALID_PARAMS, e);
+    if let Some(engine) = &patch.browser_engine
+        && ![
+            "auto", "chrome", "edge", "brave", "chromium", "arc", "opera",
+        ]
+        .contains(&engine.as_str())
+    {
+        return Err(invalid("Unknown browserEngine"));
+    }
     if patch.shortcuts.is_some() && patch.shortcut.is_some() {
         return Err(invalid("Use either shortcuts or shortcut in one patch"));
     }
@@ -38,6 +46,7 @@ pub fn set(state: &ServerState, mut patch: AppSettingsPatch) -> Result<AppSettin
     }
     if let Some(homepage) = patch.browser_homepage.as_mut() {
         *homepage = homepage.trim().to_string();
+        if homepage.is_empty() { *homepage="about:blank".into(); }
         if homepage != "about:blank" && fv_core::safe_web_url(homepage).is_none() {
             return Err(invalid(
                 "browserHomepage must be about:blank or an HTTP(S) URL",

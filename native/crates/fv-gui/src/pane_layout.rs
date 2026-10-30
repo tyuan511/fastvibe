@@ -20,11 +20,15 @@ pub struct Layout {
     /// default (380) for a pane nobody had sized, which `restore_panes` reads as `None`.
     pub width: Option<f32>,
     pub maximized: bool,
+    /// Visibility of the conversation resources when the column has enough room.
+    pub resources_open: bool,
     pub panes: BTreeMap<String, Pane>,
     #[serde(default)]
     pub browser_bookmarks: Vec<Bookmark>,
     #[serde(default)]
     pub browser_history: Vec<HistoryEntry>,
+    #[serde(default)]
+    pub browser_downloads: Vec<Download>,
 }
 
 impl Default for Layout {
@@ -35,11 +39,30 @@ impl Default for Layout {
             collapsed: true,
             width: None,
             maximized: false,
+            resources_open: true,
             panes: BTreeMap::new(),
             browser_bookmarks: Vec::new(),
             browser_history: Vec::new(),
+            browser_downloads: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Download {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub received: u64,
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default)]
+    pub can_resume: bool,
+    pub url: String,
+    pub path: PathBuf,
+    pub complete: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -326,7 +349,9 @@ mod tests {
         }))
         .unwrap();
         assert!(old.browser_bookmarks.is_empty() && old.browser_history.is_empty());
+        assert!(old.resources_open);
         let mut current = Layout::default();
+        current.resources_open = false;
         current.browser_bookmarks.push(super::Bookmark {
             title: "Docs".into(),
             url: "https://example.com".into(),

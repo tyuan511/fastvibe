@@ -10,3 +10,5 @@
 [alias]
 # Build the server and the GUI, replace a changed idle development server, then start the app.
 dev = "run -q --manifest-path native/Cargo.toml -p xtask -- dev"
+# Build and verify the unsigned local native macOS release bundle.
+"dist:mac:local" = "run -q --manifest-path native/Cargo.toml -p xtask -- dist-mac-local"

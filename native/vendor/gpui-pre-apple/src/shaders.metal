@@ -850,7 +850,10 @@ fragment float4 path_sprite_fragment(
   texture2d<float> intermediate_texture [[texture(SpriteInputIndex_AtlasTexture)]]
 ) {
   constexpr sampler intermediate_texture_sampler(mag_filter::linear, min_filter::linear);
-  return intermediate_texture.sample(intermediate_texture_sampler, input.texture_coords);
+  // The path target may omit unused right/bottom pixels. Sample the same window
+  // pixel as before, normalized by the actual target rather than the window.
+  float2 texture_size = float2(intermediate_texture.get_width(), intermediate_texture.get_height());
+  return intermediate_texture.sample(intermediate_texture_sampler, input.position.xy / texture_size);
 }
 
 struct SurfaceVertexOutput {

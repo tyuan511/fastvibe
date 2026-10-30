@@ -21,6 +21,7 @@ import { TranscriptConversationContext } from "./conversation-context";
 import { cn } from "@/lib/utils";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import { transcriptDisplay } from "@/lib/transcript-display";
+import { isProgrammaticScroll, scrollMark, type ScrollMark } from "@/lib/scroll-follow";
 import { useTranscriptNavigation } from "@/stores/transcript-navigation";
 import { useSettingsStore } from "@/stores/settings";
 import type { ChatMessage } from "@shared/types";
@@ -144,6 +145,14 @@ function groupTurns(rows: MessageRow[]): Turn[] {
 }
 
 /**
+ * How long an input that could not move the viewport yet still holds the follow off.
+ *
+ * Long enough to cover the frame or two between a wheel and the flush it races; short
+ * enough that a reader who parked mid-thread is not held there once they come back.
+ */
+const INTENT_WINDOW_MS = 300;
+
+/**
  * The scroller reads *any* wheel as "the reader took over" and drops out of
  * `following-bottom`; it only re-arms on a scroll event that lands within its 8px
  * bottom threshold. A wheel that cannot move the viewport therefore kills the
@@ -157,7 +166,7 @@ function groupTurns(rows: MessageRow[]): Turn[] {
  */
 const NO_ROOM_SLACK = 2;
 
-function useNoOpWheelGuard(): (node: HTMLDivElement | null) => void {
+function useReaderScrollIntent(intent: { current: number }): (node: HTMLDivElement | null) => void {
   const detach = useRef<(() => void) | null>(null);
   return useCallback((node: HTMLDivElement | null) => {
     // React can hand a ref callback a new element without pairing it with a null
@@ -166,13 +175,58 @@ function useNoOpWheelGuard(): (node: HTMLDivElement | null) => void {
     detach.current?.();
     detach.current = null;
     if (!node) return;
+    // Intent is recorded at the input, not read off the scroll it produces: a wheel and
+    // the flush it races are a frame apart, so following a streaming reply can reach the
+    // bottom *first* — and the scroll event then says "at the bottom", which reads as the
+    // reader asking to stay there. Recorded as a timestamp, because intent that moved
+    // nothing (a wheel up in a thread already at its top) produces no scroll event and so
+    // must not drop the follow on its own.
+    const record = (): void => {
+      intent.current = Date.now();
+    };
     const onWheel = (event: WheelEvent): void => {
-      if (event.deltaY <= 0) return;
+      if (event.deltaY < 0) {
+        record();
+        return;
+      }
       if (node.scrollHeight - node.clientHeight - node.scrollTop > NO_ROOM_SLACK) return;
       event.stopPropagation();
     };
+    // A finger dragged down the screen reveals what is above it.
+    let lastTouchY = Number.NaN;
+    const onTouchStart = (event: TouchEvent): void => {
+      lastTouchY = event.touches[0]?.clientY ?? Number.NaN;
+    };
+    const onTouchMove = (event: TouchEvent): void => {
+      const y = event.touches[0]?.clientY;
+      if (y === undefined) return;
+      if (y > lastTouchY) record();
+      lastTouchY = y;
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") record();
+    };
+    // Dragging the scrollbar is intent too, and it produces no wheel at all. The bar is
+    // painted inside the viewport's own box (`::-webkit-scrollbar`, 11px), so a press
+    // that lands past the content edge is a press on it.
+    const onPointerDown = (event: PointerEvent): void => {
+      const box = node.getBoundingClientRect();
+      const scrollbar = event.clientX - box.left >= node.clientWidth
+        || event.clientY - box.top >= node.clientHeight;
+      if (scrollbar) record();
+    };
     node.addEventListener("wheel", onWheel, { capture: true, passive: true });
-    detach.current = () => node.removeEventListener("wheel", onWheel, { capture: true });
+    node.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
+    node.addEventListener("touchmove", onTouchMove, { capture: true, passive: true });
+    node.addEventListener("keydown", onKeyDown, { capture: true });
+    node.addEventListener("pointerdown", onPointerDown, { capture: true, passive: true });
+    detach.current = () => {
+      node.removeEventListener("wheel", onWheel, { capture: true });
+      node.removeEventListener("touchstart", onTouchStart, { capture: true });
+      node.removeEventListener("touchmove", onTouchMove, { capture: true });
+      node.removeEventListener("keydown", onKeyDown, { capture: true });
+      node.removeEventListener("pointerdown", onPointerDown, { capture: true });
+    };
   }, []);
 }
 
@@ -506,9 +560,6 @@ export function MessageList({
   // Turns scope the sticky prompt; the flat index still decides which row streams.
   const turns = useMemo(() => groupTurns(rows), [rows]);
   const rowIndex = useMemo(() => new Map(rows.map((row, index) => [row.id, index])), [rows]);
-  // A ref callback, not a ref object: the scroller only mounts once the thread has
-  // rows, which is long after an effect keyed on a ref object would have run.
-  const guardViewport = useNoOpWheelGuard();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   /** Publishes `--thread-height` on the viewport in use; replaced when the node is. */
   const threadHeightRef = useRef<ResizeObserver | null>(null);
@@ -530,7 +581,20 @@ export function MessageList({
   }, [turns]);
   const [scrollState, setScrollState] = useState({ start: false, end: true });
   const followingRef = useRef(true);
-  const programmaticScrollRef = useRef(false);
+  /** When the reader last asked the viewport to move (`useReaderScrollIntent`). */
+  const readerIntentRef = useRef(0);
+  // A ref callback, not a ref object: the scroller only mounts once the thread has
+  // rows, which is long after an effect keyed on a ref object would have run.
+  const guardViewport = useReaderScrollIntent(readerIntentRef);
+  /**
+   * Where the last scroll *this list* performed went, so a scroll event can be attributed.
+   *
+   * A boolean "we are scrolling" flag cannot do this job: following a streaming reply
+   * scrolls on every flush, so the flag is set almost continuously, and a reader's wheel
+   * was read as the list's own scroll — follow mode never dropped and the next flush
+   * yanked the viewport back to the bottom under the wheel. See `lib/scroll-follow.ts`.
+   */
+  const scrollMarkRef = useRef<ScrollMark | null>(null);
   const getScrollElement = useCallback(() => viewportRef.current, []);
   // The thread this list has arrived at the live edge of. Until it has (a switch, or a
   // scroller mounted afresh), only the tail is rendered: see `tailRange`. State rather than
@@ -579,19 +643,17 @@ export function MessageList({
     const element = viewportRef.current;
     if (!element) return false;
     followingRef.current = true;
-    programmaticScrollRef.current = true;
     // The DOM is authoritative here. `getTotalSize()` is an estimate while the tail is
     // being measured and can be smaller than the actual scroll range, which leaves a
     // newly opened conversation somewhere above its last message.
+    const target = Math.max(0, element.scrollHeight - element.clientHeight);
+    scrollMarkRef.current = scrollMark(element.scrollTop, target, Date.now());
     element.scrollTo({
-      top: Math.max(0, element.scrollHeight - element.clientHeight),
+      top: target,
       behavior: options?.behavior ?? "auto",
     });
     syncScrollState();
-    window.requestAnimationFrame(() => {
-      programmaticScrollRef.current = false;
-      syncScrollState();
-    });
+    window.requestAnimationFrame(syncScrollState);
     return true;
   }, [syncScrollState, virtualizer]);
 
@@ -599,13 +661,10 @@ export function MessageList({
     const element = viewportRef.current;
     if (!element) return false;
     followingRef.current = false;
-    programmaticScrollRef.current = true;
+    scrollMarkRef.current = scrollMark(element.scrollTop, 0, Date.now());
     element.scrollTo({ top: 0, behavior: options?.behavior ?? "auto" });
     syncScrollState();
-    window.requestAnimationFrame(() => {
-      programmaticScrollRef.current = false;
-      syncScrollState();
-    });
+    window.requestAnimationFrame(syncScrollState);
     return true;
   }, [syncScrollState]);
 
@@ -657,8 +716,18 @@ export function MessageList({
       const next = scrollMetrics(element);
       // Re-rendering while a reply streams also re-runs this effect. Its initial read
       // can see the transient gap created by the new text before the follow effect moves
-      // the viewport, so only a real scroll event may change the reader's intent.
-      if (allowFollowChange && !programmaticScrollRef.current) followingRef.current = next.end;
+      // the viewport, so only a real scroll event may change the reader's intent — and
+      // only one this list did not perform itself (`scrollMarkRef`).
+      //
+      // An input that arrived moments ago outranks the mark. While a reply streams the
+      // follow writes `scrollTop` on every flush, so almost every scroll event is "ours";
+      // the one the reader's wheel produced in between is then indistinguishable from it,
+      // which is how an upward wheel used to be answered with a jump back to the bottom.
+      const now = Date.now();
+      const readerAsked = now - readerIntentRef.current <= INTENT_WINDOW_MS;
+      if (allowFollowChange && (readerAsked || !isProgrammaticScroll(scrollMarkRef.current, element.scrollTop, now))) {
+        followingRef.current = next.end;
+      }
       setScrollState((current) => current.start === next.start && current.end === next.end ? current : next);
       // Arrived: from here the virtualizer's own range is the right one. Not before — its
       // offset only follows the scroll event, while `scrollToEnd` moves `scrollTop` at once,
@@ -702,7 +771,11 @@ export function MessageList({
   // is moved on every flushed update instead of waiting for a ResizeObserver round.
   // Only a reader who was following the live edge is moved; history readers keep place.
   useLayoutEffect(() => {
-    if (followingRef.current && turns.length > 0) scrollToEnd();
+    // …and not while the reader has just asked to go somewhere: the wheel is recorded
+    // before its own scroll lands, so following here would win that race by a frame and
+    // drag the viewport back to the bottom for them to fight out again.
+    const readerAsked = Date.now() - readerIntentRef.current <= INTENT_WINDOW_MS;
+    if (followingRef.current && !readerAsked && turns.length > 0) scrollToEnd();
   }, [messages, scrollToEnd, totalSize, turns.length, virtualRows.length]);
 
   useEffect(() => {

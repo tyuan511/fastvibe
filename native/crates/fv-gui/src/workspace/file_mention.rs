@@ -191,6 +191,118 @@ pub fn attachment_suffix(files: &[fv_protocol::types::FileHit]) -> String {
     )
 }
 
+/// Extensions the transcript draws as a picture rather than as a named file.
+fn is_picture(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    [".png", ".jpg", ".jpeg", ".gif", ".webp"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// What a click on an attachment does.
+pub(super) enum AttachmentAction {
+    /// The composer's own chip: the ✕ beside it is the only control.
+    None,
+    /// A file a prompt carried: open it in the right pane.
+    Open(String),
+}
+
+/// One attached file, as the Electron app's `AttachmentChip` draws it.
+///
+/// **A picture is an 80px square** (`size-20`, rem so it follows 界面字号) with `object-cover`:
+/// a pasted screenshot is the size of a chip, not the size of the first screen of the chat, and
+/// the whole picture is one click away. Every other file keeps its compact named chip, with the
+/// glyph the file tree would give it.
+pub(super) fn attachment_chip(
+    path: &str,
+    name: &str,
+    id: SharedString,
+    action: AttachmentAction,
+    p: &crate::theme::Palette,
+    cx: Option<&mut Context<Workspace>>,
+) -> AnyElement {
+    if is_picture(path) {
+        let missing = p.c(Token::MutedForeground);
+        // A `PathBuf`, not a string: `img` reads a string as a *bundled* asset name, which a
+        // file on disk never is.
+        let picture = img(std::path::PathBuf::from(path))
+            .size(px(80.0))
+            .object_fit(ObjectFit::Cover)
+            .rounded(px(12.0))
+            .with_fallback(move || {
+                // A file that is gone (the temp directory is cleaned out) still says what it
+                // was, rather than leaving an empty square with no explanation.
+                icon("image01", 16.0, missing).into_any_element()
+            });
+        let chip = div()
+            .id(id)
+            .size(px(80.0))
+            .flex_none()
+            .overflow_hidden()
+            .rounded(px(12.0))
+            .bg(p.c(Token::Muted).opacity(0.3))
+            .child(picture)
+            .tooltip({
+                let name = name.to_string();
+                move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(name.clone()).build(window, cx)
+                }
+            });
+        let Some(cx) = cx else {
+            return chip.into_any_element();
+        };
+        let AttachmentAction::Open(path) = action else {
+            return chip.into_any_element();
+        };
+        let name = name.to_string();
+        return chip
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_in_pane(path.clone(), name.clone(), window, cx);
+            }))
+            .into_any_element();
+    }
+    let hover = p.c(Token::Accent);
+    let chip = div()
+        .id(id)
+        .h(px(28.0))
+        .max_w(px(220.0))
+        .px(px(8.0))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(p.c(Token::Border))
+        .bg(p.c(Token::Muted).opacity(0.5))
+        .text_size(px(TEXT_XS))
+        .child(
+            img(crate::file_icons::path(name, !p.is_dark()))
+                .size(px(13.0))
+                .flex_none(),
+        )
+        .child(ui::truncate(name.to_string()))
+        .tooltip({
+            let path = path.to_string();
+            move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(path.clone()).build(window, cx)
+            }
+        });
+    let Some(cx) = cx else {
+        return chip.into_any_element();
+    };
+    let AttachmentAction::Open(path) = action else {
+        return chip.hover(move |d| d.bg(hover)).into_any_element();
+    };
+    let name = name.to_string();
+    chip.hover(move |d| d.bg(hover))
+        .cursor_pointer()
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.open_in_pane(path.clone(), name.clone(), window, cx);
+        }))
+        .into_any_element()
+}
+
 /// What the `@` menu has read, and what the user has selected in it.
 #[derive(Default)]
 pub struct MentionState {
@@ -349,58 +461,123 @@ impl Workspace {
             return None;
         }
         let p = &self.palette;
-        let english = self.english();
-        let hover = p.c(Token::Accent);
         let mut row = div()
             .flex()
             .flex_wrap()
+            .items_start()
             .gap(px(8.0))
             .px(px(12.0))
             .pt(px(12.0));
         for (index, file) in self.attached_files.iter().enumerate() {
-            row = row.child(
-                div()
-                    .h(px(28.0))
-                    .max_w(px(220.0))
-                    .pl(px(8.0))
-                    .pr(px(4.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .rounded(px(8.0))
+            row = row.child(self.removable_chip(file, index, cx));
+        }
+        Some(row)
+    }
+
+    /// One composer chip: the file's own glyph — or, for a picture, its thumbnail — with the
+    /// remove control in its corner.
+    fn removable_chip(
+        &self,
+        file: &fv_protocol::types::FileHit,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let p = &self.palette;
+        let english = self.english();
+        let hover = p.c(Token::Accent);
+        let picture = is_picture(&file.path);
+        let remove = div()
+            .id(SharedString::from(format!("attachment-remove-{index}")))
+            .size(px(18.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .cursor_pointer()
+            // Above the thumbnail's own hitbox, so the ✕ is the thing a click lands on.
+            .when(picture, |d| d.absolute().top(px(-6.0)).right(px(-6.0)))
+            .when(picture, |d| {
+                d.bg(p.c(Token::Foreground))
+                    .shadow_sm()
                     .border_1()
-                    .border_color(p.c(Token::Border))
-                    .bg(p.c(Token::Muted).opacity(0.5))
-                    .text_size(px(TEXT_XS))
-                    .child(icon("file-01", 13.0, p.c(Token::MutedForeground)))
-                    .child(ui::truncate(file.relative.clone()))
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("attachment-remove-{index}")))
-                            .size(px(18.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .cursor_pointer()
-                            .hover(move |d| d.bg(hover))
-                            .tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(trs!(
-                                    english,
-                                    "composer.remove_attachment"
-                                ))
-                                .build(window, cx)
-                            })
-                            .child(icon("cancel01", 12.0, p.c(Token::MutedForeground)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if index < this.attached_files.len() {
-                                    this.attached_files.remove(index);
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            );
+                    .border_color(p.c(Token::Background))
+            })
+            .when(!picture, |d| d.hover(move |d| d.bg(hover)))
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(trs!(
+                    english,
+                    "composer.remove_attachment"
+                ))
+                .build(window, cx)
+            })
+            .child(icon(
+                "cancel01",
+                12.0,
+                if picture {
+                    p.c(Token::Background)
+                } else {
+                    p.c(Token::MutedForeground)
+                },
+            ))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if index < this.attached_files.len() {
+                    this.attached_files.remove(index);
+                }
+                cx.notify();
+            }));
+        div()
+            .relative()
+            .flex_none()
+            .child(attachment_chip(
+                &file.path,
+                &file.relative,
+                SharedString::from(format!("attachment-{index}")),
+                AttachmentAction::None,
+                p,
+                None,
+            ))
+            .child(remove)
+    }
+
+    /// The files a prompt brought along, drawn above it: a picture as its own thumbnail, any
+    /// other file as a named chip.
+    ///
+    /// The prompt itself carries only the words the person wrote (`fv_core::strip_attachment_block`);
+    /// this row is the only place the files are shown, in the composer and in the transcript
+    /// alike, so a reloaded chat reads the same as the one that was just sent.
+    pub(super) fn attachment_row(
+        &self,
+        files: &[String],
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        if files.is_empty() {
+            return None;
+        }
+        let p = &self.palette;
+        let mut row = div()
+            .flex()
+            .flex_wrap()
+            .items_start()
+            .justify_end()
+            .gap(px(8.0))
+            .mb(px(6.0));
+        for (index, path) in files.iter().enumerate() {
+            let name = path
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or(path)
+                .to_string();
+            row = row.child(attachment_chip(
+                path,
+                &name,
+                SharedString::from(format!("file-{key}-{index}")),
+                AttachmentAction::Open(path.clone()),
+                p,
+                Some(cx),
+            ));
         }
         Some(row)
     }

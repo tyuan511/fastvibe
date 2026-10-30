@@ -50,8 +50,8 @@ pub(super) struct HeaderGit {
     busy: Option<Busy>,
     error: Option<String>,
     /// The repository the status below belongs to.
-    cwd: Option<String>,
-    status: Option<GitStatus>,
+    pub(super) cwd: Option<String>,
+    pub(super) status: Option<GitStatus>,
     loaded_at: Option<Instant>,
     /// Bumped by every request so an answer for a repository left behind is ignored.
     epoch: u64,
@@ -92,6 +92,7 @@ impl Workspace {
                             if this.header_git.cwd.is_some() && stale {
                                 this.load_header_git(cx);
                             }
+                            this.refresh_resource_repositories(cx);
                         })
                         .is_ok();
                     if !alive {

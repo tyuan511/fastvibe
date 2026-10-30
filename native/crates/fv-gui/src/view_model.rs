@@ -54,9 +54,15 @@ pub enum Applied {
 
 impl ThreadView {
     pub fn from_snapshot(snapshot: ThreadResumeResponse) -> Self {
+        let turns = snapshot.turns;
+        let reasoning_durations = turns
+            .iter()
+            .flat_map(|turn| turn.reasoning_durations.iter())
+            .map(|(id, duration_ms)| (id.clone(), ((*duration_ms + 999) / 1000).max(1)))
+            .collect();
         Self {
             thread: snapshot.thread,
-            turns: snapshot.turns,
+            turns,
             seq: snapshot.seq,
             running: snapshot.running,
             token_usage: snapshot.token_usage,
@@ -70,7 +76,7 @@ impl ThreadView {
             suggestion: snapshot.suggestion,
             questions: Vec::new(),
             approvals: Vec::new(),
-            reasoning_durations: HashMap::new(),
+            reasoning_durations,
             reasoning_starts: HashMap::new(),
         }
     }
@@ -175,14 +181,18 @@ impl ThreadView {
                 }
                 if let Item::Reasoning { id, .. } = &e.body.item {
                     let end = e.body.at.unwrap_or_else(now_ms);
-                    let start = self
-                        .reasoning_starts
-                        .get(id)
-                        .copied()
-                        .or_else(|| self.turn(&e.body.turn_id).and_then(|t| t.started_at))
-                        .unwrap_or(end);
-                    let secs = ((end - start + 999) / 1000).max(1) as u64;
-                    self.reasoning_durations.insert(id.clone(), secs);
+                    let start = self.reasoning_starts.remove(id);
+                    let duration_ms = e
+                        .body
+                        .duration_ms
+                        .or_else(|| start.map(|start| (end - start).max(0) as u64));
+                    if let Some(duration_ms) = duration_ms {
+                        let secs = ((duration_ms + 999) / 1000).max(1);
+                        self.reasoning_durations.insert(id.clone(), secs);
+                        if let Some(t) = self.turn_mut(&e.body.turn_id) {
+                            t.reasoning_durations.insert(id.clone(), duration_ms);
+                        }
+                    }
                 }
             }
             N::AgentMessageDelta(e) | N::ReasoningDelta(e) => {

@@ -12,6 +12,11 @@
 //! A hand-written ```diff fence has neither, and renders **unnumbered** — which is the point:
 //! a gutter that counted rows put an invented number next to a real one.
 
+use crate::ui::px;
+use fv_theme::Token;
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+
 /// What one row of a diff is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowKind {
@@ -171,9 +176,36 @@ pub fn parse(text: &str) -> DiffDocument {
     let mut new_remaining = 0u64;
     let mut hunk = 0usize;
     let mut hunks = 0usize;
+    let mut codex_content = false;
 
     for line in &lines {
+        // Codex's apply_patch omits source line numbers. Keep its file boundaries
+        // and anchors, but never invent line numbers for them.
+        if line.starts_with("***") || (line.starts_with("@@") && is_hunk(line).is_none()) {
+            let kind = if line.starts_with("@@") {
+                counted = false;
+                hunk += 1;
+                hunks += 1;
+                RowKind::Hunk
+            } else {
+                counted = false;
+                codex_content = line.starts_with("*** Add File:")
+                    || line.starts_with("*** Update File:")
+                    || line.starts_with("*** Move to:");
+                RowKind::Meta
+            };
+            rows.push(DiffRow {
+                kind,
+                marker: ' ',
+                text: line.to_string(),
+                old_number: None,
+                new_number: None,
+                hunk,
+            });
+            continue;
+        }
         if let Some((old_start, new_start)) = is_hunk(line) {
+            codex_content = false;
             // The counts are re-derived from the header so `counted` knows when a block ends.
             let counts = line
                 .split(" @@")
@@ -212,7 +244,8 @@ pub fn parse(text: &str) -> DiffDocument {
             });
             continue;
         }
-        if is_meta(line)
+        if !codex_content
+            && is_meta(line)
             && (!counted || line.starts_with("diff --") || line.starts_with("\\ No newline"))
         {
             rows.push(DiffRow {
@@ -267,7 +300,7 @@ pub fn parse(text: &str) -> DiffDocument {
         } else {
             ' '
         };
-        let body = if marker == ' ' && !line.starts_with(' ') {
+        let body = if line.is_empty() || (marker == ' ' && !line.starts_with(' ')) {
             line.to_string()
         } else {
             line[marker.len_utf8()..].to_string()
@@ -384,9 +417,128 @@ pub fn split(rows: &[DiffRow]) -> Vec<SplitRow> {
     out
 }
 
+/// The row's fill and its left rule, as `ROW_STYLE` in Electron's `diff-view.tsx`.
+pub(super) fn row_style(
+    kind: RowKind,
+    p: &crate::theme::Palette,
+) -> (Option<Hsla>, Option<Hsla>, Option<Hsla>) {
+    match kind {
+        RowKind::Added => (
+            Some(p.c(Token::Success).opacity(0.10)),
+            Some(p.c(Token::Success)),
+            None,
+        ),
+        RowKind::Removed => (
+            Some(p.c(Token::Destructive).opacity(0.10)),
+            Some(p.c(Token::Destructive)),
+            None,
+        ),
+        RowKind::Hunk => (
+            Some(p.c(Token::Muted).opacity(0.6)),
+            None,
+            Some(p.c(Token::MutedForeground)),
+        ),
+        RowKind::Meta => (None, None, Some(p.c(Token::MutedForeground).opacity(0.7))),
+        RowKind::Skip => (None, None, Some(p.c(Token::MutedForeground).opacity(0.5))),
+        RowKind::Context => (None, None, None),
+    }
+}
+
+/// One gutter cell: `calc(<digits>ch + 0.75rem)` wide, right-aligned.
+pub(super) fn number(value: Option<u64>, width: usize, color: Hsla) -> Div {
+    div()
+        .min_w(px(width as f32 * 7.2 + 12.0))
+        .flex_none()
+        .px(px(6.0))
+        .flex()
+        .justify_end()
+        .text_color(color)
+        .child(SharedString::from(
+            value.map(|n| n.to_string()).unwrap_or_default(),
+        ))
+}
+
+pub(super) fn row(row: &DiffRow, width: usize, p: &crate::theme::Palette) -> AnyElement {
+    let (bg, rule, fg) = row_style(row.kind, p);
+    let marker = match row.kind {
+        RowKind::Added => Some(p.c(Token::Success)),
+        RowKind::Removed => Some(p.c(Token::Destructive)),
+        RowKind::Context => Some(p.c(Token::MutedForeground).opacity(0.6)),
+        _ => None,
+    };
+    div()
+        .w_full()
+        .flex()
+        .border_l_2()
+        .border_color(rule.unwrap_or(gpui::transparent_black()))
+        .when_some(bg, |d, bg| d.bg(bg))
+        .when_some(fg, |d, fg| d.text_color(fg))
+        .when(width > 0, |d| {
+            d.child(number(
+                row.old_number,
+                width,
+                p.c(Token::MutedForeground).opacity(0.4),
+            ))
+            .child(
+                number(
+                    row.new_number,
+                    width,
+                    p.c(Token::MutedForeground).opacity(0.6),
+                )
+                .border_r_1()
+                .border_color(p.c(Token::Border)),
+            )
+        })
+        .child(
+            div()
+                .w(px(16.0))
+                .flex_none()
+                .flex()
+                .justify_center()
+                .when_some(marker, |d, c| d.text_color(c))
+                .child(SharedString::from(row.marker.to_string())),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .px(px(8.0))
+                .child(SharedString::from(if row.text.is_empty() {
+                    " ".to_string()
+                } else {
+                    row.text.clone()
+                })),
+        )
+        .into_any_element()
+}
+
+/// Shared by tool cards, Markdown fences and the Git pane.
+pub(crate) fn view(
+    id: impl Into<ElementId>,
+    text: &str,
+    p: &crate::theme::Palette,
+) -> Stateful<Div> {
+    let doc = parse(text);
+    div()
+        .id(id)
+        .w_full()
+        .min_w_0()
+        .max_h(px(320.0))
+        .overflow_y_scroll()
+        .py(px(4.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(p.c(Token::Border))
+        .bg(p.c(Token::CodeBg))
+        .font_family(crate::assets::MONO_FONT)
+        .text_size(px(12.0))
+        .line_height(px(20.0))
+        .children(doc.rows.iter().map(|r| row(r, doc.number_width, p)))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{DiffRow, RowKind, changed_range, parse, split};
 
     #[test]
     fn a_changed_range_leaves_the_shared_ends_out() {
@@ -520,5 +672,35 @@ mod tests {
         let last = rows.last().unwrap();
         assert_eq!(last.left.as_ref().map(|r| r.text.as_str()), Some("e"));
         assert_eq!(last.right.as_ref().map(|r| r.text.as_str()), Some("f"));
+    }
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::{RowKind, parse};
+
+    #[test]
+    fn codex_anchors_and_file_headers_are_not_source_lines() {
+        let doc =
+            parse("*** Update File: src/a.rs\n@@ fn a\n--- old\n+++ new\n context\n*** End Patch");
+        assert_eq!(doc.number_width, 0);
+        assert_eq!(doc.hunks, 1);
+        assert_eq!(doc.rows[0].kind, RowKind::Meta);
+        assert_eq!(doc.rows[1].kind, RowKind::Hunk);
+        assert_eq!(doc.rows[2].kind, RowKind::Removed);
+        assert_eq!(doc.rows[2].text, "-- old");
+        assert_eq!(doc.rows[3].kind, RowKind::Added);
+        assert_eq!(doc.rows[3].text, "++ new");
+        assert!(
+            doc.rows
+                .iter()
+                .all(|r| r.old_number.is_none() && r.new_number.is_none())
+        );
+    }
+
+    #[test]
+    fn blank_rows_are_safe_in_fences_and_partial_patches() {
+        assert_eq!(parse("").rows[0].text, "");
+        assert_eq!(parse("-old\n\n+new").rows[1].text, "");
     }
 }

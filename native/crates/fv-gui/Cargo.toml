@@ -21,6 +21,7 @@ capture = ["dep:image", "dep:gpui-capture", "dep:gpui-macos-capture"]
 [dependencies]
 fv-update = { path = "../fv-update" }
 fv-env = { path = "../fv-env" }
+fv-browser = { path = "../fv-browser" }
 gpui-kit = { version = "0.8.0", features = [
     "tree-sitter-typescript", "tree-sitter-tsx", "tree-sitter-javascript",
     "tree-sitter-rust", "tree-sitter-python", "tree-sitter-bash",
@@ -37,6 +38,7 @@ futures-channel = "0.3"
 libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
+base64 = "0.22"
 url = "2"
 rust-i18n = "3"
 uuid = { version = "1", features = ["v4"] }
@@ -55,6 +57,7 @@ gpui-macos-capture = { package = "gpui-pre-macos", version = "=0.3.9", features 
 # The window's own vibrancy view (see `vibrancy.rs`); both are already in the lockfile via GPUI.
 wry = { version = "=0.57.1", default-features = false, features = ["os-webview"] }
 objc = "0.2"
+block = "0.1"
 core-foundation = "0.10"
 raw-window-handle = "0.6"
 

@@ -22,7 +22,8 @@ pub const NAME: &str = "browser";
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(45);
 
 const ACTIONS: &[&str] = &[
-    "open", "snapshot", "click", "type", "press", "scroll", "back", "forward", "reload", "text",
+    "open", "navigate", "search", "list", "evaluate", "snapshot", "click", "type", "press",
+    "scroll", "back", "forward", "reload", "text",
 ];
 
 struct BrowserTool {
@@ -41,12 +42,16 @@ impl Tool for BrowserTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: NAME.into(),
-            description: "Use the browser pane of this conversation. `open` loads a URL (or a search). `snapshot` lists the page's interactive elements, each with a `ref` like `e3`, a role and a label. `click` and `type` act on an element by `ref` (take a fresh snapshot first: refs belong to one snapshot). `press` sends a key (Enter, Escape, Tab…) to the focused element. `scroll` moves the page. `text` returns the readable text of the page. `back`, `forward` and `reload` navigate.".into(),
+            description: "Use this conversation’s browser (the embedded pane, or the installed browser selected in Browser control settings). `list` lists tabs; `search` searches for text; `evaluate` runs a JavaScript function body. Pass `newTab: true` to open another tab. `open` loads a URL (or a search). `snapshot` lists the page's interactive elements, each with a `ref` like `e3`, a role and a label. `click` and `type` act on an element by `ref` (take a fresh snapshot first: refs belong to one snapshot). `press` sends a key (Enter, Escape, Tab…) to the focused element. `scroll` moves the page. `text` returns the readable text of the page. `back`, `forward` and `reload` navigate.".into(),
             schema: json!({
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ACTIONS},
                     "url": {"type": "string", "description": "For open: an http(s) address, or words to search for."},
+                    "selector": {"type":"string","description":"CSS selector for click or type; alternatively use a snapshot ref."},
+                    "script": {"type":"string","description":"For evaluate: JavaScript function body; use return for its result."},
+                    "newTab": {"type":"boolean","description":"For open: create another tab instead of reusing the current one."},
+                    "tabId": {"type":"string","description":"Optional browser tab id from list."},
                     "ref": {"type": "string", "description": "For click and type: the element's ref from the latest snapshot."},
                     "text": {"type": "string", "description": "For type: what to enter."},
                     "submit": {"type": "boolean", "description": "For type: press Enter afterwards."},

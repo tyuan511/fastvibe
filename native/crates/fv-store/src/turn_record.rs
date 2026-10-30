@@ -1,6 +1,8 @@
 //! Turn boundaries belong to the transcript, independently of what a model can read. A
 //! refusal with no assistant message and a failed manual compaction still have a turn.
 
+use std::collections::BTreeMap;
+
 use fv_protocol::types::{Item, Turn, TurnStatus};
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +24,8 @@ pub(crate) struct TurnRecord {
     pub completed_at: Option<i64>,
     pub status: TurnStatus,
     pub error: Option<RecordedError>,
+    /// Per-reasoning-block durations, keyed by the block's ordinal in this turn.
+    pub reasoning_durations: BTreeMap<usize, u64>,
 }
 
 impl Loaded {
@@ -82,6 +86,17 @@ impl Loaded {
                 turn.items.insert(at + 1, item);
             }
             renumber(&mut turn);
+            let mut reasoning_durations = BTreeMap::new();
+            let mut reasoning_ordinal = 0;
+            for item in &turn.items {
+                if let Item::Reasoning { id, .. } = item {
+                    if let Some(&duration_ms) = record.reasoning_durations.get(&reasoning_ordinal) {
+                        reasoning_durations.insert(id.clone(), duration_ms);
+                    }
+                    reasoning_ordinal += 1;
+                }
+            }
+            turn.reasoning_durations = reasoning_durations;
             if record.status == TurnStatus::Failed
                 && let Some(error) = &record.error
             {

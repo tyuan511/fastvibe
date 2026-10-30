@@ -70,6 +70,46 @@ async fn it_starts_a_server_and_connects_to_it() {
 }
 
 #[tokio::test]
+async fn a_current_desktop_server_is_reused_without_an_update_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::new(dir.path().to_path_buf(), server_bin());
+    let conn = daemon
+        .connect_current(
+            "desktop",
+            env!("CARGO_PKG_VERSION"),
+            fv_protocol::DESKTOP_REQUIRED_FEATURES,
+        )
+        .await
+        .unwrap();
+    let pid = pid_of(dir.path());
+    let mismatch = conn.version_mismatch;
+    drop(conn);
+    let reopened = daemon
+        .connect_current(
+            "desktop",
+            env!("CARGO_PKG_VERSION"),
+            fv_protocol::DESKTOP_REQUIRED_FEATURES,
+        )
+        .await
+        .unwrap();
+    let reopened_pid = pid_of(dir.path());
+    let reopened_mismatch = reopened.version_mismatch;
+    drop(reopened);
+    daemon.stop().unwrap();
+    wait_gone(reopened_pid).await;
+
+    assert!(
+        !mismatch,
+        "the current server must satisfy the desktop handshake"
+    );
+    assert!(
+        !reopened_mismatch,
+        "reopening must not report an incomplete update"
+    );
+    assert_eq!(pid, reopened_pid, "an unchanged server must not restart");
+}
+
+#[tokio::test]
 async fn a_development_restart_waits_for_the_old_server_to_leave() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::new(dir.path().to_path_buf(), server_bin());

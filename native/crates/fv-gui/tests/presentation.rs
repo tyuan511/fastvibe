@@ -70,22 +70,31 @@ fn nothing_folds_while_running_after_a_failure_or_without_an_answer() {
 fn a_patch_is_counted_per_file_and_a_new_file_has_no_removals() {
     let patch = "*** Begin Patch\n*** Add File: a.txt\n+one\n+two\n*** Update File: src/b.rs\n@@ fn x\n-old\n+new\n context\n*** Update File: c.rs\n*** Move to: d.rs\n@@\n-gone\n*** End Patch\n";
     assert_eq!(
-        patch_changes(patch),
+        patch_changes(patch)
+            .into_iter()
+            .map(|mut file| {
+                file.diff.clear();
+                file
+            })
+            .collect::<Vec<_>>(),
         vec![
             FileChange {
                 path: "a.txt".into(),
                 added: 2,
-                removed: 0
+                removed: 0,
+                diff: String::new()
             },
             FileChange {
                 path: "src/b.rs".into(),
                 added: 1,
-                removed: 1
+                removed: 1,
+                diff: String::new()
             },
             FileChange {
                 path: "d.rs".into(),
                 added: 0,
-                removed: 1
+                removed: 1,
+                diff: String::new()
             },
         ]
     );
@@ -117,6 +126,105 @@ fn named(id: &str, name: &str, args: serde_json::Value) -> Item {
         arguments: args,
         output: Some("ok".into()),
         is_error: false,
+    }
+}
+
+#[test]
+fn native_tool_targets_keep_their_meaning_in_headers() {
+    use fv_gui::presentation::{Family, describe, family_of, tool_path};
+    let args = json!({"action": "open", "url": "https://example.com"});
+    let view = describe("browser", &args, true, true);
+    assert_eq!(view.family, Family::Browser);
+    assert_eq!(view.label, "Using browser");
+    assert_eq!(view.subject, "open");
+    assert_eq!(view.context, "https://example.com");
+    assert_eq!(family_of("computer"), Family::Computer);
+    assert_eq!(family_of("list_agents"), Family::Agent);
+    assert_eq!(family_of("request_user_input_async"), Family::Question);
+    for name in [
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+    ] {
+        assert_eq!(family_of(name), Family::Mcp);
+    }
+    let args = json!({"target": "child-thread-id"});
+    assert_eq!(tool_path("send_input", &args), None);
+    assert_eq!(
+        describe("send_input", &args, false, true).context,
+        "child-thread-id"
+    );
+    for name in ["read_file", "edit", "write"] {
+        let args = json!({"file_path": "/project/src/main.rs"});
+        let view = describe(name, &args, false, true);
+        assert_eq!(view.subject, "main.rs", "{name}");
+        assert_eq!(view.context, "/project/src", "{name}");
+        assert_eq!(
+            tool_path(name, &args).as_deref(),
+            Some("/project/src/main.rs")
+        );
+    }
+}
+
+#[test]
+fn tool_family_icons_exist_in_the_native_bundle() {
+    use fv_gui::presentation::{Family, family_icon};
+    for family in [
+        Family::Read,
+        Family::Edit,
+        Family::Terminal,
+        Family::Search,
+        Family::Web,
+        Family::Browser,
+        Family::Computer,
+        Family::Skill,
+        Family::Agent,
+        Family::Todo,
+        Family::Question,
+        Family::Mcp,
+        Family::Present,
+        Family::Other,
+    ] {
+        let name = family_icon(family, false);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/icons")
+            .join(format!("{name}.svg"));
+        assert!(path.is_file(), "missing icon for {family:?}: {name}");
+    }
+}
+
+#[test]
+fn hosted_search_headers_show_the_actual_query_or_page() {
+    use fv_gui::presentation::describe;
+    for (action, expected) in [
+        (json!({"query": "native tools"}), "native tools"),
+        (
+            json!({"queries": ["native tools", "GPUI"]}),
+            "native tools, GPUI",
+        ),
+        (json!({"url": "https://example.com"}), "https://example.com"),
+    ] {
+        let args = json!({"hosted": true, "action": action});
+        assert_eq!(describe("web_search", &args, true, true).subject, expected);
+    }
+}
+
+#[test]
+fn async_questions_and_agent_lists_stay_outside_tool_batches() {
+    use fv_gui::presentation::{Part, fold_runs};
+    for name in ["request_user_input_async", "list_agents"] {
+        let items = [
+            tool("1", true),
+            named("special", name, json!({})),
+            tool("2", true),
+        ];
+        let refs: Vec<&Item> = items.iter().collect();
+        assert!(
+            fold_runs(&refs, false, false)
+                .iter()
+                .all(|p| matches!(p, Part::Item(_))),
+            "{name}"
+        );
     }
 }
 
@@ -175,7 +283,8 @@ fn collapse_thinking_folds_finished_thoughts_into_a_batch_with_calls_only() {
     let line: String = run_summary(run, false)
         .into_iter()
         .map(|p| match p {
-            Piece::Text(t) | Piece::Path(t) | Piece::Name(t) => t,
+            Piece::Path(path) => fv_gui::presentation::split_path(&path).0.to_string(),
+            Piece::Text(t) | Piece::Name(t) => t,
         })
         .collect();
     assert_eq!(line, "已运行 2 个命令，思考 1 次");
@@ -222,7 +331,8 @@ fn the_summary_names_one_file_and_counts_many() {
     let line: String = run_summary(&refs, false)
         .into_iter()
         .map(|p| match p {
-            Piece::Text(t) | Piece::Path(t) | Piece::Name(t) => t,
+            Piece::Path(path) => fv_gui::presentation::split_path(&path).0.to_string(),
+            Piece::Text(t) | Piece::Name(t) => t,
         })
         .collect();
     assert_eq!(line, "已运行 2 个命令，读取 pic.png");
@@ -240,7 +350,8 @@ fn the_same_summary_reads_in_english_with_a_lowercase_later_clause() {
     let line: String = run_summary(&refs, true)
         .into_iter()
         .map(|p| match p {
-            Piece::Text(t) | Piece::Path(t) | Piece::Name(t) => t,
+            Piece::Path(path) => fv_gui::presentation::split_path(&path).0.to_string(),
+            Piece::Text(t) | Piece::Name(t) => t,
         })
         .collect();
     assert_eq!(line, "Ran 2 commands, read pic.png");
@@ -250,7 +361,8 @@ fn the_same_summary_reads_in_english_with_a_lowercase_later_clause() {
     let line: String = run_summary(&refs, true)
         .into_iter()
         .map(|p| match p {
-            Piece::Text(t) | Piece::Path(t) | Piece::Name(t) => t,
+            Piece::Path(path) => fv_gui::presentation::split_path(&path).0.to_string(),
+            Piece::Text(t) | Piece::Name(t) => t,
         })
         .collect();
     assert_eq!(line, "Ran 1 command");
@@ -284,6 +396,10 @@ fn every_tool_family_has_a_label_in_both_languages() {
         ("view_image", json!({"path": "/a/b.png"})),
         ("grep_files", json!({"pattern": "x"})),
         ("web_search", json!({"query": "x"})),
+        ("browser", json!({"action": "snapshot"})),
+        ("computer", json!({"action": "screenshot"})),
+        ("list_agents", json!({})),
+        ("request_user_input_async", json!({})),
         ("update_plan", json!({})),
         ("request_user_input", json!({})),
         ("spawn_agent", json!({})),
@@ -305,4 +421,29 @@ fn every_tool_family_has_a_label_in_both_languages() {
             }
         }
     }
+}
+
+#[test]
+fn summary_paths_keep_the_directory_and_rename_target() {
+    use fv_gui::presentation::{Piece, run_summary, tool_path};
+    let args = json!({"input": "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: lib/new.rs\n@@\n-old\n+new\n*** End Patch"});
+    let item = named("patch", "apply_patch", args.clone());
+    assert_eq!(
+        tool_path("apply_patch", &args).as_deref(),
+        Some("lib/new.rs")
+    );
+    assert!(run_summary(&[&item], false).contains(&Piece::Path("lib/new.rs".into())));
+    let many = json!({"input": "*** Begin Patch\n*** Add File: a\n+a\n*** Add File: b\n+b\n*** End Patch"});
+    assert_eq!(tool_path("apply_patch", &many), None);
+}
+
+#[test]
+fn patch_previews_keep_each_files_own_content() {
+    let patch = "*** Begin Patch\n*** Update File: a.rs\n@@ fn a\n--- old\n+++ new\n*** Add File: b.rs\n+second\n*** End Patch\n";
+    let files = patch_changes(patch);
+    assert_eq!(
+        files[0].diff,
+        "*** Update File: a.rs\n@@ fn a\n--- old\n+++ new\n"
+    );
+    assert_eq!(files[1].diff, "*** Add File: b.rs\n+second\n");
 }

@@ -106,6 +106,27 @@ impl ServerState {
         self.memory.start_timer(self);
         crate::catalog::start(self);
         crate::schedules::Schedules::start(self);
+        let history_weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                let Some(state) = history_weak.upgrade() else {
+                    break;
+                };
+                let runtimes = state.loaded_runtimes();
+                drop(state);
+                // Compression is CPU work and may wait for an allocator; it must
+                // not hold the runtime map or occupy a tokio reactor worker.
+                let _ = tokio::task::spawn_blocking(move || {
+                    let now = std::time::Instant::now();
+                    for runtime in runtimes {
+                        runtime.cool_history(now);
+                    }
+                })
+                .await;
+            }
+        });
         let weak = Arc::downgrade(self);
         let archive_weak = Arc::downgrade(self);
         tokio::spawn(async move {

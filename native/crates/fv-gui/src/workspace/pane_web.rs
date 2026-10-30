@@ -11,7 +11,6 @@ use crate::{
     webview::{Surface, WebEvent},
 };
 use fv_protocol::types::{FilePreview, FilePreviewKind, UiLanguage};
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     component::input::{Input, InputEvent, InputState},
@@ -33,10 +32,11 @@ pub(super) struct ContentView {
     /// Set once WebKit commits the page being navigated to.
     committed: bool,
     /// Page zoom of this tab (1.0 is 100%).
-    zoom: f64,
+    pub(super) zoom: f64,
     can_back: bool,
     can_forward: bool,
     external: Option<String>,
+    pub(super) controls: super::browser_controls::BrowserControls,
 }
 pub(super) fn live_key(tab: &str) -> String {
     format!("office-live:{tab}")
@@ -84,7 +84,12 @@ impl Workspace {
         self.schedule_pane_save(cx);
     }
 
-    fn toggle_browser_bookmark(&mut self, url: &str, title: &str, cx: &mut Context<Self>) {
+    pub(super) fn toggle_browser_bookmark(
+        &mut self,
+        url: &str,
+        title: &str,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(index) = self.browser_bookmarks.iter().position(|b| b.url == url) {
             self.browser_bookmarks.remove(index);
         } else if fv_core::safe_web_url(url).is_some() {
@@ -104,6 +109,20 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(super) fn browser_menu_in_native_layer(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.browser_menu.is_some() && self.web_menu_layer.is_some()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn open_browser_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(super::settings::Section::Browser, window, cx);
+    }
     /// Whether a native page may be on screen. A splitter drag is not a reason to hide it: AppKit
     /// sends every dragged event to the view the button went down in, so the page cannot take the
     /// drag, and hiding it blanked the pane for the whole drag, which read as the page re-rendering.
@@ -115,7 +134,7 @@ impl Workspace {
             && self.search_box.is_none()
             && self.project_dialog.is_none()
             && self.entry_dialog.is_none()
-            && !self.any_menu_open()
+            && (!self.any_menu_open() || self.browser_menu_in_native_layer())
     }
     pub(super) fn prepare_web_views(&mut self, cx: &mut Context<Self>) {
         let live = self
@@ -266,6 +285,10 @@ impl Workspace {
     }
     fn web_event(&mut self, key: &str, event: WebEvent, cx: &mut Context<Self>) {
         let english = self.app_settings.language == UiLanguage::English;
+        if let WebEvent::Shortcut(command) = &event {
+            self.browser_shortcut(key, command, cx);
+            return;
+        }
         let history_url = match &event {
             WebEvent::Location(url) if self.web_views.get(key).is_some_and(|view| view.browser) => {
                 Some(url.clone())
@@ -278,6 +301,10 @@ impl Workspace {
         match event {
             WebEvent::Location(url) if view.browser => {
                 if let Ok(url) = crate::webview::address(&url) {
+                    if view.url != url {
+                        view.controls.picking = false;
+                        view.controls.found = None;
+                    }
                     view.url = url.clone();
                     view.surface.remember_location(&url);
                     for pane in self.panes.values_mut() {
@@ -289,6 +316,14 @@ impl Workspace {
             }
             WebEvent::Title(title) if view.browser => {
                 if !title.trim().is_empty() {
+                    if let Some(entry) = self
+                        .browser_history
+                        .iter_mut()
+                        .rev()
+                        .find(|e| e.url == view.url)
+                    {
+                        entry.title = title.clone();
+                    }
                     for pane in self.panes.values_mut() {
                         if let Some(tab) = pane.tabs.iter_mut().find(|t| t.id == key) {
                             tab.title = title.clone();
@@ -314,6 +349,35 @@ impl Workspace {
                     office.live_ready = true;
                 }
             }
+            WebEvent::Cleared => {
+                view.notice = Some(trs!(english, "browser.cleared").into());
+                let _ = view.surface.command("reload");
+            }
+            WebEvent::Found(found) => view.controls.found = Some(found),
+            WebEvent::Captured(result) => {
+                view.controls.capturing = false;
+                view.notice = Some(match result {
+                    Ok(path) => tr!(english, "browser.capture_saved", path = path.display()),
+                    Err(e) => e,
+                });
+            }
+            WebEvent::DownloadChanged(download) => {
+                let start = download.complete.is_none() && !download.paused;
+                if let Some(row) = self
+                    .browser_services
+                    .downloads
+                    .iter_mut()
+                    .find(|d| d.id == download.id)
+                {
+                    *row = download;
+                } else {
+                    self.browser_services.downloads.push(download);
+                }
+                if start && !view.controls.polling_downloads {
+                    view.controls.polling_downloads = true;
+                    self.poll_browser_downloads(key, cx);
+                }
+            }
             WebEvent::Notice(text) => view.notice = Some(text),
             WebEvent::External(url) => view.external = fv_core::safe_web_url(&url),
             WebEvent::Crashed => {
@@ -330,21 +394,13 @@ impl Workspace {
                         Some(trs!(english, "pane_web.the_web_process_exited_refresh").into());
                 }
             }
-            WebEvent::Popup(url) => {
-                if let Some(owner) = self
-                    .panes
-                    .iter()
-                    .find(|(_, p)| p.tabs.iter().any(|t| t.id == key))
-                    .map(|(id, _)| id.clone())
-                {
-                    self.open_browser_tab(&owner, &url, cx);
-                }
-            }
+            WebEvent::Popup(url) => self.navigate_browser(key, &url, cx),
             _ => (),
         }
         if let Some(url) = history_url {
             self.record_browser_history(&url, cx);
         }
+        self.schedule_pane_save(cx);
         cx.notify();
     }
     pub(super) fn navigate_browser(&mut self, key: &str, value: &str, cx: &mut Context<Self>) {
@@ -405,7 +461,7 @@ impl Workspace {
     ];
 
     /// `step` of -1/+1 moves to the neighbouring zoom level, 0 goes back to 100%.
-    fn browser_zoom(&mut self, key: &str, step: i32, cx: &mut Context<Self>) {
+    pub(super) fn browser_zoom(&mut self, key: &str, step: i32, cx: &mut Context<Self>) {
         let Some(view) = self.web_views.get_mut(key) else {
             return;
         };
@@ -430,174 +486,6 @@ impl Workspace {
             Err(error) => view.notice = Some(error),
         }
         cx.notify();
-    }
-
-    pub(super) fn browser_menu_view(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let (at, key) = self.browser_menu.clone()?;
-        let view = self.web_views.get(&key)?;
-        let english = self.app_settings.language == UiLanguage::English;
-        let p = &self.palette;
-        let at = super::sidebar_actions::popup_origin(at, 248.0, 420.0, window);
-        let hover = p.c(fv_theme::Token::Accent);
-        let muted = p.c(fv_theme::Token::MutedForeground);
-        let mut menu = super::settings::popover(p)
-            .absolute()
-            .left(at.x)
-            .top(at.y)
-            .w(px(248.0));
-        let item = |id: &'static str, glyph: &str, label: &str| {
-            super::settings::menu_item(SharedString::from(id), false, hover)
-                .child(ui::icon(glyph, 16.0, muted))
-                .child(label.to_string())
-        };
-        menu = menu.child(
-            item("browser-print", "printer", trs!(english, "pane_web.print")).on_click(
-                cx.listener({
-                    let key = key.clone();
-                    move |this, _, _, cx| {
-                        this.close_menus(cx);
-                        this.web_command(&key, "print", cx);
-                    }
-                }),
-            ),
-        );
-        let zoom_button = |id: &'static str, glyph: &str, label: &str, step: i32| {
-            let key = key.clone();
-            ui::icon_button_xs(id, glyph, p)
-                .aria_label(label.to_string())
-                .on_click(cx.listener(move |this, _, _, cx| this.browser_zoom(&key, step, cx)))
-        };
-        menu = menu.child(
-            div()
-                .min_h(px(32.0))
-                .px(px(8.0))
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .child(div().flex_1().child(trs!(english, "pane_web.zoom")))
-                .child(zoom_button(
-                    "browser-zoom-out",
-                    "minus-sign",
-                    trs!(english, "pane_web.zoom_out"),
-                    -1,
-                ))
-                .child(
-                    div()
-                        .w(px(44.0))
-                        .flex()
-                        .justify_center()
-                        .text_size(px(TEXT_XS))
-                        .child(format!("{}%", (view.zoom * 100.0).round())),
-                )
-                .child(zoom_button(
-                    "browser-zoom-in",
-                    "plus-sign",
-                    trs!(english, "pane_web.zoom_in"),
-                    1,
-                ))
-                .child(zoom_button(
-                    "browser-zoom-reset",
-                    "rotate-ccw",
-                    trs!(english, "pane_web.zoom_reset"),
-                    0,
-                )),
-        );
-        let url = view.url.clone();
-        menu = menu.child(
-            item(
-                "browser-copy-url",
-                "copy01",
-                trs!(english, "pane_web.copy_url"),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
-                this.close_menus(cx);
-                if let Some(view) = this.web_views.values_mut().find(|v| v.url == url) {
-                    view.notice = Some(trs!(english, "pane_web.copied_url").into());
-                }
-                cx.notify();
-            })),
-        );
-        menu = menu.child(
-            item(
-                "browser-clear-data",
-                "delete02",
-                trs!(english, "pane_web.clear_data"),
-            )
-            .on_click(cx.listener({
-                let key = key.clone();
-                move |this, _, _, cx| {
-                    this.close_menus(cx);
-                    if let Some(view) = this.web_views.get_mut(&key) {
-                        view.notice = Some(match view.surface.clear_data() {
-                            Ok(()) => trs!(english, "pane_web.data_cleared").into(),
-                            Err(error) => error,
-                        });
-                    }
-                    cx.notify();
-                }
-            })),
-        );
-        menu = menu.child(
-            item(
-                "browser-settings",
-                "settings01",
-                trs!(english, "pane_web.browser_settings"),
-            )
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.close_menus(cx);
-                this.open_settings(super::settings::Section::Browser, window, cx);
-            })),
-        );
-        menu = menu
-            .child(
-                div()
-                    .my(px(4.0))
-                    .h(px(1.0))
-                    .bg(p.c(fv_theme::Token::Border)),
-            )
-            .child(super::settings::menu_label(
-                trs!(english, "pane_web.recent"),
-                p,
-            ));
-        let recent = self
-            .browser_history
-            .iter()
-            .rev()
-            .take(8)
-            .map(|entry| (entry.title.clone(), entry.url.clone()))
-            .collect::<Vec<_>>();
-        if recent.is_empty() {
-            menu = menu.child(
-                div()
-                    .px(px(8.0))
-                    .py(px(4.0))
-                    .text_size(px(TEXT_XS))
-                    .muted(p)
-                    .child(trs!(english, "pane_web.no_history")),
-            );
-        }
-        for (index, (title, url)) in recent.into_iter().enumerate() {
-            let key = key.clone();
-            menu = menu.child(
-                super::settings::menu_item(
-                    SharedString::from(format!("browser-recent-{index}")),
-                    false,
-                    hover,
-                )
-                .child(ui::icon("clock01", 16.0, muted))
-                .child(ui::truncate(title).flex_1().min_w_0())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.close_menus(cx);
-                    this.navigate_browser(&key, &url, cx);
-                })),
-            );
-        }
-        Some(ui::float(menu).into_any_element())
     }
 
     pub(super) fn web_command(&mut self, key: &str, command: &str, cx: &mut Context<Self>) {
@@ -629,7 +517,10 @@ impl Workspace {
         if let Some(view) = key.as_ref().and_then(|key| self.web_views.get_mut(key)) {
             let _ = view.surface.command("focus_parent");
             if let Some(input) = view.address.clone() {
-                input.update(cx, |input, cx| input.focus(window, cx));
+                input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                    input.select_all(window, cx);
+                });
             }
         }
     }
@@ -652,14 +543,7 @@ impl Workspace {
             self.web_command(&key, "reload", cx);
         }
     }
-    pub(super) fn browser_body(
-        &mut self,
-        id: &str,
-        url: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let english = self.app_settings.language == UiLanguage::English;
+    pub(super) fn ensure_browser_view(&mut self, id: &str, url: &str, cx: &mut Context<Self>) {
         if !self.web_views.contains_key(id) {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             self.web_views.insert(
@@ -681,10 +565,51 @@ impl Workspace {
                     can_back: false,
                     can_forward: false,
                     external: None,
+                    controls: Default::default(),
                 },
             );
             self.web_events(id.into(), 0, rx, cx);
         }
+    }
+    pub(super) fn prepare_agent_browsers(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let live: std::collections::HashSet<_> = self
+            .panes
+            .values()
+            .flat_map(|p| &p.tabs)
+            .map(|t| t.id.clone())
+            .collect();
+        self.browser_services
+            .agent_tabs
+            .retain(|id| live.contains(id));
+        let tabs: Vec<_> = self
+            .panes
+            .values()
+            .flat_map(|p| &p.tabs)
+            .filter(|t| self.browser_services.agent_tabs.contains(&t.id))
+            .filter_map(|t| match &t.kind {
+                PaneTabKind::Browser { url } => Some((t.id.clone(), url.clone())),
+                _ => None,
+            })
+            .collect();
+        for (id, url) in tabs {
+            self.ensure_browser_view(&id, &url, cx);
+            self.web_views.get_mut(&id).unwrap().surface.set_download_directory(&self.app_settings.browser_download_dir);
+            if let Some(view) = self.web_views.get_mut(&id)
+                && let Err(error) = view.surface.mount_hidden(window)
+            {
+                view.notice = Some(error);
+            }
+        }
+    }
+    pub(super) fn browser_body(
+        &mut self,
+        id: &str,
+        url: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let english = self.app_settings.language == UiLanguage::English;
+        self.ensure_browser_view(id, url, cx);
         if self.web_views[id].address.is_none() {
             let address = cx.new(|cx| {
                 InputState::new(window, cx)
@@ -700,6 +625,8 @@ impl Workspace {
                     // The native web view keeps AppKit's first responder after a click in
                     // the page, so keys never reach this field unless the window takes it back.
                     InputEvent::Focus => {
+                        // Select the entire URL on focus, as the Electron address bar does.
+                        this.web_views.get_mut(&key).unwrap().controls.focus_address = true;
                         if let Some(view) = this.web_views.get(&key) {
                             let _ = view.surface.command("focus_parent");
                         }
@@ -710,8 +637,21 @@ impl Workspace {
             .detach();
             self.web_views.get_mut(id).unwrap().address = Some(address);
         }
-        let view = &self.web_views[id];
+        self.web_views
+            .get_mut(id)
+            .unwrap()
+            .surface
+            .set_download_directory(&self.app_settings.browser_download_dir);
+        let view = self.web_views.get_mut(id).unwrap();
         let address = view.address.clone().unwrap();
+        if view.controls.focus_address {
+            view.controls.focus_address = false;
+            address.update(cx, |s, cx| {
+                s.focus(window, cx);
+                s.select_all(window, cx);
+            });
+        }
+        let view = &self.web_views[id];
         if !address.read(cx).focus_handle(cx).is_focused(window)
             && address.read(cx).value().as_ref() != view.url
         {
@@ -724,17 +664,6 @@ impl Workspace {
         }
         let loading = view.loading;
         let current = view.url.clone();
-        let title = self
-            .browser_history
-            .iter()
-            .rev()
-            .find(|entry| entry.url == current)
-            .map(|entry| entry.title.clone())
-            .unwrap_or_else(|| current.clone());
-        let bookmarked = self
-            .browser_bookmarks
-            .iter()
-            .any(|entry| entry.url == current);
         let notice = view.notice.clone();
         let p = self.palette.clone();
         // The Electron browser's bar: back / forward / reload in one pill, then the address as a
@@ -797,7 +726,28 @@ impl Workspace {
                 })),
             );
         }
-        toolbar = toolbar.child(nav);
+        let pick_key = id.to_string();
+        toolbar = toolbar.child(nav).child(
+            ui::icon_button_xs_tinted(
+                "browser-pick",
+                "cursor-rectangle-selection01",
+                if view.controls.picking {
+                    p.c(fv_theme::Token::Primary)
+                } else {
+                    p.c(fv_theme::Token::MutedForeground)
+                },
+                &p,
+            )
+            .aria_label(trs!(
+                english,
+                if view.controls.picking {
+                    "browser.pick_cancel"
+                } else {
+                    "browser.pick"
+                }
+            ))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_browser_pick(&pick_key, cx))),
+        );
         let external_url = current.clone();
         toolbar = toolbar.child(
             div()
@@ -840,27 +790,16 @@ impl Workspace {
                         ),
                 ),
         );
-        let bookmark_url = current.clone();
-        let bookmark_title = title;
+        let downloads_key = id.to_string();
         toolbar = toolbar.child(
-            ui::icon_button_xs_tinted(
-                "browser-bookmark",
-                "star",
-                if bookmarked {
-                    p.c(fv_theme::Token::Primary)
-                } else {
-                    p.c(fv_theme::Token::MutedForeground)
-                },
-                &p,
-            )
-            .aria_label(if bookmarked {
-                trs!(english, "pane_web.remove_bookmark")
-            } else {
-                trs!(english, "pane_web.bookmark_this_page")
-            })
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.toggle_browser_bookmark(&bookmark_url, &bookmark_title, cx);
-            })),
+            icon_button_xs("browser-downloads", "download01", &p)
+                .aria_label(trs!(english, "browser.downloads"))
+                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                    this.close_menus(cx);
+                    this.browser_services.menu = super::browser_settings::BrowserMenu::Downloads;
+                    this.browser_menu = Some((e.position(), downloads_key.clone()));
+                    cx.notify();
+                })),
         );
         // The scroll wrapper is `size_full` unless told otherwise: without a height of its own the
         // bar takes the whole column and the page below it is laid out zero pixels tall.
@@ -871,34 +810,22 @@ impl Workspace {
                 .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                     let at = e.position();
                     this.close_menus(cx);
+                    this.browser_services.menu = super::browser_settings::BrowserMenu::Main;
+                    this.refresh_browser_profiles(cx);
                     this.browser_menu = Some((at, menu_key.clone()));
                     cx.notify();
                 })),
         );
-        let mut library = div()
-            .w_full()
-            .h(px(26.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .px(px(8.0))
-            .overflow_x_scrollbar();
-        for bookmark in self.browser_bookmarks.iter().rev().take(8) {
-            let url = bookmark.url.clone();
-            let key = id.to_string();
-            library = library.child(
-                div()
-                    .id(SharedString::from(format!("browser-bookmark-{key}-{url}")))
-                    .cursor_pointer()
-                    .text_size(px(TEXT_XS))
-                    .child(ui::truncate(bookmark.title.clone()).max_w(px(140.0)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.navigate_browser(&key, &url, cx);
-                    })),
-            );
-        }
+        let view = self.web_views.get_mut(id).unwrap();
+        view.surface
+            .set_viewport(view.controls.viewport.dimensions(view.controls.landscape));
         let surface = self.web_surface(id, cx);
+        let controls = &self.web_views[id].controls;
+        let picking = controls.picking;
+        let finding = controls.finding;
+        let dimensions = controls.viewport.dimensions(controls.landscape);
+        let device_bar = dimensions.map(|_| self.browser_viewport_bar(id, cx));
+        let find_bar = finding.then(|| self.browser_find_bar(id, window, cx));
         div()
             .size_full()
             .flex()
@@ -913,8 +840,16 @@ impl Workspace {
                         .bg(p.c(fv_theme::Token::Primary).opacity(0.6)),
                 )
             })
-            .when(!self.browser_bookmarks.is_empty(), |this| {
-                this.child(library)
+            .children(device_bar)
+            .children(find_bar)
+            .when(picking, |d| {
+                d.child(
+                    div()
+                        .px(px(8.))
+                        .py(px(4.))
+                        .text_size(px(TEXT_XS))
+                        .child(trs!(english, "browser.pick_hint")),
+                )
             })
             .children(notice.map(|text| {
                 div()
@@ -924,7 +859,14 @@ impl Workspace {
                     .muted(&p)
                     .child(text)
             }))
-            .child(div().flex_1().min_h_0().w_full().child(surface))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(surface),
+            )
             .into_any_element()
     }
     pub(super) fn document_body(
@@ -969,6 +911,7 @@ impl Workspace {
                             can_back: false,
                             can_forward: false,
                             external: None,
+                            controls: Default::default(),
                         },
                     );
                     self.web_events(key.clone(), sig, rx, cx);
@@ -1029,6 +972,7 @@ impl Workspace {
                             can_back: false,
                             can_forward: false,
                             external: None,
+                            controls: Default::default(),
                         },
                     );
                     self.web_events(key.clone(), sig, rx, cx);

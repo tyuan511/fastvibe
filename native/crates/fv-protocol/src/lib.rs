@@ -26,6 +26,34 @@ pub use methods::{ClientNotification, ClientRequest, ServerNotification, ServerR
 /// Bumped on a breaking change to the wire format; exchanged in `initialize`.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Capabilities required by the desktop at startup. Keep this list shared so the
+/// server handshake can be checked against the same requirements as the GUI.
+pub const DESKTOP_REQUIRED_FEATURES: &[&str] = &[
+    "sidebarSettings",
+    "skills",
+    "mcp",
+    "mcpConfigEdit",
+    "mcpOAuth",
+    "execSessions",
+    "workspaceEntries",
+    "terminalInteraction",
+    "memory",
+    "autoCompaction",
+    "personalization",
+    "shortcuts",
+    "usageStats",
+    "modelCatalogRefresh",
+    "modelDetails",
+    "providerModelTest",
+    "subagents",
+    "subagentRoles",
+    "schedules",
+    "codeMode",
+    "hostedWebSearch",
+    "officePreview",
+    "computerControl",
+];
+
 /// One client → server call: its wire name and the types on either side.
 pub trait Rpc {
     const METHOD: &'static str;

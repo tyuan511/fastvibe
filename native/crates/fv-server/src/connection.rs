@@ -295,6 +295,7 @@ async fn dispatch(
                     "codeMode".into(),
                     "hostedWebSearch".into(),
                     "officePreview".into(),
+                    "computerControl".into(),
                     "workspaceEntries".into(),
                     "terminalInteraction".into(),
                     "memory".into(),

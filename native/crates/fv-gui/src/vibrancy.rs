@@ -7,14 +7,27 @@
 //! So the window is `Transparent` as far as GPUI is concerned and this view supplies the
 //! material.
 
+use crate::theme::Palette;
 use gpui_kit::*;
 
-/// Show the material behind the window (`on`), or take it away.
-pub fn set(window: &Window, on: bool) {
+/// Match the material to the resolved app theme, independently of the OS appearance.
+/// Keep the override on the effect view: overriding NSApplication/NSWindow would also
+/// change `window.appearance()`, which we observe to implement “follow system”.
+fn appearance_name(palette: &Palette) -> Option<&'static str> {
+    palette.glass().then_some(if palette.is_dark() {
+        "NSAppearanceNameDarkAqua"
+    } else {
+        "NSAppearanceNameAqua"
+    })
+}
+
+/// Show the theme's material behind the window, or take it away when glass is off.
+pub fn set(window: &Window, palette: &Palette) {
+    let appearance = appearance_name(palette);
     #[cfg(target_os = "macos")]
-    mac::set(window, on);
+    mac::set(window, appearance);
     #[cfg(not(target_os = "macos"))]
-    let _ = (window, on);
+    let _ = (window, appearance);
 }
 
 /// What GPUI is asked for: it never blurs, it only has to be see-through.
@@ -116,7 +129,7 @@ mod mac {
         found
     }
 
-    pub fn set(window: &Window, on: bool) {
+    pub fn set(window: &Window, appearance: Option<&str>) {
         let Ok(handle) = HasWindowHandle::window_handle(window) else {
             return;
         };
@@ -134,18 +147,24 @@ mod mac {
                 return;
             }
             let existing = find(content);
-            if !on {
+            let Some(appearance) = appearance else {
                 if !existing.is_null() {
                     let _: () = msg_send![existing, removeFromSuperview];
                 }
                 return;
-            }
+            };
+            let name = ns_string(appearance);
+            let appearance: *mut Object = msg_send![class!(NSAppearance), appearanceNamed: name];
+            let _: () = msg_send![name, release];
             if !existing.is_null() {
+                // Theme changes reuse the view; its material must change with the tokens.
+                let _: () = msg_send![existing, setAppearance: appearance];
                 return;
             }
             let bounds: Rect = msg_send![content, bounds];
             let view: *mut Object = msg_send![class!(NSVisualEffectView), alloc];
             let view: *mut Object = msg_send![view, initWithFrame: bounds];
+            let _: () = msg_send![view, setAppearance: appearance];
             let _: () = msg_send![view, setMaterial: UNDER_WINDOW_BACKGROUND];
             let _: () = msg_send![view, setBlendingMode: BEHIND_WINDOW];
             let _: () = msg_send![view, setState: ACTIVE];
@@ -156,6 +175,66 @@ mod mac {
             let _: () = msg_send![content, addSubview: view positioned: WINDOW_BELOW relativeTo: std::ptr::null_mut::<Object>()];
             // The content view holds it now.
             let _: () = msg_send![view, release];
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fv_theme::{Preferences, ThemeKind, ThemeMode};
+
+    #[test]
+    fn material_follows_the_selected_theme_even_when_the_system_disagrees() {
+        for id in fv_theme::all_ids() {
+            let dark = fv_theme::seed(id).unwrap().kind == ThemeKind::Dark;
+            let prefs = Preferences {
+                mode: if dark {
+                    ThemeMode::Dark
+                } else {
+                    ThemeMode::Light
+                },
+                light_theme: id.into(),
+                dark_theme: id.into(),
+                glass: true,
+            };
+            for system_dark in [false, true] {
+                let palette = Palette::new(prefs.resolve(system_dark, true));
+                assert_eq!(
+                    appearance_name(&palette),
+                    Some(if dark {
+                        "NSAppearanceNameDarkAqua"
+                    } else {
+                        "NSAppearanceNameAqua"
+                    }),
+                    "{id}, system_dark={system_dark}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn system_mode_and_disabling_glass_update_the_material() {
+        for system_dark in [false, true] {
+            let mut prefs = Preferences::default();
+            let palette = Palette::new(prefs.resolve(system_dark, true));
+            assert_eq!(
+                appearance_name(&palette),
+                Some(if system_dark {
+                    "NSAppearanceNameDarkAqua"
+                } else {
+                    "NSAppearanceNameAqua"
+                }),
+            );
+            assert_eq!(
+                appearance_name(&Palette::new(prefs.resolve(system_dark, false))),
+                None
+            );
+            prefs.glass = false;
+            assert_eq!(
+                appearance_name(&Palette::new(prefs.resolve(system_dark, true))),
+                None
+            );
         }
     }
 }

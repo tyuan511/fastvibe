@@ -37,9 +37,11 @@ pub mod assets;
 pub mod backend;
 pub mod computer_host;
 pub mod context_stats;
+mod conversation_resources;
 pub mod dock;
 pub mod file_icons;
 pub mod fixture;
+mod history_cache;
 pub mod markdown;
 pub mod notify;
 pub mod pane_layout;
@@ -47,10 +49,17 @@ pub mod presentation;
 pub mod sidebar_state;
 pub mod skill_draft;
 pub mod terminal_state;
+mod terminal_transcript;
 pub mod theme;
 pub mod ui;
 pub mod vibrancy;
 pub mod view_model;
 pub mod web_content;
 pub mod webview;
+#[cfg(target_os = "macos")]
+mod webview_shortcuts;
+#[cfg(target_os = "macos")]
+mod webview_container;
+#[cfg(target_os = "macos")]
+mod webview_downloads;
 pub mod workspace;

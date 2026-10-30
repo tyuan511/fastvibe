@@ -16,7 +16,7 @@ use std::collections::HashSet;
 
 #[derive(Default)]
 pub(super) struct Subagents {
-    agents: Vec<Subagent>,
+    pub(super) agents: Vec<Subagent>,
     config: SubagentConfig,
     config_loaded: bool,
     loading: bool,
@@ -29,7 +29,7 @@ pub(super) struct Subagents {
     /// Which count select in 设置 → 子 Agent is open (0 the per-chat limit, 1 the depth).
     menu: Option<u8>,
 }
-fn label(a: &Subagent, english: bool) -> &'static str {
+pub(super) fn label(a: &Subagent, english: bool) -> &'static str {
     if a.waiting_for_input {
         return trs!(english, "subagents.waiting_for_input");
     }

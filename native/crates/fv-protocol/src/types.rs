@@ -362,6 +362,10 @@ pub struct GoalSetParams {
 pub struct Turn {
     pub id: TurnId,
     pub items: Vec<Item>,
+    /// The measured duration of each reasoning item, in milliseconds. This is kept separately
+    /// from `Item` so the engine's history format does not need to carry UI timing metadata.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reasoning_durations: BTreeMap<ItemId, u64>,
     /// When the user's message was accepted (milliseconds since the epoch).
     #[serde(default)]
     pub started_at: Option<i64>,
@@ -378,6 +382,7 @@ impl Turn {
         Self {
             id,
             items,
+            reasoning_durations: BTreeMap::new(),
             started_at: None,
             process_ended_at: None,
             completed_at: None,
@@ -627,6 +632,9 @@ pub struct ItemRef {
     pub item: Item,
     #[serde(default)]
     pub at: Option<i64>,
+    /// Exact server-measured duration for a completed reasoning item, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2015,6 +2023,11 @@ pub struct AppSettings {
     /// Local browser download directory. Empty uses the platform Downloads folder.
     #[serde(default)]
     pub browser_download_dir: String,
+    /// Route agent browser actions to an isolated profile in an installed Chromium browser.
+    #[serde(default)]
+    pub browser_use_system: bool,
+    #[serde(default = "default_browser_engine")]
+    pub browser_engine: String,
     /// Automatically archive inactive, unpinned conversations after this many days.
     #[serde(default)]
     pub auto_archive_after_days: Option<u32>,
@@ -2037,6 +2050,9 @@ pub struct AppSettings {
 
 fn default_browser_homepage() -> String {
     "about:blank".into()
+}
+fn default_browser_engine() -> String {
+    "auto".into()
 }
 
 fn default_browser_search_engine() -> String {
@@ -2147,6 +2163,8 @@ impl Default for AppSettings {
             browser_homepage: default_browser_homepage(),
             browser_search_engine: default_browser_search_engine(),
             browser_download_dir: String::new(),
+            browser_use_system: false,
+            browser_engine: default_browser_engine(),
             auto_archive_after_days: None,
             keep_awake: true,
             computer_control: false,
@@ -2213,6 +2231,10 @@ pub struct AppSettingsPatch {
     pub browser_search_engine: Option<String>,
     #[serde(default)]
     pub browser_download_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_use_system: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_engine: Option<String>,
     #[serde(default)]
     pub auto_archive_after_days: Option<Option<u32>>,
     #[serde(default)]
@@ -2338,6 +2360,12 @@ impl AppSettings {
         }
         if let Some(v) = patch.browser_download_dir {
             self.browser_download_dir = v;
+        }
+        if let Some(v) = patch.browser_use_system {
+            self.browser_use_system = v;
+        }
+        if let Some(v) = patch.browser_engine {
+            self.browser_engine = v;
         }
         if let Some(v) = patch.auto_archive_after_days {
             self.auto_archive_after_days = v;

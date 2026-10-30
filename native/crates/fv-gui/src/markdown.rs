@@ -581,11 +581,26 @@ fn view_at(id: SharedString, source: SharedString, p: &Palette, depth: ListDepth
                         .child(copy),
                 )
                 .child(
-                    div().px(px(14.4)).py(px(12.0)).child(
-                        TextView::markdown("code", SharedString::from(fence.source.clone()))
-                            .style(inner)
-                            .code_block_actions(|_, _, _| div()),
-                    ),
+                    if matches!(
+                        fence.language.to_ascii_lowercase().as_str(),
+                        "diff" | "patch"
+                    ) {
+                        crate::workspace::diff::view("fence-diff", &fence.code, p)
+                            .into_any_element()
+                    } else {
+                        div()
+                            .px(px(14.4))
+                            .py(px(12.0))
+                            .child(
+                                TextView::markdown(
+                                    "code",
+                                    SharedString::from(fence.source.clone()),
+                                )
+                                .style(inner)
+                                .code_block_actions(|_, _, _| div()),
+                            )
+                            .into_any_element()
+                    },
                 )
         })
         .markdown_block_renderer("chat-list", move |node, _, _| {

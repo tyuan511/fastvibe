@@ -1253,6 +1253,38 @@ hover 变深；Windows/Linux 的步进按钮关掉（7px 的轨道放不下它�
 - 真的要**没有**滚动条就用 `no-scrollbar`（`shadcn/tailwind.css` 提供）——那是唯一欢迎平台
   规则的地方，因为它要的是「不画」。
 
+## 转写的跟随与读者滚动（`components/chat/message-list.tsx`、`lib/scroll-follow.ts`）
+
+回复在流式时，转写要在每一帧把它带到底部；读者往上看历史时，它必须一动不动。这两件事
+写同一个 `scrollTop`，所以「这一次滚动是谁干的」是唯一要回答的问题——而它曾经回答错了。
+
+- **「我们正在滚动」这个布尔标记回答不了它。** 跟随每帧都会滚，标记于是几乎一直是 `true`，
+  读者那一记滚轮产生的 scroll 事件被当成自己的，`followingRef` 从不落下，下一帧就把他拽回底部：
+  一边滚一边被拉回，整块转写发抖。现在记的是**位置**（`scrollMark`：起点、目标、时间），
+  落在两者之间（含目标）的 scroll 事件才是自己的，别的一律是读者的。
+- **意图在输入那一刻就记下，不等它变成滚动。** 滚轮和它要竞争的 flush 差一帧，跟随完全可能先
+  到底——那时 scroll 事件报告的是「在底部」，读起来就像读者要求待在底部。所以上滚的滚轮、
+  向下拖拽（露出上面的历史）、`↑` / `PageUp` / `Home`、以及按在滚动条上的 `pointerdown`
+  都在捕获阶段记一次 `readerIntentRef`；随后 `INTENT_WINDOW_MS`（300ms）内的滚动与跟随都听它的。
+  时限很短，是因为「动了但没动成」（已经在顶部的上滚）不能永久掐掉跟随。
+- **回到原处就恢复跟随。** 读者自己滚回底部，`next.end` 为真即重新跟随，不需要额外按钮；
+  `回到底部` 按钮与发送新提示词走的是同一个 `scrollToEnd`。
+- **短转写照旧跟随**：意图只在真的能移动时才可能落地，一屏放得下的对话里往上滚没有意义，
+  它仍然会跟着下一段回复走。
+- `test/scroll-follow.test.ts` 钉住归属判定（含过期标记、零位移不记录、双向跳转）。
+
+### 原生右侧面板关闭标签
+
+`native/crates/fv-gui/src/workspace/pane.rs` 的 `close_pane_tab` 是关闭按钮、中键与右键关闭其他/全部的共同入口。关闭当前会话最后一个标签时自动收起右侧面板并退出最大化，与 Electron 的 `side-pane` store 一致；仍有标签时保持现有面板状态与相邻标签切换。通过 `cx.notify()` 驱动既有宽度动画和布局持久化。
+
+### 原生转写里的滚动与文件行（`native/crates/fv-gui/src/workspace/`）
+
+GPUI 把一个滚轮事件交给命中点下所有可滚动祖先；嵌套的限高文件列表会和转写同时移动，读者滚动时列表也在变，难以稳定点中行。原生版的已修改文件列表因此保持内容高度、只由转写视口滚动；每一行仍由 `file_actions` 提供预览/审查点击与右键菜单。不要给这张列表再加独立的 `overflow_y_scroll`。
+
+- `TranscriptScroll::prepare` 在布局前比较上帧与当前 offset；向上移动就退出跟随，回到底部才恢复。`recorder` 在布局后记录实际 offset，避免正文增长和滚轮竞态误判。
+- `native/crates/fv-gui/src/workspace/transcript_scroll.rs` 的 GPUI 测试把可点击的文件行区域放在滚轮命中点，验证它仍滚动外层会话；另覆盖流式增长、回到底部、会话切换与搜索定位。
+- 这与 Electron 的文件列表不同：Electron 卡片按五行限高并在卡片内滚动；GPUI 当前滚轮分发模型下不复用这个内层滚动行为。
+
 ## 语言 / i18n
 
 设置 → 通用 → 语言 has two independent picks, both `zh | en`:

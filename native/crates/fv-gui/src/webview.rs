@@ -15,6 +15,11 @@ pub enum WebEvent {
     External(String),
     Notice(String),
     Crashed,
+    Captured(Result<PathBuf, String>),
+    Found(bool),
+    DownloadChanged(crate::pane_layout::Download),
+    Cleared,
+    Shortcut(String),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Navigation {
@@ -147,13 +152,193 @@ pub struct Surface {
     events: UnboundedSender<WebEvent>,
     // Retaining the server keeps its exact file grant alive only as long as this view.
     _document: Option<DocumentServer>,
-    download_dir: Option<PathBuf>,
+    download_dir: Option<std::sync::Arc<std::sync::Mutex<PathBuf>>>,
+    #[cfg(target_os = "macos")]
+    downloads: Option<crate::webview_downloads::Downloads>,
     #[cfg(target_os = "macos")]
     native: Option<wry::WebView>,
+    #[cfg(target_os = "macos")]
+    shortcuts: Option<crate::webview_shortcuts::Shortcuts>,
+    #[cfg(target_os = "macos")]
+    container: Option<crate::webview_container::Container>,
+    viewport: Option<(f32, f32)>,
     visible: bool,
     bounds: Option<Bounds<Pixels>>,
 }
 impl Surface {
+    pub fn mount_hidden(&mut self, window: &Window) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if self.native.is_none() && self.error.is_none() {
+            self.mount(window).map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = window;
+        Ok(())
+    }
+
+    pub fn poll_downloads(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        if let Some(downloads) = &self.downloads {
+            return downloads.poll();
+        }
+        false
+    }
+    pub fn download_action(&self, id: &str, action: &str) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(downloads) = &self.downloads {
+            return downloads.action(id, action);
+        }
+        let _ = (id, action);
+        Err("Download no longer exists".into())
+    }
+    #[allow(unexpected_cfgs)]
+    pub fn set_viewport(&mut self, viewport: Option<(f32, f32)>) {
+        if self.viewport != viewport {
+            let old_mobile = self.viewport.map(|(w, h)| w.max(h) <= 812.);
+            let new_mobile = viewport.map(|(w, h)| w.max(h) <= 812.);
+            self.viewport = viewport;
+            self.bounds = None;
+            #[cfg(target_os = "macos")]
+            if old_mobile != new_mobile
+                && let Some(native) = &self.native
+            {
+                use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+                use wry::WebViewExtMacOS as _;
+                let agent = match new_mobile {
+                    None => browser_user_agent(),
+                    Some(true) => {
+                        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+                    }
+                    Some(false) => {
+                        "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+                    }
+                };
+                unsafe {
+                    let text: *mut Object = msg_send![class!(NSString), alloc];
+                    let text: *mut Object = msg_send![text,initWithBytes:agent.as_ptr() length:agent.len() encoding:4usize];
+                    let view = &*native.webview() as *const _ as *mut Object;
+                    let _: () = msg_send![view,setCustomUserAgent:text];
+                    let _: () = msg_send![text, release];
+                }
+                if self.url != "about:blank" {
+                    let _ = native.reload();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (old_mobile, new_mobile);
+        }
+    }
+    pub fn set_download_directory(&mut self, configured: &str) {
+        // The handler reads this shared value so settings apply to existing tabs too.
+        if let Some(dir) = &self.download_dir {
+            *dir.lock().unwrap() = download_directory(configured);
+        }
+    }
+    pub fn import_cookies(
+        &mut self,
+        cookies: &[fv_browser::Cookie],
+        window: &Window,
+    ) -> Result<usize, String> {
+        #[cfg(target_os = "macos")]
+        {
+            if self.native.is_none() {
+                self.mount(window).map_err(|e| e.to_string())?;
+            }
+            let native = self.native.as_ref().unwrap();
+            let mut written = 0;
+            for cookie in cookies {
+                let mut builder =
+                    wry::cookie::Cookie::build((cookie.name.clone(), cookie.value.clone()))
+                        .domain(cookie.domain.clone())
+                        .path(cookie.path.clone())
+                        .secure(cookie.secure)
+                        .http_only(cookie.http_only);
+                if let Some(seconds) = cookie.expires.and_then(|e| {
+                    wry::cookie::time::OffsetDateTime::from_unix_timestamp(e as i64).ok()
+                }) {
+                    builder = builder.expires(seconds);
+                }
+                builder = match cookie.same_site.as_deref() {
+                    Some("Strict") => builder.same_site(wry::cookie::SameSite::Strict),
+                    Some("Lax") => builder.same_site(wry::cookie::SameSite::Lax),
+                    Some("None") => builder.same_site(wry::cookie::SameSite::None),
+                    _ => builder,
+                };
+                if native.set_cookie(&builder.build()).is_ok() {
+                    written += 1;
+                }
+            }
+            return Ok(written);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (cookies, window);
+            Err("Embedded browser is unavailable on this platform".into())
+        }
+    }
+    #[allow(unexpected_cfgs)]
+    pub fn find(&self, text: &str, backwards: bool) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &self.native {
+            use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+            use wry::WebViewExtMacOS as _;
+            let events = self.events.clone();
+            let callback = block::ConcreteBlock::new(move |result: *mut Object| {
+                let found: bool = unsafe { msg_send![result, matchFound] };
+                let _ = events.send(WebEvent::Found(found));
+            })
+            .copy();
+            unsafe {
+                let config: *mut Object = msg_send![class!(WKFindConfiguration), new];
+                let _: () = msg_send![config, setBackwards: backwards];
+                let _: () = msg_send![config, setWraps: true];
+                let string: *mut Object = msg_send![class!(NSString), alloc];
+                let string: *mut Object = msg_send![string, initWithBytes: text.as_ptr() length: text.len() encoding: 4usize];
+                let view = &*native.webview() as *const _ as *mut Object;
+                let _: () = msg_send![view, findString: string withConfiguration: config completionHandler: &*callback];
+                let _: () = msg_send![string, release];
+                let _: () = msg_send![config, release];
+            }
+            return Ok(());
+        }
+        let _ = (text, backwards);
+        Err("The browser is not showing".into())
+    }
+    #[allow(unexpected_cfgs)]
+    pub fn capture(&self, path: PathBuf) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &self.native {
+            use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+            use wry::WebViewExtMacOS as _;
+            let events = self.events.clone();
+            let callback = block::ConcreteBlock::new(move |image: *mut Object, error: *mut Object| {
+                let result = (|| {
+                    if !error.is_null() || image.is_null() { return Err("Could not capture this page".to_string()); }
+                    unsafe {
+                        let data: *mut Object = msg_send![image, TIFFRepresentation];
+                        if data.is_null() { return Err("Empty screenshot".into()); }
+                        let bitmap: *mut Object = msg_send![class!(NSBitmapImageRep), imageRepWithData: data];
+                        let props: *mut Object = msg_send![class!(NSDictionary), dictionary];
+                        let png: *mut Object = msg_send![bitmap, representationUsingType: 4usize properties: props];
+                        if png.is_null() { return Err("Could not encode screenshot".into()); }
+                        let len: usize = msg_send![png, length];
+                        let bytes: *const u8 = msg_send![png, bytes];
+                        if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+                        std::fs::write(&path, std::slice::from_raw_parts(bytes, len)).map_err(|e| e.to_string())?;
+                    }
+                    Ok(path.clone())
+                })();
+                let _ = events.send(WebEvent::Captured(result));
+            }).copy();
+            unsafe {
+                let view = &*native.webview() as *const _ as *mut Object;
+                let _: () = msg_send![view, takeSnapshotWithConfiguration: std::ptr::null::<Object>() completionHandler: &*callback];
+            }
+            return Ok(());
+        }
+        let _ = path;
+        Err("The browser is not showing".into())
+    }
     pub fn browser(url: String, events: UnboundedSender<WebEvent>, download_dir: PathBuf) -> Self {
         Self {
             error: None,
@@ -161,9 +346,16 @@ impl Surface {
             navigation: Navigation::Browser,
             events,
             _document: None,
-            download_dir: Some(download_dir),
+            download_dir: Some(std::sync::Arc::new(std::sync::Mutex::new(download_dir))),
+            #[cfg(target_os = "macos")]
+            downloads: None,
             #[cfg(target_os = "macos")]
             native: None,
+            #[cfg(target_os = "macos")]
+            shortcuts: None,
+            #[cfg(target_os = "macos")]
+            container: None,
+            viewport: None,
             visible: false,
             bounds: None,
         }
@@ -179,7 +371,14 @@ impl Surface {
             _document: Some(server),
             download_dir: None,
             #[cfg(target_os = "macos")]
+            downloads: None,
+            #[cfg(target_os = "macos")]
             native: None,
+            #[cfg(target_os = "macos")]
+            shortcuts: None,
+            #[cfg(target_os = "macos")]
+            container: None,
+            viewport: None,
             visible: false,
             bounds: None,
         })
@@ -203,7 +402,14 @@ impl Surface {
             _document: None,
             download_dir: None,
             #[cfg(target_os = "macos")]
+            downloads: None,
+            #[cfg(target_os = "macos")]
             native: None,
+            #[cfg(target_os = "macos")]
+            shortcuts: None,
+            #[cfg(target_os = "macos")]
+            container: None,
+            viewport: None,
             visible: false,
             bounds: None,
         })
@@ -249,25 +455,35 @@ impl Surface {
             }
             if let Some(native) = &self.native {
                 if self.bounds != Some(bounds) {
-                    let rect = wry::Rect {
-                        position: wry::dpi::LogicalPosition::new(
-                            f64::from(f32::from(bounds.left())),
-                            f64::from(f32::from(bounds.top())),
-                        )
-                        .into(),
-                        size: wry::dpi::LogicalSize::new(
-                            f64::from(f32::from(bounds.size.width)),
-                            f64::from(f32::from(bounds.size.height)),
-                        )
-                        .into(),
-                    };
-                    if let Err(e) = native.set_bounds(rect) {
-                        let error = e.to_string();
-                        self.hide();
-                        self.error = Some(error);
-                        return;
+                    if let Some(container) = &self.container {
+                        use wry::WebViewExtMacOS as _;
+                        container.place(
+                            &*native.webview() as *const _ as *mut objc::runtime::Object,
+                            bounds,
+                            self.viewport,
+                        );
+                        self.bounds = Some(bounds);
+                    } else {
+                        let rect = wry::Rect {
+                            position: wry::dpi::LogicalPosition::new(
+                                f64::from(f32::from(bounds.left())),
+                                f64::from(f32::from(bounds.top())),
+                            )
+                            .into(),
+                            size: wry::dpi::LogicalSize::new(
+                                f64::from(f32::from(bounds.size.width)),
+                                f64::from(f32::from(bounds.size.height)),
+                            )
+                            .into(),
+                        };
+                        if let Err(e) = native.set_bounds(rect) {
+                            let error = e.to_string();
+                            self.hide();
+                            self.error = Some(error);
+                            return;
+                        }
+                        self.bounds = Some(bounds);
                     }
-                    self.bounds = Some(bounds);
                 }
                 if !self.visible && show {
                     if let Err(error) = native.set_visible(true) {
@@ -381,11 +597,70 @@ impl Surface {
         }
         Ok(())
     }
+    #[allow(unexpected_cfgs)]
+    pub fn clear_selected_data(&self, cache: bool, cookies: bool) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &self.native {
+            use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+            use wry::WebViewExtMacOS as _;
+            unsafe extern "C" {
+                static WKWebsiteDataTypeDiskCache: *mut Object;
+                static WKWebsiteDataTypeMemoryCache: *mut Object;
+                static WKWebsiteDataTypeFetchCache: *mut Object;
+                static WKWebsiteDataTypeCookies: *mut Object;
+                static WKWebsiteDataTypeLocalStorage: *mut Object;
+                static WKWebsiteDataTypeSessionStorage: *mut Object;
+                static WKWebsiteDataTypeIndexedDBDatabases: *mut Object;
+                static WKWebsiteDataTypeServiceWorkerRegistrations: *mut Object;
+            }
+            let events = self.events.clone();
+            let callback = block::ConcreteBlock::new(move || {
+                let _ = events.send(WebEvent::Cleared);
+            })
+            .copy();
+            unsafe {
+                let types: *mut Object = msg_send![class!(NSMutableSet), new];
+                if cache {
+                    for value in [
+                        WKWebsiteDataTypeDiskCache,
+                        WKWebsiteDataTypeMemoryCache,
+                        WKWebsiteDataTypeFetchCache,
+                    ] {
+                        let _: () = msg_send![types, addObject:value];
+                    }
+                }
+                if cookies {
+                    for value in [
+                        WKWebsiteDataTypeCookies,
+                        WKWebsiteDataTypeLocalStorage,
+                        WKWebsiteDataTypeSessionStorage,
+                        WKWebsiteDataTypeIndexedDBDatabases,
+                        WKWebsiteDataTypeServiceWorkerRegistrations,
+                    ] {
+                        let _: () = msg_send![types, addObject:value];
+                    }
+                }
+                let view = &*native.webview() as *const _ as *mut Object;
+                let config: *mut Object = msg_send![view, configuration];
+                let store: *mut Object = msg_send![config, websiteDataStore];
+                let date: *mut Object =
+                    msg_send![class!(NSDate), dateWithTimeIntervalSince1970:0f64];
+                let _: () = msg_send![store, removeDataOfTypes:types modifiedSince:date completionHandler:&*callback];
+                let _: () = msg_send![types, release];
+            }
+            return Ok(());
+        }
+        let _ = (cache, cookies);
+        Err("The browser is not showing".into())
+    }
     pub fn retry(&mut self) {
         self.error = None;
         #[cfg(target_os = "macos")]
         {
+            self.downloads = None;
+            self.shortcuts = None;
             self.native = None;
+            self.container = None;
         }
         self.visible = false;
         self.bounds = None;
@@ -400,8 +675,6 @@ impl Surface {
         let title_events = self.events.clone();
         let page_events = self.events.clone();
         let page_navigation = self.navigation.clone();
-        let download_events = self.events.clone();
-        let download_dir = self.download_dir.clone();
         let browser = matches!(self.navigation, Navigation::Browser);
         let mut builder = wry::WebViewBuilder::new()
             .with_url(&self.url)
@@ -447,34 +720,47 @@ impl Surface {
                     wry::PageLoadEvent::Started
                 )));
             })
-            .with_download_started_handler(move |_, path| {
-                let Some(dir) = download_dir.as_ref() else {
-                    return false;
-                };
-                if std::fs::create_dir_all(dir).is_err() {
-                    let _ = download_events.send(WebEvent::Notice("无法创建下载目录".into()));
-                    return false;
-                }
-                let name = path
-                    .file_name()
-                    .unwrap_or_else(|| std::ffi::OsStr::new("download"));
-                *path = dir.join(name);
-                let _ = download_events
-                    .send(WebEvent::Notice(format!("已开始下载：{}", path.display())));
-                true
-            })
+            .with_download_started_handler(|_, _| false)
             .with_permission_handler(|_| wry::PermissionResponse::Deny)
             .with_on_web_content_process_terminate_handler(move || {
                 let _ = crashed_events.send(WebEvent::Crashed);
             });
         if browser {
-            builder = builder.with_user_agent(browser_user_agent());
+            builder = builder
+                .with_user_agent(browser_user_agent())
+                .with_initialization_script(
+                    "window.alert=()=>{};window.confirm=()=>false;window.prompt=()=>null;",
+                );
         } else {
             builder = builder.with_initialization_script(
                 "window.alert=()=>{};window.confirm=()=>false;window.prompt=()=>null;",
             );
         }
         self.native = Some(builder.build_as_child(window)?);
+        if browser {
+            use wry::WebViewExtMacOS as _;
+            self.downloads = Some(unsafe {
+                crate::webview_downloads::Downloads::attach(
+                    &*self.native.as_ref().unwrap().webview() as *const _
+                        as *mut objc::runtime::Object,
+                    self.download_dir.as_ref().unwrap().clone(),
+                    self.events.clone(),
+                )
+            });
+            self.container = Some(unsafe {
+                crate::webview_container::Container::attach(
+                    &*self.native.as_ref().unwrap().webview() as *const _
+                        as *mut objc::runtime::Object,
+                )
+            });
+            self.shortcuts = Some(unsafe {
+                crate::webview_shortcuts::Shortcuts::install(
+                    &*self.native.as_ref().unwrap().webview() as *const _
+                        as *mut objc::runtime::Object,
+                    self.events.clone(),
+                )
+            });
+        }
         Ok(())
     }
 }
