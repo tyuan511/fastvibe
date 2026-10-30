@@ -2526,6 +2526,21 @@ node scripts/bench-session-open.mjs [轮数]  # 冷会话打开里「加载内�
 
 ## 发版与 release note
 
+**原生测试版独立发布（当前只支持 macOS arm64）：** 版本取 `native/Cargo.toml` 的
+`workspace.package.version`，标签为 `native-vX.Y.Z`，走 `native-bundles.yml`；不要改 Electron 的
+`package.json` 版本或推 `v*` 标签。发布必须始终 `prerelease: true`、`make_latest: false`，
+所有资产先上传 draft，再公开。更新资产是 `FastVibe-Native-<version>-mac-arm64.zip`，不得产出
+Electron 的 `latest*.yml`。`fv-update` 仅筛选 native 预发布标签和本机匹配的归档，并校验 GitHub
+资产的 SHA256；关于页支持检查、下载校验、退出后替换并重启。`pnpm native:dist:mac` 可本地
+打本地 ad-hoc 测试包；`--sign` 使用个人 Developer ID，`--notarize` 同时签名与公证。可信分支 push 和
+native tag CI 必须签名/公证成功，PR 为 ad-hoc，手动 dispatch 默认公证（可显式关闭，只产 CI artifact）。
+复用现有 `APPLE_CERT_P12` / `APPLE_CERT_PASSWORD` / `APPLE_API_KEY_P8` / `APPLE_API_KEY_ID` /
+`APPLE_API_ISSUER`；临时钥匙串与私钥在 always 步骤清理。最终 zip 必须在 `.app` staple 和验证后重建、
+再计算 SHA256；OfficeCLI 保持上游签名及原始哈希，不能 deep-sign 改写。native 的应用名 / bundle ID / 数据目录为
+`FastVibe Native` / `dev.fastvibe.native` / `FastVibeNative`，可与 Electron 并存。
+`.app` 的清单放 `Contents/Resources/native-manifest.json`，不能放 `Contents` 根目录：严格签名会把它当作未签名代码。
+发布说明使用 `docs/release/native-vX.Y.Z.md` 和 `_zh-CN.md`，遵守下面同样的双语规则。
+
 版本号写 `package.json`，英文 release note 写 `docs/release/<tag>.md`，简体中文译文写
 `docs/release/<tag>_zh-CN.md`，三者在同一个 `chore: release vX.Y.Z` 提交里。两份顶部用
 固定到本次 tag 的绝对 URL 双向切换语言；已发布版本补译时用 `blob/main`，不移动旧 tag。

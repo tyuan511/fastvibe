@@ -16,8 +16,9 @@ if (process.argv.includes("--help")) {
 
 const bundleOption = option("bundle");
 if (!bundleOption) throw new Error("--bundle DIR is required");
-const bundle = resolve(bundleOption);
-const manifestPath = join(bundle, "native-manifest.json");
+const bundleRoot = resolve(bundleOption);
+const bundle = join(bundleRoot, bundleRoot.endsWith(".app") ? "Contents" : ".");
+const manifestPath = join(bundle, bundleRoot.endsWith(".app") ? "Resources/native-manifest.json" : "native-manifest.json");
 if (!existsSync(manifestPath)) throw new Error(`native-manifest.json is missing from ${bundle}`);
 
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));

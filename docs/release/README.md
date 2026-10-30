@@ -5,6 +5,7 @@ GitHub Release 以英文为正文，顶部提供简体中文链接。
 
 | Release / 版本 | English | 简体中文 |
 | --- | --- | --- |
+| Native preview / 原生测试版 native-v0.1.0 | [English](native-v0.1.0.md) | [简体中文](native-v0.1.0_zh-CN.md) |
 | Desktop / 桌面端 v0.22.7 | [English](v0.22.7.md) | [简体中文](v0.22.7_zh-CN.md) |
 | Desktop / 桌面端 v0.22.6 | [English](v0.22.6.md) | [简体中文](v0.22.6_zh-CN.md) |
 | Desktop / 桌面端 v0.22.5 | [English](v0.22.5.md) | [简体中文](v0.22.5_zh-CN.md) |
@@ -28,10 +29,10 @@ Older notes remain in this directory. Earlier releases may have only one languag
 
 Write two aligned files before creating a release tag:
 
-| Purpose | Desktop | Phone app |
-| --- | --- | --- |
-| English Release body | `vX.Y.Z.md` | `app-vX.Y.Z.md` |
-| Simplified Chinese translation | `vX.Y.Z_zh-CN.md` | `app-vX.Y.Z_zh-CN.md` |
+| Purpose | Electron desktop | Phone app | Native preview |
+| --- | --- | --- | --- |
+| English Release body | `vX.Y.Z.md` | `app-vX.Y.Z.md` | `native-vX.Y.Z.md` |
+| Simplified Chinese translation | `vX.Y.Z_zh-CN.md` | `app-vX.Y.Z_zh-CN.md` | `native-vX.Y.Z_zh-CN.md` |
 
 Commit both files under `docs/release/` with the version bump. The English file at the
 tag **is** the GitHub Release body: `release.yml` and `mobile-android.yml` use it as
@@ -52,7 +53,12 @@ Its Chinese translation starts with:
 [English](https://github.com/tyuan511/fastvibe/blob/vX.Y.Z/docs/release/vX.Y.Z.md) | **简体中文**
 ```
 
-Replace every `vX.Y.Z` with the actual tag, including the `app-` prefix for mobile releases.
+Replace every `vX.Y.Z` with the actual tag, including `app-` for mobile and `native-` for native previews.
+
+Native previews use the Cargo workspace version and `native-bundles.yml`, always published
+as prereleases with `make_latest: false`. Currently only macOS arm64 is packaged. They never
+include Electron update manifests or change the Electron version; existing Electron users
+receive no native-preview update prompt.
 
 ## Writing and checks
 

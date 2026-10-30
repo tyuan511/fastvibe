@@ -126,3 +126,16 @@ about.diagnostics_desc:
 about.reset_title:
   zh: "恢复默认设置"
   en: "Reset settings"
+
+about.downloading_app_update:
+  zh: "正在下载并校验更新…"
+  en: "Downloading and verifying update…"
+about.app_update_ready:
+  zh: "更新已就绪，重启后安装"
+  en: "Update ready; restart to install"
+about.restart_to_update:
+  zh: "重启并更新"
+  en: "Restart to update"
+about.download_app_update:
+  zh: "下载更新"
+  en: "Download update"

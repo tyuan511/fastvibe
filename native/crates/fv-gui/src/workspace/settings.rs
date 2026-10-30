@@ -836,11 +836,11 @@ impl Workspace {
     /// surface increments the generation and cancels this pending close.
     fn close_default_submenu_after_hover(&mut self, cx: &mut Context<Self>) {
         self.hover_submenus.close_after(cx, |this| {
-            if let Some(settings) = &mut this.settings {
-                if settings.default_provider_menu.is_some() || settings.default_thinking_menu {
-                    settings.default_provider_menu = None;
-                    settings.default_thinking_menu = false;
-                }
+            if let Some(settings) = &mut this.settings
+                && (settings.default_provider_menu.is_some() || settings.default_thinking_menu)
+            {
+                settings.default_provider_menu = None;
+                settings.default_thinking_menu = false;
             }
         });
     }

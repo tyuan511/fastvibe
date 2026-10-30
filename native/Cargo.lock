@@ -2440,6 +2440,7 @@ dependencies = [
  "fv-env",
  "fv-protocol",
  "fv-theme",
+ "fv-update",
  "gpui-kit",
  "gpui-pre",
  "gpui-pre-macos",
@@ -2547,6 +2548,7 @@ dependencies = [
  "fv-sandbox",
  "fv-store",
  "fv-tools",
+ "fv-update",
  "image",
  "libc",
  "portable-pty",
@@ -2611,6 +2613,20 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "fv-update"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "zip",
 ]
 
 [[package]]

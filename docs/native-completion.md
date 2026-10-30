@@ -41,12 +41,12 @@
 - [x] 数据：压缩窗口自适应；代码与自动化验收通过。
 - [x] 数据：其他 Agent 导入；Claude Code、pi、Codex、OpenCode 与 zcode 的扫描、预览和“导入为新对话”已接入 `fv-import` 与 `import/scan|read|commit`，并用源记录稳定键做用量去重；历史导入来源已持久化到 `Thread.source` 并显示在侧边栏，六个格式/缺失源回归用例通过。
 - [x] 外围：i18n 已收口（第四十七至五十四批）；Dock 角标、保持唤醒、自动归档和后台回合通知已接通，见第三十四至三十七批。
-- [ ] 交付：自动更新、签名打包、Windows/Linux、切换前的全范围代码验证；OfficeCLI 与原生 office 技能须随包发布，二进制重签后的运行时校验须适配并验收。
+- [ ] 交付：macOS arm64 测试包与独立更新已接通；Developer ID 签名及 CI 公证流程已接通，Apple 实际公证结果、真实线上升级、Windows/Linux 和切换前的全范围验收仍待确认。OfficeCLI 与原生 office 技能已随 macOS 测试包分发，资源哈希和二进制重签后的包校验已接通。
 - [x] 对齐：标题栏状态（第五十一至五十三批）、工具详情、菜单样式（第五十批）；进度文档已更新。
 - [x] 转写：滚动吸顶的用户提示词（turn-scoped sticky，含玻璃浮层色近似）；纯函数、无头 GPUI 与截图验收见第五十六批。
 - [ ] 最后实施：旧 Electron 完整数据导入，包括供应商/API Key、设置、会话、用量账本与缺少来源标识的历史副本；不提前作为其它功能的前置依赖。
 
-当前设置页中，远程访问、SSH 远程主机仍走 `not_yet()`，导入、电脑操控、浏览器控制和网络代理页已接通实际操作。关于页已显示版本、开源入口、模型目录刷新状态和安全诊断摘要；应用更新等其余操作仍待补齐。浏览器基础、主页/搜索/下载配置与本地 HTML/媒体预览已接通；辅助对话面板已复用真实子 Agent 线程。模型订阅 OAuth 已从目标中移除，MCP OAuth 继续保留。
+当前设置页中，远程访问、SSH 远程主机仍走 `not_yet()`，导入、电脑操控、浏览器控制和网络代理页已接通实际操作。关于页已显示版本、开源入口、模型目录刷新状态和安全诊断摘要；macOS arm64 的原生测试通道和应用内更新已接通，真实线上升级仍待人工验收。浏览器基础、主页/搜索/下载配置与本地 HTML/媒体预览已接通；辅助对话面板已复用真实子 Agent 线程。模型订阅 OAuth 已从目标中移除，MCP OAuth 继续保留。
 
 ## 已存在的基础（不重复实现）
 
@@ -925,3 +925,24 @@ Electron 版滚动转写时把最近一条滚出视口的用户提示词 pin 在
 4. **`send_message` 对空闲 agent 进 mailbox**，不再走提示队列——下个输入边界被读取，永不自成回合（codex queue-only 原义）。运行中仍 steer（「delivered promptly」）。
 
 **验证**：`fv-server` 全部 48 个测试目标通过（lib 137 项，新增：fork 默认解析、逐出释放名额后 followup 仍可重建运行时、FINAL_ANSWER 只进 mailbox 不进队列且随下一回合同请求交付、send_message 邮箱化并在 followup 的首个请求里出现）；`fv-protocol`/`fv-store` 与 schema 快照通过；`fv-server/fv-protocol/fv-store` all-targets 严格 Clippy 与格式检查通过；`fv-gui` 编译通过（116 项通过，唯一失败仍是并行会话的 `resources.finished` 键）。集成测试的子会话转写现在带 fork 前缀（断言改为扫全部回合）。全程未使用 computer use，无真实付费请求。
+
+
+## macOS arm64 测试包与独立更新（2026-10-30）
+
+- `native-bundles.yml` 只覆盖 Apple Silicon，先跑 workspace 测试、格式与 clippy，再打包并验证；手动触发只产出 CI artifact，只有 `native-v<workspace version>` 标签才公开预发布版本。
+- native 版本独立取自 `native/Cargo.toml`。预发布保持 `prerelease=true` / `make_latest=false`，无 Electron `latest*.yml`，不会进入 Electron 正式更新通道。
+- `.app` 使用独立的应用名与 bundle ID；标准 Resources 目录保存清单、技能、OfficeCLI 和许可，严格 ad-hoc 签名校验通过，OfficeCLI 的上游固定哈希保持有效。
+- 关于页支持检查 native 版本、下载并验证 GitHub SHA256、解压后校验身份/版本/架构，以及退出后替换应用并重启；临时夹具覆盖替换失败回滚。后台服务从启动到监听复用同一组退出信号，修复立即重启时丢信号的竞态。
+- 本地验证：Node 全量 1,995 项通过；native workspace 828 项通过、2 个子进程夹具按原设计忽略，文档测试完成；发布/打包定向测试 14 项通过；workspace clippy、格式、actionlint 和 diff 检查通过。
+- 实际 release 包通过二进制版本/arm64 架构检查、严格签名、39 项资源哈希、更新器归档验证和隔离数据目录下的服务协议冒烟测试（initialize / thread/list）。本地命令为 `pnpm native:dist:mac`。
+- 未使用 Computer Use，未启动 GUI；尚未推送或发布。首次 GUI 启动和公开两个 native 预发布版本后的「设置 → 关于 → 下载更新 → 重启并更新」仍需人工验收。当前包未做 Developer ID 签名或公证，不能据此声称完成了正式签名交付。
+
+
+## native CI 的 Developer ID 签名与公证（2026-10-30）
+
+- 复用已有五项 Apple secrets 和个人 Developer ID（与 Electron 发版相同）。可信 push 默认要求完整签名公证；PR 无私钥，手动 dispatch 默认公证、可显式关闭。只有 push native tag 才公开 Release，手动选择 tag 不会发布。
+- native app 和 server 使用 Hardened Runtime、可信时间戳和明确签名身份；OfficeCLI 保留既有上游 Developer ID 签名、entitlements 与固定 SHA256，无需改写运行时资源验证。
+- 公证必须返回 Accepted，并保存提交状态与 Apple 日志；随后 staple / validate app、严格签名和 Gatekeeper 检查，重新生成 zip，再验证更新器归档并计算 SHA256。
+- 临时 P8 / P12 使用私有权限；always 步骤清理证书/私钥/钥匙串并恢复搜索列表，失败时保留公证诊断 artifact。
+- 已用本机个人 Developer ID 实际签名 arm64 包，验证 app/server 的 runtime、时间戳和证书身份，严格签名、39 项资源哈希、更新器归档和包内 server 协议冒烟均通过。21 项定向测试（含公证拒绝/失败、票据/Gatekeeper 拒绝和密钥清理夹具）、actionlint、脚本语法和 diff 检查通过。
+- 未启动 GUI，未推送 CI 或公开 Release；本地未提交 Apple 公证。因此实际 Apple Accepted / staple / Gatekeeper 的成功结果仍待带 secrets 的 CI 运行确认，不能把已通过的签名验证说成已公证。

@@ -1,0 +1,53 @@
+_version: 2
+
+resources.title:
+  zh: "会话资源"
+  en: "Conversation resources"
+resources.environment:
+  zh: "环境"
+  en: "Environment"
+resources.todos:
+  zh: "任务清单"
+  en: "Tasks"
+resources.progress:
+  zh: "%{done}/%{total}"
+  en: "%{done}/%{total}"
+resources.agents:
+  zh: "子 Agent"
+  en: "Subagents"
+resources.finished:
+  zh: "已结束 %{count} 项"
+  en: "%{count} finished"
+resources.outputs:
+  zh: "最近产出"
+  en: "Recent outputs"
+resources.changes:
+  zh: "工作区变更"
+  en: "Workspace changes"
+resources.local:
+  zh: "本机"
+  en: "This computer"
+resources.copied:
+  zh: "已复制路径"
+  en: "Path copied"
+resources.open_branch:
+  zh: "打开分支"
+  en: "Open branch"
+resources.worktree:
+  zh: "工作树"
+  en: "Worktree"
+resources.changed_count:
+  zh: "%{count} 项变更"
+  en: "%{count} changes"
+resources.clean:
+  zh: "无变更"
+  en: "No changes"
+resources.jump:
+  zh: "跳转到消息"
+  en: "Jump to message"
+resources.less:
+  zh: "收起"
+  en: "Show less"
+resources.more:
+  zh: "展开更多（%{count}）"
+  en: "Show more (%{count})"

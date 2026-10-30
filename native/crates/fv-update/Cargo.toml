@@ -1,0 +1,19 @@
+[package]
+name = "fv-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+reqwest = { version = "0.13", features = ["rustls", "json"] }
+serde.workspace = true
+serde_json.workspace = true
+semver = "1"
+sha2 = "0.10"
+tempfile = "3"
+tokio = { workspace = true, features = ["fs"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

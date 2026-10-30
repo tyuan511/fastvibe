@@ -83,6 +83,12 @@ fn main() {
 }
 
 async fn run() {
+    // Keep the same signal listeners through startup and serving. Recreating them after
+    // the login shell completes loses SIGTERM delivered between the two registrations:
+    // the daemon's socket already looks ready, but an immediate restart never stops it.
+    let termination = terminated();
+    let interruption = tokio::signal::ctrl_c();
+    tokio::pin!(termination, interruption);
     // Start reading the executable now, before a later build can replace this path; the
     // hash itself finishes in the background so it never delays the socket.
     fv_server::warm_build_fingerprint();
@@ -116,8 +122,8 @@ async fn run() {
 
     let environment = tokio::select! {
         environment = fv_env::initialize() => environment,
-        _ = tokio::signal::ctrl_c() => return,
-        _ = terminated() => return,
+        _ = &mut interruption => return,
+        _ = &mut termination => return,
     };
     if let Some(warning) = environment.warning {
         eprintln!("{warning}");
@@ -168,8 +174,8 @@ async fn run() {
                     tokio::io::stdin(),
                     tokio::io::stdout(),
                 ) => {},
-                _ = tokio::signal::ctrl_c() => {},
-                _ = terminated() => {},
+                _ = &mut interruption => {},
+                _ = &mut termination => {},
             }
         }
         Listen::Unix => {
@@ -180,8 +186,8 @@ async fn run() {
             eprintln!("listening on {}", server.path().display());
             tokio::select! {
                 r = server.run() => { if let Err(e) = r { fail(format!("listener stopped: {e}")); } }
-                _ = tokio::signal::ctrl_c() => {}
-                _ = terminated() => {}
+                _ = &mut interruption => {}
+                _ = &mut termination => {}
             }
         }
     }

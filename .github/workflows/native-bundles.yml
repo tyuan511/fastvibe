@@ -1,78 +1,195 @@
-name: Native bundles
+name: Native macOS preview
 
 on:
   workflow_dispatch:
+    inputs:
+      notarize:
+        description: Sign with Developer ID and notarize the native preview
+        type: boolean
+        default: true
   push:
-    branches: [main]
+    branches: [main, gpui]
+    tags: ["native-v*"]
     paths:
       - "native/**"
-      - "scripts/stage-native-app.mjs"
-      - "scripts/check-native-bundle.mjs"
+      - "scripts/*native*.mjs"
+      - "scripts/lib/native-mac-signing.mjs"
+      - "scripts/prepare-native-signing.sh"
+      - "scripts/check-release-note.mjs"
+      - "test/native-*.test.ts"
       - "scripts/fetch-officecli.mjs"
       - "scripts/officecli.json"
       - "resources/skills/**"
+      - "resources/icon.icns"
+      - ".github/workflows/native-bundles.yml"
+  pull_request:
+    paths:
+      - "native/**"
+      - "scripts/*native*.mjs"
+      - "scripts/lib/native-mac-signing.mjs"
+      - "scripts/prepare-native-signing.sh"
+      - "scripts/check-release-note.mjs"
+      - "test/native-*.test.ts"
+      - "scripts/fetch-officecli.mjs"
+      - "scripts/officecli.json"
+      - "resources/skills/**"
+      - "resources/icon.icns"
+      - ".github/workflows/native-bundles.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-bundles-${{ github.ref }}
-  cancel-in-progress: true
+  group: native-preview-${{ github.ref }}
+  # Never cancel a tag after it has begun uploading its release.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  NO_PROXY: localhost,127.0.0.1,::1
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 jobs:
-  bundle:
-    name: Native bundle (${{ matrix.platform }}-${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            platform: mac
-            arch: arm64
-          - runner: ubuntu-24.04
-            platform: linux
-            arch: x64
-          - runner: windows-2025
-            platform: win
-            arch: x64
-    runs-on: ${{ matrix.runner }}
+  check:
+    name: Native checks (macOS arm64)
+    runs-on: macos-14
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux WebView dependencies
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libxdo-dev
-
-      - name: Fetch pinned OfficeCLI
-        run: node scripts/fetch-officecli.mjs --platforms=${{ matrix.platform }}-${{ matrix.arch }}
-
-      - name: Build and stage bundle
-        run: node scripts/stage-native-app.mjs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --profile release --bundle --output release/native/${{ matrix.platform }}-${{ matrix.arch }}
-
-      - name: Verify bundle
-        run: node scripts/check-native-bundle.mjs --bundle release/native/${{ matrix.platform }}-${{ matrix.arch }}
-
-      - name: Smoke test staged server
-        shell: bash
-        run: |
-          if [ "${{ matrix.platform }}" = "win" ]; then
-            ./release/native/${{ matrix.platform }}-${{ matrix.arch }}/bin/fastvibe-server.exe --help
-          else
-            ./release/native/${{ matrix.platform }}-${{ matrix.arch }}/bin/fastvibe-server --help
-          fi
-
-      - name: Upload native bundle
-        uses: actions/upload-artifact@v4
         with:
-          name: fastvibe-native-${{ matrix.platform }}-${{ matrix.arch }}
-          path: release/native/${{ matrix.platform }}-${{ matrix.arch }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+      - name: Validate native release tag and notes
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node scripts/package-native-macos.mjs --check-tag "$RELEASE_TAG"
+          node scripts/check-release-note.mjs --tag "$RELEASE_TAG"
+      - name: Test packaging and release isolation
+        run: node --test test/native-release.test.ts test/native-signing.test.ts test/check-release-note.test.ts
+      - name: Test native workspace
+        run: cargo test --manifest-path native/Cargo.toml --workspace --locked --no-fail-fast
+      - name: Check formatting
+        run: cargo fmt --manifest-path native/Cargo.toml --all -- --check
+      - name: Clippy
+        run: cargo clippy --manifest-path native/Cargo.toml --workspace --all-targets --locked -- -D warnings
+
+  bundle:
+    name: Package native macOS arm64
+    needs: check
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          key: native-preview-release
+      - name: Fetch pinned OfficeCLI
+        run: node scripts/fetch-officecli.mjs --platforms=mac-arm64
+      - name: Build native binaries
+        run: cargo build --manifest-path native/Cargo.toml --locked -p fv-server -p fv-gui --release
+      - name: Prepare Apple signing and notarization credentials
+        id: signing
+        # PR code never receives signing keys. Trusted pushes require notarization;
+        # a manual artifact build may explicitly request ad-hoc signing instead.
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.notarize)
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: bash scripts/prepare-native-signing.sh
+      - name: Package signed and notarized native preview
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: node scripts/package-native-macos.mjs --no-build --notarize
+      - name: Package ad-hoc CI artifact
+        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.notarize)
+        run: node scripts/package-native-macos.mjs --no-build
+      - name: Verify archive and staged server protocol
+        run: |
+          cd release/native/mac-arm64
+          shasum -a 256 -c *.sha256
+          cd ../../..
+          node scripts/smoke-native-server.mjs "release/native/mac-arm64/FastVibe Native.app/Contents/MacOS/fastvibe-server"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fastvibe-native-mac-arm64
+          path: |
+            release/native/mac-arm64/*.zip
+            release/native/mac-arm64/*.sha256
           if-no-files-found: error
           retention-days: 14
+      - name: Keep Apple notarization reports
+        if: always() && steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastvibe-native-notarization-mac-arm64
+          path: release/native/mac-arm64/native-notarization*.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Remove signing credentials and keychain
+        if: always() && github.event_name != 'pull_request'
+        run: bash scripts/prepare-native-signing.sh cleanup
+
+  publish:
+    name: Publish native prerelease
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/native-v')
+    needs: [check, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fastvibe-native-mac-arm64
+          path: native-assets
+      - name: Verify checksums
+        working-directory: native-assets
+        run: sha256sum -c *.sha256
+      - name: Upload all assets into a draft preview
+        id: draft_release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: true
+          make_latest: false
+          name: FastVibe Native ${{ github.ref_name }} (macOS arm64 preview)
+          body_path: docs/release/${{ github.ref_name }}.md
+          fail_on_unmatched_files: true
+          files: native-assets/*
+      - name: Require GitHub's archive digest before announcing an update
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft_release.outputs.id }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > native-release.json
+          node scripts/check-native-release.mjs native-release.json native-assets
+      - name: Publish only after every asset is uploaded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft_release.outputs.id }}
+        # Address drafts by ID; the tag endpoint may not resolve a draft release.
+        run: |
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false -F prerelease=true -f make_latest=false \
+            --jq '{tag: .tag_name, draft, prerelease, url: .html_url}'

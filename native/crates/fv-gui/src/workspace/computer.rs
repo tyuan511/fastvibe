@@ -299,10 +299,8 @@ impl Workspace {
             },
             cx,
         );
-        if enable {
-            if computer_host::GATED && !computer_host::permissions().ready() {
-                computer_host::request_permissions();
-            }
+        if enable && computer_host::GATED && !computer_host::permissions().ready() {
+            computer_host::request_permissions();
         }
         self.computer_sync(cx);
         cx.notify();

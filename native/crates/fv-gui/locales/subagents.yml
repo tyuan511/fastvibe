@@ -90,3 +90,6 @@ subagents.max_desc:
 subagents.depth_desc:
   zh: "子 Agent 还能继续委派的层数。"
   en: "How many levels a sub-agent may delegate further."
+subagents.subagent:
+  zh: "子 Agent"
+  en: "Subagent"

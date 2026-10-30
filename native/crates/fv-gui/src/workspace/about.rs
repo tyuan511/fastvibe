@@ -5,9 +5,7 @@ use super::settings::{Section, outline_button};
 use crate::ui::px;
 use crate::ui::{Muted as _, TEXT_XS, icon};
 use fv_protocol::catalog::ModelCatalogInfo;
-use fv_protocol::methods::{
-    AppUpdateCheck, DiagnosticsGet, ModelCatalogGet, ModelCatalogRefresh, SettingsReset,
-};
+use fv_protocol::methods::{DiagnosticsGet, ModelCatalogGet, ModelCatalogRefresh, SettingsReset};
 use fv_protocol::types::{Empty, UiLanguage};
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -28,8 +26,11 @@ pub struct AboutSettings {
     dirty: bool,
     diagnostics: Option<fv_protocol::types::Diagnostics>,
     diagnostics_loading: bool,
-    update: Option<fv_protocol::types::AppUpdateInfo>,
+    update: Option<fv_update::Release>,
     update_loading: bool,
+    update_checked: bool,
+    update_downloading: bool,
+    prepared_update: Option<fv_update::PreparedUpdate>,
 }
 impl Default for AboutSettings {
     fn default() -> Self {
@@ -46,6 +47,9 @@ impl Default for AboutSettings {
             diagnostics_loading: false,
             update: None,
             update_loading: false,
+            update_checked: false,
+            update_downloading: false,
+            prepared_update: None,
         }
     }
 }
@@ -57,14 +61,20 @@ impl Workspace {
         let Some(settings) = self.settings.as_mut() else {
             return;
         };
-        if settings.about.update_loading {
+        if settings.about.update_loading
+            || settings.about.update_downloading
+            || settings.about.prepared_update.is_some()
+        {
             return;
         }
         settings.about.update_loading = true;
+        settings.about.error = None;
         let session = settings.about.session;
-        let call = backend.call::<AppUpdateCheck>(Empty {});
+        let proxy = self.app_settings.proxy_url.clone();
+        let call =
+            backend.task(async move { fv_update::check(env!("CARGO_PKG_VERSION"), &proxy).await });
         cx.spawn(async move |this, cx| {
-            let result = call.await;
+            let result = call.await.unwrap_or_else(|e| Err(e.to_string()));
             this.update(cx, |this, cx| {
                 let english = this.app_settings.language == UiLanguage::English;
                 if let Some(settings) = this
@@ -74,7 +84,10 @@ impl Workspace {
                 {
                     settings.about.update_loading = false;
                     match result {
-                        Ok(update) => settings.about.update = Some(update),
+                        Ok(update) => {
+                            settings.about.update = update;
+                            settings.about.update_checked = true;
+                        }
                         Err(error) => {
                             settings.about.error = Some(tr!(
                                 english,
@@ -89,6 +102,77 @@ impl Workspace {
             .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    fn download_app_update(&mut self, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        if settings.about.update_downloading || settings.about.update_loading {
+            return;
+        }
+        let Some(release) = settings.about.update.clone() else {
+            return;
+        };
+        if let Err(error) = std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|p| fv_update::installed_app(&p))
+        {
+            settings.about.error = Some(error);
+            cx.notify();
+            return;
+        }
+        settings.about.update_downloading = true;
+        settings.about.error = None;
+        let session = settings.about.session;
+        let proxy = self.app_settings.proxy_url.clone();
+        let call = backend.task(async move { fv_update::prepare(release, &proxy).await });
+        cx.spawn(async move |this, cx| {
+            let result = call.await.unwrap_or_else(|e| Err(e.to_string()));
+            this.update(cx, |this, cx| {
+                if let Some(settings) = this
+                    .settings
+                    .as_mut()
+                    .filter(|s| s.about.session == session)
+                {
+                    settings.about.update_downloading = false;
+                    match result {
+                        Ok(prepared) => settings.about.prepared_update = Some(prepared),
+                        Err(error) => settings.about.error = Some(error),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn install_app_update(&mut self, cx: &mut Context<Self>) {
+        let Some(data_dir) = self.update_data_dir.clone() else {
+            return;
+        };
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        let Some(prepared) = settings.about.prepared_update.take() else {
+            return;
+        };
+        let result = std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|p| prepared.install(&p, &data_dir));
+        match result {
+            Ok(()) => cx.quit(),
+            Err(error) => {
+                settings.about.error = Some(error);
+                cx.notify();
+            }
+        }
     }
 
     fn load_diagnostics(&mut self, cx: &mut Context<Self>) {
@@ -350,27 +434,28 @@ impl Workspace {
         let diagnostics_loading = s.diagnostics_loading;
         let update = s.update.clone();
         let update_loading = s.update_loading;
-        let status: SharedString = if update_loading {
+        let downloading = s.update_downloading;
+        let prepared = s.prepared_update.is_some();
+        let status: SharedString = if downloading {
+            trs!(english, "about.downloading_app_update").into()
+        } else if prepared {
+            trs!(english, "about.app_update_ready").into()
+        } else if update_loading {
             trs!(english, "about.checking").into()
         } else {
-            match update.as_ref().and_then(|u| u.latest_version.as_deref()) {
-                Some(version)
-                    if update
-                        .as_ref()
-                        .is_some_and(|u| u.current_version != version) =>
-                {
-                    tr!(
-                        english,
-                        "about.new_version_v_version_available",
-                        version = version
-                    )
-                    .into()
-                }
-                Some(_) => trs!(english, "about.already_up_to_date").into(),
+            match update.as_ref().map(|u| u.version.as_str()) {
+                Some(version) => tr!(
+                    english,
+                    "about.new_version_v_version_available",
+                    version = version
+                )
+                .into(),
+                None if s.update_checked => trs!(english, "about.already_up_to_date").into(),
                 None => trs!(english, "about.check_the_latest_github_release").into(),
             }
         };
-        let release = update.and_then(|u| u.release_url);
+        let available = update.is_some();
+        let release = update.map(|u| u.url);
 
         let header = div()
             .flex()
@@ -467,6 +552,31 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
+                    .when(prepared, |d| {
+                        d.child(
+                            xs(
+                                "install-app-update",
+                                Some("refresh01"),
+                                trs!(english, "about.restart_to_update").into(),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.install_app_update(cx))),
+                        )
+                    })
+                    .when(
+                        available && !prepared && !downloading && !update_loading,
+                        |d| {
+                            d.child(
+                                xs(
+                                    "download-app-update",
+                                    Some("download01"),
+                                    trs!(english, "about.download_app_update").into(),
+                                )
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.download_app_update(cx)),
+                                ),
+                            )
+                        },
+                    )
                     .when_some(release, |d, url| {
                         d.child(
                             xs(
@@ -483,10 +593,15 @@ impl Workspace {
                             Some("refresh01"),
                             trs!(english, "about.check_for_updates").into(),
                         )
-                        .when(update_loading, |d| d.opacity(0.5))
-                        .when(!update_loading, |button| {
-                            button.on_click(cx.listener(|this, _, _, cx| this.check_update(cx)))
-                        }),
+                        .when(update_loading || downloading || prepared, |d| {
+                            d.opacity(0.5)
+                        })
+                        .when(
+                            !update_loading && !downloading && !prepared,
+                            |button| {
+                                button.on_click(cx.listener(|this, _, _, cx| this.check_update(cx)))
+                            },
+                        ),
                     ),
             )
             .into_any_element()],

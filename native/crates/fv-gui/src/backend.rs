@@ -37,6 +37,15 @@ pub struct Backend {
 }
 
 impl Backend {
+    /// Run a local application operation on the same Tokio reactor as network calls.
+    pub fn task<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.runtime.spawn(future)
+    }
+
     /// Connect to the server for `data_dir`, starting it if needed. Events arrive on the
     /// returned channel; `Connected` comes first.
     pub fn start(

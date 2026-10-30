@@ -80,10 +80,10 @@ pub struct Daemon {
 /// executable a second time after the xtask has already built it. Packaged/direct launches keep
 /// the content hash below.
 fn built_identity(path: &Path) -> Result<String, std::io::Error> {
-    if let Ok(identity) = std::env::var("FASTVIBE_DEV_SERVER_ID") {
-        if !identity.is_empty() {
-            return Ok(identity);
-        }
+    if let Ok(identity) = std::env::var("FASTVIBE_DEV_SERVER_ID")
+        && !identity.is_empty()
+    {
+        return Ok(identity);
     }
     let mut file = std::fs::File::open(path)?;
     let mut digest = Sha256::new();

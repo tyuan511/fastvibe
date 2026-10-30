@@ -157,6 +157,7 @@ impl Notice {
 }
 
 pub struct Workspace {
+    update_data_dir: Option<std::path::PathBuf>,
     web_views: HashMap<String, pane_web::ContentView>,
     web_drag_blocked: bool,
     office_views: HashMap<String, pane_office::OfficeView>,
@@ -333,6 +334,7 @@ impl Workspace {
     ) -> Self {
         let mut this = Self::base(palette, window, cx);
         this.live_appearance = true;
+        this.update_data_dir = Some(data_dir.clone());
         let layout_path = data_dir.join("gui-workspace.json");
         let recovery = cx
             .background_executor()
@@ -498,6 +500,7 @@ impl Workspace {
         let scroll = ScrollHandle::new();
         let search_anchor = ScrollAnchor::for_handle(scroll.clone());
         let this = Self {
+            update_data_dir: None,
             web_views: HashMap::new(),
             web_drag_blocked: false,
             office_views: HashMap::new(),

@@ -52,7 +52,8 @@
     "native:build": "cargo build --manifest-path native/Cargo.toml -p fv-server -p fv-gui --release",
     "native:stage": "node scripts/stage-native-app.mjs",
     "native:bundle": "node scripts/stage-native-app.mjs --bundle",
-    "native:verify": "node scripts/check-native-bundle.mjs"
+    "native:verify": "node scripts/check-native-bundle.mjs",
+    "native:dist:mac": "node scripts/fetch-officecli.mjs --platforms=mac-arm64 && node scripts/package-native-macos.mjs"
   },
   "packageManager": "pnpm@11.22.0",
   "dependencies": {

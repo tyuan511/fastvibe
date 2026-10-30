@@ -19,6 +19,7 @@ path = "src/main.rs"
 capture = ["dep:image", "dep:gpui-capture", "dep:gpui-macos-capture"]
 
 [dependencies]
+fv-update = { path = "../fv-update" }
 fv-env = { path = "../fv-env" }
 gpui-kit = { version = "0.8.0", features = [
     "tree-sitter-typescript", "tree-sitter-tsx", "tree-sitter-javascript",

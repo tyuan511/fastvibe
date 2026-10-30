@@ -28,7 +28,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const NOTES_URL = "https://github.com/tyuan511/fastvibe/blob";
 
 /** `v1.2.3`, `v1.2.3-rc.1` and the phone app's `app-v1.2.3`; not `latest`, not `1.2.3`. */
-export const RELEASE_TAG = /^(app-)?v\d+\.\d+\.\d+/;
+export const RELEASE_TAG = /^(app-|native-)?v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
  * Returns note metadata when the note is present and has content, otherwise
@@ -37,7 +37,7 @@ export const RELEASE_TAG = /^(app-)?v\d+\.\d+\.\d+/;
  */
 export function checkReleaseNote(tag, root = ROOT) {
   if (!tag) throw new Error("no tag: set GITHUB_REF_NAME or pass --tag vX.Y.Z");
-  if (!RELEASE_TAG.test(tag)) throw new Error(`not a release tag: ${tag} (expected vX.Y.Z or app-vX.Y.Z)`);
+  if (!RELEASE_TAG.test(tag)) throw new Error(`not a release tag: ${tag} (expected vX.Y.Z, app-vX.Y.Z or native-vX.Y.Z)`);
 
   const path = join(root, "docs", "release", `${tag}.md`);
   const relative = `docs/release/${tag}.md`;

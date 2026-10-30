@@ -13,6 +13,7 @@ name = "fastvibe-server"
 path = "src/main.rs"
 
 [dependencies]
+fv-update = { path = "../fv-update" }
 reqwest = { version = "0.13", features = ["rustls", "json"] }
 fv-env = { path = "../fv-env" }
 fv-protocol = { path = "../fv-protocol" }

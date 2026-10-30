@@ -80,17 +80,33 @@ async fn a_large_picture_is_scaled_down_and_the_model_is_told() {
         .unwrap();
     let out = view(Some(dir.path()), "big.png", true).await;
     assert!(!out.is_error, "{}", out.content);
+    let (mime, img) = decode(&out);
     assert!(
-        out.content.contains("3200x2000") && out.content.contains("scaled down to 1568x980"),
+        out.content.contains("3200x2000")
+            && out
+                .content
+                .contains(&format!("scaled down to {}x{}", img.width(), img.height())),
         "{}",
         out.content
     );
-    let (mime, img) = decode(&out);
     assert_eq!(
         mime, "image/jpeg",
         "no transparency to keep, so a lighter format"
     );
-    assert_eq!((img.width(), img.height()), (1568, 980));
+    // Noisy images may need to shrink past the display limit to fit the transport budget.
+    assert!(img.width() > 0 && img.width() <= 1568);
+    assert!(img.height() > 0 && img.height() <= 1568);
+    assert!((i64::from(img.width()) * 2000 - i64::from(img.height()) * 3200).abs() <= 3200);
+    let ImageSource::Base64 { data } = &out.images[0].source else {
+        unreachable!()
+    };
+    assert!(
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap()
+            .len()
+            <= 512 * 1024
+    );
 }
 
 #[tokio::test]

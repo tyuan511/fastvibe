@@ -12,9 +12,12 @@ import {
 } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const nativeManifest = join(root, "native", "Cargo.toml");
+const version = readFileSync(nativeManifest, "utf8").match(/\[workspace\.package\][\s\S]*?version\s*=\s*"([^"]+)"/)?.[1];
+if (!version) throw new Error("native workspace version is missing");
 
 function option(name, fallback) {
   const index = process.argv.indexOf(`--${name}`);
@@ -76,7 +79,7 @@ function collectFiles(source, relativeRoot) {
 }
 
 if (!process.argv.includes("--no-build")) {
-  const args = ["build", "--manifest-path", nativeManifest, "-p", "fv-server", "-p", "fv-gui"];
+  const args = ["build", "--locked", "--manifest-path", nativeManifest, "-p", "fv-server", "-p", "fv-gui"];
   if (profile === "release") args.push("--release");
   if (target) args.push("--target", target);
   const result = spawnSync("cargo", args, { cwd: root, stdio: "inherit" });
@@ -127,6 +130,7 @@ if (bundle) {
 
 const manifest = {
   schema: 1,
+  version,
   layout: bundle ? "bundle" : "flat",
   platform,
   arch,

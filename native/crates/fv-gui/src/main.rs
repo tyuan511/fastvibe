@@ -109,6 +109,11 @@ fn parse_args() -> Args {
 }
 
 fn main() {
+    // A CLI-only packaging check: exit before GPUI or any application window starts.
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("FastVibe Native {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let args = parse_args();
     gpui_kit::application()
         .with_assets(fv_gui::assets::Assets)

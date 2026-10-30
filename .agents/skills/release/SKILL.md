@@ -225,6 +225,43 @@ workflow 读的是 **tag 上的**那个文件，所以在 `main` 上补一次提
 下一次重跑同一条 workflow 会重新使用 tag 上的旧正文。已发布版本的修订保存在 `main`，
 补译链接也指向 `main`；不要为文案修改重打已发布 tag。
 
+## 原生测试版（`native-vX.Y.Z`，macOS arm64）
+
+这一通道与 Electron 独立：版本唯一来源是 `native/Cargo.toml` 的
+`workspace.package.version`，不是 `package.json`。保持 Cargo.lock 中所有 workspace 包的版本
+同步，提交前运行 `cargo check --manifest-path native/Cargo.toml --workspace`，不要手改依赖版本。
+只推 `native-v<原生版本>`，不推 Electron 的 `v*` 标签。两份说明仍放在
+`docs/release/native-vX.Y.Z.md` / `native-vX.Y.Z_zh-CN.md`，顶部用对应 native tag 双向切换语言，
+并登记在 `docs/release/README.md`。说明仅覆盖原生版。
+
+- `native-bundles.yml` 在 PR / main / gpui 跑测试、格式检查和 clippy，再构建 Apple Silicon 包；
+  手动 dispatch 只构建 CI artifact，不发布；推 native tag 才发布。
+- 每次发布必须保持 `prerelease: true` 和 `make_latest: false`（包括最终公开步骤），不得把
+  native 预览转成正式 Release。Electron 的 `allowPrerelease = false` 因而跳过它。
+- 先上传全部资产进 draft，再公开；不得上传任何 `latest*.yml`。
+- 草稿的 API 操作用上传步骤返回的 release ID（tag 端点可能读不到草稿）；最终 PATCH 必须显式
+  保留 `prerelease=true`、`make_latest=false`，并且只清除 `draft`。
+- 下载包是 `FastVibe-Native-<version>-mac-arm64.zip`，附 `.sha256`；GitHub API 资产必须提供
+  `sha256:` digest，`fv-update` 使用它校验完整下载后才解压。打包时用同一个 Rust 验证器检查归档。
+- `FastVibe Native.app` / `dev.fastvibe.native` / `FastVibeNative` 数据目录与 Electron 并存。
+  CI 复用 Electron 的五项 `APPLE_*` secrets：临时钥匙串导入个人 Developer ID，只给 native app / server
+  开启 Hardened Runtime + 可信时间戳，保持 OfficeCLI 上游签名及原始哈希，不做 deep-sign。
+- 可信分支 push 和 native tag 的 CI 必须公证成功；缺凭据、签名失败、Apple 非 Accepted、stapler 或
+  Gatekeeper 验证失败都阻断产出/发布。PR 不提供私钥，仅产 ad-hoc artifact；手动 dispatch 默认公证，
+  可显式将 `notarize` 关掉，只产 ad-hoc CI artifact，不发布（即使选择的是 tag）。
+- `notarytool submit --wait` 后保留状态和 Apple log，staple / validate `.app` 并做 `spctl --assess`；
+  最后重新打 zip、跑更新器归档验证、计算 SHA256。不要先 hash 后 staple，也不要把提交用 zip 上传为资产。
+  CI 的 always 步骤上传公证诊断并清理临时私钥/证书/钥匙串、恢复原钥匙串搜索列表。
+- 本地可用 `pnpm native:dist:mac` 打 ad-hoc native 测试包；追加 `--sign` 使用个人 Developer ID，
+  `--notarize` 还要求 `APPLE_API_KEY` 私钥路径、`APPLE_API_KEY_ID` 和 `APPLE_API_ISSUER`。
+  上文不跑 `pnpm dist` 的约束针对 Electron。
+  验证使用脚本 / CLI，不启动 GUI。原生关于页提供检查更新、下载校验、重启并更新。
+- 后台服务可能仍在运行旧版回合，更新不终止它；新应用按既有 `connect_current` 规则在空闲时
+  换服务，繁忙时保留旧服务并显示版本不匹配提示。
+
+完善 CI 或本地打包测试不等于授权推送或发布。只有用户明确要求发布才提交并推 native tag，
+然后等待该 workflow 并确认 Release 的 `isPrerelease: true`、`isDraft: false` 以及资产齐全。
+
 ## 手机 App（`app-vX.Y.Z`）
 
 App 的 note 和桌面端同一个规则：先写进 `docs/release/app-vX.Y.Z.md` 和

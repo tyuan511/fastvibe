@@ -4,8 +4,7 @@ use super::{
     Workspace,
     personalization::{outline_sm, primary_button, select_trigger},
     settings::{
-        Section, card, checkbox, dialog_card, dialog_head, menu_item, outline_button, popover,
-        switch,
+        Section, checkbox, dialog_card, dialog_head, menu_item, outline_button, popover, switch,
     },
 };
 use crate::ui::px;
