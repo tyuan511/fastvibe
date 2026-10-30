@@ -41,7 +41,7 @@
 - [x] 数据：压缩窗口自适应；代码与自动化验收通过。
 - [x] 数据：其他 Agent 导入；Claude Code、pi、Codex、OpenCode 与 zcode 的扫描、预览和“导入为新对话”已接入 `fv-import` 与 `import/scan|read|commit`，并用源记录稳定键做用量去重；历史导入来源已持久化到 `Thread.source` 并显示在侧边栏，六个格式/缺失源回归用例通过。
 - [x] 外围：i18n 已收口（第四十七至五十四批）；Dock 角标、保持唤醒、自动归档和后台回合通知已接通，见第三十四至三十七批。
-- [ ] 交付：macOS arm64 测试包与独立更新已接通；Developer ID 签名及 CI 公证流程已接通，Apple 实际公证结果、真实线上升级、Windows/Linux 和切换前的全范围验收仍待确认。OfficeCLI 与原生 office 技能已随 macOS 测试包分发，资源哈希和二进制重签后的包校验已接通。
+- [ ] 交付：macOS arm64 测试包与独立更新已接通；Developer ID 签名、Apple 公证、票据和 Gatekeeper 已通过真实 CI 与下载复核；真实线上升级、Windows/Linux 和切换前的全范围验收仍待确认。OfficeCLI 与原生 office 技能已随 macOS 测试包分发，资源哈希和二进制重签后的包校验已接通。
 - [x] 对齐：标题栏状态（第五十一至五十三批）、工具详情、菜单样式（第五十批）；进度文档已更新。
 - [x] 转写：滚动吸顶的用户提示词（turn-scoped sticky，含玻璃浮层色近似）；纯函数、无头 GPUI 与截图验收见第五十六批。
 - [ ] 最后实施：旧 Electron 完整数据导入，包括供应商/API Key、设置、会话、用量账本与缺少来源标识的历史副本；不提前作为其它功能的前置依赖。
@@ -935,7 +935,7 @@ Electron 版滚动转写时把最近一条滚出视口的用户提示词 pin 在
 - 关于页支持检查 native 版本、下载并验证 GitHub SHA256、解压后校验身份/版本/架构，以及退出后替换应用并重启；临时夹具覆盖替换失败回滚。后台服务从启动到监听复用同一组退出信号，修复立即重启时丢信号的竞态。
 - 本地验证：Node 全量 1,995 项通过；native workspace 828 项通过、2 个子进程夹具按原设计忽略，文档测试完成；发布/打包定向测试 14 项通过；workspace clippy、格式、actionlint 和 diff 检查通过。
 - 实际 release 包通过二进制版本/arm64 架构检查、严格签名、39 项资源哈希、更新器归档验证和隔离数据目录下的服务协议冒烟测试（initialize / thread/list）。本地命令为 `pnpm native:dist:mac`。
-- 未使用 Computer Use，未启动 GUI；尚未推送或发布。首次 GUI 启动和公开两个 native 预发布版本后的「设置 → 关于 → 下载更新 → 重启并更新」仍需人工验收。当前包未做 Developer ID 签名或公证，不能据此声称完成了正式签名交付。
+- 本节为最初本地 ad-hoc 包的验证记录，真实签名/公证 CI 验收见末节。全程未使用 Computer Use，未启动 GUI；首次 GUI 启动和公开两个 native 预发布版本后的「设置 → 关于 → 下载更新 → 重启并更新」仍需人工验收。
 
 
 ## native CI 的 Developer ID 签名与公证（2026-10-30）
@@ -945,4 +945,20 @@ Electron 版滚动转写时把最近一条滚出视口的用户提示词 pin 在
 - 公证必须返回 Accepted，并保存提交状态与 Apple 日志；随后 staple / validate app、严格签名和 Gatekeeper 检查，重新生成 zip，再验证更新器归档并计算 SHA256。
 - 临时 P8 / P12 使用私有权限；always 步骤清理证书/私钥/钥匙串并恢复搜索列表，失败时保留公证诊断 artifact。
 - 已用本机个人 Developer ID 实际签名 arm64 包，验证 app/server 的 runtime、时间戳和证书身份，严格签名、39 项资源哈希、更新器归档和包内 server 协议冒烟均通过。21 项定向测试（含公证拒绝/失败、票据/Gatekeeper 拒绝和密钥清理夹具）、actionlint、脚本语法和 diff 检查通过。
-- 未启动 GUI，未推送 CI 或公开 Release；本地未提交 Apple 公证。因此实际 Apple Accepted / staple / Gatekeeper 的成功结果仍待带 secrets 的 CI 运行确认，不能把已通过的签名验证说成已公证。
+- 上述为接入 CI 时的本地验证记录；后续真实 CI 与下载包复核已通过，详见末节。全程未启动 GUI，尚未公开 Release。
+
+
+## native 签名、公证 CI 实际验收（2026-10-30）
+
+代码提交 `84cb8d1b86b717959ee6728eee15ffd66c8c4b26` 已推送 `gpui`，
+[Native macOS preview #41032307475](https://github.com/tyuan511/fastvibe/actions/runs/41032307475)
+完整通过，未创建发布标签或公开 Release。
+
+- 云端 21 项发布/签名定向测试、828 项 Rust 测试、格式与 Clippy 全部通过；2 个子进程夹具按原设计忽略。
+- arm64 release 二进制构建、证书导入、Developer ID + Hardened Runtime + 可信时间戳签名通过。
+- Apple 公证提交 `e45d0ad0-ff33-4f1e-9798-2e4368fcc0af` 返回 `Accepted`、`Ready for distribution`，`statusCode: 0`、`issues: null`。
+- `.app` staple / validate、严格签名、Gatekeeper、更新器归档、包内 server 的 initialize / thread/list、产物上传以及临时凭据清理均成功。发布 job 按分支运行规则跳过。
+- 已取回 CI zip 并在本机重新验证 SHA256、严格签名、stapler、39 项资源哈希；Gatekeeper 返回 `accepted`、`source=Notarized Developer ID`。没有启动 GUI 或使用 Computer Use。
+- CI artifact 为 `fastvibe-native-mac-arm64`；文件 `FastVibe-Native-0.1.0-mac-arm64.zip`，SHA256 为 `163b5d9cf4cb5474b03dacb3683a3c334d12d07e3b1d2ae99433c246d0d6845e`。Apple 原始状态与日志保存在同一 run 的 `fastvibe-native-notarization-mac-arm64` artifact。
+
+首次 GUI 启动、真实线上跨版本升级和其它平台仍保留为后续验收，不将本轮静态/协议验证描述成 GUI 交互验收。
