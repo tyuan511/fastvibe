@@ -920,7 +920,14 @@ async fn a_reordered_queue_is_sent_in_its_new_order_and_stored_that_way() {
     let order = vec![ids[2].clone(), ids[0].clone(), ids[1].clone()];
     c.call::<TurnQueueReorder>(QueueReorderParams {
         thread_id: thread.clone(),
-        item_ids: order.clone(),
+        // Duplicate and stale ids must have the same first-occurrence semantics in memory
+        // and on disk. Leave b unnamed to exercise preservation of the remaining queue.
+        item_ids: vec![
+            ids[2].clone(),
+            ids[0].clone(),
+            ids[2].clone(),
+            "gone".into(),
+        ],
     })
     .await
     .unwrap();

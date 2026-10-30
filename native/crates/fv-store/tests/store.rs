@@ -333,6 +333,10 @@ fn providers_keep_their_order_and_their_place_when_edited() {
     db.reorder_providers(&["c".into(), "ghost".into()]).unwrap();
     assert_eq!(ids(&db), ["c", "a", "b"]);
 
+    db.reorder_providers(&["c".into(), "a".into(), "c".into(), "ghost".into()])
+        .unwrap();
+    assert_eq!(ids(&db), ["c", "a", "b"], "first occurrence wins");
+
     assert!(db.delete_provider("a").unwrap());
     assert!(!db.delete_provider("a").unwrap());
     assert_eq!(ids(&db), ["c", "b"]);
@@ -636,6 +640,13 @@ fn reordering_writes_the_whole_order_and_keeps_unnamed_prompts() {
     db.reorder_queue("a", &["ghost".into(), "two".into()])
         .unwrap();
     assert_eq!(order(&db), ["two", "three", "one"]);
+
+    db.reorder_queue("a", &["three".into(), "one".into(), "three".into()])
+        .unwrap();
+    assert_eq!(order(&db), ["three", "one", "two"]);
+    drop(db);
+    let reopened = Db::open(&dir.path().join("queue.db")).unwrap();
+    assert_eq!(order(&reopened), ["three", "one", "two"]);
 }
 
 /// Editing a waiting prompt changes its words and nothing else — not its id, not its place.

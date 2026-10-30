@@ -292,13 +292,13 @@ impl Db {
     pub fn reorder_providers(&self, ids: &[String]) -> Result<(), StoreError> {
         let current: Vec<String> = self.list_providers()?.into_iter().map(|p| p.id).collect();
         let current_ids: HashSet<&str> = current.iter().map(String::as_str).collect();
+        let mut named = HashSet::new();
         let mut order: Vec<&String> = ids
             .iter()
-            .filter(|i| current_ids.contains(i.as_str()))
+            .filter(|i| current_ids.contains(i.as_str()) && named.insert(i.as_str()))
             .collect();
-        let mut named: HashSet<String> = order.iter().map(|id| (*id).clone()).collect();
         for id in &current {
-            if named.insert(id.clone()) {
+            if named.insert(id.as_str()) {
                 order.push(id);
             }
         }
@@ -448,14 +448,13 @@ impl Db {
         drop(stmt);
         // Named ids first (skipping ones that are no longer queued), then the rest untouched.
         let current_ids: HashSet<&str> = current.iter().map(String::as_str).collect();
-        let mut order: Vec<String> = ids
+        let mut named = HashSet::new();
+        let mut order: Vec<&String> = ids
             .iter()
-            .filter(|id| current_ids.contains(id.as_str()))
-            .cloned()
+            .filter(|id| current_ids.contains(id.as_str()) && named.insert(id.as_str()))
             .collect();
-        let mut named: HashSet<String> = order.iter().cloned().collect();
-        for id in current {
-            if named.insert(id.clone()) {
+        for id in &current {
+            if named.insert(id.as_str()) {
                 order.push(id);
             }
         }

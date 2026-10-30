@@ -212,16 +212,11 @@ impl ToolRegistry {
     /// (prompt caches).
     pub fn specs_for(&self, loaded: &LoadedTools) -> Vec<ToolSpec> {
         self.tools
-            .values()
-            .filter_map(|t| {
-                if !t.enabled(self) {
-                    return None;
-                }
-                // Build the schema once. Tool specs can contain large JSON schemas, and the old
-                // filter called `spec()` once to check deferred loading and again to collect it.
-                let spec = t.spec();
-                (!t.deferred() || loaded.contains(&spec.name)).then_some(spec)
-            })
+            .iter()
+            // The registry already holds the name captured at registration. Check it before
+            // constructing potentially large schemas for deferred tools.
+            .filter(|(name, t)| t.enabled(self) && (!t.deferred() || loaded.contains(name)))
+            .map(|(_, t)| t.spec())
             .collect()
     }
 

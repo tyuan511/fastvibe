@@ -282,7 +282,7 @@ pub fn estimate_tokens(messages: &[Message]) -> u64 {
     bytes.div_ceil(4)
 }
 
-/// Estimate the encoded size of a JSON value without allocating its serialized form. Tool
+/// Count the encoded size of a JSON value without allocating its serialized form. Tool
 /// arguments are often large and this function runs repeatedly while deciding whether to compact
 /// a turn, so `Value::to_string()` here would otherwise copy every argument on every pass.
 fn estimate_json_bytes(value: &Value) -> usize {
@@ -291,7 +291,7 @@ fn estimate_json_bytes(value: &Value) -> usize {
         Value::Bool(true) => 4,
         Value::Bool(false) => 5,
         Value::Number(number) => number.to_string().len(),
-        Value::String(text) => text.len() + 2,
+        Value::String(text) => json_string_bytes(text),
         Value::Array(values) => {
             2 + values.iter().map(estimate_json_bytes).sum::<usize>()
                 + values.len().saturating_sub(1)
@@ -299,11 +299,24 @@ fn estimate_json_bytes(value: &Value) -> usize {
         Value::Object(values) => {
             2 + values
                 .iter()
-                .map(|(key, value)| key.len() + 3 + estimate_json_bytes(value))
+                .map(|(key, value)| json_string_bytes(key) + 1 + estimate_json_bytes(value))
                 .sum::<usize>()
                 + values.len().saturating_sub(1)
         }
     }
+}
+
+fn json_string_bytes(text: &str) -> usize {
+    // Match serde_json's compact formatter: UTF-8 is retained, quotes/backslashes and the
+    // five short control escapes take two bytes; other ASCII controls use six (\u00XX).
+    2 + text
+        .bytes()
+        .map(|b| match b {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 2,
+            0..=0x1f => 6,
+            _ => 1,
+        })
+        .sum::<usize>()
 }
 
 /// One choice offered with a question.
@@ -432,6 +445,20 @@ mod tests {
         assert!(text.contains("bytes omitted"));
         // Cut on a character boundary: this would have panicked otherwise.
         assert!(text.is_char_boundary(text.len()));
+    }
+
+    #[test]
+    fn json_size_matches_serialization_including_escaped_keys_and_values() {
+        let controls: String = (0..=31).map(char::from).collect();
+        let values = [
+            serde_json::json!({"\"\\\n": [controls, "中文😀", "\"\\/\t\r\n", null, true, false, -123, 1.25]}),
+            serde_json::json!([]),
+            serde_json::json!({}),
+            serde_json::json!("\n".repeat(100_000)),
+        ];
+        for value in values {
+            assert_eq!(estimate_json_bytes(&value), value.to_string().len());
+        }
     }
 
     #[test]

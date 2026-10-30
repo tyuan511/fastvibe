@@ -15,6 +15,71 @@ use tokio_util::sync::CancellationToken;
 
 struct Hidden;
 
+#[test]
+fn unloaded_and_disabled_tools_do_not_build_schemas() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counted {
+        name: &'static str,
+        deferred: bool,
+        enabled: bool,
+        builds: Arc<AtomicUsize>,
+    }
+    impl Tool for Counted {
+        fn spec(&self) -> ToolSpec {
+            self.builds.fetch_add(1, Ordering::Relaxed);
+            ToolSpec {
+                name: self.name.into(),
+                description: String::new(),
+                schema: json!({}),
+            }
+        }
+        fn deferred(&self) -> bool {
+            self.deferred
+        }
+        fn enabled(&self, _: &ToolRegistry) -> bool {
+            self.enabled
+        }
+        fn call(&self, _: ToolCtx, _: Value) -> BoxFuture<'static, ToolOutput> {
+            Box::pin(async { ToolOutput::ok("") })
+        }
+    }
+    let visible = Arc::new(AtomicUsize::new(0));
+    let hidden = Arc::new(AtomicUsize::new(0));
+    let disabled = Arc::new(AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    for (name, deferred, enabled, builds) in [
+        ("visible", false, true, visible.clone()),
+        ("hidden", true, true, hidden.clone()),
+        ("disabled", true, false, disabled.clone()),
+    ] {
+        registry.register(Counted {
+            name,
+            deferred,
+            enabled,
+            builds,
+        });
+    }
+    // Registration needs each tool's name once; measure only request construction.
+    for counter in [&visible, &hidden, &disabled] {
+        counter.store(0, Ordering::Relaxed);
+    }
+    let loaded = LoadedTools::default();
+    assert_eq!(registry.specs_for(&loaded).len(), 1);
+    assert_eq!(visible.load(Ordering::Relaxed), 1);
+    assert_eq!(hidden.load(Ordering::Relaxed), 0);
+    assert_eq!(disabled.load(Ordering::Relaxed), 0);
+    loaded.load(["hidden".into(), "disabled".into()]);
+    let names: Vec<_> = registry
+        .specs_for(&loaded)
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(names, ["hidden", "visible"]);
+    assert_eq!(hidden.load(Ordering::Relaxed), 1);
+    assert_eq!(disabled.load(Ordering::Relaxed), 0);
+}
+
 impl Tool for Hidden {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
