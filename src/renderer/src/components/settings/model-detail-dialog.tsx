@@ -196,7 +196,7 @@ export function ModelDetailDialog({
                 value={name}
                 disabled={!editable}
                 placeholder={model.id}
-                className="h-8 text-sm"
+                className="h-9 text-sm"
                 onChange={(event) => setName(event.target.value)}
               />
             </Row>
@@ -234,7 +234,7 @@ export function ModelDetailDialog({
                   value={context}
                   disabled={!editable}
                   inputMode="numeric"
-                  className="h-8 text-sm tabular-nums"
+                  className="h-9 text-sm tabular-nums"
                   onChange={(event) => setContext(event.target.value)}
                 />
               </Row>
@@ -243,7 +243,7 @@ export function ModelDetailDialog({
                   value={output}
                   disabled={!editable}
                   inputMode="numeric"
-                  className="h-8 text-sm tabular-nums"
+                  className="h-9 text-sm tabular-nums"
                   onChange={(event) => setOutput(event.target.value)}
                 />
               </Row>

@@ -988,7 +988,7 @@ enum Guard {
 }
 
 fn unknown_tool(name: &str, registry: &ToolRegistry) -> String {
-    if registry.deferred_specs().iter().any(|t| t.name == name) {
+    if registry.is_deferred(name) {
         format!("Tool `{name}` is not loaded yet. Find it with tool_search first.")
     } else {
         format!("Unknown tool: {name}")

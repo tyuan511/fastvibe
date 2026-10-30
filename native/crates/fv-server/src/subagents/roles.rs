@@ -12,12 +12,52 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "request_user_input",
     "update_plan",
 ];
-fn defaults() -> Vec<SubagentRole> {
+
+/// Built-in roles are compiled into the binary, after codex's `core/src/agent/role.rs`
+/// (`mod built_in`): never stored in the database, never editable or deletable, always
+/// available for `spawn_agent`. A saved role with the same id and different content
+/// shadows one, so a user can still override the built-ins by name.
+fn built_ins() -> Vec<SubagentRole> {
     vec![
-        SubagentRole { id:"explorer".into(),name:"代码探索".into(),description:"Read-only investigation, code navigation and review.".into(),system_prompt:"Investigate the assigned question and report concrete findings with file references. Do not modify files or delegate work.".into(),model:None,thinking:None,read_only:true,tools:None },
-        SubagentRole { id:"worker".into(),name:"执行任务".into(),description:"Implement and verify a focused task in the shared workspace.".into(),system_prompt:"Complete the assigned task, verify the result and report changed files, checks and remaining issues. Other agents share this workspace; preserve their edits.".into(),model:None,thinking:None,read_only:false,tools:None },
+        SubagentRole {
+            id: "explorer".into(),
+            name: "代码探索".into(),
+            description: "Read-only investigation of the codebase. Use for specific, well-scoped questions; spawn several in parallel for independent questions and keep working while they run; trust their results instead of re-verifying; reuse an existing explorer for follow-ups rather than spawning a new one.".into(),
+            system_prompt: "Investigate the assigned question and report concrete findings with file references. Do not modify files or delegate work.".into(),
+            model: None,
+            thinking: None,
+            read_only: true,
+            tools: None,
+            builtin: true,
+        },
+        SubagentRole {
+            id: "worker".into(),
+            name: "执行任务".into(),
+            description: "Execution and production work: implementing a feature slice, fixing bugs or tests, or one independent chunk of a large refactor. Assign explicit file/module ownership per worker, tell each that others edit the same workspace, and never revert changes the worker did not make.".into(),
+            system_prompt: "Complete the assigned task, verify the result and report changed files, checks and remaining issues. Other agents share this workspace; preserve their edits.".into(),
+            model: None,
+            thinking: None,
+            read_only: false,
+            tools: None,
+            builtin: true,
+        },
     ]
 }
+
+/// True when a saved role is bit-for-bit the built-in definition. Installations seeded by
+/// the pre-builtin builds stored the defaults in the database; an unmodified copy is the
+/// built-in itself and must not render as a second, deletable row next to it.
+fn is_untouched_built_in(saved: &SubagentRole, builtin: &SubagentRole) -> bool {
+    saved.id == builtin.id
+        && saved.name == builtin.name
+        && saved.description == builtin.description
+        && saved.system_prompt == builtin.system_prompt
+        && saved.model == builtin.model
+        && saved.thinking == builtin.thinking
+        && saved.read_only == builtin.read_only
+        && saved.tools == builtin.tools
+}
+
 pub fn read(state: &ServerState) -> Result<Vec<SubagentRole>, ErrorObject> {
     state
         .store
@@ -26,7 +66,42 @@ pub fn read(state: &ServerState) -> Result<Vec<SubagentRole>, ErrorObject> {
         .map_err(internal)?
         .map(|s| serde_json::from_str(&s).map_err(internal))
         .transpose()
-        .map(|roles| roles.unwrap_or_else(defaults))
+        .map(|roles| roles.unwrap_or_default())
+}
+
+/// Saved roles first, then the built-ins an install has not overridden, mirroring codex's
+/// `resolve_role_config`: user-configured roles win by name, built-ins fill the rest.
+pub fn merged(state: &ServerState) -> Result<Vec<SubagentRole>, ErrorObject> {
+    let saved = read(state)?;
+    let mut kept: Vec<SubagentRole> = Vec::with_capacity(saved.len());
+    let mut shadowed: Vec<bool> = vec![false; saved.len()];
+    let mut trailing: Vec<SubagentRole> = Vec::with_capacity(2);
+    for builtin in built_ins() {
+        // A saved role with the same id overrides the built-in — unless it is an
+        // untouched legacy seed of it, which is the built-in itself and gets replaced.
+        let mut overridden = false;
+        for (index, role) in saved.iter().enumerate() {
+            if role.id == builtin.id {
+                if is_untouched_built_in(role, &builtin) {
+                    shadowed[index] = true;
+                } else {
+                    overridden = true;
+                }
+            }
+        }
+        if !overridden {
+            trailing.push(builtin);
+        }
+    }
+    // Saved roles lead, built-ins after — the order codex's spawn description uses, so
+    // an install's own roles lead the list the model and the settings page see.
+    for (index, role) in saved.into_iter().enumerate() {
+        if !shadowed[index] {
+            kept.push(role);
+        }
+    }
+    kept.extend(trailing);
+    Ok(kept)
 }
 fn registry(state: &Arc<ServerState>) -> ToolRegistry {
     let mut snapshot = state.mcp.snapshot(&state.agent.tools).tools;
@@ -47,7 +122,7 @@ pub fn list(state: &Arc<ServerState>) -> Result<SubagentRolesResponse, ErrorObje
         );
     }
     Ok(SubagentRolesResponse {
-        roles: read(state)?,
+        roles: merged(state)?,
         tools: tools.into_values().collect(),
     })
 }
@@ -105,28 +180,54 @@ pub fn upsert(
     state: &Arc<ServerState>,
     params: SubagentRoleUpsertParams,
 ) -> Result<SubagentRolesResponse, ErrorObject> {
-    validate(state, &params.role)?;
+    // Only the compiled-in definitions are built-in; a client cannot mark a saved role as one.
+    let mut role = params.role;
+    role.builtin = false;
+    validate(state, &role)?;
     {
         let _gate = state.subagents_lock.lock().unwrap();
         let mut roles = read(state)?;
-        let current = roles.iter().find(|r| r.id == params.role.id);
-        if current != params.expected.as_ref() {
-            return Err(invalid(
-                "This role changed elsewhere. Reload it before saving.",
-            ));
+        // The "current" definition a save is compared against: the saved role, or the built-in
+        // it would override — codex's user-configured roles override the compiled-in ones by
+        // name. A create (`expected: None`) may shadow a built-in but never a saved role;
+        // an edit must name the exact role the editor read, built-in or saved.
+        let saved_current = roles.iter().find(|r| r.id == role.id).cloned();
+        let built_in = built_ins().into_iter().find(|r| r.id == role.id);
+        // `builtin` is server-owned, so it never participates in a comparison: an editor
+        // that read a built-in holds `builtin: true` while the override it saved stores false.
+        let strip = |mut role: SubagentRole| {
+            role.builtin = false;
+            role
+        };
+        match params.expected {
+            None => {
+                if saved_current.is_some() {
+                    return Err(invalid(
+                        "A role with this id is already saved. Reload it before saving.",
+                    ));
+                }
+            }
+            Some(ref expected) => {
+                if saved_current.map(strip).or(built_in.map(strip)) != Some(strip(expected.clone()))
+                {
+                    return Err(invalid(
+                        "This role changed elsewhere. Reload it before saving.",
+                    ));
+                }
+            }
         }
         if let Some(old) = params.expected.as_ref()
-            && old.id != params.role.id
+            && old.id != role.id
         {
             return Err(invalid("A saved role id cannot be changed."));
         }
-        if let Some(index) = roles.iter().position(|r| r.id == params.role.id) {
-            roles[index] = params.role;
+        if let Some(index) = roles.iter().position(|r| r.id == role.id) {
+            roles[index] = role;
         } else {
             if roles.len() >= 32 {
                 return Err(invalid("At most 32 roles can be saved."));
             }
-            roles.push(params.role);
+            roles.push(role);
         }
         state
             .store
@@ -144,12 +245,22 @@ pub fn delete(
     {
         let _gate = state.subagents_lock.lock().unwrap();
         let mut roles = read(state)?;
-        if !roles.iter().any(|r| r == &params.expected) {
+        // `builtin` is server-owned; it never decides whether a delete still matches.
+        let expected = {
+            let mut expected = params.expected;
+            expected.builtin = false;
+            expected
+        };
+        if !roles.iter().any(|r| {
+            let mut r = r.clone();
+            r.builtin = false;
+            r == expected
+        }) {
             return Err(invalid(
                 "This role changed elsewhere. Reload it before deleting.",
             ));
         }
-        roles.retain(|r| r.id != params.expected.id);
+        roles.retain(|r| r.id != expected.id);
         state
             .store
             .db
@@ -169,10 +280,14 @@ pub fn for_spawn(
     if name == "default" {
         return Ok(None);
     }
-    let role = read(state)?
+    let role = merged(state)?
         .into_iter()
         .find(|r| r.id == name)
-        .ok_or_else(|| invalid(format!("Unknown agent_type `{name}`. Choose a saved role.")))?;
+        .ok_or_else(|| {
+            invalid(format!(
+                "Unknown agent_type `{name}`. Choose a saved role or a built-in."
+            ))
+        })?;
     validate(state, &role)?;
     Ok(Some(role))
 }

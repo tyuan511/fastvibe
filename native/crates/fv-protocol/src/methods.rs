@@ -77,6 +77,8 @@ client_requests! {
     TurnEnqueue => "turn/enqueue": TurnEnqueueParams => QueueItem,
     TurnQueueRemove => "turn/queue/remove": QueueItemParams => Empty,
     TurnQueueSendNow => "turn/queue/sendNow": QueueItemParams => Empty,
+    TurnQueueReorder => "turn/queue/reorder": QueueReorderParams => Empty,
+    TurnQueueEdit => "turn/queue/edit": QueueEditParams => Empty,
     TurnQueueResume => "turn/queue/resume": ThreadIdParams => Empty,
     ThreadGoalSet => "thread/goal/set": GoalSetParams => Empty,
     ThreadGoalPause => "thread/goal/pause": ThreadIdParams => Empty,

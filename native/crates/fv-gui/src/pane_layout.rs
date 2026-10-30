@@ -73,10 +73,21 @@ pub struct Tab {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum TabKind {
-    File { path: String, file: File },
+    File {
+        path: String,
+        file: File,
+    },
+    /// An auxiliary conversation backed by an existing child thread.
+    Chat {
+        thread_id: String,
+    },
     Git,
-    Browser { url: String },
-    Terminal { session: Option<TerminalSession> },
+    Browser {
+        url: String,
+    },
+    Terminal {
+        session: Option<TerminalSession>,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

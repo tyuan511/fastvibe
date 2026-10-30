@@ -345,10 +345,11 @@ async fn yielded_cell_is_continued_through_the_public_engine_without_duplicate_o
 struct ForkModel;
 impl Model for ForkModel {
     fn stream(&self, r: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>> {
+        // The spawn tool prefixes the child's canonical task name onto its opening message.
         let child = r
             .messages
             .iter()
-            .any(|m| matches!(m,fv_core::Message::User{text}if text=="child task"));
+            .any(|m| matches!(m,fv_core::Message::User{text}if text.ends_with("child task")));
         let reply = if child {
             Reply::new().text("child inherited context").done()
         } else if r
@@ -358,7 +359,7 @@ impl Model for ForkModel {
         {
             Reply::new().text("delegation finished").done()
         } else {
-            Reply::new().tool("script","code_mode",json!({"code":"const child=await tools.spawn_agent({message:'child task',fork_context:true});text(child.agent_id);text(await tools.wait_agent({targets:[child.agent_id],timeout_ms:3000}));"})).done()
+            Reply::new().tool("script","code_mode",json!({"code":"const child=await tools.spawn_agent({message:'child task',task_name:'inner',fork_turns:'all'});text(child.task_name);text(await tools.wait_agent({timeout_ms:3000}));"})).done()
         };
         ScriptedModel::new([reply]).stream(r)
     }
@@ -530,7 +531,7 @@ impl Model for ReadOnlyModel {
         let child = r
             .messages
             .iter()
-            .any(|m| matches!(m,fv_core::Message::User{text}if text=="inspect readonly"));
+            .any(|m| matches!(m,fv_core::Message::User{text}if text.ends_with("inspect readonly")));
         let last = r.messages.iter().rev().find_map(|m| match m {
             fv_core::Message::ToolResult { name, content, .. } => Some((name.as_str(), content)),
             _ => None,
@@ -549,16 +550,17 @@ impl Model for ReadOnlyModel {
                     .tool(
                         "spawn",
                         "spawn_agent",
-                        json!({"message":"inspect readonly","agent_type":"explorer"}),
+                        json!({"message":"inspect readonly","agent_type":"explorer","task_name":"scout"}),
                     )
                     .done(),
                 Some(("spawn_agent", out)) => {
                     let child: serde_json::Value = serde_json::from_str(out).unwrap();
+                    assert_eq!(child["task_name"], "/root/scout");
                     Reply::new()
                         .tool(
                             "wait-child",
                             "wait_agent",
-                            json!({"targets":[child["agent_id"]],"timeout_ms":3000}),
+                            json!({"timeout_ms":3000}),
                         )
                         .done()
                 }
@@ -614,7 +616,9 @@ async fn a_read_only_role_can_orchestrate_its_own_tools_without_acquiring_write_
         })
         .await
         .unwrap();
-    assert!(child.turns[0].items.iter().any(|i|matches!(i,Item::ToolCall{name,output:Some(out),is_error:false,..}if name=="code_mode"&&out.contains("undefined\ntrue"))));
+    // With the codex fork default the transcript starts with the inherited prefix, so the
+    // code_mode call can sit in any turn of the child's history.
+    assert!(child.turns.iter().flat_map(|t| t.items.iter()).any(|i|matches!(i,Item::ToolCall{name,output:Some(out),is_error:false,..}if name=="code_mode"&&out.contains("undefined\ntrue"))));
     state.shutdown_schedules().await;
     server.abort();
 }

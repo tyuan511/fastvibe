@@ -41,7 +41,9 @@ impl Model for ForkModel {
         });
         let reply = match last_user {
             "remember data" => Reply::new().text("retained facts").done(),
-            "child task" | "child followup" => {
+            // The spawn tool prefixes the child's canonical task name onto its opening
+            // message, and a finished child reports back with a FINAL_ANSWER message.
+            text if text.ends_with("child task") || text.ends_with("child followup") => {
                 assert!(request.system.contains("ROLE_SNAPSHOT_FIRST"));
                 assert!(!request.system.contains("ROLE_SNAPSHOT_SECOND"));
                 assert!(
@@ -80,22 +82,24 @@ impl Model for ForkModel {
                     .tool(
                         "spawn-ready",
                         "spawn_agent",
-                        json!({"message":"child task","fork_context":true,"agent_type":"worker"}),
+                        json!({"message":"child task","fork_turns":"all","agent_type":"worker","task_name":"forked"}),
                     )
                     .done(),
                 Some(("spawn_agent", output)) => {
                     let response: Value = serde_json::from_str(output).unwrap();
-                    assert!(response["agent_id"].is_string(), "{output}");
+                    assert_eq!(response["task_name"], "/root/forked", "{output}");
                     Reply::new()
                         .tool(
                             "wait-child",
                             "wait_agent",
-                            json!({"targets":[response["agent_id"]],"timeout_ms":3000}),
+                            json!({"timeout_ms":3000}),
                         )
                         .done()
                 }
                 Some(("wait_agent", output)) => {
-                    assert!(output.contains("fork complete"), "{output}");
+                    // v2 wait reports who updated, not the content: the forked child's
+                    // answer lives in its transcript.
+                    assert!(output.contains("/root/forked"), "{output}");
                     Reply::new()
                         .text("late parent answer")
                         .input_tokens(30)
@@ -103,6 +107,11 @@ impl Model for ForkModel {
                 }
                 _ => panic!("unexpected tool {tool:?}"),
             },
+            text if text.starts_with("Message Type: FINAL_ANSWER") => {
+                // The child's completion reaches the parent as its own message.
+                assert!(text.contains("fork complete"), "{text}");
+                Reply::new().text("parent saw the answer").done()
+            }
             _ => panic!("unexpected prompt {last_user}"),
         };
         ScriptedModel::new([reply]).stream(request)
@@ -294,14 +303,17 @@ async fn live_context_fork_keeps_its_role_and_usage_identity_through_edits_delet
             .input,
         40
     );
-    assert!(
-        client
-            .call::<SubagentRoleList>(Empty {})
-            .await
-            .unwrap()
-            .roles
-            .iter()
-            .all(|r| r.id != "worker")
-    );
+    // Deleting the override brings the built-in worker back; the override itself is gone.
+    let after_delete = client
+        .call::<SubagentRoleList>(Empty {})
+        .await
+        .unwrap()
+        .roles;
+    let worker = after_delete
+        .iter()
+        .find(|r| r.id == "worker")
+        .expect("the built-in worker returns after its override is deleted");
+    assert!(worker.builtin);
+    assert!(worker.system_prompt != "ROLE_SNAPSHOT_SECOND");
     server.abort();
 }

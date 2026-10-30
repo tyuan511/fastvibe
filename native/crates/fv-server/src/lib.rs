@@ -55,15 +55,18 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Captured once at process startup, never from a replacement executable on disk.
 ///
-/// The read starts at boot (`warm_build_fingerprint`), but the hashing runs in the
-/// background: a debug binary is over 100 MB, and hashing it inline kept the socket
-/// from binding until seconds into startup — past the daemon's start timeout whenever
-/// the machine was busy.
+/// Development launches receive `FASTVIBE_DEV_SERVER_ID` from `cargo dev`, which is a
+/// metadata-only identity. Direct and packaged launches retain the content hash.
 pub async fn build_fingerprint() -> Option<String> {
     use sha2::{Digest, Sha256};
     static STARTED_WITH: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
     STARTED_WITH
         .get_or_init(|| async {
+            if let Ok(identity) = std::env::var("FASTVIBE_DEV_SERVER_ID")
+                && !identity.is_empty()
+            {
+                return Some(identity);
+            }
             tokio::task::spawn_blocking(|| {
                 let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
                 Some(format!("{:x}", Sha256::digest(bytes)))
@@ -78,7 +81,7 @@ pub async fn build_fingerprint() -> Option<String> {
 
 /// Begins capturing [build_fingerprint] without waiting for it. Call once, at the top of
 /// the process: what matters is that the executable is read as this process started with
-/// it, not that the digest is ready before the first client.
+/// it, not that a packaged-build digest is ready before the first client.
 pub fn warm_build_fingerprint() {
     tokio::spawn(async {
         let _ = build_fingerprint().await;

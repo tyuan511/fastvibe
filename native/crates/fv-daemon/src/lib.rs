@@ -76,6 +76,21 @@ pub struct Daemon {
     server_bin: PathBuf,
 }
 
+/// `cargo dev` supplies a metadata-only identity so the GUI does not hash the whole debug
+/// executable a second time after the xtask has already built it. Packaged/direct launches keep
+/// the content hash below.
+fn built_identity(path: &Path) -> Result<String, std::io::Error> {
+    if let Ok(identity) = std::env::var("FASTVIBE_DEV_SERVER_ID") {
+        if !identity.is_empty() {
+            return Ok(identity);
+        }
+    }
+    let mut file = std::fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    std::io::copy(&mut file, &mut digest)?;
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 /// A connected, initialized client, and what is worth knowing about the server behind it.
 pub struct Connection {
     pub client: Client,
@@ -85,7 +100,7 @@ pub struct Connection {
     pub features: Vec<String>,
     /// The server is from a different build than this app; it should be restarted when idle.
     pub version_mismatch: bool,
-    /// Digest of the running executable, absent on servers built before this handshake field.
+    /// Identity of the running executable, absent on servers built before this handshake field.
     pub build_fingerprint: Option<String>,
     /// `None` means the running server is too old to report activity; restart conservatively.
     pub has_running_turns: Option<bool>,
@@ -266,14 +281,9 @@ impl Daemon {
     ) -> Result<Connection, DaemonError> {
         let mut connection = self.connect(client_name, client_version).await?;
         let binary = self.server_bin.clone();
-        let built = tokio::task::spawn_blocking(move || {
-            let mut file = std::fs::File::open(binary)?;
-            let mut digest = Sha256::new();
-            std::io::copy(&mut file, &mut digest)?;
-            Ok::<_, std::io::Error>(format!("{:x}", digest.finalize()))
-        })
-        .await
-        .map_err(|e| DaemonError::Rpc(e.to_string()))??;
+        let built = tokio::task::spawn_blocking(move || built_identity(&binary))
+            .await
+            .map_err(|e| DaemonError::Rpc(e.to_string()))??;
         let current = |connection: &Connection| {
             connection.build_fingerprint.as_deref() == Some(&built)
                 && required_features

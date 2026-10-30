@@ -14,6 +14,8 @@ pub struct Fixture {
     pub suggestion: Option<String>,
     /// A draft already in the composer.
     pub draft: Option<String>,
+    /// A queued prompt opened for editing in the tray, so its field can be looked at.
+    pub queue_edit: Option<String>,
     /// Open the terminal tab, for the capture fixture.
     pub terminal: bool,
     pub models: Vec<ModelEntry>,
@@ -244,6 +246,7 @@ pub fn theme_conversation() -> Fixture {
         rewound_notice: None,
         suggestion: None,
         draft: None,
+        queue_edit: None,
         terminal: false,
         // Two providers, so a capture of the model menu shows what it looks like grouped: one row
         // each, with the models behind a hover.
@@ -303,6 +306,13 @@ pub fn queued() -> Fixture {
             pause: None,
         };
     }
+    fixture
+}
+
+/// The same queue with its first row open for editing, which is what 编辑 turns a row into.
+pub fn queued_editing() -> Fixture {
+    let mut fixture = queued();
+    fixture.queue_edit = Some("q1".into());
     fixture
 }
 

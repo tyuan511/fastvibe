@@ -175,6 +175,35 @@ pub fn ring(fraction: f32, size: f32, track: Hsla, color: Hsla) -> impl IntoElem
     )
 }
 
+/// The `backdrop-filter` half of `.overlay-surface` under glass (`index.css`):
+/// `blur(28px) saturate(1.8)` on whatever is already painted behind this element, so the
+/// 84/90% fill on top of it stays legible — the blurred copy replaces the page underneath,
+/// exactly as a CSS backdrop-filter presents the filtered backdrop in place of the original.
+///
+/// Blur is linear, so snapshotting *after* the fill is equivalent to snapshotting before it:
+/// `blur(fill + page) = fill + blur(page)` for a uniform fill. Add this as the element's
+/// first child (a div paints its background before its children) and keep the fill at
+/// Electron's `--glass-overlay` alpha — without the blur, the unblurred page shows through.
+pub fn backdrop(radius: f32, blur: f32, saturation: f32) -> Div {
+    // The painter takes pixels, not the rems this module's `px` returns.
+    let corners = Corners {
+        top_left: gpui_kit::px(radius),
+        top_right: gpui_kit::px(radius),
+        bottom_right: gpui_kit::px(radius),
+        bottom_left: gpui_kit::px(radius),
+    };
+    div().absolute().inset_0().child(
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                window.paint_backdrop(bounds, corners, gpui_kit::px(blur), saturation);
+            },
+        )
+        // A canvas without a size paints nothing: zero bounds, zero backdrop.
+        .size_full(),
+    )
+}
+
 /// Liquid Glass's specular rim (`index.css`, `--glass-rim`): a 1px ring that is bright where the
 /// light would catch the edge (top left) and fades round to the far corner. CSS cuts it out of
 /// a gradient box with a mask; here the ring is two gradient strokes, one for each half of the

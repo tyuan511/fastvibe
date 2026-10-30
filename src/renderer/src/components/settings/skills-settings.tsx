@@ -133,7 +133,7 @@ export function SkillsSettings(): JSX.Element {
       <div className="flex items-center justify-between gap-3">
         <span className="text-sm font-medium">{t("skills.installed", { count: skills.length })}</span>
         <div className="flex items-center gap-1.5">
-          <InputGroup className="h-8 w-56 rounded-full">
+          <InputGroup className="h-9 w-56 rounded-full">
             <InputGroupAddon>
               <HugeiconsIcon strokeWidth={2} icon={Search01Icon} />
             </InputGroupAddon>

@@ -10,28 +10,58 @@ fn state(model: Arc<dyn fv_agent::Model>) -> (tempfile::TempDir, Arc<ServerState
     (dir, state, root.id)
 }
 fn task(message: &str) -> SpawnArgs {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let task_name = format!(
+        "task_{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     SpawnArgs {
         message: message.into(),
-        model: None,
-        reasoning_effort: None,
+        task_name,
+        // The codex default is `all`; unit tests drive the engine directly, so they say
+        // `none` explicitly rather than paying a parent-history fork each time.
+        fork_turns: Some("none".into()),
         ..Default::default()
     }
 }
-async fn done(state: &ServerState, parent: &str, id: &str) -> Value {
-    tokio::time::timeout(
-        Duration::from_secs(3),
-        wait(
-            state,
-            parent,
-            WaitArgs {
-                targets: vec![id.into()],
-                timeout_ms: Some(2000),
-            },
-            &CancellationToken::new(),
-        ),
-    )
+
+#[test]
+fn fork_turns_follows_the_codex_default_of_all() {
+    let parse = |raw: Option<&str>| {
+        SpawnArgs {
+            fork_turns: raw.map(str::to_string),
+            ..Default::default()
+        }
+        .fork_context()
+        .unwrap()
+    };
+    assert!(parse(None));
+    assert!(parse(Some("")));
+    assert!(parse(Some("all")));
+    assert!(!parse(Some("none")));
+    assert!(
+        SpawnArgs {
+            fork_turns: Some("everything".into()),
+            ..Default::default()
+        }
+        .fork_context()
+        .is_err()
+    );
+}
+/// Wait until the child reaches a terminal status, then hand back its row.
+async fn done(state: &ServerState, id: &str) -> Subagent {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Ok(Some(agent)) = state.store.db.subagent(id) {
+                match agent.status {
+                    SubagentStatus::Running | SubagentStatus::Idle => {}
+                    _ => return agent,
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
     .await
-    .unwrap()
     .unwrap()
 }
 async fn settle(state: &ServerState, id: &str) {
@@ -57,31 +87,27 @@ async fn independent_history_persists_and_send_resumes_finished_child() {
     let child = spawn(&s, &root, task("first task"), &CancellationToken::new())
         .await
         .unwrap();
-    let result = done(&s, &root, &child.agent_id).await;
-    assert_eq!(result["status"][&child.agent_id]["result"], "child result");
+    let result = done(&s, &child.agent_id).await;
+    assert_eq!(result.result, "child result");
     assert_eq!(
         s.threads(false).unwrap().len(),
         1,
         "children have a separate catalog"
     );
     assert!(s.store.transcripts.read(&root).unwrap().messages.is_empty());
-    send(
+    followup(
         &s,
         &root,
-        SendArgs {
+        TargetedMessage {
             target: child.agent_id.clone(),
             message: "followup".into(),
-            interrupt: false,
         },
         &CancellationToken::new(),
     )
     .await
     .unwrap();
-    let result = done(&s, &root, &child.agent_id).await;
-    assert_eq!(
-        result["status"][&child.agent_id]["result"],
-        "followup result"
-    );
+    let result = done(&s, &child.agent_id).await;
+    assert_eq!(result.result, "followup result");
     let requests = model.requests();
     let conversation = |request: &fv_agent::ModelRequest| -> Vec<fv_core::Message> {
         request
@@ -93,11 +119,9 @@ async fn independent_history_persists_and_send_resumes_finished_child() {
             .cloned()
             .collect()
     };
-    assert_eq!(
-        conversation(&requests[0])[0],
-        fv_core::Message::User {
-            text: "first task".into()
-        }
+    assert!(
+        matches!(&conversation(&requests[0])[0], fv_core::Message::User{text}
+            if text.starts_with("You are the agent \"/root/task_") && text.ends_with("first task"))
     );
     assert!(
         requests[1]
@@ -139,7 +163,7 @@ async fn limits_are_atomic_and_cross_parent_control_is_refused() {
     assert_ne!(a.is_ok(), b.is_ok());
     let child = a.or(b).unwrap();
     let other = s.create_thread(None, None, None, None).unwrap();
-    assert!(owned(&s, &other.id, &child.agent_id).is_err());
+    assert!(resolve(&s, &other.id, &child.agent_id).is_err());
     assert!(
         spawn(&s, &child.agent_id, task("too deep"), &token)
             .await
@@ -227,7 +251,6 @@ async fn wait_times_out_and_is_cancellable_without_stopping_child() {
         .await
         .unwrap();
     let args = || WaitArgs {
-        targets: vec![child.agent_id.clone()],
         timeout_ms: Some(0),
     };
     assert_eq!(
@@ -353,35 +376,31 @@ async fn a_finished_child_with_a_yielded_command_can_close_and_use_commands_afte
     )
     .await
     .unwrap();
-    let result = done(&s, &root, &child.agent_id).await;
-    assert_eq!(result["status"][&child.agent_id]["status"], "completed");
+    let result = done(&s, &child.agent_id).await;
+    assert_eq!(result.status, SubagentStatus::Completed);
     assert!(s.runtime(&child.agent_id).exec_sessions.has_running());
     close(&s, &child.agent_id).unwrap();
     settle(&s, &child.agent_id).await;
     resume(&s, &child.agent_id).unwrap();
-    send(
+    followup(
         &s,
         &root,
-        SendArgs {
+        TargetedMessage {
             target: child.agent_id.clone(),
             message: "new command".into(),
-            interrupt: false,
         },
         &CancellationToken::new(),
     )
     .await
     .unwrap();
-    let result = done(&s, &root, &child.agent_id).await;
-    assert_eq!(
-        result["status"][&child.agent_id]["result"],
-        "resumed successfully"
-    );
+    let result = done(&s, &child.agent_id).await;
+    assert_eq!(result.result, "resumed successfully");
     let loaded = s.store.transcripts.read(&child.agent_id).unwrap();
     assert!(loaded.messages.iter().any(|m|matches!(m,fv_core::Message::ToolResult{name,content,is_error:false,..} if name=="exec_command" && content.contains("resumed"))));
 }
 
 #[tokio::test]
-async fn interrupt_input_waits_for_old_turn_before_starting_a_new_one() {
+async fn interrupt_then_followup_starts_a_new_turn_once_the_old_one_settles() {
     let model = Arc::new(ScriptedModel::new([
         vec![Step::Hang],
         Reply::new().text("new task done").done(),
@@ -397,20 +416,29 @@ async fn interrupt_input_waits_for_old_turn_before_starting_a_new_one() {
     })
     .await
     .unwrap();
-    send(
+    interrupt(
         &s,
         &root,
-        SendArgs {
+        Target {
             target: child.agent_id.clone(),
-            message: "replacement".into(),
-            interrupt: true,
         },
         &CancellationToken::new(),
     )
     .await
     .unwrap();
-    let result = done(&s, &root, &child.agent_id).await;
-    assert_eq!(result["status"][&child.agent_id]["result"], "new task done");
+    followup(
+        &s,
+        &root,
+        TargetedMessage {
+            target: child.agent_id.clone(),
+            message: "replacement".into(),
+        },
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let result = done(&s, &child.agent_id).await;
+    assert_eq!(result.result, "new task done");
     assert_eq!(s.runtime(&child.agent_id).turns().len(), 2);
     assert!(
         matches!(model.requests()[1].messages.last(),Some(fv_core::Message::User{text}) if text=="replacement")
@@ -425,7 +453,7 @@ async fn disabled_or_depth_limited_spawning_is_not_offered_but_controls_stay_ava
     let child = spawn(&s, &root, task("child"), &CancellationToken::new())
         .await
         .unwrap();
-    done(&s, &root, &child.agent_id).await;
+    done(&s, &child.agent_id).await;
     let mut tools = ToolRegistry::new();
     register(&s, &child.agent_id, "test-turn", &mut tools);
     assert!(!tools.specs().iter().any(|s| s.name == "spawn_agent"));
@@ -440,7 +468,10 @@ async fn disabled_or_depth_limited_spawning_is_not_offered_but_controls_stay_ava
     let mut tools = ToolRegistry::new();
     register(&s, &root, "test-turn", &mut tools);
     assert!(!tools.specs().iter().any(|s| s.name == "spawn_agent"));
-    assert!(tools.specs().iter().any(|s| s.name == "close_agent"));
+    assert!(tools.specs().iter().any(|s| s.name == "followup_task"));
+    assert!(tools.specs().iter().any(|s| s.name == "interrupt_agent"));
+    assert!(!tools.specs().iter().any(|s| s.name == "send_input"));
+    assert!(!tools.specs().iter().any(|s| s.name == "close_agent"));
     assert!(
         spawn(&s, &root, task("disabled"), &CancellationToken::new())
             .await
@@ -496,6 +527,7 @@ fn role(id: &str) -> SubagentRole {
         thinking: None,
         read_only: false,
         tools: Some(vec!["view_image".into()]),
+        builtin: false,
     }
 }
 #[tokio::test]
@@ -529,7 +561,7 @@ async fn role_edits_are_cas_guarded_and_existing_children_keep_their_snapshot_af
     let child = spawn(&s, &root, args, &CancellationToken::new())
         .await
         .unwrap();
-    done(&s, &root, &child.agent_id).await;
+    done(&s, &child.agent_id).await;
     let mut next = first.clone();
     next.system_prompt = "snapshot v2".into();
     next.tools = Some(vec!["exec_command".into()]);
@@ -560,19 +592,18 @@ async fn role_edits_are_cas_guarded_and_existing_children_keep_their_snapshot_af
         )
         .is_err()
     );
-    send(
+    followup(
         &s,
         &root,
-        SendArgs {
+        TargetedMessage {
             target: child.agent_id.clone(),
             message: "second task".into(),
-            interrupt: false,
         },
         &CancellationToken::new(),
     )
     .await
     .unwrap();
-    done(&s, &root, &child.agent_id).await;
+    done(&s, &child.agent_id).await;
     assert!(model.requests()[1].system.contains("snapshot v1"));
     assert!(!model.requests()[1].system.contains("snapshot v2"));
     assert_eq!(
@@ -594,19 +625,18 @@ async fn role_edits_are_cas_guarded_and_existing_children_keep_their_snapshot_af
         )
         .unwrap(),
     );
-    send(
+    followup(
         &reloaded,
         &root,
-        SendArgs {
+        TargetedMessage {
             target: child.agent_id.clone(),
             message: "resume after restart".into(),
-            interrupt: false,
         },
         &CancellationToken::new(),
     )
     .await
     .unwrap();
-    done(&reloaded, &root, &child.agent_id).await;
+    done(&reloaded, &child.agent_id).await;
     assert_eq!(get(&reloaded, &child.agent_id).unwrap().role, Some(first));
     assert!(after.requests()[0].system.contains("snapshot v1"));
     assert_eq!(
@@ -636,7 +666,7 @@ async fn read_only_role_has_no_write_tools_and_cannot_escape_its_sandbox_or_dele
     let child = spawn(&s, &root, args, &CancellationToken::new())
         .await
         .unwrap();
-    done(&s, &root, &child.agent_id).await;
+    done(&s, &child.agent_id).await;
     assert!(!work.path().join("blocked.txt").exists());
     assert!(!work.path().join("escaped.txt").exists());
     assert!(model.requests()[0].system.contains("read-only sandbox"));
@@ -704,7 +734,7 @@ async fn delegation_never_widens_an_ancestors_tool_grant() {
     let child = spawn(&s, &parent.agent_id, args, &CancellationToken::new())
         .await
         .unwrap();
-    done(&s, &parent.agent_id, &child.agent_id).await;
+    done(&s, &child.agent_id).await;
     assert_eq!(
         model.requests()[1]
             .tools
@@ -813,7 +843,7 @@ async fn explicit_deferred_grants_work_without_search_and_do_not_expose_ungrante
     let child = spawn(&s, &root, args, &CancellationToken::new())
         .await
         .unwrap();
-    done(&s, &root, &child.agent_id).await;
+    done(&s, &child.agent_id).await;
     assert_eq!(
         model.requests()[0]
             .tools
@@ -894,5 +924,450 @@ async fn explicit_model_and_effort_override_role_then_role_overrides_parent() {
         // No provider request is sent: stop before the background worker gets its first poll.
         cancel.cancel();
         settle(&s, &child.agent_id).await;
+    }
+}
+
+#[test]
+fn built_in_roles_are_compiled_in_not_stored_and_survive_deleting_every_saved_role() {
+    let (_dir, s, _root) = state(Arc::new(ScriptedModel::default()));
+    // Nothing is persisted for built-ins: the settings key stays empty.
+    assert!(roles::read(&s).unwrap().is_empty());
+    let merged = roles::merged(&s).unwrap();
+    let ids: Vec<&str> = merged.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["explorer", "worker"]);
+    assert!(merged.iter().all(|r| r.builtin));
+    assert!(
+        merged
+            .iter()
+            .find(|r| r.id == "explorer")
+            .unwrap()
+            .read_only
+    );
+    // A legacy install seeded the old defaults into the database: an untouched copy is
+    // the built-in itself, so it is not listed twice beside it.
+    let legacy = serde_json::to_string(&merged).unwrap();
+    s.store
+        .db
+        .set_setting("subagent_roles_v1", Some(&legacy))
+        .unwrap();
+    let after_seed = roles::merged(&s).unwrap();
+    assert_eq!(after_seed.len(), 2);
+    assert!(after_seed.iter().all(|r| r.builtin));
+    // A delete naming a built-in is a no-op on the saved list: nothing matches, the
+    // built-in is still there afterwards.
+    for role in merged {
+        let _ = roles::delete(&s, SubagentRoleDeleteParams { expected: role });
+    }
+    assert_eq!(roles::merged(&s).unwrap().len(), 2);
+    s.store.db.set_setting("subagent_roles_v1", None).unwrap();
+    assert_eq!(roles::merged(&s).unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_saved_role_with_the_same_id_overrides_the_built_in_and_deleting_it_restores_the_builtin()
+{
+    let model = Arc::new(ScriptedModel::new([
+        Reply::new().text("override done").done(),
+        Reply::new().text("builtin done").done(),
+    ]));
+    let (_dir, s, root) = state(model.clone());
+    // Shadow the built-in "worker" with a custom definition, as codex's user-configured
+    // agent roles override the compiled-in ones by name.
+    let mut override_role = role("worker");
+    override_role.system_prompt = "custom worker prompt".into();
+    roles::upsert(
+        &s,
+        SubagentRoleUpsertParams {
+            role: override_role.clone(),
+            expected: None,
+        },
+    )
+    .unwrap();
+    let merged = roles::merged(&s).unwrap();
+    assert_eq!(merged.len(), 2); // explorer stays built-in, worker is the override
+    assert!(merged.iter().find(|r| r.id == "explorer").unwrap().builtin);
+    assert!(!merged.iter().find(|r| r.id == "worker").unwrap().builtin);
+    let mut args = task("custom");
+    args.agent_type = Some("worker".into());
+    let child = spawn(&s, &root, args, &CancellationToken::new())
+        .await
+        .unwrap();
+    done(&s, &child.agent_id).await;
+    assert!(model.requests()[0].system.contains("custom worker prompt"));
+    // A client cannot smuggle the built-in flag into the persisted list.
+    let mut forged = override_role.clone();
+    forged.builtin = true;
+    roles::upsert(
+        &s,
+        SubagentRoleUpsertParams {
+            role: forged,
+            expected: Some(override_role.clone()),
+        },
+    )
+    .unwrap();
+    assert!(
+        roles::read(&s)
+            .unwrap()
+            .into_iter()
+            .all(|r: SubagentRole| !r.builtin)
+    );
+    // Removing the override brings the built-in back.
+    roles::delete(
+        &s,
+        SubagentRoleDeleteParams {
+            expected: override_role,
+        },
+    )
+    .unwrap();
+    let restored = roles::merged(&s).unwrap();
+    assert_eq!(restored.len(), 2);
+    assert!(restored.iter().find(|r| r.id == "worker").unwrap().builtin);
+    // The spawn tool offers every role, built-ins included.
+    let mut tools = ToolRegistry::new();
+    register(&s, &root, "test-turn", &mut tools);
+    let specs = tools.specs();
+    let spawn = specs
+        .iter()
+        .find(|spec| spec.name == "spawn_agent")
+        .unwrap();
+    assert!(spawn.description.contains("explorer"));
+    assert!(spawn.description.contains("worker"));
+    assert!(spawn.description.contains("Role explorer:"));
+    let schema = serde_json::to_string(&spawn.schema).unwrap();
+    assert!(schema.contains("explorer"));
+    assert!(schema.contains("worker"));
+}
+
+#[tokio::test]
+async fn task_names_address_agents_by_path_and_duplicate_names_are_refused() {
+    let (_dir, s, root) = state(Arc::new(ScriptedModel::new([
+        Reply::new().text("done").done(),
+        Reply::new().text("done").done(),
+    ])));
+    configure(
+        &s,
+        SubagentConfig {
+            max_depth: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut args = task("nested work");
+    args.task_name = "outer".into();
+    let child = spawn(&s, &root, args, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(child.task_name.as_deref(), Some("/root/outer"));
+    // A nested child of `/root/outer` gets a path under its spawner's.
+    let mut nested = task("inner work");
+    nested.task_name = "inner".into();
+    let grandchild = spawn(&s, &child.agent_id, nested, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(grandchild.task_name.as_deref(), Some("/root/outer/inner"));
+    // Relative (from the caller's path), absolute, and id all resolve to the same agent.
+    assert_eq!(
+        resolve(&s, &root, "outer").unwrap().agent_id,
+        child.agent_id
+    );
+    assert_eq!(
+        resolve(&s, &child.agent_id, "inner").unwrap().agent_id,
+        grandchild.agent_id
+    );
+    assert_eq!(
+        resolve(&s, &root, "/root/outer/inner").unwrap().agent_id,
+        grandchild.agent_id
+    );
+    assert_eq!(
+        resolve(&s, &root, &grandchild.agent_id).unwrap().agent_id,
+        grandchild.agent_id
+    );
+    // References may only go down the tree, and the root is not an agent.
+    assert!(resolve(&s, &grandchild.agent_id, "outer").is_err());
+    assert!(resolve(&s, &root, "/root").is_err());
+    assert!(resolve(&s, &root, "/root/missing").is_err());
+    // A duplicate name in the tree is refused, and the name rules follow codex.
+    let mut duplicate = task("duplicate");
+    duplicate.task_name = "outer".into();
+    assert!(
+        spawn(&s, &root, duplicate, &CancellationToken::new())
+            .await
+            .is_err()
+    );
+    let mut bad = task("bad name");
+    bad.task_name = "Bad-Name".into();
+    assert!(
+        spawn(&s, &root, bad, &CancellationToken::new())
+            .await
+            .is_err()
+    );
+    close(&s, &child.agent_id).unwrap();
+    settle(&s, &child.agent_id).await;
+    settle(&s, &grandchild.agent_id).await;
+}
+
+#[tokio::test]
+async fn wait_reports_the_agent_that_finished_by_name_without_its_content() {
+    let (_dir, s, root) = state(Arc::new(ScriptedModel::new([Reply::new()
+        .text("the answer text")
+        .done()])));
+    let mut args = task("finish fast");
+    args.task_name = "finisher".into();
+    let _child = spawn(&s, &root, args, &CancellationToken::new())
+        .await
+        .unwrap();
+    let result = wait(
+        &s,
+        &root,
+        WaitArgs {
+            timeout_ms: Some(3000),
+        },
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["timed_out"], false);
+    let agents = result["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["agent_name"], "/root/finisher");
+    let raw = agents[0].to_string();
+    assert!(
+        !raw.contains("the answer text"),
+        "wait returns who updated, not the content: {raw}"
+    );
+}
+
+#[tokio::test]
+async fn the_final_answer_is_delivered_to_the_parent_as_its_own_message() {
+    let model = Arc::new(ScriptedModel::new([
+        // Child turn: completes with the answer.
+        Reply::new().text("child says 42").done(),
+        // Parent turn that runs when the next input boundary reads the mail.
+        Reply::new().text("parent reports").done(),
+    ]));
+    let (_dir, s, root) = state(model.clone());
+    let mut args = task("answer me");
+    args.task_name = "oracle".into();
+    let child = spawn(&s, &root, args, &CancellationToken::new())
+        .await
+        .unwrap();
+    done(&s, &child.agent_id).await;
+    // The parent is idle here: the notification waits in its mailbox and does not wake the
+    // thread (codex's WakeOnAgentMessages is off by default) and does not enter the
+    // user-visible prompt queue.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(s.store.db.queue(&root).unwrap().is_empty());
+    let mail = s.agent_mailbox.lock().unwrap().get(&root).cloned().unwrap();
+    assert_eq!(mail.len(), 1);
+    assert!(mail[0].contains("Message Type: FINAL_ANSWER"));
+    assert!(mail[0].contains("Task name: /root/oracle"));
+    assert!(mail[0].contains("child says 42"));
+    assert!(state_delivered(&s, &child.agent_id));
+    // The next input boundary reads it: the parent's next turn carries the mail beside its
+    // own prompt, in the same request.
+    let replies = model.requests();
+    assert_eq!(replies.len(), 1, "the mailbox alone never starts a turn");
+    let rt = s.runtime(&root);
+    crate::turn::start_text(s.clone(), rt, &root, "please report".into()).await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while model.requests().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let request = &model.requests()[1];
+    assert!(
+        request
+            .messages
+            .iter()
+            .any(|m| matches!(m, fv_core::Message::User{text}
+            if text.contains("Message Type: FINAL_ANSWER") && text.contains("child says 42"))),
+        "the mail rides the next turn: {:?}",
+        request.messages
+    );
+    assert!(
+        request
+            .messages
+            .iter()
+            .any(|m| matches!(m, fv_core::Message::User{text}
+            if text == "please report")),
+        "the turn's own prompt is still there: {:?}",
+        request.messages
+    );
+}
+
+fn state_delivered(s: &ServerState, id: &str) -> bool {
+    s.subagent_delivered.lock().unwrap().contains_key(id)
+}
+
+#[tokio::test]
+async fn send_message_queues_on_an_idle_agent_without_starting_a_turn() {
+    let model = Arc::new(ScriptedModel::new([
+        Reply::new().text("done").done(),
+        Reply::new().text("awake").done(),
+    ]));
+    let (_dir, s, root) = state(model.clone());
+    let mut args = task("idle target");
+    args.task_name = "idler".into();
+    let child = spawn(&s, &root, args, &CancellationToken::new())
+        .await
+        .unwrap();
+    done(&s, &child.agent_id).await;
+    message(
+        &s,
+        &root,
+        TargetedMessage {
+            target: "/root/idler".into(),
+            message: "context only, do not wake".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!s.runtime(&child.agent_id).is_running());
+    assert!(s.store.db.queue(&child.agent_id).unwrap().is_empty());
+    assert_eq!(
+        s.agent_mailbox
+            .lock()
+            .unwrap()
+            .get(&child.agent_id)
+            .cloned()
+            .unwrap(),
+        vec!["context only, do not wake".to_string()]
+    );
+    // A follow-up then starts the turn, and the mail rides the same first request.
+    followup(
+        &s,
+        &root,
+        TargetedMessage {
+            target: "/root/idler".into(),
+            message: "now do it".into(),
+        },
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while model.requests().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let request = &model.requests()[1];
+    assert!(
+        request
+            .messages
+            .iter()
+            .any(|m| matches!(m, fv_core::Message::User{text}
+            if text == "context only, do not wake")),
+        "queue-only mail is read at the next input boundary: {:?}",
+        request.messages
+    );
+    close(&s, &child.agent_id).unwrap();
+}
+
+#[tokio::test]
+async fn list_agents_filters_by_path_prefix_and_hides_closed_agents() {
+    let (_dir, s, root) = state(Arc::new(ScriptedModel::new([
+        Reply::new().text("done").done(),
+        Reply::new().text("done").done(),
+    ])));
+    for name in ["alpha", "beta"] {
+        let mut args = task("work");
+        args.task_name = name.into();
+        spawn(&s, &root, args, &CancellationToken::new())
+            .await
+            .unwrap();
+    }
+    let tool = AgentTool {
+        state: Arc::downgrade(&s),
+        parent: root.clone(),
+        turn: "test-turn".into(),
+        kind: Kind::List,
+    };
+    let all = tool
+        .call(ToolCtx::new(CancellationToken::new(), None), json!({}))
+        .await;
+    let all: Value = serde_json::from_str(&all.content).unwrap();
+    let names: Vec<&str> = all["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["agent_name"].as_str())
+        .collect();
+    assert_eq!(names, ["/root/alpha", "/root/beta"]);
+    let filtered = tool
+        .call(
+            ToolCtx::new(CancellationToken::new(), None),
+            json!({"path_prefix": "/root/al"}),
+        )
+        .await;
+    let filtered: Value = serde_json::from_str(&filtered.content).unwrap();
+    assert_eq!(
+        filtered["agents"].as_array().unwrap().len(),
+        1,
+        "{filtered}"
+    );
+    close(&s, &root).err();
+}
+
+#[tokio::test]
+async fn settled_agents_are_evicted_from_residency_to_free_the_spawn_limit() {
+    let model = Arc::new(ScriptedModel::new(
+        (0..5).map(|_| Reply::new().text("done").done()),
+    ));
+    let (_dir, s, root) = state(model.clone());
+    configure(
+        &s,
+        SubagentConfig {
+            max_agents: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut completed = Vec::new();
+    for i in 0..3 {
+        let mut args = task("finish");
+        args.task_name = format!("agent{i}");
+        let child = spawn(&s, &root, args, &CancellationToken::new())
+            .await
+            .unwrap();
+        done(&s, &child.agent_id).await;
+        completed.push(child);
+    }
+    // All three stay durable in the tree, but at most one runtime is resident at a time.
+    assert_eq!(s.store.db.subagents(Some(&root)).unwrap().len(), 3);
+    let resident = completed
+        .iter()
+        .filter(|a| s.loaded_runtime(&a.agent_id).is_some())
+        .count();
+    assert!(resident <= 1, "{resident} residents for a limit of 1");
+    // An evicted agent still resolves by name and still takes a follow-up: the runtime is
+    // rebuilt from its transcript on demand.
+    let first = completed.first().unwrap();
+    let mut more = task("more work");
+    more.task_name = "later".into();
+    assert!(
+        spawn(&s, &root, more, &CancellationToken::new())
+            .await
+            .is_ok(),
+        "eviction freed the limit"
+    );
+    followup(
+        &s,
+        &root,
+        TargetedMessage {
+            target: "/root/agent0".into(),
+            message: "pick this up again".into(),
+        },
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let row = done(&s, &first.agent_id).await;
+    assert_eq!(row.result, "done");
+    for child in completed {
+        close(&s, &child.agent_id).unwrap();
     }
 }

@@ -42,6 +42,10 @@ pub struct Subagent {
     pub role: Option<SubagentRole>,
     #[serde(default)]
     pub fork_context: bool,
+    /// Codex-style canonical agent path (`/root/<name>/…`): the spawn-time `task_name` joined
+    /// onto the spawner's own path. None for rows written before task names existed.
+    #[serde(default)]
+    pub task_name: Option<String>,
     /// An ancestor's tool grant is a ceiling even when this child chooses another role.
     #[serde(default)]
     pub tool_ceiling: Option<Vec<String>>,
@@ -86,6 +90,11 @@ pub struct SubagentRole {
     pub read_only: bool,
     /// None grants all eligible tools; Some([]) grants none.
     pub tools: Option<Vec<String>>,
+    /// A built-in role ships with the app: it is not stored per install and cannot be edited
+    /// or deleted. A saved role with the same id (and different content) shadows it, as in
+    /// codex where user-configured agent roles override the compiled-in ones by name.
+    #[serde(default)]
+    pub builtin: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

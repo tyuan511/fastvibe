@@ -350,7 +350,7 @@ function ImportPickerDialog({
                 <Input
                   value={query}
                   placeholder={t("import.search")}
-                  className="h-8 pl-8 text-xs"
+                  className="h-9 pl-8 text-xs"
                   onChange={(event) => setQuery(event.target.value)}
                 />
               </div>

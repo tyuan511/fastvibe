@@ -65,6 +65,14 @@ pub struct ServerState {
     prompts: Mutex<HashMap<fv_protocol::RequestId, PendingPrompt>>,
     pub(crate) subagents_lock: Mutex<()>,
     pub(crate) subagent_changes: tokio::sync::watch::Sender<u64>,
+    /// agent_id → the row `updated_at` whose completion notification has already been delivered
+    /// to the parent. `wait_agent` reports agents with terminal work past that mark, so a child
+    /// that finished while its parent was mid-turn is not hidden behind a full timeout.
+    pub(crate) subagent_delivered: Mutex<HashMap<String, i64>>,
+    /// Mail that is waiting for a thread's next turn, after codex's v2 mailbox: queue-only
+    /// messages (`send_message`, final answers to an idle parent) land here and are read at
+    /// the next input boundary — they never start a turn of their own.
+    pub(crate) agent_mailbox: Mutex<HashMap<String, Vec<String>>>,
     pub(crate) settings_lock: Mutex<()>,
     pub(crate) providers_lock: Mutex<()>,
     pub(crate) model_checks: std::sync::Arc<tokio::sync::Semaphore>,
@@ -149,6 +157,8 @@ impl ServerState {
             prompts: Mutex::default(),
             subagents_lock: Mutex::new(()),
             subagent_changes: tokio::sync::watch::channel(0).0,
+            subagent_delivered: Mutex::default(),
+            agent_mailbox: Mutex::default(),
             settings_lock: Mutex::new(()),
             providers_lock: Mutex::new(()),
             model_checks: std::sync::Arc::new(tokio::sync::Semaphore::new(
@@ -231,6 +241,22 @@ impl ServerState {
         crate::queue::restore(self, &rt, thread_id);
         runtimes.insert(thread_id.to_string(), rt.clone());
         rt
+    }
+
+    /// Drop a settled agent's runtime, after codex's v2 residency eviction: the row, the
+    /// transcript and any queued prompts survive on disk, so the next `runtime()` rebuilds
+    /// it. In-flight work keeps its `Arc`, so removing here never cancels anything.
+    pub(crate) fn evict_runtime(&self, thread_id: &str) -> bool {
+        let mut runtimes = self.runtimes.lock().unwrap();
+        if let Some(rt) = runtimes.get(thread_id) {
+            if rt.is_running() || rt.exec_sessions.has_running() {
+                return false;
+            }
+            runtimes.remove(thread_id);
+            true
+        } else {
+            false
+        }
     }
 
     /// Write a message to the thread's transcript. A failure is reported, not fatal: the turn

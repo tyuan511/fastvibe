@@ -5,6 +5,7 @@
 //! list are in the database; its key is in `credentials.json` and goes nowhere but into the
 //! request made to that provider.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use fv_agent::Model;
@@ -118,7 +119,7 @@ fn new_id(state: &ServerState, name: &str) -> Result<String, ErrorObject> {
     }
     let slug = slug.trim_matches('-');
     let base = if slug.is_empty() { "provider" } else { slug };
-    let taken: Vec<String> = state
+    let taken: HashSet<String> = state
         .store
         .db
         .list_providers()

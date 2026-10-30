@@ -20,10 +20,11 @@ struct DelegatingModel {
 }
 impl Model for DelegatingModel {
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>> {
+        // The spawn tool prefixes the child's own canonical task name onto its opening message.
         let child = request
             .messages
             .iter()
-            .any(|m| matches!(m,Message::User{text} if text == "Write child artifact"));
+            .any(|m| matches!(m,Message::User{text} if text.ends_with("Write child artifact")));
         let last_tool = request.messages.iter().rev().find_map(|m| match m {
             Message::ToolResult { name, content, .. } => Some((name.as_str(), content.as_str())),
             _ => None,
@@ -40,17 +41,14 @@ impl Model for DelegatingModel {
                     .tool(
                         "spawn",
                         "spawn_agent",
-                        json!({"message":"Write child artifact"}),
+                        json!({"message":"Write child artifact","task_name":"writer"}),
                     )
                     .done(),
                 Some(("spawn_agent", output)) => {
                     let parsed: Value = serde_json::from_str(output).unwrap();
+                    assert_eq!(parsed["task_name"], "/root/writer");
                     Reply::new()
-                        .tool(
-                            "wait",
-                            "wait_agent",
-                            json!({"targets":[parsed["agent_id"]],"timeout_ms":3000}),
-                        )
+                        .tool("wait", "wait_agent", json!({"timeout_ms":3000}))
                         .done()
                 }
                 Some(("wait_agent", output)) => {
@@ -160,11 +158,13 @@ async fn delegate_write_wait_inspect_close_resume_and_delete_over_public_protoco
         })
         .await
         .unwrap();
-    assert_eq!(snapshot.turns.len(), 1);
+    // The fork default is `all`, so the child's transcript starts with the inherited prefix;
+    // its own work is the trailing turn(s).
     assert!(
-        snapshot.turns[0]
-            .items
+        snapshot
+            .turns
             .iter()
+            .flat_map(|t| t.items.iter())
             .any(|i| matches!(i,Item::ToolCall{name,is_error:false,..} if name=="apply_patch"))
     );
     let usage = client

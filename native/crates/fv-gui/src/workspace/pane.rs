@@ -19,12 +19,14 @@ use crate::ui::px;
 use fv_protocol::methods::*;
 use fv_protocol::types::*;
 use fv_theme::Token;
-use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::input::{Editor, EditorState, Textarea};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::Workspace;
+use super::transcript::THREAD_MAX;
 use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon, icon_button, icon_button_xs};
 
 #[path = "pane_entries.rs"]
@@ -151,6 +153,10 @@ pub enum PaneTabKind {
     /// A file the user opened from the tree, a chip or the resources list.
     Files {
         path: String,
+    },
+    /// An auxiliary conversation backed by a real child thread.
+    Chat {
+        thread_id: String,
     },
     /// A terminal in the conversation's working directory.
     Terminal,
@@ -383,6 +389,16 @@ impl Workspace {
         let state = self.panes.entry(conversation.clone()).or_default();
         let tabs = state.tabs.clone();
         let active = state.active.clone();
+        for tab in &tabs {
+            if let PaneTabKind::Chat { thread_id } = &tab.kind {
+                self.ensure_pane_chat_input(tab.id.clone(), thread_id.clone(), window, cx);
+                if !self.views.contains_key(thread_id)
+                    && self.pane_chat_loading.insert(thread_id.clone())
+                {
+                    self.load_view(thread_id.clone(), cx);
+                }
+            }
+        }
         let has_tabs = !tabs.is_empty();
         let mut strip = div()
             .id("pane-tabs-viewport")
@@ -401,6 +417,7 @@ impl Workspace {
             let menu_id = id.clone();
             let glyph = match tab.kind {
                 PaneTabKind::Files { .. } => "folder01",
+                PaneTabKind::Chat { .. } => "message-square",
                 PaneTabKind::Git => "git-compare",
                 PaneTabKind::Terminal => "terminal",
                 PaneTabKind::Browser { .. } => "chrome",
@@ -495,6 +512,10 @@ impl Workspace {
             .and_then(|s| s.active_tab())
             .cloned();
         let body = match active_tab.as_ref() {
+            Some(PaneTab {
+                kind: PaneTabKind::Chat { thread_id },
+                ..
+            }) => self.chat_body(thread_id, window, cx),
             Some(PaneTab {
                 id,
                 kind: PaneTabKind::Browser { url },
@@ -782,6 +803,106 @@ impl Workspace {
             )
     }
 
+    fn chat_body(
+        &mut self,
+        thread_id: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let input = self
+            .panes
+            .get(self.selected.as_deref().unwrap_or("__draft__"))
+            .and_then(|state| state.active_tab())
+            .and_then(|tab| self.pane_chat_inputs.get(&tab.id))
+            .cloned();
+        let Some(input) = input else {
+            return div().into_any_element();
+        };
+        let running = self.views.get(thread_id).is_some_and(|view| view.running);
+        let pending = self.views.get(thread_id).and_then(|view| {
+            view.approvals
+                .first()
+                .map(|(id, approval)| self.approval_panel(id, approval, cx))
+                .or_else(|| {
+                    view.questions
+                        .first()
+                        .map(|(id, question)| self.question_panel(id, question, cx))
+                })
+        });
+        let has_pending = pending.is_some();
+        let id = thread_id.to_string();
+        let p = &self.palette;
+        let english = self.english();
+        let composer = div()
+            .w_full()
+            .max_w(px(THREAD_MAX))
+            .mx_auto()
+            .px(px(16.0))
+            .pb(px(12.0))
+            .flex_none()
+            .child(
+                div()
+                    .rounded(px(16.0))
+                    .border_1()
+                    .border_color(p.c(Token::Border))
+                    .bg(p.c(Token::Card))
+                    .shadow_sm()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div().min_h(px(44.0)).px(px(10.0)).py(px(8.0)).child(
+                            Textarea::new(&input)
+                                .appearance(false)
+                                .bordered(false)
+                                .with_size(gpui_kit::component::Size::Size(
+                                    gpui_kit::component::Theme::global(cx).font_size,
+                                )),
+                        ),
+                    )
+                    .child(
+                        div().px(px(10.0)).pb(px(8.0)).flex().justify_end().child(
+                            div()
+                                .id("pane-chat-send")
+                                .size(px(28.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .bg(p.c(Token::Primary))
+                                .cursor_pointer()
+                                .child(icon(
+                                    if running { "square" } else { "arrow-up02" },
+                                    15.0,
+                                    p.c(Token::PrimaryForeground),
+                                ))
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(if running {
+                                        trs!(english, "composer.stop")
+                                    } else {
+                                        trs!(english, "composer.send")
+                                    })
+                                    .build(window, cx)
+                                })
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    if running {
+                                        this.interrupt_thread(id.clone(), cx);
+                                    } else {
+                                        this.send_pane_chat(id.clone(), window, cx);
+                                    }
+                                })),
+                        ),
+                    ),
+            );
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(self.side_chat_transcript(thread_id, cx))
+            .children(pending)
+            .children((!has_pending).then_some(composer))
+            .into_any_element()
+    }
+
     fn pane_catalog(&self) -> Vec<(&'static str, &'static str, String)> {
         let english = self.app_settings.language == UiLanguage::English;
         let mut items = Vec::new();
@@ -814,7 +935,7 @@ impl Workspace {
         let english = self.app_settings.language == UiLanguage::English;
         match kind {
             "chat" => {
-                self.open_auxiliary_chat(cx);
+                self.open_auxiliary_chat(window, cx);
             }
             "git" => self.open_git_tab(window, cx),
             "terminal" => self.open_terminal_tab(cx),
@@ -883,6 +1004,7 @@ impl Workspace {
 
     fn close_pane_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let conversation = self.selected.clone().unwrap_or_else(|| "__draft__".into());
+        self.pane_chat_inputs.remove(id);
         self.close_office(id, cx);
         self.web_views.remove(id);
         self.web_views.remove(&super::pane_web::preview_key(id));
@@ -1074,7 +1196,9 @@ impl Workspace {
             .child(SharedString::from(what.to_string()))
     }
 
-    /// Open a file in the pane, creating its tab if this conversation does not have one.
+    /// Open a file in the pane, reusing the active Files tab the way Electron's file pane does.
+    /// A file preview is the content of a Files tab; opening another file replaces that content
+    /// instead of creating a second tab for every tree click.
     pub(super) fn open_in_pane(
         &mut self,
         path: String,
@@ -1087,26 +1211,65 @@ impl Workspace {
         };
         self.side_pane_collapsed = false;
         let state = self.panes.entry(conversation.clone()).or_default();
-        // One tab per file: opening the same path twice focuses the tab that is already there
-        // rather than stacking two views of one file.
-        if let Some(existing) = state
-            .tabs
-            .iter()
-            .find(|t| matches!(&t.kind, PaneTabKind::Files { path: p } if p == &path))
-        {
-            let id = existing.id.clone();
-            state.activate(id);
-        } else {
-            let id = new_tab_id();
-            state.tabs.push(PaneTab {
-                id: id.clone(),
-                kind: PaneTabKind::Files { path: path.clone() },
-                title,
+        // Electron keeps one Files tab per view. Prefer the active Files tab, then an existing
+        // Files tab, and create one only when the pane has never had a file view.
+        let id = state
+            .active
+            .as_ref()
+            .and_then(|active| {
+                state
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == *active && matches!(tab.kind, PaneTabKind::Files { .. }))
+                    .map(|tab| tab.id.clone())
+            })
+            .or_else(|| {
+                state
+                    .tabs
+                    .iter()
+                    .find(|tab| matches!(tab.kind, PaneTabKind::Files { .. }))
+                    .map(|tab| tab.id.clone())
+            })
+            .unwrap_or_else(|| {
+                let id = new_tab_id();
+                state.tabs.push(PaneTab {
+                    id: id.clone(),
+                    kind: PaneTabKind::Files { path: path.clone() },
+                    title: title.clone(),
+                });
+                id
             });
-            state.activate(id);
-        }
-        state.show_preview = true;
-        if state.preview.is_none() {
+        state.activate(id.clone());
+
+        let should_load = {
+            let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == id) else {
+                return;
+            };
+            let previous_path = match &tab.kind {
+                PaneTabKind::Files { path } => Some(path.as_str()),
+                _ => None,
+            };
+            let changed = previous_path != Some(path.as_str());
+            tab.kind = PaneTabKind::Files { path: path.clone() };
+            tab.title = title;
+            if changed {
+                // The current tab's preview belongs to its old path. Drop that view before the
+                // async read starts, otherwise the old document can remain visible while the
+                // new request is in flight.
+                state.preview = None;
+                state.show_preview = false;
+                state.preview_loading = None;
+                state.preview_epoch = state.preview_epoch.wrapping_add(1);
+                state.draft = None;
+                state.editing = false;
+                state.baseline = None;
+                state.editor = None;
+                state.markdown_source = None;
+            }
+            state.show_preview = true;
+            state.preview.is_none()
+        };
+        if should_load {
             self.load_preview(path, window, cx);
         }
         cx.notify();
@@ -1968,8 +2131,6 @@ impl Workspace {
                         let source = markdown.clone().unwrap_or_default();
                         div()
                             .size_full()
-                            .px(px(14.0))
-                            .py(px(10.0))
                             .text_size(px(TEXT_SM))
                             .line_height(px(24.0))
                             .child(
@@ -1978,6 +2139,12 @@ impl Workspace {
                                     source,
                                     &p,
                                 )
+                                // Keep the scrollable view flush with the pane edge so its
+                                // scrollbar does not sit inside the document's text inset.
+                                // Padding on TextView is part of its own box, while padding on
+                                // this wrapper would shrink the scrollbar's containing bounds.
+                                .px(px(14.0))
+                                .py(px(10.0))
                                 .scrollable(true),
                             )
                             .into_any_element()

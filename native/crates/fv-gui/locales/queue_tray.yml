@@ -12,6 +12,12 @@ queue_tray.now:
 queue_tray.remove:
   zh: "移除待发送消息"
   en: "Remove queued message"
+queue_tray.edit:
+  zh: "编辑待发送消息"
+  en: "Edit queued message"
+queue_tray.reorder:
+  zh: "拖动调整顺序"
+  en: "Drag to reorder"
 queue_tray.continue:
   zh: "继续发送"
   en: "Continue sending"

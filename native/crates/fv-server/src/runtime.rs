@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -339,6 +339,42 @@ impl ThreadRuntime {
         let mut g = self.inner.lock().unwrap();
         let index = g.queue.iter().position(|item| item.id == id)?;
         Some(g.queue.remove(index))
+    }
+
+    /// Replace the queue's whole order with the ids given, keeping anything they did not name.
+    pub fn reorder_queue(&self, ids: &[String]) {
+        let mut g = self.inner.lock().unwrap();
+        let old_ids: Vec<String> = g.queue.iter().map(|item| item.id.clone()).collect();
+        let mut by_id: HashMap<String, fv_store::QueuedPrompt> = g
+            .queue
+            .drain(..)
+            .map(|item| (item.id.clone(), item))
+            .collect();
+        let mut ordered: Vec<fv_store::QueuedPrompt> = Vec::with_capacity(by_id.len());
+        for id in ids {
+            if let Some(item) = by_id.remove(id) {
+                ordered.push(item);
+            }
+        }
+        // HashMap lookup makes the named portion linear; use the old id order for anything the
+        // client omitted so a partial reorder does not shuffle unrelated prompts.
+        for id in old_ids {
+            if let Some(item) = by_id.remove(&id) {
+                ordered.push(item);
+            }
+        }
+        ordered.extend(by_id.into_values());
+        g.queue = ordered;
+    }
+
+    /// Rewrite one waiting prompt's text. `false` when it is no longer queued.
+    pub fn edit_queue(&self, id: &str, text: &str) -> bool {
+        let mut g = self.inner.lock().unwrap();
+        let Some(item) = g.queue.iter_mut().find(|item| item.id == id) else {
+            return false;
+        };
+        item.text = text.to_string();
+        true
     }
 
     pub fn mark_queue_paused(&self) {

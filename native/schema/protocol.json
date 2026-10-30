@@ -218,6 +218,13 @@
               "null"
             ]
           },
+          "resourcePanelOpen": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "sandboxMode": {
             "anyOf": [
               {
@@ -1475,8 +1482,28 @@
         ],
         "type": "object"
       },
+      "QueueEditParams": {
+        "description": "`turn/queue/edit`: rewrite a prompt that has not been sent yet.\n\nThe row keeps its id and its place, so a queue whose neighbour was edited is still the\nqueue the user arranged. A prompt the server has already taken off the queue cannot be\nedited — it is being sent, and the answer would contradict what the model was given.",
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "itemId",
+          "text"
+        ],
+        "type": "object"
+      },
       "QueueItemParams": {
-        "description": "One queued prompt by id, for `turn/queue/remove` and `turn/queue/sendNow`.",
+        "description": "One queued prompt by id, for `turn/queue/remove`, `turn/queue/edit` and\n`turn/queue/sendNow`.",
         "properties": {
           "itemId": {
             "type": "string"
@@ -1488,6 +1515,25 @@
         "required": [
           "threadId",
           "itemId"
+        ],
+        "type": "object"
+      },
+      "QueueReorderParams": {
+        "description": "`turn/queue/reorder`: the queue's whole new order.\n\nThe whole list rather than a move, because that is what a drag produces and because it\nmakes a stale client harmless: an id that is no longer queued is skipped, and one the\ncaller did not name keeps its place at the end instead of disappearing.",
+        "properties": {
+          "itemIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "itemIds"
         ],
         "type": "object"
       },
@@ -2137,6 +2183,11 @@
       },
       "SubagentRole": {
         "properties": {
+          "builtin": {
+            "default": false,
+            "description": "A built-in role ships with the app: it is not stored per install and cannot be edited\nor deleted. A saved role with the same id (and different content) shadows it, as in\ncodex where user-configured agent roles override the compiled-in ones by name.",
+            "type": "boolean"
+          },
           "description": {
             "type": "string"
           },
@@ -3050,6 +3101,46 @@
           },
           "params": {
             "$ref": "#/$defs/QueueItemParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "turn/queue/reorder",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/QueueReorderParams"
+          }
+        },
+        "required": [
+          "method",
+          "id",
+          "params"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "method": {
+            "const": "turn/queue/edit",
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/QueueEditParams"
           }
         },
         "required": [
@@ -6340,6 +6431,11 @@
             "description": "回复推荐: guess the user's next message and offer it as the composer's placeholder. On\nunless turned off, like the Electron app's `replySuggestions`.",
             "type": "boolean"
           },
+          "resourcePanelOpen": {
+            "default": true,
+            "description": "会话资源: the docked resources panel beside the conversation is open. A narrow window\nkeeps the popover form, which only a deliberate open turns on.",
+            "type": "boolean"
+          },
           "sandboxMode": {
             "$ref": "#/$defs/SandboxMode",
             "default": "workspaceWrite",
@@ -8619,6 +8715,14 @@
           "task": {
             "type": "string"
           },
+          "taskName": {
+            "default": null,
+            "description": "Codex-style canonical agent path (`/root/<name>/…`): the spawn-time `task_name` joined\nonto the spawner's own path. None for rows written before task names existed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "toolCeiling": {
             "default": null,
             "description": "An ancestor's tool grant is a ceiling even when this child chooses another role.",
@@ -8653,6 +8757,11 @@
       },
       "SubagentRole": {
         "properties": {
+          "builtin": {
+            "default": false,
+            "description": "A built-in role ships with the app: it is not stored per install and cannot be edited\nor deleted. A saved role with the same id (and different content) shadows it, as in\ncodex where user-configured agent roles override the compiled-in ones by name.",
+            "type": "boolean"
+          },
           "description": {
             "type": "string"
           },
@@ -8748,6 +8857,11 @@
     "$defs": {
       "SubagentRole": {
         "properties": {
+          "builtin": {
+            "default": false,
+            "description": "A built-in role ships with the app: it is not stored per install and cannot be edited\nor deleted. A saved role with the same id (and different content) shadows it, as in\ncodex where user-configured agent roles override the compiled-in ones by name.",
+            "type": "boolean"
+          },
           "description": {
             "type": "string"
           },

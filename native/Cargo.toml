@@ -22,6 +22,9 @@ all = { level = "warn", priority = -1 }
 [patch.crates-io]
 # 0.3.9 adds destination alpha in the final Metal pass, making layered glass opaque/grey.
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+# Backdrop blur for glass overlays: a `Backdrop` primitive and `Window::paint_backdrop`,
+# which the registry crate has no way to express. See vendor/gpui-pre/FASTVIBE.md.
+gpui-pre = { path = "vendor/gpui-pre" }
 
 # Stable history positions for independent terminal clients; see vendor patch notes.
 alacritty_terminal = { path = "vendor/alacritty_terminal" }

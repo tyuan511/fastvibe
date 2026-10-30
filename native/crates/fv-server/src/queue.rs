@@ -121,6 +121,59 @@ pub fn take(
     Some(taken)
 }
 
+/// `turn/queue/reorder`: apply the client's order to the queue.
+///
+/// A prompt that is already being sent keeps its place: its run is in flight, and moving it
+/// would only change what the client draws. The database is written first — it is the recovery
+/// copy, and a failed write must leave the queue the client already sees untouched.
+pub fn reorder(
+    state: &ServerState,
+    rt: &ThreadRuntime,
+    thread_id: &str,
+    ids: &[String],
+) -> Result<(), ErrorObject> {
+    let sending = rt.preferred();
+    let ids: Vec<String> = ids
+        .iter()
+        .filter(|id| sending.as_deref() != Some(id.as_str()))
+        .cloned()
+        .collect();
+    if let Err(e) = state.store.db.reorder_queue(thread_id, &ids) {
+        eprintln!("cannot reorder the queue of {thread_id}: {e}");
+        return Err(ErrorObject::new(code::INTERNAL_ERROR, e.to_string()));
+    }
+    rt.reorder_queue(&ids);
+    Ok(())
+}
+
+/// `turn/queue/edit`: rewrite a waiting prompt.
+///
+/// The text is trimmed by the caller (the composer sends what the user left); an empty one is
+/// refused rather than stored, because a queued prompt with nothing in it is a turn that would
+/// start with no question.
+pub fn edit(
+    state: &ServerState,
+    rt: &ThreadRuntime,
+    thread_id: &str,
+    id: &str,
+    text: &str,
+) -> Result<(), ErrorObject> {
+    if text.trim().is_empty() {
+        return Err(invalid("a queued prompt cannot be empty"));
+    }
+    if rt.preferred().as_deref() == Some(id) {
+        return Err(invalid("that prompt is already being sent"));
+    }
+    if let Err(e) = state.store.db.edit_queued(thread_id, id, text) {
+        eprintln!("cannot edit a queued prompt of {thread_id}: {e}");
+        return Err(ErrorObject::new(code::INTERNAL_ERROR, e.to_string()));
+    }
+    if !rt.edit_queue(id, text) {
+        return Err(invalid("that prompt is no longer queued"));
+    }
+    Ok(())
+}
+
 /// The head of the queue, if anything may be sent from it right now.
 ///
 /// A paused queue sends nothing; that is the whole point of the flag.

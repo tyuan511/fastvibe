@@ -58,7 +58,7 @@ impl Workspace {
     /// The side pane's auxiliary chat reuses a real child thread. It never creates
     /// a second transcript store: the model's `spawn_agent` path remains the
     /// single owner of child creation and all existing question/approval handling.
-    pub(super) fn open_auxiliary_chat(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_auxiliary_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(child) = self
             .subagents
             .agents
@@ -66,13 +66,17 @@ impl Workspace {
             .find(|a| a.status != SubagentStatus::Closed)
             .map(|a| a.agent_id.clone())
         else {
-            self.subagents.error =
-                Some(trs!(self.english(), "subagents.this_chat_has_no_side").into());
+            let message: String = trs!(self.english(), "subagents.this_chat_has_no_side").into();
+            self.subagents.error = Some(message.clone());
+            if let Some(parent) = self.selected.clone() {
+                self.panes.entry(parent).or_default().notice = Some(message);
+                self.side_pane_collapsed = false;
+            }
             cx.notify();
             return;
         };
         self.settings = None;
-        self.select(child, cx);
+        self.open_auxiliary_chat_tab(child, window, cx);
     }
 
     pub(super) fn refresh_subagents(&mut self, cx: &mut Context<Self>) {

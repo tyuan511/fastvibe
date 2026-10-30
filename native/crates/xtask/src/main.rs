@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use fv_daemon::Daemon;
-use sha2::{Digest, Sha256};
 
 /// The native workspace root, taken from this crate's own manifest directory (a compile-time
 /// constant) rather than from the invocation's cwd. `cargo dev` is aliased both in
@@ -68,9 +67,21 @@ fn restart_needed(current: Option<&str>, running: Option<bool>, built: &str) -> 
     }
 }
 
-fn fingerprint(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+/// Development builds are rebuilt locally and only need a cheap identity for deciding whether
+/// the resident server came from the same build. Reading the 100+ MiB executable for SHA-256
+/// made every `cargo dev` pay an avoidable disk read before the GUI could connect.
+fn development_identity(path: &Path) -> std::io::Result<String> {
+    let metadata = std::fs::metadata(path)?;
+    let modified = metadata
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    Ok(format!(
+        "dev:{size}:{seconds}:{nanos}",
+        size = metadata.len(),
+        seconds = modified.as_secs(),
+        nanos = modified.subsec_nanos()
+    ))
 }
 
 fn requested_data_dir(app_args: &[String]) -> Result<Option<PathBuf>, &'static str> {
@@ -148,10 +159,10 @@ fn dev(app_args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let built_fingerprint = match fingerprint(&server_bin) {
+    let built_fingerprint = match development_identity(&server_bin) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("could not fingerprint {}: {error}", server_bin.display());
+            eprintln!("could not identify {}: {error}", server_bin.display());
             return ExitCode::FAILURE;
         }
     };
@@ -163,6 +174,7 @@ fn dev(app_args: Vec<String>) -> ExitCode {
 
     let status = cargo("run")
         .args(["-q", "-p", "fv-gui", "--bin", "fastvibe", "--"])
+        .env("FASTVIBE_DEV_SERVER_ID", &built_fingerprint)
         .args(app_args)
         .status();
     match status {

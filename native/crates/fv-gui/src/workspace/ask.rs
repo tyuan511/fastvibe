@@ -154,14 +154,24 @@ impl Workspace {
         let Some(Pending::Question(id, _)) = self.pending() else {
             return;
         };
-        let id = id.clone();
+        self.submit_free_for(id.clone(), window, cx);
+    }
+
+    /// Submit the free-form answer for a question in any loaded thread, including a child
+    /// displayed in the auxiliary side pane.
+    pub(super) fn submit_free_for(
+        &mut self,
+        request: RequestId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let text = self.ask_input.read(cx).value().trim().to_string();
         if text.is_empty() {
             return;
         }
         self.ask_input
             .update(cx, |st, cx| st.set_value("", window, cx));
-        self.pick_answer(id, text, cx);
+        self.pick_answer(request, text, cx);
     }
 
     /// Enter on an approval: allow it this once.
@@ -338,7 +348,7 @@ impl Workspace {
             .child(trs!(english, "ask.send"))
             .on_click(cx.listener(move |this, _, window, cx| {
                 let _ = &send_id;
-                this.submit_free(window, cx)
+                this.submit_free_for(send_id.clone(), window, cx)
             }));
 
         div()

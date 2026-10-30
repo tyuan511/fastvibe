@@ -2270,6 +2270,7 @@ fn options(p: &crate::theme::Palette, id: &'static str) -> Stateful<Div> {
         .shadow_md()
         .flex()
         .flex_col()
+        .child(crate::ui::backdrop(10.0, 28.0, 1.8))
 }
 
 fn option(

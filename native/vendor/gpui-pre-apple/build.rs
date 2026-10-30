@@ -99,9 +99,17 @@ mod apple_build {
 
     /// Locate the gpui crate directory relative to this crate. Resolved at
     /// build-script runtime against this crate's manifest dir, so no checkout
-    /// path is baked into a compiled artifact (which corgi rejects).
+    /// path is baked into a compiled artifact (which corgi rejects). The patched
+    /// vendored `gpui-pre` (the one the workspace patches crates.io with) is
+    /// preferred; `vendor/gpui` remains the pristine upstream reference copy.
     fn find_gpui_crate_dir() -> PathBuf {
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("vendor/gpui")
+        let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+        let patched = manifest_dir.join("../../gpui-pre");
+        if patched.join("src/scene.rs").exists() {
+            patched
+        } else {
+            manifest_dir.join("vendor/gpui")
+        }
     }
 
     /// To enable runtime compilation, we need to "stitch" the shaders file with the generated header

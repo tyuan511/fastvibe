@@ -1283,3 +1283,122 @@ float4 fill_color(Background background,
 
   return color;
 }
+
+// ---------------------------------------------------------------------------
+// Backdrop blur (CSS backdrop-filter for glass overlays)
+//
+// The renderer snapshots the pixels already painted behind a glass overlay's
+// bounds, blurs that snapshot and composites it back over itself, replacing
+// the region. A translucent fill painted afterwards then sits on a frosted
+// copy of the page, which is what Electron's
+// `backdrop-filter: blur(28px) saturate(1.8)` looks like.
+//
+// All passes draw a quad over the whole destination texture; `dest` is the
+// quad in destination pixels, `source` the matching rectangle in source
+// pixels. Snapshotted data stays premultiplied, so replacing a translucent
+// window region with its blurred copy keeps the desktop showing through, the
+// same way the unblurred page does.
+
+struct BackdropPassParams {
+  float4 dest;     // x, y, w, h in destination pixels
+  float4 source;   // x, y, w, h in source pixels
+  float2 source_size;  // source texture size in pixels
+  float2 viewport;     // destination viewport size in pixels
+  float sigma;         // gaussian sigma in source texels (blur passes)
+  float saturation;    // composite pass only
+  float mode;          // 0 downsample, 1 blur-x, 2 blur-y, 3 composite
+  float4 corners;      // composite only: tl, tr, br, bl radii in dest pixels
+  float2 _pad;
+};
+
+struct BackdropVertexOutput {
+  float4 position [[position]];
+  float2 source_position [[user(locn0)]];
+  float2 quad_position [[user(locn1)]];
+};
+
+vertex BackdropVertexOutput backdrop_vertex(uint vid [[vertex_id]],
+                                            constant BackdropPassParams &params [[buffer(0)]]) {
+  float2 vertices[4] = {
+    float2(params.dest.x, params.dest.y),
+    float2(params.dest.x + params.dest.z, params.dest.y),
+    float2(params.dest.x, params.dest.y + params.dest.w),
+    float2(params.dest.x + params.dest.z, params.dest.y + params.dest.w),
+  };
+  float2 position = vertices[vid];
+  float2 ndc = position / params.viewport * float2(2., -2.) + float2(-1., 1.);
+  float2 source_position =
+    (position - params.dest.xy) / params.dest.zw * params.source.zw + params.source.xy;
+
+  BackdropVertexOutput output;
+  output.position = float4(ndc, 0., 1.);
+  output.source_position = source_position;
+  output.quad_position = position;
+  return output;
+}
+
+fragment float4 backdrop_fragment(BackdropVertexOutput input [[stage_in]],
+                                  texture2d<float, access::sample> source_texture [[texture(0)]],
+                                  constant BackdropPassParams &params [[buffer(0)]]) {
+  constexpr sampler source_sampler(mag_filter::linear, min_filter::linear,
+                                    address::clamp_to_edge);
+  float2 texel = 1. / params.source_size;
+
+  if (params.mode < 0.5) {
+    // Downsample: 2x2 (at the destination's scale) average around the mapped
+    // source texel centre. Linear filtering fetches exact texels.
+    float scale = params.source.z / params.dest.z;
+    float half_scale = scale * 0.5 - 0.5;
+    float4 sum = 0.;
+    for (int i = 0; i < 4; i++) {
+      float2 offset = float2(float(i % 2) - 0.5, float(i / 2) - 0.5) * scale;
+      sum += source_texture.sample(source_sampler,
+                                   (input.source_position + offset) * texel);
+    }
+    return sum * 0.25;
+  }
+
+  // Separable gaussian; 9 taps spaced along the blur axis.
+  float2 direction = params.mode < 1.5 ? float2(1., 0.) : float2(0., 1.);
+  float step = max(1., params.sigma * 0.5);
+  float4 sum = 0.;
+  float weight_sum = 0.;
+  for (int i = -4; i <= 4; i++) {
+    float offset = float(i) * step;
+    float weight = gaussian(offset, params.sigma);
+    sum += source_texture.sample(source_sampler,
+                                 (input.source_position + direction * offset) * texel) * weight;
+    weight_sum += weight;
+  }
+  return sum / weight_sum;
+}
+
+fragment float4 backdrop_composite_fragment(BackdropVertexOutput input [[stage_in]],
+                                            texture2d<float, access::sample> source_texture [[texture(0)]],
+                                            constant BackdropPassParams &params [[buffer(0)]]) {
+  constexpr sampler source_sampler(mag_filter::linear, min_filter::linear,
+                                    address::clamp_to_edge);
+  float4 color = source_texture.sample(source_sampler, input.source_position / params.source_size);
+  if (params.saturation != 1.) {
+    float luminance = dot(color.rgb, float3(0.299, 0.587, 0.114));
+    color.rgb = mix(float3(luminance), color.rgb, params.saturation);
+  }
+
+  // Rounded corners: keep the pixels outside the overlay's rounded rectangle
+  // untouched. The fill painted over this region antialiases its own edge.
+  float2 size = params.dest.zw;
+  float2 half_size = size * 0.5;
+  float2 point = input.quad_position - params.dest.xy;
+  float2 center_to_point = point - half_size;
+  float2 quadrant = float2(point.x < 0. ? -1. : 1., point.y < 0. ? -1. : 1.);
+  float corner_radius =
+    quadrant.x < 0.
+      ? (quadrant.y < 0. ? params.corners.x : params.corners.w)
+      : (quadrant.y < 0. ? params.corners.y : params.corners.z);
+  float2 outer = fabs(center_to_point) - (half_size - float2(corner_radius));
+  float distance = length(max(outer, 0.)) + fmin(max(outer.x, outer.y), 0.) - corner_radius;
+  if (distance > -0.5) {
+    discard_fragment();
+  }
+  return color;
+}

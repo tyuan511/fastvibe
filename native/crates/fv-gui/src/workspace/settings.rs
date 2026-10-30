@@ -812,6 +812,7 @@ impl Workspace {
             s.default_menu = false;
             s.default_provider_menu = None;
             s.default_thinking_menu = false;
+            self.hover_submenus.entered();
         }
         cx.notify();
         let Some(b) = self.backend.clone() else {
@@ -828,6 +829,20 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    /// Close a hover submenu shortly after the pointer leaves its trigger. The short grace
+    /// period lets the pointer cross the 12px overlap into the sibling flyout; entering either
+    /// surface increments the generation and cancels this pending close.
+    fn close_default_submenu_after_hover(&mut self, cx: &mut Context<Self>) {
+        self.hover_submenus.close_after(cx, |this| {
+            if let Some(settings) = &mut this.settings {
+                if settings.default_provider_menu.is_some() || settings.default_thinking_menu {
+                    settings.default_provider_menu = None;
+                    settings.default_thinking_menu = false;
+                }
+            }
+        });
     }
 
     fn toggle_provider(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -2049,8 +2064,10 @@ impl Workspace {
                         if let Some(s) = &mut this.settings {
                             s.default_menu = !s.default_menu;
                             if !s.default_menu {
+                                s.default_provider_menu = None;
                                 s.default_thinking_menu = false;
                             }
+                            this.hover_submenus.entered();
                         }
                         cx.notify();
                     })),
@@ -3139,11 +3156,13 @@ impl Workspace {
                 )
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if !*hovered {
+                        this.close_default_submenu_after_hover(cx);
                         return;
                     }
                     let Some(s) = &mut this.settings else {
                         return;
                     };
+                    this.hover_submenus.entered();
                     // One flyout at a time: the effort list and a provider's models cannot both
                     // hang off this card, or they draw on top of each other.
                     if s.default_thinking_menu
@@ -3158,6 +3177,7 @@ impl Workspace {
                     let Some(s) = &mut this.settings else {
                         return;
                     };
+                    this.hover_submenus.entered();
                     s.default_thinking_menu = false;
                     s.default_provider_menu =
                         if s.default_provider_menu.as_deref() == Some(clicked_id.as_str()) {
@@ -3211,16 +3231,26 @@ impl Workspace {
                         .child(icon("arrow-right01", 12.0, p.c(Token::MutedForeground))),
                 )
                 .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                    if *hovered
-                        && let Some(s) = &mut this.settings
-                        && !s.default_thinking_menu
-                    {
-                        s.default_thinking_menu = true;
-                        cx.notify();
+                    if !*hovered {
+                        this.close_default_submenu_after_hover(cx);
+                        return;
+                    }
+                    if let Some(s) = &mut this.settings {
+                        // The provider flyout and effort flyout are sibling overlays. Moving
+                        // onto this row must hand ownership to the effort flyout immediately;
+                        // otherwise the previous provider's models remain visible beside it.
+                        this.hover_submenus.entered();
+                        if !s.default_thinking_menu || s.default_provider_menu.is_some() {
+                            s.default_provider_menu = None;
+                            s.default_thinking_menu = true;
+                            cx.notify();
+                        }
                     }
                 }))
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Some(s) = &mut this.settings {
+                        this.hover_submenus.entered();
+                        s.default_provider_menu = None;
                         s.default_thinking_menu = !s.default_thinking_menu;
                     }
                     cx.notify();
@@ -3230,7 +3260,7 @@ impl Workspace {
 
     /// Levels beside the session-model menu. A sibling of that card, not a child: the card clips
     /// anything that sticks out, and a clipped glass fill lets the page show through.
-    fn thinking_flyout(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    fn thinking_flyout(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
         let allowed = self
@@ -3258,6 +3288,7 @@ impl Workspace {
             }
             + 9.0;
         let mut flyout = popover(p)
+            .id("default-thinking-submenu")
             .absolute()
             .top(px(52.0 + row_top - 4.0))
             .w(px(flyout_w));
@@ -3284,7 +3315,13 @@ impl Workspace {
                 cx,
             ));
         }
-        flyout
+        flyout.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            if *hovered {
+                this.hover_submenus.entered();
+            } else {
+                this.close_default_submenu_after_hover(cx);
+            }
+        }))
     }
 
     /// The session-model menu sits on the right of the settings column. Open the flyout right
@@ -3353,7 +3390,13 @@ impl Workspace {
                 })),
             );
         }
-        flyout
+        flyout.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            if *hovered {
+                this.hover_submenus.entered();
+            } else {
+                this.close_default_submenu_after_hover(cx);
+            }
+        }))
     }
 
     fn thinking_choice(
@@ -3729,6 +3772,9 @@ impl Workspace {
     /// The dialogs Settings can raise, drawn over the whole window.
     pub(super) fn settings_dialogs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let english = self.app_settings.language == UiLanguage::English;
+        if let Some(dialog) = self.computer_install_dialog(cx) {
+            return Some(dialog);
+        }
         let s = self.settings.as_ref()?;
         if s.model_edit.is_some() {
             return self.model_detail_dialog(cx);
@@ -3736,12 +3782,7 @@ impl Workspace {
         // The MCP server form and the subagent role editor are Electron dialogs: drawn over the
         // pane, closed by the backdrop as by their own Cancel.
         if s.section == Section::Mcp && self.mcp_form_open() {
-            let body = div()
-                .id("mcp-form-dialog")
-                .w(px(576.0))
-                .max_h(px(640.0))
-                .overflow_y_scroll()
-                .child(self.mcp_form(cx));
+            let body = div().id("mcp-form-dialog").child(self.mcp_form(cx));
             return Some(modal(div().child(body), &self.palette, cx, |this| {
                 this.close_mcp_form()
             }));
@@ -3749,12 +3790,7 @@ impl Workspace {
         if s.section == Section::Subagents
             && let Some(editor) = self.role_editor_dialog(cx)
         {
-            let body = div()
-                .id("role-editor-dialog")
-                .w(px(576.0))
-                .max_h(px(640.0))
-                .overflow_y_scroll()
-                .child(editor);
+            let body = div().id("role-editor-dialog").child(editor);
             return Some(modal(div().child(body), &self.palette, cx, |this| {
                 this.close_role_editor()
             }));
@@ -4331,8 +4367,12 @@ pub(super) fn outline_button(id: impl Into<ElementId>, p: &crate::theme::Palette
         .hover(move |d| d.bg(hover))
 }
 
-/// `.overlay-surface` under glass: rounder, no border, a hairline edge, the long soft shadow
-/// and the specular rim. Solid themes keep the card.
+/// `.overlay-surface` under glass: rounder, no border, a hairline edge, the long soft shadow,
+/// the specular rim — and the `backdrop-filter` that Electron's overlays carry
+/// (`blur(28px) saturate(1.8)`), which is what lets the fill stay at the real 84/90%
+/// `--glass-overlay` alpha. The blur's input includes this element's own fill (a div
+/// paints its background before its children), which is equivalent: blur is linear, so
+/// `blur(fill + page) = fill + blur(page)`. Solid themes keep the card.
 fn overlay_surface(d: Div, radius: f32, p: &crate::theme::Palette) -> Div {
     match (p.get(Token::GlassEdge), p.get(Token::GlassShade)) {
         (Some(edge), Some(shade)) => {
@@ -4350,6 +4390,7 @@ fn overlay_surface(d: Div, radius: f32, p: &crate::theme::Palette) -> Div {
                     shadow(shade, 18.0, 40.0, -14.0),
                     shadow(shade, 2.0, 8.0, -2.0),
                 ])
+                .child(crate::ui::backdrop(14.0, 28.0, 1.8))
                 .child(crate::ui::glass_rim(14.0, p).unwrap_or_else(div))
         }
         _ => d
@@ -4479,6 +4520,26 @@ pub(super) fn dialog_foot(
     disabled: bool,
     english: bool,
 ) -> Div {
+    dialog_foot_with_cancel(
+        p,
+        cx,
+        cancel,
+        trs!(english, "settings.cancel"),
+        confirm_label,
+        confirm,
+        disabled,
+    )
+}
+
+pub(super) fn dialog_foot_with_cancel(
+    p: &crate::theme::Palette,
+    cx: &mut Context<Workspace>,
+    cancel: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
+    cancel_label: &str,
+    confirm_label: &str,
+    confirm: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+    disabled: bool,
+) -> Div {
     div()
         .px(px(16.0))
         .py(px(12.0))
@@ -4491,7 +4552,7 @@ pub(super) fn dialog_foot(
         .rounded_b(px(16.0))
         .child(
             outline_button("dialog-cancel", p)
-                .child(trs!(english, "settings.cancel"))
+                .child(SharedString::from(cancel_label.to_string()))
                 .on_click(cx.listener(move |this, _, _, cx| cancel(this, cx))),
         )
         .child(

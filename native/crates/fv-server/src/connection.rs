@@ -1005,6 +1005,18 @@ async fn dispatch(
             crate::queue::publish(state, &rt, &params.thread_id).await;
             to_value(Empty {})
         }
+        ClientRequest::TurnQueueReorder { params, .. } => {
+            let rt = state.runtime(&params.thread_id);
+            crate::queue::reorder(state, &rt, &params.thread_id, &params.item_ids)?;
+            crate::queue::publish(state, &rt, &params.thread_id).await;
+            to_value(Empty {})
+        }
+        ClientRequest::TurnQueueEdit { params, .. } => {
+            let rt = state.runtime(&params.thread_id);
+            crate::queue::edit(state, &rt, &params.thread_id, &params.item_id, &params.text)?;
+            crate::queue::publish(state, &rt, &params.thread_id).await;
+            to_value(Empty {})
+        }
         ClientRequest::TurnQueueSendNow { params, .. } => {
             let rt = state.runtime(&params.thread_id);
             crate::queue::send_now(state, &rt, &params.thread_id, &params.item_id)?;

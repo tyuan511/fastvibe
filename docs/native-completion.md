@@ -864,4 +864,64 @@ Electron 版滚动转写时把最近一条滚出视口的用户提示词 pin 在
 - 系统通知（`notify.rs`，`NSUserNotification`）：窗口失焦时任务完成/出错提醒；会话在等回答且不在屏幕上时提醒。
 - 使用统计、子 Agent、长期记忆、MCP（表单改为对话框）、技能、关于、个性化、定时任务、⌘K 面板、`/` 与 `@` 菜单、项目对话框、队列/目标托盘、右侧面板逐一按 Electron 重排（详见各文件）。
 
-**仍不同的（功能缺口，不是样式）**：插件页（原生无 pi 扩展）、电脑操控的后台投递/剪贴板开关、浏览器的系统浏览器与 Cookie 导入、按项目默认模型、CC Switch 导入、远程访问与 SSH 页（按计划后置）、内置子 Agent 角色、队列拖动排序/编辑。
+**仍不同的（功能缺口，不是样式）**：插件页（原生无 pi 扩展）、电脑操控的后台投递/剪贴板开关、浏览器的系统浏览器与 Cookie 导入、按项目默认模型、CC Switch 导入、远程访问与 SSH 页（按计划后置）。（内置子 Agent 角色已在第五十九批、队列拖动排序/编辑已在第六十批补齐。）
+
+## 第五十九批：照 codex 的方式内置子 Agent 角色
+
+此前 explorer / worker 是 `defaults()` 写进 `subagent_roles_v1` 的种子数据——落库、可编辑可删除，和用户自建角色混在一起；删掉之后 `spawn_agent` 就不再有这两个角色。这批改为 codex `core/src/agent/role.rs`（`mod built_in`）的模型：**内置角色编译进二进制，永不落库、不可编辑删除**。
+
+- `fv-server/src/subagents/roles.rs::built_ins()`：静态定义 explorer（只读）与 worker，随 `spawn_agent` 的描述与 enum 一并提供，`description` 采用 codex 的使用指引（并行多个 explorer、信任其结果、复用已有实例；worker 明确文件所有权、告知共享工作区、不回退他人改动）。用户角色仍存数据库，最多 32 个。
+- **同名覆盖语义**（codex 的 `resolve_role_config`：用户配置优先，内置补位）：`merged()` 先列用户角色，再补未被覆盖的内置角色；保存一个同 id 的自定义角色即覆盖内置（`upsert` 强制把客户端送来的 `builtin` 标志清掉——只有编译进二进制的定义才叫内置），删掉覆盖后内置回来。老版本种进库里的 explorer/worker 副本与内置逐字段相同，`merged()` 视其为内置本身，不会列出第二行可删的重复。
+- `for_spawn()` 改经 `merged()` 解析：未保存任何角色时 `agent_type: "explorer"/"worker"` 直接可用；`"default"` 仍是通用子会话。
+- 协议 `SubagentRole` 增加 `builtin`（serde 默认 false，旧载荷可读），`native/schema/protocol.json` 已重新生成。快照随子会话持久化的 `role` 字段带该标志，仅用于展示。
+- 设置页：内置角色行显示「内置」徽标，模型/思考一栏为纯文本，不提供编辑与删除；自定义角色的编辑、CAS 保存、删除与只读约束不变。截图夹具增加一个内置行供目检。
+- codex 里没有 planner/reviewer 内置角色（review 是独立任务类型、plan 是模式），故不添加；`awaiter` 在 codex 侧已被临时移除，不引入。
+
+验证：`fv-server --lib` 126 项通过（新增 2 项：内置不落库且删除无操作后仍在、同名覆盖与删除后恢复、`spawn_agent` 描述含内置角色）；`fv-protocol` 24 项与 schema 快照通过；`fv-server`/`fv-protocol` all-targets 严格 Clippy 通过。`fv-gui` 编译通过、`FV_FIXTURE_SAMPLE=1 --settings subagents --screenshot` 目检内置行（同轮另一会话在并行修改 queue/resources/web_content，那三个文件的失败用例与本批无关；`fv-gui` 的严格 Clippy 因其 `fv-daemon` 在途改动暂无法完整跑通）。全程未使用 computer use，无真实模型请求。
+
+## 第六十批：队列的拖动排序与就地编辑
+
+队列条此前只有「立即」和「×」：顺序只能在打字时决定，写错的一条只能删掉重打——而重打会把它挪到队尾，丢掉用户排好的顺序。
+
+- 协议新增 `turn/queue/reorder { threadId, itemIds }` 与 `turn/queue/edit { threadId, itemId, text }`，`native/schema/protocol.json` 已重新生成；两者都进远程策略的允许集（与 `turn/queue/remove` 同一理由）。
+- 排序提交**整份顺序**：拖动产出的本来就是整份，而整份让过期的客户端无害（不在队列里的 id 跳过，没点名的 id 留在原处）。`fv-store` 的 `reorder_queue` 在一个事务里重写全部 `position`；正在发送的那条（`preferred`）不参与。数据库先写、再改内存。
+- 编辑保持 id 与位置；空文本与「已在发送」都被拒绝。`fv-store` 的 `edit_queued` 只改 `text`，行不在队列里时返回 `false`，不会把已经发出去的提示词变回来。
+- GUI：队列行左侧抓手可拖动，落点用 2px 插入线画在目标行上缘/下缘（沿用侧栏 `sidebar_state::reordered` 的规则）；行内新增「编辑」铅笔，把该行换成输入框——Enter 保存、失焦保存、Esc 取消、空文本取消，编辑中的行不参与拖动，切换会话结束编辑。编辑不借用 composer：那里是写下一条消息的地方，借它会丢掉正在打的草稿。
+- 队列推送（`thread/queue/changed`）若发现被编辑/被拖动的行已经不在了，两个状态都直接结束，而不是改指向顶替它位置的另一条。
+- 预览：`--fixture queue-editing`（第一行处于编辑态）。
+
+验证：`fv-server --test queue` 14 项（新增 2 项：拖动后的顺序既被推给客户端、也落在库里，并按新顺序发送；编辑保持位置并发送新文案，空文本被拒）、`fv-store --test store` 21 项（新增 2 项：整份排序保留未点名的行、编辑保持 id 与位置）、`fv-gui --lib` 新增 2 项拖动算术单测；`fv-protocol` schema 快照通过；相关 crate all-targets Clippy 与 `cargo fmt` 通过。`fv-gui` 的 `i18n_keys`/`locale_file_tests` 仍因并行在途的 `resources.*` 文案缺键而失败（与本批无关）。截图 `--fixture queue-editing` 目检了编辑态与插入线所在的行高。全程未使用 computer use，无真实模型请求。
+
+## 第六十批：子 Agent 生命周期照 codex MultiAgentV2 重做
+
+按用户要求「完全参考 codex 实现」，模型侧的子 Agent 工具面从 v1 形态（spawn/send_input/wait/close/resume）整体替换为 codex `core/src/tools/handlers/multi_agents_v2` 的 durable-agent 形态。依据 `/tmp/codex-src`（`23934d3`）的 `multi_agents_v2/*`、`agent_path.rs`、`completion.rs`、`residency.rs` 取证。
+
+**工具面**（`fv-server/src/subagents.rs`，注册于每轮工具表）：
+- `spawn_agent`：必填 `task_name`（小写字母/数字/下划线，codex 的 `validate_agent_name` 规则），返回**规范任务路径**（`/root/<name>/…`）而非 agent id。`fork_turns: "none"|"all"` 取代 `fork_context`；**默认仍是 `none`**（FastVibe 的委派一直是新上下文起步，codex 默认 `all` 是一处记录在案的分歧）。子会话的开场消息前缀 `You are the agent "<path>"`（codex：「The new agent's canonical task name will be provided to it along with the message」）。路径名在树内唯一，重名拒绝。
+- `followup_task`：对已有 agent 下新任务——运行中的投递到下一个消息边界（steer），空闲/已结束的开新回合（复用全部历史，鼓励复用而非重开）。GUI 关闭的 agent 拒绝并提示去任务栏重开。
+- `send_message`：queue-only——运行中投递到消息边界，空闲只入队不启回合。
+- `interrupt_agent`：中断当前回合并返回先前状态；agent 保持可用。有界等待旧回合收尾，使紧随的 followup 不会 steer 进垂死回合。
+- `wait_agent`：v2 形态——**无 targets**，等树内任一 agent 的终态/未投递答复/等人作答，返回「谁更新了」不返回内容（codex：「Does not return the content」）。
+- `list_agents`：可选 `path_prefix`，列出整棵树（用户关闭的除外），行返回 `{agent_name, agent_status}`。
+- **模型侧没有 close/resume 工具**（codex v2 也没有）：容量改为只数**正在运行**的 agent（codex 数常驻、靠逐出；原生运行时不逐出，改数活跃回合，终态 agent 持久存活、100 条上限不变）。用户侧 `subagent/close` / `subagent/resume` JSON-RPC 保留给任务栏。
+
+**寻址**（`subagents/agent_path.rs`，逐条测试）：目标是 agent id 或路径——相对引用接在调用者自己的路径上（只能向下，`..`/`.` 保留），绝对引用必须 `/root` 开头；同树解析，`resolve` 对应 codex 的 `resolve_agent_target`。
+
+**完成通知**（`settled()`，对应 codex 的 `notify_parent_of_terminal_turn`）：子会话到达 Completed/Failed 时，向父线程投递 `Message Type: FINAL_ANSWER\nTask name: …\nSender: …\nPayload: …` 格式的消息（Failed 写 `Agent errored: …`，Interrupted 不发）。父线程运行中 → steer 进当前回合的下一个请求；空闲 → 入队（复用 async_ask 的投递形态，答复随下一回合交给模型）。投递记入 `state.subagent_delivered`，`wait_agent` 用它区分「已投递」与「未投递的终态」，避免父回合中途完成的孩子被整段超时藏住。
+
+**存储/协议**：`Subagent` 增加 `task_name`（serde 默认，旧行按 id 寻址）；schema 已重新生成。启动恢复（重启标记 Interrupted、send 续跑、角色快照）语义不变。
+
+**测试**：单元 29 项（新增：路径寻址/重名拒绝、wait 按名字报告且不含内容、FINAL_ANSWER 入队、send_message 不启回合、list 前缀过滤、interrupt+followup 收尾后再开新回合）；集成 `subagents`/`context_fork`/`code_mode`/`tools` 全部改到 v2 形态并通过；`fv-server --lib` 135 项通过。`tools.rs` 的注册清单、GUI `presentation.rs` 的工具家族归类同步更新；`NOTICE.md` 改记 MultiAgentV2 依据。
+
+**与 codex 的已知分歧（有意保留）**：① `fork_turns` 默认 `none`（codex `all`）；② 完成通知对空闲父线程入队并在其下一回合交给模型（codex 默认 WakeOnAgentMessages 关闭，通知停在 mailbox）；③ 容量按「运行中」计数而非 codex 的常驻+逐出（原生无运行时逐出）；④ `send_message` 对空闲 agent 入队后，该队列会在下一次回合结束时被 drain（codex 的 queue-only 消息只在下个回合开始时被读取）——语义上等价，时机略早。全程未使用 computer use，无真实付费请求。
+
+## 第六十一批：四处分歧全部对齐 codex
+
+第六十批记录的四处分歧，按用户要求「改成和 codex 一样」全部对齐：
+
+1. **`fork_turns` 默认 `all`**。不写 `fork_turns` 的 spawn 继承父会话全部保留上下文——codex 的默认；`"none"` 才是全新上下文。工具描述改为 codex 的措辞（`none` 可能让孩子缺上下文，`all` 带全部）。解析规则钉在 `fork_turns_follows_the_codex_default_of_all` 用例里。
+2. **空闲父线程的 FINAL_ANSWER 不再入提示队列、不再唤醒**。新增 `ServerState.agent_mailbox`：子会话完成时若父线程空闲，通知进 mailbox 等待；`spawn_turn_inner`（所有回合启动的唯一漏斗）在回合开始时把 mailbox 内容作为 steer 推入——循环顶部的 drain 把每条都落成独立的用户消息，与该回合自己的提示进**同一个**请求。运行中的父线程仍是 steer（消息边界投递）。这正是 codex 的 mailbox + `WakeOnAgentMessages` 默认关闭 + `DeferMailboxPreemption`（「Pending mail is delivered at the next normal input boundary instead」）的组合；也不再把 agent 间通知混进用户可见的提示队列。
+3. **容量改按常驻（已加载运行时）计数 + 逐出**。`room()` 数树内加载了运行时的 agent；满了就按 `updated_at` 最旧的**已收尾** agent（非 Running、无后台命令、无等人作答）逐出——只从运行时表里移除（`evict_runtime`），行、转写、排队提示都在磁盘上，下次 `runtime()` 按需重建（队列出 `queue::restore` 复原）。对应 codex `residency.rs` 的 `reserve_v2_residency_slot`（满了逐出最旧的空闲 resident）。agent 持久存活，只有常驻有界。
+4. **`send_message` 对空闲 agent 进 mailbox**，不再走提示队列——下个输入边界被读取，永不自成回合（codex queue-only 原义）。运行中仍 steer（「delivered promptly」）。
+
+**验证**：`fv-server` 全部 48 个测试目标通过（lib 137 项，新增：fork 默认解析、逐出释放名额后 followup 仍可重建运行时、FINAL_ANSWER 只进 mailbox 不进队列且随下一回合同请求交付、send_message 邮箱化并在 followup 的首个请求里出现）；`fv-protocol`/`fv-store` 与 schema 快照通过；`fv-server/fv-protocol/fv-store` all-targets 严格 Clippy 与格式检查通过；`fv-gui` 编译通过（116 项通过，唯一失败仍是并行会话的 `resources.finished` 键）。集成测试的子会话转写现在带 fork 前缀（断言改为扫全部回合）。全程未使用 computer use，无真实付费请求。

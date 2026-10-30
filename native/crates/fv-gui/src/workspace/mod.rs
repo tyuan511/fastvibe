@@ -10,8 +10,11 @@ use fv_protocol::types::Empty;
 use fv_protocol::types::*;
 use fv_protocol::{RequestId, ServerNotification, ServerRequest};
 use fv_theme::Token;
+use gpui_kit::base::TextSelection;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::*;
+
+use self::hover_submenu::HoverSubmenuController;
 
 mod about;
 mod app_menu;
@@ -23,6 +26,7 @@ mod diff;
 mod file_mention;
 mod goal_tray;
 mod header_git;
+mod hover_submenu;
 mod mcp;
 mod memory;
 mod model_detail;
@@ -45,7 +49,6 @@ mod sidebar;
 mod sidebar_actions;
 mod skill_picker;
 mod skills;
-mod sticky;
 mod subagent_roles;
 mod subagents;
 mod transcript;
@@ -187,15 +190,21 @@ pub struct Workspace {
     /// Which provider's models stand beside the model menu. Electron's `ModelThinkingSelect` nests
     /// them in a submenu per provider; only that one and the effort flyout can be open at a time.
     model_submenu: Option<String>,
+    hover_submenus: HoverSubmenuController,
     context_menu: bool,
     compact_pending: HashSet<ThreadId>,
     input: Entity<TextareaState>,
+    /// Inputs for auxiliary chat tabs. Each child thread keeps its own draft while the
+    /// parent remains selected in the main column.
+    pane_chat_inputs: HashMap<String, Entity<TextareaState>>,
+    /// Child thread snapshots currently being loaded for restored side-chat tabs.
+    pane_chat_loading: HashSet<String>,
     scroll: ScrollHandle,
-    /// Where each turn sits in the transcript, measured as it was drawn, for the pinned prompt.
-    sticky: sticky::Marks,
     /// How far through each waiting question set the user is.
     ask: HashMap<RequestId, ask::AskProgress>,
     ask_input: Entity<InputState>,
+    /// Selection captured after a real text drag: text plus the floating action bar's visibility.
+    transcript_selection: Option<String>,
     panel_focus: FocusHandle,
     focused_for: Option<RequestId>,
     approval_menu: bool,
@@ -295,6 +304,10 @@ pub struct Workspace {
     thread_menu: Option<(ThreadId, Point<Pixels>)>,
     /// A sidebar row being renamed in place.
     rename: Option<(ThreadId, Entity<InputState>)>,
+    /// A queued prompt being rewritten in the tray, and the draft it is standing in for.
+    queue_edit: Option<queue_tray::QueueEdit>,
+    /// Where a dragged queue row would land: the row it is over, and whether after it.
+    queue_drop: Option<(String, bool)>,
     /// How the app looks, as the server keeps it (shared by every client).
     app_settings: AppSettings,
     /// A settings read started before a write/notification cannot restore its old snapshot.
@@ -426,6 +439,11 @@ impl Workspace {
             this.views.insert(view.thread.id.clone(), view);
             this.fixture_header_git(1);
         }
+        if let Some(item_id) = fixture.queue_edit {
+            // The capture harness has no pointer, so the fixture opens the edit itself; the
+            // field is built exactly as 编辑 builds it.
+            this.queue_begin_edit(item_id, window, cx);
+        }
         this
     }
 
@@ -506,13 +524,16 @@ impl Workspace {
             model_menu: false,
             thinking_menu: false,
             model_submenu: None,
+            hover_submenus: Default::default(),
             context_menu: false,
             compact_pending: HashSet::new(),
             input,
+            pane_chat_inputs: HashMap::new(),
+            pane_chat_loading: HashSet::new(),
             scroll,
-            sticky: Default::default(),
             ask: HashMap::new(),
             ask_input,
+            transcript_selection: None,
             panel_focus: cx.focus_handle(),
             focused_for: None,
             approval_menu: false,
@@ -578,6 +599,8 @@ impl Workspace {
             project_row_menu: None,
             thread_menu: None,
             rename: None,
+            queue_edit: None,
+            queue_drop: None,
             app_settings: AppSettings::default(),
             app_settings_epoch: 0,
             shortcuts: shortcuts::Runtime::new(window, cx),
@@ -835,6 +858,7 @@ impl Workspace {
         self.model_menu = false;
         self.thinking_menu = false;
         self.model_submenu = None;
+        self.hover_submenus.entered();
         self.context_menu = false;
         self.access_menu = false;
         self.approval_menu = false;
@@ -872,6 +896,18 @@ impl Workspace {
         if let Some(input) = self.search_box.clone() {
             input.update(cx, |st, cx| st.set_value(query, window, cx));
         }
+    }
+
+    /// Close the composer's hover submenu after the pointer leaves its trigger. The short grace
+    /// period lets the pointer cross the flyout overlap; entering the trigger or flyout bumps the
+    /// generation and cancels this pending close.
+    fn close_model_submenu_after_hover(&mut self, cx: &mut Context<Self>) {
+        self.hover_submenus.close_after(cx, |this| {
+            if this.model_submenu.is_some() || this.thinking_menu {
+                this.model_submenu = None;
+                this.thinking_menu = false;
+            }
+        });
     }
 
     pub fn show_context_menu(&mut self, cx: &mut Context<Self>) {
@@ -1375,8 +1411,147 @@ impl Workspace {
         // it rather than silently rewriting a turn in the chat the user just opened. The words
         // stay in the composer — they are still what the user typed.
         self.cancel_edit(cx);
+        self.queue_edit = None;
         cx.notify();
         self.load_view(id, cx);
+    }
+
+    /// Open an existing child thread as a real tab in the parent's side pane. The parent stays
+    /// selected in the main column, while the child keeps its own transcript and draft input.
+    pub(super) fn open_auxiliary_chat_tab(
+        &mut self,
+        thread_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(parent) = self.selected.clone() else {
+            return;
+        };
+        let title: String = trs!(self.english(), "pane.auxiliary_chat").into();
+        let pane = self.panes.entry(parent).or_default();
+        let tab_id = pane
+            .tabs
+            .iter()
+            .find_map(|tab| match &tab.kind {
+                pane::PaneTabKind::Chat { thread_id: id } if id == &thread_id => {
+                    Some(tab.id.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                let id = pane::new_tab_id();
+                pane.tabs.push(pane::PaneTab {
+                    id: id.clone(),
+                    kind: pane::PaneTabKind::Chat {
+                        thread_id: thread_id.clone(),
+                    },
+                    title: title.clone(),
+                });
+                id
+            });
+        pane.activate(tab_id.clone());
+        self.side_pane_collapsed = false;
+        self.ensure_pane_chat_input(tab_id, thread_id.clone(), window, cx);
+        if !self.views.contains_key(&thread_id) && self.pane_chat_loading.insert(thread_id.clone())
+        {
+            self.load_view(thread_id, cx);
+        }
+        cx.notify();
+    }
+
+    fn ensure_pane_chat_input(
+        &mut self,
+        tab_id: String,
+        thread_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pane_chat_inputs.contains_key(&tab_id) {
+            return;
+        }
+        let input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .submit_on_enter(true)
+                .auto_grow(1, 6)
+                .placeholder(text::placeholder(self.app_settings.language))
+        });
+        let owner = thread_id.clone();
+        cx.subscribe_in(
+            &input,
+            window,
+            move |this, _, event: &InputEvent, window, cx| {
+                if matches!(
+                    event,
+                    InputEvent::PressEnter {
+                        secondary: false,
+                        shift: false,
+                    }
+                ) {
+                    this.send_pane_chat(owner.clone(), window, cx);
+                }
+            },
+        )
+        .detach();
+        self.pane_chat_inputs.insert(tab_id, input);
+    }
+
+    pub(super) fn send_pane_chat(
+        &mut self,
+        thread_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.pane_chat_inputs.iter().find_map(|(tab, input)| {
+            self.panes.values().any(|pane| {
+                pane.tabs.iter().any(|entry| {
+                    entry.id == *tab
+                        && matches!(&entry.kind, pane::PaneTabKind::Chat { thread_id: id } if id == &thread_id)
+                })
+            })
+            .then(|| input.clone())
+        }) else {
+            return;
+        };
+        let text = input.read(cx).value().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        input.update(cx, |state, cx| state.set_value("", window, cx));
+        let running = self.views.get(&thread_id).is_some_and(|view| view.running);
+        let window_handle = window.window_handle();
+        let original = text.clone();
+        cx.spawn(async move |this, cx| {
+            let result = if running {
+                backend
+                    .call::<TurnEnqueue>(TurnEnqueueParams {
+                        thread_id: thread_id.clone(),
+                        text,
+                    })
+                    .await
+                    .map(|_| ())
+            } else {
+                backend
+                    .call::<TurnStart>(TurnStartParams {
+                        thread_id: thread_id.clone(),
+                        text,
+                    })
+                    .await
+                    .map(|_| ())
+            };
+            if let Err(error) = result {
+                let _ = cx.update_window(window_handle, |_, window, cx| {
+                    input.update(cx, |state, cx| state.set_value(original, window, cx));
+                });
+                let _ = this.update(cx, |this, cx| {
+                    this.fail(error.to_string(), cx);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn load_view(&mut self, id: ThreadId, cx: &mut Context<Self>) {
@@ -1387,8 +1562,10 @@ impl Workspace {
             thread_id: id.clone(),
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(snapshot) = call.await {
-                this.update(cx, |this, cx| {
+            let snapshot = call.await.ok();
+            this.update(cx, |this, cx| {
+                this.pane_chat_loading.remove(&id);
+                if let Some(snapshot) = snapshot {
                     let mut view = ThreadView::from_snapshot(snapshot);
                     if let Some(old) = this.views.get(&id) {
                         view.questions = old.questions.clone();
@@ -1429,10 +1606,10 @@ impl Workspace {
                     }
                     this.views.insert(id, view);
                     this.stick_to_bottom = !this.search_jump_pending;
-                    cx.notify();
-                })
-                .ok();
-            }
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
@@ -1555,6 +1732,13 @@ impl Workspace {
                     _ => {}
                 }
                 match &note {
+                    // A row that is being edited or dragged can vanish under the pointer — the
+                    // turn before it finished and sent it, or another client removed it. Both
+                    // edits are anchored on an id, so both end rather than repoint at whatever
+                    // now holds that position.
+                    ServerNotification::ThreadQueueChanged(event) => {
+                        self.queue_changed(event);
+                    }
                     ServerNotification::TurnCompleted(event)
                         if self.selected.as_deref() != Some(event.thread_id.as_str()) =>
                     {
@@ -1943,6 +2127,54 @@ impl Workspace {
         cx.notify();
     }
 
+    fn clear_transcript_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        TextSelection::clear(window, cx);
+        self.transcript_selection = None;
+        cx.notify();
+    }
+
+    fn capture_transcript_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = TextSelection::selected_text(window, cx).trim().to_string();
+        self.transcript_selection = (!text.is_empty()).then_some(text);
+        cx.notify();
+    }
+
+    fn add_selection_to_composer(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.input.read(cx).value().to_string();
+        let next = if current.trim().is_empty() {
+            text
+        } else {
+            format!("{current}\n\n{text}")
+        };
+        self.input
+            .update(cx, |state, cx| state.set_value(next, window, cx));
+        self.clear_transcript_selection(window, cx);
+    }
+
+    fn ask_selection_in_side_chat(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_auxiliary_chat(window, cx);
+        let Some(parent) = self.selected.clone() else {
+            return;
+        };
+        let Some(tab_id) = self.panes.get(&parent).and_then(|pane| pane.active.clone()) else {
+            return;
+        };
+        if let Some(input) = self.pane_chat_inputs.get(&tab_id) {
+            input.update(cx, |state, cx| state.set_value(text, window, cx));
+            self.clear_transcript_selection(window, cx);
+        }
+    }
+
     /// 重试: ask for that turn again. Its reply is discarded and the same prompt re-sent, which
     /// is the whole meaning of "run this again" in a conversation.
     ///
@@ -2142,6 +2374,32 @@ impl Workspace {
 
     // ---- the queue behind the reply in flight
 
+    /// A queue notice landed. An edit or a drag that was anchored on a row the queue no longer
+    /// holds is dropped: repointing it at the row that took the place would rewrite or move a
+    /// prompt the user never touched.
+    fn queue_changed(&mut self, event: &ThreadEvent<QueueState>) {
+        let ids: Vec<&str> = event
+            .body
+            .items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+        if self
+            .queue_edit
+            .as_ref()
+            .is_some_and(|edit| !ids.contains(&edit.item_id.as_str()))
+        {
+            self.queue_edit = None;
+        }
+        if self
+            .queue_drop
+            .as_ref()
+            .is_some_and(|(id, _)| !ids.contains(&id.as_str()))
+        {
+            self.queue_drop = None;
+        }
+    }
+
     fn queue_remove(&mut self, item_id: String, cx: &mut Context<Self>) {
         let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
             return;
@@ -2191,6 +2449,146 @@ impl Workspace {
         .detach();
     }
 
+    /// 拖动: put the queue in the order a drag produced.
+    ///
+    /// The server answers with the queue's whole new state, so a drag that lost a race with a
+    /// send is corrected by the same reply rather than by a guess here.
+    fn queue_reorder(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
+        let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = b
+                .call::<TurnQueueReorder>(QueueReorderParams {
+                    thread_id: id,
+                    item_ids: ids,
+                })
+                .await;
+            if let Err(e) = result {
+                this.update(cx, |this, cx| {
+                    this.fail(
+                        tr!(this.english(), "mod.could_not_reorder_queue_e", e = e),
+                        cx,
+                    );
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// 编辑: rewrite a waiting prompt in place.
+    ///
+    /// The words go into the tray's own field, not the composer: the composer is where the next
+    /// message is written, and borrowing it would throw away a half-written draft to correct a
+    /// message that has not been sent yet.
+    fn queue_begin_edit(&mut self, item_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.views.get(id))
+            .and_then(|v| v.queue.items.iter().find(|item| item.id == item_id))
+            .cloned()
+        else {
+            return;
+        };
+        // One at a time: a second 编辑 on another row abandons the first, which is what clicking
+        // elsewhere in a list does.
+        self.queue_edit = None;
+        let input = cx.new(|cx| InputState::new(window, cx));
+        input.update(cx, |state, cx| {
+            state.set_value(item.text.clone(), window, cx);
+            state.focus(window, cx);
+        });
+        let target = item.id.clone();
+        cx.subscribe_in(
+            &input,
+            window,
+            move |this, input, ev: &InputEvent, _, cx| match ev {
+                InputEvent::PressEnter { .. } => {
+                    let text = input.read(cx).value().trim().to_string();
+                    this.finish_queue_edit(&target, text, cx);
+                }
+                // Leaving the field saves what is in it, like the sidebar's rename: an edit
+                // that is cancelled by clicking away would be a change the user watched
+                // themselves make and then lost.
+                InputEvent::Blur
+                    if this
+                        .queue_edit
+                        .as_ref()
+                        .is_some_and(|edit| edit.item_id == target) =>
+                {
+                    let text = input.read(cx).value().trim().to_string();
+                    this.finish_queue_edit(&target, text, cx);
+                }
+                _ => {}
+            },
+        )
+        .detach();
+        self.queue_edit = Some(queue_tray::QueueEdit { item_id, input });
+        cx.notify();
+    }
+
+    /// Commit (or drop) the tray's edit. An empty field cancels: a queued prompt with nothing in
+    /// it would be a turn that starts with no question.
+    pub(super) fn finish_queue_edit(
+        &mut self,
+        item_id: &str,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.queue_edit = None;
+        if text.is_empty() {
+            cx.notify();
+            return;
+        }
+        let unchanged = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.views.get(id))
+            .and_then(|v| v.queue.items.iter().find(|item| item.id == item_id))
+            .is_some_and(|item| item.text == text);
+        if unchanged {
+            cx.notify();
+            return;
+        }
+        self.queue_edit_save(item_id.to_string(), text, cx);
+        cx.notify();
+    }
+
+    /// Cancel the tray's edit and give the keyboard back to the composer.
+    pub(super) fn cancel_queue_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.queue_edit.take().is_none() {
+            return;
+        }
+        self.input.update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+    }
+
+    fn queue_edit_save(&mut self, item_id: String, text: String, cx: &mut Context<Self>) {
+        let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = b
+                .call::<TurnQueueEdit>(QueueEditParams {
+                    thread_id: id,
+                    item_id,
+                    text,
+                })
+                .await;
+            if let Err(e) = result {
+                this.update(cx, |this, cx| {
+                    this.fail(tr!(this.english(), "mod.could_not_edit_queue_e", e = e), cx);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     fn palette_blocked(&self) -> bool {
         self.backend.is_none()
             || self
@@ -2207,6 +2605,18 @@ impl Workspace {
         cx.spawn(async move |_, _| {
             let _ = b
                 .call::<TurnInterrupt>(ThreadIdParams { thread_id: id })
+                .await;
+        })
+        .detach();
+    }
+
+    pub(super) fn interrupt_thread(&mut self, thread_id: String, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        cx.spawn(async move |_, _| {
+            let _ = backend
+                .call::<TurnInterrupt>(ThreadIdParams { thread_id })
                 .await;
         })
         .detach();
@@ -2481,6 +2891,7 @@ impl Render for Workspace {
         }
         if !cx.has_active_drag() {
             self.sidebar_drop = None;
+            self.queue_drop = None;
         }
         self.focus_pending(window, cx);
         // The handle only knows the content's height after a layout, so the jump to the end
@@ -3066,9 +3477,15 @@ impl Workspace {
         if self.dismiss_schedule(cx) {
             return;
         }
-        // Esc closes one thing per press, and an edit in the composer is the most immediate of
-        // them: the words stay, they just stop replacing a turn the user already sent.
-        if self.editing() {
+        if self.computer_install_dialog_is_open() {
+            self.computer_close_install_dialog(cx);
+            return;
+        }
+        // Esc closes one thing per press. A queued prompt being rewritten is a field with typed
+        // text in it and sits above the composer, so it is the first thing Escape leaves.
+        if self.queue_edit.is_some() {
+            self.cancel_queue_edit(window, cx);
+        } else if self.editing() {
             self.cancel_edit(cx);
         } else if self.rename.take().is_some() || self.sidebar_notice.take().is_some() {
             cx.notify();

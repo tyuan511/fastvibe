@@ -3,8 +3,8 @@ use anyhow::{Context as _, Result};
 use block2::RcBlock;
 use core_graphics::geometry::CGSize;
 use gpui::{
-    AtlasTextureId, Background, Bounds, ContentMask, DevicePixels, PaintSurface, Path, Point,
-    PrimitiveBatch, ScaledPixels, Scene, Size, point, size,
+    AtlasTextureId, Backdrop, Background, Bounds, ContentMask, DevicePixels, PaintSurface, Path,
+    Point, PrimitiveBatch, ScaledPixels, Scene, Size, point, size,
 };
 #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
 use image::RgbaImage;
@@ -124,6 +124,11 @@ pub struct MetalRenderer {
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
     surfaces_pipeline_state: metal::RenderPipelineState,
+    /// Blur passes for `Backdrop` primitives (downsample + separable gaussian).
+    /// Blending is off: each pass covers its whole destination texture.
+    backdrop_pipeline_state: metal::RenderPipelineState,
+    /// Composites a blurred snapshot back over the frame, replacing the region.
+    backdrop_composite_pipeline_state: metal::RenderPipelineState,
     unit_vertices: metal::Buffer,
     #[allow(clippy::arc_with_non_send_sync)]
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
@@ -131,6 +136,9 @@ pub struct MetalRenderer {
     core_video_texture_cache: CFRetained<CVMetalTextureCache>,
     path_intermediate_texture: Option<metal::Texture>,
     path_intermediate_msaa_texture: Option<metal::Texture>,
+    /// Ping-pong textures for `Backdrop` blurs, quarter-resolution, exact size.
+    backdrop_texture_a: Option<metal::Texture>,
+    backdrop_texture_b: Option<metal::Texture>,
     path_sample_count: u32,
     /// Offscreen render target reused across `render_scene` calls when
     /// rendering headlessly without reading pixels back.
@@ -181,10 +189,11 @@ impl MetalRenderer {
         // https://developer.apple.com/documentation/metal/managing-your-game-window-for-metal-in-macos
         layer.set_opaque(!transparent);
         layer.set_maximum_drawable_count(3);
-        // Allow texture reading for visual tests and UI automation screenshots
-        // (captures without ScreenCaptureKit). Only debug builds pay the
-        // presentation cost, even when `test-support` is compiled in.
-        #[cfg(all(feature = "test-support", debug_assertions))]
+        // Allow reading the drawable at any time: the backdrop blur snapshots
+        // the frame mid-pass, and visual tests / UI automation captures read it
+        // too. A translucent (glass) window is composited by Core Animation
+        // either way, so direct-to-display was already unavailable there; only
+        // opaque windows forgo it.
         layer.set_framebuffer_only(false);
         // metal-rs doesn't bind these setters, so view the same object through
         // objc2's typed CAMetalLayer binding.
@@ -359,6 +368,20 @@ impl MetalRenderer {
             "surface_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
+        let backdrop_pipeline_state = build_backdrop_pipeline_state(
+            &device,
+            &library,
+            "backdrop",
+            "backdrop_vertex",
+            "backdrop_fragment",
+        );
+        let backdrop_composite_pipeline_state = build_backdrop_pipeline_state(
+            &device,
+            &library,
+            "backdrop composite",
+            "backdrop_vertex",
+            "backdrop_composite_fragment",
+        );
 
         let command_queue = device.new_command_queue();
         let supports_shared_storage = cfg!(target_os = "ios") || is_apple_gpu;
@@ -399,12 +422,16 @@ impl MetalRenderer {
             monochrome_sprites_pipeline_state,
             polychrome_sprites_pipeline_state,
             surfaces_pipeline_state,
+            backdrop_pipeline_state,
+            backdrop_composite_pipeline_state,
             unit_vertices,
             instance_buffer_pool,
             sprite_atlas,
             core_video_texture_cache,
             path_intermediate_texture: None,
             path_intermediate_msaa_texture: None,
+            backdrop_texture_a: None,
+            backdrop_texture_b: None,
             path_sample_count: PATH_SAMPLE_COUNT,
             #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
             headless_render_target: None,
@@ -735,6 +762,18 @@ impl MetalRenderer {
                 }
                 PrimitiveBatch::Quads(range) => {
                     self.draw_quads(range, instance_bindings, viewport_size, command_encoder)
+                }
+                PrimitiveBatch::Backdrops(range) => {
+                    command_encoder.end_encoding();
+                    for backdrop in &scene.backdrops[range.clone()] {
+                        self.draw_backdrop(backdrop, command_buffer, texture, viewport_size);
+                    }
+                    command_encoder = new_command_encoder_for_texture(
+                        command_buffer,
+                        texture,
+                        viewport_size,
+                        None,
+                    );
                 }
                 PrimitiveBatch::Paths(range) => {
                     let paths = &scene.paths[range];
@@ -1180,6 +1219,212 @@ impl MetalRenderer {
         );
     }
 
+    /// Blur the pixels already rendered behind `backdrop.bounds` and composite them back
+    /// over themselves (replacing the region), so a translucent glass fill painted after
+    /// this primitive sits on a frosted copy of the page — the Metal analogue of CSS
+    /// `backdrop-filter: blur(radius) saturate(saturation)`.
+    ///
+    /// The snapshot stays premultiplied: a translucent window region replaced with its
+    /// blurred copy keeps showing the desktop through it, exactly as the unblurred page
+    /// did. The blur runs at quarter resolution (two ping-pong textures), which a 28px
+    /// blur cannot resolve anyway.
+    fn draw_backdrop(
+        &mut self,
+        backdrop: &Backdrop,
+        command_buffer: &metal::CommandBufferRef,
+        target: &metal::TextureRef,
+        viewport_size: Size<DevicePixels>,
+    ) {
+        const DOWNSAMPLE: f32 = 4.;
+        // CSS `blur()` is twice the gaussian standard deviation.
+        let sigma = backdrop.blur_radius.0 * 0.5 / DOWNSAMPLE;
+
+        let bounds = backdrop.bounds.intersect(&backdrop.content_mask.bounds);
+        let viewport_bounds = Bounds {
+            origin: Point {
+                x: ScaledPixels(0.),
+                y: ScaledPixels(0.),
+            },
+            size: size(
+                ScaledPixels(i32::from(viewport_size.width) as f32),
+                ScaledPixels(i32::from(viewport_size.height) as f32),
+            ),
+        };
+        let bounds = bounds.intersect(&viewport_bounds);
+        let x = bounds.origin.x.0.max(0.) as i64;
+        let y = bounds.origin.y.0.max(0.) as i64;
+        let width = (bounds.size.width.0.max(0.) as i64).min(i32::from(viewport_size.width) as i64 - x);
+        let height = (bounds.size.height.0.max(0.) as i64).min(i32::from(viewport_size.height) as i64 - y);
+        if width <= 0 || height <= 0 {
+            return;
+        }
+
+        let quarter_width = (((width as f32) / DOWNSAMPLE).ceil() as i64).max(1);
+        let quarter_height = (((height as f32) / DOWNSAMPLE).ceil() as i64).max(1);
+        self.backdrop_texture_a =
+            Self::ensure_backdrop_texture(self.backdrop_texture_a.take(), &self.device, quarter_width, quarter_height);
+        self.backdrop_texture_b =
+            Self::ensure_backdrop_texture(self.backdrop_texture_b.take(), &self.device, quarter_width, quarter_height);
+        let texture_a = self
+            .backdrop_texture_a
+            .clone()
+            .expect("backdrop texture allocated");
+        let texture_b = self
+            .backdrop_texture_b
+            .clone()
+            .expect("backdrop texture allocated");
+
+        let corners = backdrop.corner_radii;
+        // The quarter-texture geometry is what the blur passes draw; the
+        // downsample and composite passes override dest/source/viewport.
+        let params = BackdropPassParams {
+            dest: [0., 0., quarter_width as f32, quarter_height as f32],
+            source: [0., 0., quarter_width as f32, quarter_height as f32],
+            source_size: [quarter_width as f32, quarter_height as f32],
+            viewport: [quarter_width as f32, quarter_height as f32],
+            sigma,
+            saturation: backdrop.saturation,
+            mode: 0.,
+            corners: [
+                corners.top_left.0,
+                corners.top_right.0,
+                corners.bottom_right.0,
+                corners.bottom_left.0,
+            ],
+            _pad: [0.; 2],
+        };
+
+        // 1. Downsample the frame so far into texture A.
+        self.run_backdrop_pass(
+            &self.backdrop_pipeline_state,
+            &texture_a,
+            target,
+            BackdropPassParams {
+                dest: [0., 0., quarter_width as f32, quarter_height as f32],
+                source: [x as f32, y as f32, width as f32, height as f32],
+                source_size: [
+                    i32::from(viewport_size.width) as f32,
+                    i32::from(viewport_size.height) as f32,
+                ],
+                viewport: [quarter_width as f32, quarter_height as f32],
+                ..params
+            },
+            command_buffer,
+            metal::MTLLoadAction::DontCare,
+        );
+        // 2. Horizontal gaussian, A -> B.
+        self.run_backdrop_pass(
+            &self.backdrop_pipeline_state,
+            &texture_b,
+            &texture_a,
+            BackdropPassParams {
+                mode: 1.,
+                ..params
+            },
+            command_buffer,
+            metal::MTLLoadAction::DontCare,
+        );
+        // 3. Vertical gaussian, B -> A.
+        self.run_backdrop_pass(
+            &self.backdrop_pipeline_state,
+            &texture_a,
+            &texture_b,
+            BackdropPassParams {
+                mode: 2.,
+                ..params
+            },
+            command_buffer,
+            metal::MTLLoadAction::DontCare,
+        );
+        // 4. Composite A over the frame, replacing the blurred region. Unlike the
+        // blur passes it covers only part of its destination, so that texture is
+        // loaded, not cleared.
+        self.run_backdrop_pass(
+            &self.backdrop_composite_pipeline_state,
+            target,
+            &texture_a,
+            BackdropPassParams {
+                dest: [x as f32, y as f32, width as f32, height as f32],
+                viewport: [
+                    i32::from(viewport_size.width) as f32,
+                    i32::from(viewport_size.height) as f32,
+                ],
+                mode: 3.,
+                ..params
+            },
+            command_buffer,
+            metal::MTLLoadAction::Load,
+        );
+    }
+
+    fn ensure_backdrop_texture(
+        existing: Option<metal::Texture>,
+        device: &metal::DeviceRef,
+        width: i64,
+        height: i64,
+    ) -> Option<metal::Texture> {
+        if let Some(texture) = &existing {
+            if texture.width() == width as u64 && texture.height() == height as u64 {
+                return existing;
+            }
+        }
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_width(width as u64);
+        descriptor.set_height(height as u64);
+        descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        descriptor.set_usage(
+            metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead,
+        );
+        Some(device.new_texture(&descriptor))
+    }
+
+    /// One backdrop draw step: a quad covering the whole `destination`, sampling
+    /// `source` with `params`.
+    fn run_backdrop_pass(
+        &self,
+        pipeline_state: &metal::RenderPipelineState,
+        destination: &metal::TextureRef,
+        source: &metal::TextureRef,
+        params: BackdropPassParams,
+        command_buffer: &metal::CommandBufferRef,
+        load_action: metal::MTLLoadAction,
+    ) {
+        let render_pass_descriptor = metal::RenderPassDescriptor::new();
+        let color_attachment = render_pass_descriptor
+            .color_attachments()
+            .object_at(0)
+            .unwrap();
+        color_attachment.set_texture(Some(destination));
+        color_attachment.set_load_action(load_action);
+        color_attachment.set_store_action(metal::MTLStoreAction::Store);
+
+        let command_encoder = command_buffer.new_render_command_encoder(render_pass_descriptor);
+        command_encoder.set_label("backdrop");
+        command_encoder.set_viewport(metal::MTLViewport {
+            originX: 0.0,
+            originY: 0.0,
+            width: destination.width() as f64,
+            height: destination.height() as f64,
+            znear: 0.0,
+            zfar: 1.0,
+        });
+        command_encoder.set_render_pipeline_state(pipeline_state);
+        command_encoder.set_vertex_bytes(
+            0,
+            mem::size_of::<BackdropPassParams>() as u64,
+            &params as *const BackdropPassParams as *const _,
+        );
+        command_encoder.set_fragment_bytes(
+            0,
+            mem::size_of::<BackdropPassParams>() as u64,
+            &params as *const BackdropPassParams as *const _,
+        );
+        command_encoder.set_fragment_texture(0, Some(source));
+        command_encoder.draw_primitives(metal::MTLPrimitiveType::TriangleStrip, 0, 4);
+        command_encoder.end_encoding();
+    }
+
     fn draw_surfaces(
         &mut self,
         surfaces: &[PaintSurface],
@@ -1336,6 +1581,53 @@ fn read_texture_to_image(texture: &metal::TextureRef) -> Result<RgbaImage> {
     }
 
     RgbaImage::from_raw(width, height, pixels).context("failed to create RgbaImage from pixel data")
+}
+
+/// The per-pass uniform for `backdrop_vertex` / `backdrop_fragment`; see
+/// `shaders.metal` for the field meanings. Shared with the shader by layout.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BackdropPassParams {
+    dest: [f32; 4],
+    source: [f32; 4],
+    source_size: [f32; 2],
+    viewport: [f32; 2],
+    sigma: f32,
+    saturation: f32,
+    mode: f32,
+    corners: [f32; 4],
+    _pad: [f32; 2],
+}
+
+/// Like `build_pipeline_state`, but with blending disabled: the blur passes
+/// cover their whole destination, and the composite pass *replaces* its region
+/// (a CSS backdrop-filter presents the filtered backdrop in place of the
+/// original pixels, not composited over them).
+fn build_backdrop_pipeline_state(
+    device: &metal::DeviceRef,
+    library: &metal::LibraryRef,
+    label: &str,
+    vertex_fn_name: &str,
+    fragment_fn_name: &str,
+) -> metal::RenderPipelineState {
+    let vertex_fn = library
+        .get_function(vertex_fn_name, None)
+        .expect("error locating vertex function");
+    let fragment_fn = library
+        .get_function(fragment_fn_name, None)
+        .expect("error locating fragment function");
+
+    let descriptor = metal::RenderPipelineDescriptor::new();
+    descriptor.set_label(label);
+    descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+    descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
+    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+    color_attachment.set_blending_enabled(false);
+
+    device
+        .new_render_pipeline_state(&descriptor)
+        .expect("could not create render pipeline state")
 }
 
 fn build_pipeline_state(

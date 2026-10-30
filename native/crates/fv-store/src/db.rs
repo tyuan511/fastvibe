@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Mutex;
@@ -112,7 +113,6 @@ const MIGRATIONS: &[&str] = &[
      CREATE UNIQUE INDEX scheduled_one_active ON scheduled_runs((1)) WHERE status='running';
      CREATE UNIQUE INDEX scheduled_one_queued ON scheduled_runs(task_id) WHERE status='queued';
      CREATE TABLE schedule_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);",
-
 ];
 
 /// A provider as stored: everything but its key.
@@ -161,6 +161,13 @@ impl Db {
              PRAGMA foreign_keys = ON;",
         )?;
         migrate(&conn)?;
+        // This is an additive query-planning optimization, so it does not advance the schema
+        // version. Keeping it outside MIGRATIONS also lets older databases gain the index without
+        // changing the compatibility version expected by existing clients.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS queue_items_thread_position
+             ON queue_items(thread_id, position, id);",
+        )?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -284,9 +291,14 @@ impl Db {
     /// Put the providers in this order; ones not named keep their relative order after them.
     pub fn reorder_providers(&self, ids: &[String]) -> Result<(), StoreError> {
         let current: Vec<String> = self.list_providers()?.into_iter().map(|p| p.id).collect();
-        let mut order: Vec<&String> = ids.iter().filter(|i| current.contains(i)).collect();
+        let current_ids: HashSet<&str> = current.iter().map(String::as_str).collect();
+        let mut order: Vec<&String> = ids
+            .iter()
+            .filter(|i| current_ids.contains(i.as_str()))
+            .collect();
+        let mut named: HashSet<String> = order.iter().map(|id| (*id).clone()).collect();
         for id in &current {
-            if !order.contains(&id) {
+            if named.insert(id.clone()) {
                 order.push(id);
             }
         }
@@ -407,6 +419,58 @@ impl Db {
             "DELETE FROM queue_items WHERE thread_id = ?1 AND id = ?2",
             params![thread_id, id],
         )? > 0)
+    }
+
+    /// Rewrite one waiting prompt, keeping its id and its place in the queue.
+    ///
+    /// `false` when the row is gone (sent, removed, or taken by another client): an edit is
+    /// not allowed to bring a prompt back that the server already handed to the model.
+    pub fn edit_queued(&self, thread_id: &str, id: &str, text: &str) -> Result<bool, StoreError> {
+        Ok(self.conn.lock().unwrap().execute(
+            "UPDATE queue_items SET text = ?3 WHERE thread_id = ?1 AND id = ?2",
+            params![thread_id, id, text],
+        )? > 0)
+    }
+
+    /// Write the queue's order: the ids the caller named, in the order it named them, then
+    /// whatever else is still queued in the order it already had.
+    ///
+    /// One transaction, because the positions are rewritten whole — a crash halfway through
+    /// would leave a queue with duplicate positions, and `ORDER BY position, id` would then
+    /// quietly re-sort it by id.
+    pub fn reorder_queue(&self, thread_id: &str, ids: &[String]) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id FROM queue_items WHERE thread_id = ?1 ORDER BY position, id")?;
+        let current: Vec<String> = stmt
+            .query_map(params![thread_id], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        // Named ids first (skipping ones that are no longer queued), then the rest untouched.
+        let current_ids: HashSet<&str> = current.iter().map(String::as_str).collect();
+        let mut order: Vec<String> = ids
+            .iter()
+            .filter(|id| current_ids.contains(id.as_str()))
+            .cloned()
+            .collect();
+        let mut named: HashSet<String> = order.iter().cloned().collect();
+        for id in current {
+            if named.insert(id.clone()) {
+                order.push(id);
+            }
+        }
+        if order.is_empty() {
+            return Ok(());
+        }
+        let tx = conn.unchecked_transaction()?;
+        for (position, id) in order.iter().enumerate() {
+            tx.execute(
+                "UPDATE queue_items SET position = ?3 WHERE thread_id = ?1 AND id = ?2",
+                params![thread_id, id, position as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// The most recently queued prompt, for a turn that starts with one.

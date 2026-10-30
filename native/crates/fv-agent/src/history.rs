@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use fv_core::{ContentBlock, Message};
 
@@ -13,42 +13,48 @@ const MISSING_RESULT: &str = "The tool call did not finish (no result was record
 pub fn normalize(history: &[Message]) -> Vec<Message> {
     let mut out = Vec::with_capacity(history.len());
     // Calls from the last assistant message still waiting for their result: (id, name).
-    let mut pending: Vec<(String, String)> = Vec::new();
+    let mut pending: HashMap<String, String> = HashMap::new();
+    let mut pending_order: Vec<String> = Vec::new();
 
-    fn close(out: &mut Vec<Message>, pending: &mut Vec<(String, String)>) {
-        for (call_id, name) in pending.drain(..) {
-            out.push(Message::ToolResult {
-                call_id,
-                name,
-                content: MISSING_RESULT.into(),
-                is_error: true,
-            });
+    fn close(
+        out: &mut Vec<Message>,
+        pending: &mut HashMap<String, String>,
+        pending_order: &mut Vec<String>,
+    ) {
+        for call_id in pending_order.drain(..) {
+            if let Some(name) = pending.remove(&call_id) {
+                out.push(Message::ToolResult {
+                    call_id,
+                    name,
+                    content: MISSING_RESULT.into(),
+                    is_error: true,
+                });
+            }
         }
+        pending.clear();
     }
 
     for message in history {
         match message {
             Message::ToolResult { call_id, .. } => {
-                if let Some(at) = pending.iter().position(|(id, _)| id == call_id) {
-                    pending.remove(at);
+                if pending.remove(call_id).is_some() {
                     out.push(message.clone());
                 }
                 // else: orphan, dropped
             }
             other => {
-                close(&mut out, &mut pending);
+                close(&mut out, &mut pending, &mut pending_order);
                 if let Message::Assistant(a) = other {
                     let mut seen = HashSet::new();
-                    pending = a
-                        .content
-                        .iter()
-                        .filter_map(|b| match b {
-                            ContentBlock::ToolCall { id, name, .. } if seen.insert(id.clone()) => {
-                                Some((id.clone(), name.clone()))
-                            }
-                            _ => None,
-                        })
-                        .collect();
+                    pending_order.clear();
+                    for b in &a.content {
+                        if let ContentBlock::ToolCall { id, name, .. } = b
+                            && seen.insert(id.clone())
+                        {
+                            pending.insert(id.clone(), name.clone());
+                            pending_order.push(id.clone());
+                        }
+                    }
                 }
                 match other {
                     Message::MemoryContext { summary } => out.push(Message::User {
@@ -67,6 +73,6 @@ pub fn normalize(history: &[Message]) -> Vec<Message> {
             }
         }
     }
-    close(&mut out, &mut pending);
+    close(&mut out, &mut pending, &mut pending_order);
     out
 }

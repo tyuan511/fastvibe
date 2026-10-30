@@ -56,10 +56,21 @@ impl Palette {
             .unwrap_or(self.c(Token::Background))
     }
 
-    /// Floating content must hide the sharp text underneath. Electron combines its
-    /// 84/90% glass fill with a 28px backdrop blur; GPUI's window vibrancy only blurs
-    /// the desktop, so native overlays need a denser fill until backdrop blur exists.
+    /// The fill of a floating glass surface: Electron's `--glass-overlay`, 84% dark / 90% light.
+    /// A surface that paints it must also blur the page behind itself (`ui::backdrop`):
+    /// without the blur, the unblurred page shows through at 16/10%.
+    /// Solid themes are Electron's `bg-popover/95`.
     pub fn overlay(&self) -> Hsla {
+        match self.get(Token::GlassOverlay) {
+            Some(fill) => fill,
+            None => self.c(Token::Popover).opacity(0.95),
+        }
+    }
+
+    /// The popover fill for the component library, whose surfaces cannot paint the
+    /// backdrop blur (its own div, not ours): denser than `overlay()` so the transcript
+    /// under a tooltip or notification stays hidden.
+    pub fn overlay_kit(&self) -> Hsla {
         match self.get(Token::GlassOverlay) {
             Some(fill) => Hsla {
                 a: if self.is_dark() { 0.96 } else { 0.98 },
@@ -105,7 +116,7 @@ pub fn apply(palette: &Palette, cx: &mut App) {
     k.muted_foreground = c(Token::MutedForeground);
     k.accent = c(Token::Accent);
     k.accent_foreground = c(Token::AccentForeground);
-    k.popover = palette.overlay();
+    k.popover = palette.overlay_kit();
     k.popover_foreground = c(Token::PopoverForeground);
     k.danger = c(Token::Destructive);
     k.danger_foreground = c(Token::DestructiveForeground);
@@ -131,7 +142,7 @@ pub fn apply(palette: &Palette, cx: &mut App) {
     k.scrollbar_thumb = c(Token::MutedForeground).opacity(0.35);
     k.scrollbar_thumb_hover = c(Token::MutedForeground).opacity(0.6);
     // Tooltip and newer kit components read the fill token instead of the legacy colour.
-    theme.tokens.popover = palette.overlay().into();
+    theme.tokens.popover = palette.overlay_kit().into();
     theme.highlight_theme = crate::markdown::highlight_theme(palette);
     Theme::sync_base(cx);
 }

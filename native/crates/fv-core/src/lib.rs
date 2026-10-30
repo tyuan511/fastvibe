@@ -266,7 +266,7 @@ pub fn estimate_tokens(messages: &[Message]) -> u64 {
                     }
                     ContentBlock::ToolCall {
                         name, arguments, ..
-                    } => (name.len() + arguments.to_string().len()) as u64,
+                    } => (name.len() + estimate_json_bytes(arguments)) as u64,
                 })
                 .sum(),
             Message::ToolResult { content, .. } => content.len() as u64,
@@ -280,6 +280,30 @@ pub fn estimate_tokens(messages: &[Message]) -> u64 {
         })
         .sum();
     bytes.div_ceil(4)
+}
+
+/// Estimate the encoded size of a JSON value without allocating its serialized form. Tool
+/// arguments are often large and this function runs repeatedly while deciding whether to compact
+/// a turn, so `Value::to_string()` here would otherwise copy every argument on every pass.
+fn estimate_json_bytes(value: &Value) -> usize {
+    match value {
+        Value::Null => 4,
+        Value::Bool(true) => 4,
+        Value::Bool(false) => 5,
+        Value::Number(number) => number.to_string().len(),
+        Value::String(text) => text.len() + 2,
+        Value::Array(values) => {
+            2 + values.iter().map(estimate_json_bytes).sum::<usize>()
+                + values.len().saturating_sub(1)
+        }
+        Value::Object(values) => {
+            2 + values
+                .iter()
+                .map(|(key, value)| key.len() + 3 + estimate_json_bytes(value))
+                .sum::<usize>()
+                + values.len().saturating_sub(1)
+        }
+    }
 }
 
 /// One choice offered with a question.

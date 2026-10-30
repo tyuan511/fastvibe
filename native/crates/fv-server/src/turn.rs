@@ -34,6 +34,14 @@ fn spawn_turn_inner(
     cancel: CancellationToken,
     wait_for_mcp: bool,
 ) {
+    // Codex v2 mailbox: mail that arrived while the thread was idle is read at the next
+    // input boundary. Pushed as steers, the loop's first drain commits each one as its own
+    // user message, so this turn's first request carries them beside the new prompt.
+    if let Some(mail) = state.agent_mailbox.lock().unwrap().remove(&thread_id) {
+        for text in mail {
+            rt.steers().push(text);
+        }
+    }
     // The workspace as it is *before* this turn touches it, so a retry can run against the code
     // the user asked about rather than the half-applied result of the attempt it retries.
     capture_checkpoint(&state, &thread_id);

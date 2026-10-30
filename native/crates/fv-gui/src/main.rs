@@ -211,6 +211,14 @@ fn main() {
                                 cx,
                             );
                         }
+                        Some("queue-editing") => {
+                            return Workspace::fixture(
+                                palette,
+                                fv_gui::fixture::queued_editing(),
+                                window,
+                                cx,
+                            );
+                        }
                         Some("queue-paused") => {
                             return Workspace::fixture(
                                 palette,
@@ -323,7 +331,7 @@ fn main() {
                         }
                         Some(other) => {
                             panic!(
-                                "unknown fixture {other} (theme, approval, question, new, queue, queue-paused, markdown, process)"
+                                "unknown fixture {other} (theme, approval, question, new, queue, queue-editing, queue-paused, markdown, process)"
                             )
                         }
                         None => {}

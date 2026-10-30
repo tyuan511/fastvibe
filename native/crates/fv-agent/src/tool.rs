@@ -213,8 +213,15 @@ impl ToolRegistry {
     pub fn specs_for(&self, loaded: &LoadedTools) -> Vec<ToolSpec> {
         self.tools
             .values()
-            .filter(|t| t.enabled(self) && (!t.deferred() || loaded.contains(&t.spec().name)))
-            .map(|t| t.spec())
+            .filter_map(|t| {
+                if !t.enabled(self) {
+                    return None;
+                }
+                // Build the schema once. Tool specs can contain large JSON schemas, and the old
+                // filter called `spec()` once to check deferred loading and again to collect it.
+                let spec = t.spec();
+                (!t.deferred() || loaded.contains(&spec.name)).then_some(spec)
+            })
             .collect()
     }
 
@@ -225,6 +232,10 @@ impl ToolRegistry {
 
     pub fn has_deferred(&self) -> bool {
         self.tools.values().any(|t| t.deferred())
+    }
+
+    pub fn is_deferred(&self, name: &str) -> bool {
+        self.tools.get(name).is_some_and(|tool| tool.deferred())
     }
 
     /// Every installed tool, including temporarily disabled ones, for capability editors.

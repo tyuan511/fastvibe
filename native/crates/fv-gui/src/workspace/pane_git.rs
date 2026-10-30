@@ -2842,6 +2842,7 @@ impl Workspace {
                         .shadow_md()
                         .flex()
                         .flex_col()
+                        .child(crate::ui::backdrop(10.0, 28.0, 1.8))
                         .child(item(
                             "git-menu-commit",
                             if english { "Commit" } else { "提交" },
@@ -3245,6 +3246,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
+                    .child(crate::ui::backdrop(14.0, 28.0, 1.8))
                     .child(
                         div()
                             .text_size(px(TEXT_SM))

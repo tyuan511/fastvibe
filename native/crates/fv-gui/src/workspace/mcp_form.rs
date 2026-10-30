@@ -13,7 +13,9 @@ use super::super::Workspace;
 use super::super::personalization::{
     field_label, ghost_icon, outline_sm, primary_button, select_trigger,
 };
-use super::super::settings::{card, dialog_head, menu_item, outline_button, popover, switch};
+use super::super::settings::{
+    dialog_card, dialog_head, menu_item, outline_button, popover, switch,
+};
 use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon};
 use fv_theme::Token;
 use gpui_kit::component::input::Textarea;
@@ -204,9 +206,9 @@ impl Workspace {
         let Some(s) = self.settings.as_mut() else {
             return;
         };
-        if s.mcp.busy {
-            return;
-        }
+        // No busy guard: a new server's form needs nothing from the list still
+        // loading, and an edit cannot be asked for before its row exists.
+        // Saving stays guarded by `busy` of its own.
         let config = id.and_then(|id| {
             s.mcp
                 .servers
@@ -669,7 +671,10 @@ impl Workspace {
             );
         }
         let editing = form.original.is_some();
-        card(p)
+        dialog_card(p, 576.0)
+            .id("mcp-form-scroll")
+            .max_h(px(640.0))
+            .overflow_y_scroll()
             .child(dialog_head(
                 if editing {
                     trs!(english, "mcp_form.edit_server")

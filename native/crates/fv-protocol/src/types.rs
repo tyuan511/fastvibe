@@ -57,8 +57,9 @@ pub struct InitializeResponse {
     pub features: Vec<String>,
     /// Where the server keeps its data; informational for clients on the same machine.
     pub data_dir: String,
-    /// A digest of the running server executable. Development builds compare it with the one
-    /// just built instead of treating every GUI launch as a server upgrade.
+    /// An identity of the running server executable. Packaged builds use a content digest;
+    /// `cargo dev` uses a metadata-only identity so every GUI launch avoids rereading the debug
+    /// executable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_fingerprint: Option<String>,
     /// Whether any conversation has a turn or a yielded command in flight. A restart must
@@ -575,12 +576,38 @@ pub struct TurnSteerResponse {
     pub turn_id: TurnId,
 }
 
-/// One queued prompt by id, for `turn/queue/remove` and `turn/queue/sendNow`.
+/// One queued prompt by id, for `turn/queue/remove`, `turn/queue/edit` and
+/// `turn/queue/sendNow`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueItemParams {
     pub thread_id: ThreadId,
     pub item_id: String,
+}
+
+/// `turn/queue/reorder`: the queue's whole new order.
+///
+/// The whole list rather than a move, because that is what a drag produces and because it
+/// makes a stale client harmless: an id that is no longer queued is skipped, and one the
+/// caller did not name keeps its place at the end instead of disappearing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueReorderParams {
+    pub thread_id: ThreadId,
+    pub item_ids: Vec<String>,
+}
+
+/// `turn/queue/edit`: rewrite a prompt that has not been sent yet.
+///
+/// The row keeps its id and its place, so a queue whose neighbour was edited is still the
+/// queue the user arranged. A prompt the server has already taken off the queue cannot be
+/// edited — it is being sent, and the answer would contradict what the model was given.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueEditParams {
+    pub thread_id: ThreadId,
+    pub item_id: String,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1999,6 +2026,10 @@ pub struct AppSettings {
     /// runs it (`computer/host`).
     #[serde(default)]
     pub computer_control: bool,
+    /// 会话资源: the docked resources panel beside the conversation is open. A narrow window
+    /// keeps the popover form, which only a deliberate open turns on.
+    #[serde(default = "default_true")]
+    pub resource_panel_open: bool,
     /// Optional HTTP(S)/SOCKS proxy used for model and catalog requests.
     #[serde(default)]
     pub proxy_url: String,
@@ -2119,6 +2150,7 @@ impl Default for AppSettings {
             auto_archive_after_days: None,
             keep_awake: true,
             computer_control: false,
+            resource_panel_open: true,
             proxy_url: String::new(),
         }
     }
@@ -2187,6 +2219,8 @@ pub struct AppSettingsPatch {
     pub keep_awake: Option<bool>,
     #[serde(default)]
     pub computer_control: Option<bool>,
+    #[serde(default)]
+    pub resource_panel_open: Option<bool>,
     #[serde(default)]
     pub proxy_url: Option<String>,
 }
@@ -2310,6 +2344,9 @@ impl AppSettings {
         }
         if let Some(v) = patch.computer_control {
             self.computer_control = v;
+        }
+        if let Some(v) = patch.resource_panel_open {
+            self.resource_panel_open = v;
         }
         if let Some(v) = patch.keep_awake {
             self.keep_awake = v;

@@ -245,6 +245,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
+                .child(crate::ui::backdrop(12.0, 28.0, 1.8))
                 .child(
                     div()
                         .flex()

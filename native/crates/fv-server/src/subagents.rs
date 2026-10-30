@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::state::{ServerState, now_ms};
+pub(crate) mod agent_path;
 pub(crate) mod roles;
 
 const CONFIG: &str = "subagent_config_v1";
@@ -96,15 +97,6 @@ fn get(state: &ServerState, id: &str) -> Result<Subagent, ErrorObject> {
         .map_err(internal)?
         .ok_or_else(|| invalid("agent not found"))
 }
-fn owned(state: &ServerState, parent: &str, id: &str) -> Result<Subagent, ErrorObject> {
-    let agent = get(state, id)?;
-    if agent.parent_thread_id != parent {
-        return Err(invalid(
-            "Only direct children can be controlled by this agent.",
-        ));
-    }
-    Ok(agent)
-}
 pub fn is_child(state: &ServerState, id: &str) -> bool {
     state.store.db.subagent(id).ok().flatten().is_some()
 }
@@ -112,23 +104,37 @@ fn room(state: &ServerState, root: &str, config: &SubagentConfig) -> Result<(), 
     if !config.enabled {
         return Err(invalid("Subagents are disabled in settings."));
     }
-    let count = state
-        .store
-        .db
-        .subagents(Some(root))
-        .map_err(internal)?
-        .into_iter()
-        .filter(|a| {
-            a.status != SubagentStatus::Closed
-                || state
-                    .loaded_runtime(&a.agent_id)
-                    .is_some_and(|rt| rt.is_running() || rt.exec_sessions.has_running())
-        })
-        .count();
-    if count >= config.max_agents as usize {
-        return Err(invalid(
-            "Agent limit reached. Close an agent before creating or resuming another.",
-        ));
+    // Codex v2 counts *resident* children — runtimes that are loaded — and frees capacity by
+    // evicting a settled resident: its row, transcript and queue survive, the runtime is
+    // rebuilt on demand. Agents are durable; only residency is bounded.
+    let rows = state.store.db.subagents(Some(root)).map_err(internal)?;
+    let resident = |rows: &[Subagent]| {
+        rows.iter()
+            .filter(|a| state.loaded_runtime(&a.agent_id).is_some())
+            .count()
+    };
+    while resident(&rows) >= config.max_agents as usize {
+        // The oldest settled resident goes first: no running work, nothing parked on a person.
+        let mut candidates: Vec<&Subagent> = rows
+            .iter()
+            .filter(|a| {
+                a.status != SubagentStatus::Running
+                    && state.loaded_runtime(&a.agent_id).is_some()
+                    && state.pending_prompts(&a.agent_id).is_empty()
+                    && !state
+                        .loaded_runtime(&a.agent_id)
+                        .is_some_and(|rt| rt.exec_sessions.has_running())
+            })
+            .collect();
+        candidates.sort_by_key(|a| a.updated_at);
+        let evicted = candidates
+            .first()
+            .is_some_and(|a| state.evict_runtime(&a.agent_id));
+        if !evicted {
+            return Err(invalid(
+                "Agent limit reached. Wait for running agents to finish, or interrupt them.",
+            ));
+        }
     }
     Ok(())
 }
@@ -137,8 +143,9 @@ fn room(state: &ServerState, root: &str, config: &SubagentConfig) -> Result<(), 
 #[serde(deny_unknown_fields)]
 struct SpawnArgs {
     message: String,
+    task_name: String,
     #[serde(default)]
-    fork_context: bool,
+    fork_turns: Option<String>,
     #[serde(default)]
     agent_type: Option<String>,
     #[serde(skip)]
@@ -149,6 +156,19 @@ struct SpawnArgs {
     reasoning_effort: Option<fv_protocol::types::ThinkingLevel>,
 }
 
+impl SpawnArgs {
+    /// codex v2 spelling: `fork_turns` is `"none"` (fresh context) or `"all"` (inherit the
+    /// parent's retained conversation), with `"all"` as the default — as in codex, where an
+    /// unqualified spawn passes all surrounding context to the child.
+    fn fork_context(&self) -> Result<bool, ErrorObject> {
+        match self.fork_turns.as_deref().map(str::trim) {
+            None | Some("") | Some("all") => Ok(true),
+            Some("none") => Ok(false),
+            Some(_) => Err(invalid("fork_turns must be `none` or `all`.")),
+        }
+    }
+}
+
 async fn spawn(
     state: &Arc<ServerState>,
     parent_id: &str,
@@ -156,12 +176,14 @@ async fn spawn(
     parent_cancel: &CancellationToken,
 ) -> Result<Subagent, ErrorObject> {
     validate_message(&args.message)?;
-    if args.fork_context && args.history.is_none() {
+    let fork_context = args.fork_context()?;
+    if fork_context && args.history.is_none() {
         return Err(invalid("The parent history snapshot is missing."));
     }
     let role = roles::for_spawn(state, args.agent_type.as_deref())?;
+    agent_path::valid_name(&args.task_name).map_err(invalid)?;
     let id = uuid::Uuid::new_v4().to_string();
-    let agent = {
+    let (agent, task_name) = {
         let _gate = state.subagents_lock.lock().unwrap();
         if parent_cancel.is_cancelled() {
             return Err(invalid("The parent turn was stopped."));
@@ -209,6 +231,22 @@ async fn spawn(
             ));
         }
         room(state, &root, &config)?;
+        // Durable task names are unique per tree: a path names exactly one agent.
+        let task_name = agent_path::join(
+            &agent_path::caller_path(source.as_ref().and_then(|s| s.task_name.as_deref())),
+            &args.task_name,
+        )
+        .map_err(invalid)?;
+        let tree = state.store.db.subagents(Some(&root)).map_err(internal)?;
+        if tree
+            .iter()
+            .any(|a| a.task_name.as_deref() == Some(task_name.as_str()))
+        {
+            return Err(invalid(format!(
+                "task_name `{}` is already in use in this tree",
+                args.task_name
+            )));
+        }
         // Prevent an unbounded retained history even if agents are repeatedly opened/closed.
         if state
             .store
@@ -258,7 +296,8 @@ async fn spawn(
             root_thread_id: root,
             depth,
             role,
-            fork_context: args.fork_context,
+            fork_context,
+            task_name: Some(task_name.clone()),
             tool_ceiling,
             task: args.message.clone(),
             waiting_for_input: false,
@@ -286,8 +325,11 @@ async fn spawn(
             let _ = state.store.images.delete(&id);
             return Err(internal(error));
         }
-        agent
+        (agent, task_name)
     };
+    // The child is told its own canonical task name along with the message, as codex does:
+    // it needs the name to introduce itself on the board and to name its own children.
+    let message = format!("You are the agent \"{task_name}\".\n\n{}", args.message);
     // Claim with a token linked to the spawning turn. A simultaneous parent Stop therefore
     // cannot miss a newly allocated child between the ownership insert and its first poll.
     let rt = {
@@ -310,7 +352,7 @@ async fn spawn(
         close(state, &id)?;
         return Err(invalid("The child session could not be started."));
     };
-    crate::turn::spawn_turn(state.clone(), rt, id.clone(), turn_id, args.message, cancel);
+    crate::turn::spawn_turn(state.clone(), rt, id.clone(), turn_id, message, cancel);
     Ok(get(state, &id).unwrap_or(agent))
 }
 async fn fork_history(
@@ -384,7 +426,7 @@ pub fn started(state: &ServerState, id: &str) {
     }
 }
 pub fn settled(
-    state: &ServerState,
+    state: &Arc<ServerState>,
     id: &str,
     status: TurnStatus,
     error: Option<String>,
@@ -395,6 +437,10 @@ pub fn settled(
         return;
     }
     if let Ok(Some(mut agent)) = state.store.db.subagent(id) {
+        // Deliver the final answer to the parent as its own message, after codex's
+        // `notify_parent_of_terminal_turn`. Computed after the row below takes its terminal
+        // status; interrupted turns say nothing, and the answer text rides the normal
+        // queue/steer path so it reaches the parent outside this tool-time lock.
         if let Some(turn) = turns.last() {
             if agent.status != SubagentStatus::Closed {
                 agent.status = match status {
@@ -418,14 +464,86 @@ pub fn settled(
                 })
                 .take(PREVIEW_CHARS)
                 .collect();
-            agent.error = error;
+            agent.error = error.clone();
         }
         agent.updated_at = now_ms();
         if let Err(e) = state.store.db.update_subagent(&agent) {
             eprintln!("cannot settle agent {id}: {e}");
         }
+        let notify = match status {
+            TurnStatus::Completed | TurnStatus::Failed => {
+                final_answer_notification(&agent, error.as_deref())
+            }
+            TurnStatus::Interrupted => None,
+        };
+        if let Some((parent, text)) = notify {
+            let delivered_at = agent.updated_at;
+            let state = Arc::clone(state);
+            let id = id.to_string();
+            tokio::spawn(async move {
+                deliver_final_answer(&state, &parent, &id, text, delivered_at).await;
+            });
+        }
         changed(state);
     }
+}
+
+/// A `FINAL_ANSWER` message in codex's wire format, or None for turns that say nothing.
+fn final_answer_notification(agent: &Subagent, error: Option<&str>) -> Option<(String, String)> {
+    let name = agent
+        .task_name
+        .clone()
+        .unwrap_or_else(|| agent.agent_id.clone());
+    let payload = match agent.status {
+        SubagentStatus::Completed => agent.result.clone(),
+        SubagentStatus::Failed => format!(
+            "Agent errored: {}",
+            error.unwrap_or("the run failed without an error message")
+        ),
+        _ => return None,
+    };
+    Some((
+        agent.parent_thread_id.clone(),
+        format!(
+            "Message Type: FINAL_ANSWER\nTask name: {name}\nSender: {name}\nPayload:\n{payload}"
+        ),
+    ))
+}
+
+/// Best effort: the message rides the steer queue of the parent's running turn, or its
+/// prompt queue otherwise. A closed or deleted parent simply drops the notification.
+async fn deliver_final_answer(
+    state: &Arc<ServerState>,
+    parent: &str,
+    id: &str,
+    text: String,
+    delivered_at: i64,
+) {
+    let rt = state.runtime(parent);
+    if let Some(turn_id) = rt.running_turn()
+        && rt.steer(&turn_id, text.clone()).is_ok()
+    {
+        state
+            .subagent_delivered
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), delivered_at);
+        return;
+    }
+    // Idle parent: the mail waits for the next input boundary. Unlike the prompt queue it
+    // never wakes the thread on its own — codex's WakeOnAgentMessages is off by default.
+    state
+        .agent_mailbox
+        .lock()
+        .unwrap()
+        .entry(parent.to_string())
+        .or_default()
+        .push(text);
+    state
+        .subagent_delivered
+        .lock()
+        .unwrap()
+        .insert(id.to_string(), delivered_at);
 }
 
 /// Close is immediate as a lifecycle decision. The worker still owns cleanup, and resume is
@@ -517,38 +635,164 @@ pub fn interrupt_tree(state: &ServerState, parent: &str) {
     }
 }
 
+/// Resolve a tool target to an agent row: an agent id, or a path — relative to the caller's
+/// own path, or absolute — within the caller's tree, after codex's `resolve_agent_target`.
+fn resolve(state: &ServerState, caller: &str, target: &str) -> Result<Subagent, ErrorObject> {
+    let root = root_id(state, caller)?;
+    if let Ok(Some(agent)) = state.store.db.subagent(target) {
+        if agent.root_thread_id == root {
+            return Ok(agent);
+        }
+        return Err(invalid(format!(
+            "Agent `{target}` belongs to another conversation's tree."
+        )));
+    }
+    let caller_row = state.store.db.subagent(caller).map_err(internal)?;
+    let path = agent_path::resolve(
+        &agent_path::caller_path(caller_row.as_ref().and_then(|s| s.task_name.as_deref())),
+        target,
+    )
+    .map_err(invalid)?;
+    if path == agent_path::ROOT {
+        return Err(invalid("The root thread is not an agent."));
+    }
+    state
+        .store
+        .db
+        .subagents(Some(&root))
+        .map_err(internal)?
+        .into_iter()
+        .find(|a| a.task_name.as_deref() == Some(path.as_str()))
+        .ok_or_else(|| invalid(format!("live agent path `{path}` not found")))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SendArgs {
+struct TargetedMessage {
     target: String,
     message: String,
-    #[serde(default)]
-    interrupt: bool,
 }
-async fn send(
+
+fn closed_by_tray() -> ErrorObject {
+    invalid("This agent was closed from the task tray. Reopen it there before sending more work.")
+}
+
+/// Deliver work to a target: steer it into the running turn at the next model request, or
+/// start another turn when the agent is idle.
+async fn start_or_steer(
     state: &Arc<ServerState>,
-    parent: &str,
-    args: SendArgs,
+    caller: &str,
+    target_id: &str,
+    message: String,
+    cancel: &CancellationToken,
+) -> Result<Value, ErrorObject> {
+    let rt = {
+        let _gate = state.subagents_lock.lock().unwrap();
+        // Recheck under the lock: another tool or the tray may have closed it meanwhile.
+        resolve(state, caller, target_id)?;
+        state.runtime(target_id)
+    };
+    if let Some(turn_id) = rt.running_turn() {
+        rt.steer(&turn_id, message)
+            .map_err(|_| invalid("The agent just finished; send the input again."))?;
+        return Ok(json!({"submission_id": turn_id}));
+    }
+    let source = resolve(state, caller, target_id)?;
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    if !state
+        .schedules
+        .adopt(&source.root_thread_id, target_id, &turn_id, rt.clone())
+    {
+        return Err(invalid("The scheduled run is stopping."));
+    }
+    let token = rt
+        .begin_linked(state, &turn_id, cancel.child_token())
+        .await
+        .ok_or_else(|| invalid("The agent is busy or closed."))?;
+    crate::turn::spawn_turn(
+        state.clone(),
+        rt,
+        target_id.to_string(),
+        turn_id.clone(),
+        message,
+        token,
+    );
+    Ok(json!({"submission_id": turn_id}))
+}
+
+/// `followup_task`: send a follow-up task and trigger a turn if the target is idle; a running
+/// target receives it at its next message boundary.
+async fn followup(
+    state: &Arc<ServerState>,
+    caller: &str,
+    args: TargetedMessage,
     cancel: &CancellationToken,
 ) -> Result<Value, ErrorObject> {
     validate_message(&args.message)?;
-    if owned(state, parent, &args.target)?.status == SubagentStatus::Closed {
-        return Err(invalid("Resume this agent before sending input."));
+    let target = resolve(state, caller, &args.target)?;
+    if target.status == SubagentStatus::Closed {
+        return Err(closed_by_tray());
     }
-    let rt = {
-        let _gate = state.subagents_lock.lock().unwrap();
-        owned(state, parent, &args.target)?;
-        state.runtime(&args.target)
+    start_or_steer(state, caller, &target.agent_id, args.message, cancel).await
+}
+
+/// `send_message`: queue-only. Delivered promptly at a message boundary while sampling; on an
+/// idle agent it waits in the mailbox and is read at the next input boundary — it never
+/// starts a turn.
+async fn message(
+    state: &Arc<ServerState>,
+    caller: &str,
+    args: TargetedMessage,
+) -> Result<Value, ErrorObject> {
+    validate_message(&args.message)?;
+    let target = resolve(state, caller, &args.target)?;
+    if target.status == SubagentStatus::Closed {
+        return Err(closed_by_tray());
+    }
+    let rt = state.runtime(&target.agent_id);
+    if let Some(turn_id) = rt.running_turn()
+        && rt.steer(&turn_id, args.message.clone()).is_ok()
+    {
+        return Ok(Value::String(String::new()));
+    }
+    // NOTE: creating the runtime above makes the agent resident; a just-messaged idle agent
+    // counts toward the spawn limit until it is evicted, exactly as codex counts every
+    // agent a communication touched.
+    state
+        .agent_mailbox
+        .lock()
+        .unwrap()
+        .entry(target.agent_id.clone())
+        .or_default()
+        .push(args.message);
+    Ok(Value::String(String::new()))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Target {
+    target: String,
+}
+
+/// `interrupt_agent`: stop the target's current turn, if any, and report its previous
+/// status. The agent remains available for messages and follow-up tasks. The call waits,
+/// bounded, for the interrupted turn to settle so an immediate follow-up starts a new turn
+/// instead of steering one that is on its way out.
+async fn interrupt(
+    state: &Arc<ServerState>,
+    caller: &str,
+    args: Target,
+    cancel: &CancellationToken,
+) -> Result<Value, ErrorObject> {
+    let target = resolve(state, caller, &args.target)?;
+    let previous = target.status;
+    let Some(rt) = state.loaded_runtime(&target.agent_id) else {
+        return Ok(json!({"previous_status": previous}));
     };
-    if let Some(turn_id) = rt.running_turn() {
-        if !args.interrupt {
-            rt.steer(&turn_id, args.message)
-                .map_err(|_| invalid("The agent just finished; send the input again."))?;
-            return Ok(json!({"submission_id": turn_id}));
-        }
+    if rt.is_running() || rt.exec_sessions.has_running() {
         rt.interrupt();
         rt.exec_sessions.terminate_all();
-        interrupt_tree(state, &args.target);
+        interrupt_tree(state, &target.agent_id);
         let mut changes = state.subagent_changes.subscribe();
         let settled = async {
             let mut tick = tokio::time::interval(Duration::from_millis(25));
@@ -563,69 +807,75 @@ async fn send(
         tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(invalid("Stopped while waiting for the agent.")),
-            result = tokio::time::timeout(Duration::from_secs(15), settled) => result.map_err(|_| invalid("The agent is still stopping. Send the input again once it settles."))??,
+            result = tokio::time::timeout(Duration::from_secs(15), settled) => {
+                result.map_err(|_| invalid("The agent is still stopping. Try again in a moment."))??;
+            }
         }
     }
-    // Recheck after awaiting: another tool/UI may have closed it.
-    owned(state, parent, &args.target)?;
-    let turn_id = uuid::Uuid::new_v4().to_string();
-    let source = owned(state, parent, &args.target)?;
-    if !state
-        .schedules
-        .adopt(&source.root_thread_id, &args.target, &turn_id, rt.clone())
-    {
-        return Err(invalid("The scheduled run is stopping."));
-    }
-    let token = rt
-        .begin_linked(state, &turn_id, cancel.child_token())
-        .await
-        .ok_or_else(|| invalid("The agent is busy or closed."))?;
-    crate::turn::spawn_turn(
-        state.clone(),
-        rt,
-        args.target,
-        turn_id.clone(),
-        args.message,
-        token,
-    );
-    Ok(json!({"submission_id": turn_id}))
+    Ok(json!({"previous_status": previous}))
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WaitArgs {
-    targets: Vec<String>,
     timeout_ms: Option<u64>,
 }
+
+/// One agent as `wait_agent` reports it: its path (or id for legacy rows) and what happened.
+fn wait_entry(state: &ServerState, agent: &Subagent) -> Value {
+    let waiting = !state.pending_prompts(&agent.agent_id).is_empty();
+    json!({
+        "agent_name": agent.task_name.clone().unwrap_or_else(|| agent.agent_id.clone()),
+        "status": agent.status,
+        "waiting_for_input": waiting,
+    })
+}
+
+/// `wait_agent` (codex v2): wait until any agent in the caller's tree updates — a terminal
+/// turn, an undelivered final answer, or a question parked on a person. Does not return the
+/// content: the final answer is delivered to the caller as a message of its own.
 async fn wait(
     state: &ServerState,
-    parent: &str,
+    caller: &str,
     args: WaitArgs,
     cancel: &CancellationToken,
 ) -> Result<Value, ErrorObject> {
-    if args.targets.is_empty() || args.targets.len() > 16 {
-        return Err(invalid("Wait for 1–16 agents."));
-    }
-    let mut changes = state.subagent_changes.subscribe();
-    // Register before reading states so a completion between the check and wait isn't lost.
+    let ids = descendants(state, caller)?;
+    let started = now_ms();
     let deadline = tokio::time::Instant::now()
         + Duration::from_millis(args.timeout_ms.unwrap_or(30_000).min(300_000));
+    let mut changes = state.subagent_changes.subscribe();
     loop {
-        let mut status = BTreeMap::new();
-        for id in &args.targets {
-            let agent = owned(state, parent, id)?;
+        let mut agents = Vec::new();
+        for id in &ids {
+            let Ok(Some(agent)) = state.store.db.subagent(id) else {
+                continue;
+            };
             let waiting = !state.pending_prompts(id).is_empty();
-            if agent.status != SubagentStatus::Running || waiting {
-                status.insert(id, json!({"status": agent.status, "result": agent.result, "error": agent.error, "waiting_for_input": waiting}));
+            let delivered = state
+                .subagent_delivered
+                .lock()
+                .unwrap()
+                .get(id)
+                .copied()
+                .unwrap_or(0);
+            let undelivered = agent.updated_at > delivered;
+            let changed_since = agent.updated_at > started;
+            if waiting
+                || ((undelivered || changed_since)
+                    && agent.status != SubagentStatus::Running
+                    && agent.status != SubagentStatus::Idle)
+            {
+                agents.push(wait_entry(state, &agent));
             }
         }
-        if !status.is_empty() {
-            return Ok(json!({"status":status,"timed_out":false}));
+        if !agents.is_empty() {
+            return Ok(json!({"agents":agents,"timed_out":false}));
         }
         tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(invalid("Stopped waiting for agents.")),
-            _ = tokio::time::sleep_until(deadline) => return Ok(json!({"status":{},"timed_out":true})),
+            _ = tokio::time::sleep_until(deadline) => return Ok(json!({"agents":Vec::<Value>::new(),"timed_out":true})),
             result = changes.changed() => { result.map_err(internal)?; }
         }
     }
@@ -634,19 +884,19 @@ async fn wait(
 #[derive(Clone, Copy)]
 enum Kind {
     Spawn,
-    Send,
+    Followup,
+    SendMessage,
+    Interrupt,
     Wait,
-    Close,
-    Resume,
     List,
 }
 pub fn register(state: &Arc<ServerState>, parent: &str, turn: &str, registry: &mut ToolRegistry) {
     for kind in [
         Kind::Spawn,
-        Kind::Send,
+        Kind::Followup,
+        Kind::SendMessage,
+        Kind::Interrupt,
         Kind::Wait,
-        Kind::Close,
-        Kind::Resume,
         Kind::List,
     ] {
         registry.register(AgentTool {
@@ -668,38 +918,38 @@ impl Tool for AgentTool {
         let (name, description, properties, required) = match self.kind {
             Kind::Spawn => (
                 "spawn_agent",
-                "Delegate a self-contained task to an independent child session. The child inherits the working directory, project instructions, skills, MCP tools, sandbox and selected custom model. By default it starts without this chat's history: include the context it needs in message. Set fork_context to inherit the retained conversation through this decision; earlier tool handles and action-specific approvals are historical, not live permissions. Use only when delegation is authorized. Children share files; assign non-overlapping writes. Close finished children to release slots.",
-                json!({"message":{"type":"string"},"fork_context":{"type":"boolean","description":"Inherit the parent's retained conversation and explanation before this call. Defaults to false."},"model":{"type":"string","description":"Optional provider/model label; otherwise inherit."},"reasoning_effort":{"type":"string","enum":["minimal","low","medium","high","xhigh","max"]}}),
-                vec!["message"],
+                "Spawn an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name \"task_3\" the agent will have canonical task name `/root/task1/task_3`. You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`. The spawned agent has the same tools as you and the ability to spawn its own subagents; children share files, so assign non-overlapping writes. It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes. The new agent's canonical task name will be provided to it along with the message. Agents are durable: they stay available for follow-up tasks after finishing, across turns and restarts; settled ones can be evicted from residency to free the agent limit. Passing fork_turns=\"none\" will not pass any surrounding context to the spawned agent, which may cause it to lack the context it needs to complete its task, whereas fork_turns=\"all\" (the default) will provide the agent with all surrounding context.",
+                json!({"message":{"type":"string"},"task_name":{"type":"string","description":"Task name for the new agent. Use lowercase letters, digits, and underscores."},"fork_turns":{"type":"string","enum":["none","all"],"description":"`none` starts the child with no surrounding context; `all` (the default) passes the parent's retained conversation."},"model":{"type":"string","description":"Optional provider/model label; otherwise inherit."},"reasoning_effort":{"type":"string","enum":["minimal","low","medium","high","xhigh","max"]}}),
+                vec!["message", "task_name"],
             ),
-            Kind::Send => (
-                "send_input",
-                "Send input to your direct child. A running child receives it before its next model request; a finished child starts another turn. interrupt stops the current turn before starting the new input. A closed child must first be resumed.",
-                json!({"target":{"type":"string"},"message":{"type":"string"},"interrupt":{"type":"boolean"}}),
+            Kind::Followup => (
+                "followup_task",
+                "Send a follow-up task to an existing agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes. The target keeps its full history, so prefer reusing a finished agent whose earlier task built the context you need over spawning a fresh one.",
+                json!({"target":{"type":"string","description":"Agent id or canonical task name to send a follow-up task to (from spawn_agent)."},"message":{"type":"string"}}),
                 vec!["target", "message"],
+            ),
+            Kind::SendMessage => (
+                "send_message",
+                "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn: use followup_task for that.",
+                json!({"target":{"type":"string","description":"Relative or canonical task name to message (from spawn_agent)."},"message":{"type":"string"}}),
+                vec!["target", "message"],
+            ),
+            Kind::Interrupt => (
+                "interrupt_agent",
+                "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.",
+                json!({"target":{"type":"string","description":"Agent id or canonical task name to interrupt (from spawn_agent)."}}),
+                vec!["target"],
             ),
             Kind::Wait => (
                 "wait_agent",
-                "Wait until any named direct child stops running, or the timeout (default 30000ms, maximum 300000ms). Returns bounded result previews; the complete child transcript is retained. A timeout does not stop the children.",
-                json!({"targets":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":16},"timeout_ms":{"type":"integer","minimum":0,"maximum":300000}}),
-                vec!["targets"],
-            ),
-            Kind::Close => (
-                "close_agent",
-                "Close your direct child and its descendants. Running turns and command sessions are stopped. History remains available for inspection and explicit resume.",
-                json!({"target":{"type":"string"}}),
-                vec!["target"],
-            ),
-            Kind::Resume => (
-                "resume_agent",
-                "Reopen your closed direct child with its existing history. Does not start work: use send_input next. Refused while the previous turn is still stopping.",
-                json!({"target":{"type":"string"}}),
-                vec!["target"],
+                "Wait for an update from any agent in your tree: a finished or failed turn, a final answer not yet delivered, or an agent waiting for a person to answer its question. Returns which agents have updates, not their content — the final answer is delivered to you as a message when the agent finishes. Also ends early (timeout) if nothing arrives; the default is 30000ms and the maximum 300000ms. A timeout does not stop the agents.",
+                json!({"timeout_ms":{"type":"integer","minimum":0,"maximum":300000}}),
+                vec![],
             ),
             Kind::List => (
                 "list_agents",
-                "List your direct children, their current status and bounded result previews.",
-                json!({}),
+                "List the agents in the current root thread tree with their current status. Optionally filter by task-path prefix. Agents that the user closed from the task tray are not listed.",
+                json!({"path_prefix":{"type":"string","description":"Task-path prefix filter without a trailing slash. Omit to list all agents."}}),
                 vec![],
             ),
         };
@@ -708,7 +958,7 @@ impl Tool for AgentTool {
         if matches!(self.kind, Kind::Spawn)
             && let Some(state) = self.state.upgrade()
         {
-            let roles = roles::read(&state).unwrap_or_default();
+            let roles = roles::merged(&state).unwrap_or_default();
             properties["agent_type"] = json!({"type":"string","enum":std::iter::once("default").chain(roles.iter().map(|r|r.id.as_str())).collect::<Vec<_>>(),"description":"Optional saved role; otherwise use a general child with inherited tools."});
             for role in roles {
                 description.push_str(&format!("\nRole {}: {}", role.id, role.description));
@@ -759,19 +1009,28 @@ impl Tool for AgentTool {
                 match kind {
                     Kind::Spawn => {
                         let mut args: SpawnArgs = serde_json::from_value(arguments).map_err(invalid)?;
-                        if args.fork_context { args.history = Some(fork_history(&state, &parent, &turn, &ctx).await?); }
+                        if args.fork_context()? { args.history = Some(fork_history(&state, &parent, &turn, &ctx).await?); }
                         let agent = spawn(&state, &parent, args, &ctx.cancel).await?;
-                        Ok(json!({"agent_id":agent.agent_id}))
+                        Ok(json!({"task_name":agent.task_name}))
                     },
-                    Kind::Send => send(&state, &parent, serde_json::from_value(arguments).map_err(invalid)?, &ctx.cancel).await,
+                    Kind::Followup => followup(&state, &parent, serde_json::from_value(arguments).map_err(invalid)?, &ctx.cancel).await,
+                    Kind::SendMessage => message(&state, &parent, serde_json::from_value(arguments).map_err(invalid)?).await,
+                    Kind::Interrupt => interrupt(&state, &parent, serde_json::from_value(arguments).map_err(invalid)?, &ctx.cancel).await,
                     Kind::Wait => wait(&state, &parent, serde_json::from_value(arguments).map_err(invalid)?, &ctx.cancel).await,
-                    Kind::Close | Kind::Resume => {
-                        #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct Target { target: String }
-                        let args: Target = serde_json::from_value(arguments).map_err(invalid)?;
-                        owned(&state, &parent, &args.target)?;
-                        serde_json::to_value(if matches!(kind, Kind::Close) { close(&state, &args.target)? } else { resume(&state, &args.target)? }).map_err(internal)
+                    Kind::List => {
+                        #[derive(Deserialize)] #[serde(deny_unknown_fields)] struct ListArgs { #[serde(default)] path_prefix: Option<String> }
+                        let args: ListArgs = serde_json::from_value(arguments).map_err(invalid)?;
+                        let root = root_id(&state, &parent)?;
+                        let agents = state.store.db.subagents(Some(&root)).map_err(internal)?
+                            .into_iter()
+                            .filter(|a| a.status != SubagentStatus::Closed)
+                            .filter(|a| args.path_prefix.as_deref().is_none_or(|prefix| {
+                                a.task_name.as_deref().is_some_and(|name| name.starts_with(prefix))
+                            }))
+                            .map(|a| json!({"agent_name": a.task_name.clone().unwrap_or_else(|| a.agent_id.clone()), "agent_status": a.status}))
+                            .collect::<Vec<_>>();
+                        Ok(json!({"agents": agents}))
                     }
-                    Kind::List => Ok(json!({"agents":list(&state, Some(&parent))?.agents.into_iter().filter(|a| a.parent_thread_id == parent).collect::<Vec<_>>()})),
                 }
             }.await;
             match result {

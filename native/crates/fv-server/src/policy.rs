@@ -32,6 +32,8 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::TurnRewind { .. }
             | ClientRequest::TurnEnqueue { .. }
             | ClientRequest::TurnQueueRemove { .. }
+            | ClientRequest::TurnQueueReorder { .. }
+            | ClientRequest::TurnQueueEdit { .. }
             | ClientRequest::TurnQueueSendNow { .. }
             | ClientRequest::TurnQueueResume { .. }
             | ClientRequest::ThreadModeSet { .. }

@@ -38,6 +38,12 @@ mod.could_not_compact_the_context:
 mod.could_not_send_now_e:
   zh: "无法立即发送：%{e}"
   en: "Could not send now: %{e}"
+mod.could_not_reorder_queue_e:
+  zh: "无法调整队列顺序：%{e}"
+  en: "Could not reorder the queue: %{e}"
+mod.could_not_edit_queue_e:
+  zh: "无法修改排队消息：%{e}"
+  en: "Could not edit the queued message: %{e}"
 mod.could_not_resend_e:
   zh: "无法重新发送：%{e}"
   en: "Could not resend: %{e}"

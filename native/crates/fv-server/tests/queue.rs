@@ -21,6 +21,20 @@ struct Harness {
     _dir: tempfile::TempDir,
     sock: std::path::PathBuf,
     model: Arc<ScriptedModel>,
+    /// The database behind the server, for what a restart would read back.
+    db: Arc<fv_store::Db>,
+}
+
+impl Harness {
+    /// The queue as the database holds it, for the promise that a drag outlives the process.
+    fn store_order(&self, thread_id: &str) -> Vec<String> {
+        self.db
+            .queue(thread_id)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect()
+    }
 }
 
 /// A tool that takes a moment, so a test has a window to steer into a live run.
@@ -68,12 +82,14 @@ async fn start(model: ScriptedModel) -> Harness {
     };
     let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
     common::disable_reply_suggestions(&state);
+    let db = state.store.db.clone();
     let sock = dir.path().join("q.sock");
     tokio::spawn(UnixServer::bind(state, &sock).await.unwrap().run());
     Harness {
         _dir: dir,
         sock,
         model,
+        db,
     }
 }
 
@@ -135,6 +151,15 @@ async fn until(
             return seen;
         }
     }
+}
+
+/// Let whatever is already on the wire land, so an `until` that follows waits for the notice its
+/// own call causes rather than an earlier one of the same method.
+async fn settle(notes: &mut Notes) {
+    while tokio::time::timeout(Duration::from_millis(40), notes.recv())
+        .await
+        .is_ok()
+    {}
 }
 
 fn queue_of(notes: &[ServerNotification]) -> Vec<QueueState> {
@@ -419,6 +444,7 @@ async fn a_queued_prompt_survives_a_restart_and_a_pause_survives_with_it() {
             _dir: tempfile::tempdir().unwrap(),
             sock: sock.clone(),
             model: Arc::new(ScriptedModel::new([])),
+            db: state.store.db.clone(),
         })
         .await;
         thread = new_thread(&c).await;
@@ -454,11 +480,12 @@ async fn a_queued_prompt_survives_a_restart_and_a_pause_survives_with_it() {
     };
     let state = Arc::new(ServerState::new(dir.path().to_path_buf(), agent).unwrap());
     let sock = dir.path().join("p2.sock");
-    tokio::spawn(UnixServer::bind(state, &sock).await.unwrap().run());
+    tokio::spawn(UnixServer::bind(state.clone(), &sock).await.unwrap().run());
     let (c, _n) = client(&Harness {
         _dir: tempfile::tempdir().unwrap(),
         sock,
         model: Arc::new(ScriptedModel::new([])),
+        db: state.store.db.clone(),
     })
     .await;
     let snapshot = c
@@ -855,4 +882,174 @@ async fn each_chained_turn_owns_its_id_and_the_whole_queue_finishes() {
     );
     assert!(snapshot.queue.items.is_empty());
     assert!(!snapshot.running);
+}
+
+/// The order a drag produces is the order the prompts are sent in, and it is the order the
+/// database holds, so a restart resumes the arrangement rather than the order they were typed.
+#[tokio::test]
+async fn a_reordered_queue_is_sent_in_its_new_order_and_stored_that_way() {
+    let h = start(ScriptedModel::new([
+        Reply::new().text("first ").then_hang(),
+        Reply::new().text("second").done(),
+        Reply::new().text("third").done(),
+    ]))
+    .await;
+    let (c, mut notes) = client(&h).await;
+    let thread = new_thread(&c).await;
+    c.call::<TurnStart>(TurnStartParams {
+        thread_id: thread.clone(),
+        text: "one".into(),
+    })
+    .await
+    .unwrap();
+    until(&mut notes, |n| n.method() == "item/agentMessage/delta").await;
+    let mut ids = Vec::new();
+    for text in ["a", "b", "c"] {
+        ids.push(
+            c.call::<TurnEnqueue>(TurnEnqueueParams {
+                thread_id: thread.clone(),
+                text: text.into(),
+            })
+            .await
+            .unwrap()
+            .id,
+        );
+    }
+    // c first, then a, then b — what dragging the last row to the top produces.
+    settle(&mut notes).await;
+    let order = vec![ids[2].clone(), ids[0].clone(), ids[1].clone()];
+    c.call::<TurnQueueReorder>(QueueReorderParams {
+        thread_id: thread.clone(),
+        item_ids: order.clone(),
+    })
+    .await
+    .unwrap();
+    let announced = until(&mut notes, |n| n.method() == "thread/queue/changed").await;
+    let drawn: Vec<String> = queue_of(&announced)
+        .last()
+        .unwrap()
+        .items
+        .iter()
+        .map(|item| item.id.clone())
+        .collect();
+    assert_eq!(drawn, order, "the client is told the new order");
+    assert_eq!(
+        h.store_order(&thread),
+        vec![ids[2].clone(), ids[0].clone(), ids[1].clone()],
+        "and so is the database"
+    );
+
+    c.call::<TurnInterrupt>(ThreadIdParams {
+        thread_id: thread.clone(),
+    })
+    .await
+    .unwrap();
+    let stopped = until(&mut notes, idle).await;
+    assert_eq!(
+        queue_of(&stopped).last().and_then(|q| q.pause),
+        Some(QueuePauseReason::Stopped)
+    );
+    c.call::<TurnQueueResume>(ThreadIdParams {
+        thread_id: thread.clone(),
+    })
+    .await
+    .unwrap();
+    let mut sent = user_prompts(&until(&mut notes, idle).await);
+    // One resume starts the head; the queue then continues on its own.
+    let mut guard = 0;
+    while sent.len() < 3 && guard < 4 {
+        guard += 1;
+        sent.extend(user_prompts(&until(&mut notes, idle).await));
+    }
+    assert_eq!(sent, ["c", "a", "b"], "{sent:?}");
+}
+
+/// Editing a waiting prompt changes what is sent, keeps its place, and leaves its neighbours
+/// alone. A prompt already being sent is refused rather than rewritten under the model.
+#[tokio::test]
+async fn an_edited_prompt_keeps_its_place_and_sends_the_new_words() {
+    let h = start(ScriptedModel::new([
+        Reply::new().text("first ").then_hang(),
+        Reply::new().text("second").done(),
+    ]))
+    .await;
+    let (c, mut notes) = client(&h).await;
+    let thread = new_thread(&c).await;
+    c.call::<TurnStart>(TurnStartParams {
+        thread_id: thread.clone(),
+        text: "one".into(),
+    })
+    .await
+    .unwrap();
+    until(&mut notes, |n| n.method() == "item/agentMessage/delta").await;
+    let first = c
+        .call::<TurnEnqueue>(TurnEnqueueParams {
+            thread_id: thread.clone(),
+            text: "before".into(),
+        })
+        .await
+        .unwrap();
+    let second = c
+        .call::<TurnEnqueue>(TurnEnqueueParams {
+            thread_id: thread.clone(),
+            text: "untouched".into(),
+        })
+        .await
+        .unwrap();
+    settle(&mut notes).await;
+    c.call::<TurnQueueEdit>(QueueEditParams {
+        thread_id: thread.clone(),
+        item_id: first.id.clone(),
+        text: "after".into(),
+    })
+    .await
+    .unwrap();
+    let announced = until(&mut notes, |n| n.method() == "thread/queue/changed").await;
+    let queue = queue_of(&announced).last().unwrap().clone();
+    assert_eq!(
+        queue
+            .items
+            .iter()
+            .map(|item| (item.id.as_str(), item.text.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (first.id.as_str(), "after"),
+            (second.id.as_str(), "untouched")
+        ]
+    );
+
+    // An empty rewrite is refused: a queued prompt with nothing in it is a turn with no question.
+    let refused = c
+        .call::<TurnQueueEdit>(QueueEditParams {
+            thread_id: thread.clone(),
+            item_id: first.id.clone(),
+            text: "   ".into(),
+        })
+        .await;
+    assert!(refused.is_err());
+
+    c.call::<TurnInterrupt>(ThreadIdParams {
+        thread_id: thread.clone(),
+    })
+    .await
+    .unwrap();
+    let stopped = until(&mut notes, idle).await;
+    assert_eq!(
+        queue_of(&stopped).last().and_then(|q| q.pause),
+        Some(QueuePauseReason::Stopped)
+    );
+    c.call::<TurnQueueResume>(ThreadIdParams {
+        thread_id: thread.clone(),
+    })
+    .await
+    .unwrap();
+    // The queue drains on its own once resumed: the edited prompt first, its neighbour after it,
+    // both in the places they already held.
+    let mut sent = user_prompts(&until(&mut notes, idle).await);
+    let mut guard = 0;
+    while sent.len() < 2 && guard < 4 {
+        guard += 1;
+        sent.extend(user_prompts(&until(&mut notes, idle).await));
+    }
+    assert_eq!(sent, ["after", "untouched"], "{sent:?}");
 }

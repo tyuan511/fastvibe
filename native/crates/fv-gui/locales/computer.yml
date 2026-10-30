@@ -6,6 +6,39 @@ computer.allow:
 computer.allow_description:
   zh: "让智能体查看屏幕、点击和输入，操作你电脑上的应用。"
   en: "Let the agent see the screen, click and type in apps on this computer."
+computer.driver:
+  zh: "驱动"
+  en: "Driver"
+computer.driver_name:
+  zh: "电脑操控组件"
+  en: "Computer-control component"
+computer.driver_missing:
+  zh: "未下载"
+  en: "Not downloaded"
+computer.check_update:
+  zh: "检查更新"
+  en: "Check for updates"
+computer.update:
+  zh: "更新"
+  en: "Update"
+computer.retry:
+  zh: "重试"
+  en: "Retry"
+computer.close:
+  zh: "关闭"
+  en: "Close"
+computer.driver_dialog_title:
+  zh: "下载电脑操控组件"
+  en: "Download the computer-control component"
+computer.driver_dialog_description:
+  zh: "使用电脑操控需要先下载这个组件。"
+  en: "Computer control needs this component before it can run."
+computer.permissions:
+  zh: "系统权限"
+  en: "System permissions"
+computer.control:
+  zh: "控制"
+  en: "Control"
 computer.unsupported:
   zh: "这台电脑不支持电脑操控。"
   en: "Computer control is not available on this computer."

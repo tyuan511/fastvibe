@@ -494,7 +494,10 @@ impl Workspace {
             .shadow_md()
             .flex()
             .flex_col()
-            .text_size(px(TEXT_SM));
+            .text_size(px(TEXT_SM))
+            // Electron's overlay-surface blur; the fill above it is the real
+            // 84/90% --glass-overlay, legible only over a blurred backdrop.
+            .child(crate::ui::backdrop(12.0, 28.0, 1.8));
         if self.models.is_empty() {
             list = list.child(
                 div()
@@ -523,9 +526,12 @@ impl Workspace {
                 .on_hover(cx.listener({
                     let id = id.clone();
                     move |this, hovered: &bool, _, cx| {
-                        if *hovered
-                            && (this.thinking_menu
-                                || this.model_submenu.as_deref() != Some(id.as_str()))
+                        if !*hovered {
+                            this.close_model_submenu_after_hover(cx);
+                            return;
+                        }
+                        this.hover_submenus.entered();
+                        if this.thinking_menu || this.model_submenu.as_deref() != Some(id.as_str())
                         {
                             this.thinking_menu = false;
                             this.model_submenu = Some(id.clone());
@@ -534,6 +540,7 @@ impl Workspace {
                     }
                 }))
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    this.hover_submenus.entered();
                     this.thinking_menu = false;
                     this.model_submenu =
                         if this.model_submenu.as_deref() == Some(clicked_id.as_str()) {
@@ -583,13 +590,19 @@ impl Workspace {
                         .child(icon("arrow-right01", 12.0, p.c(Token::MutedForeground))),
                 )
                 .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                    if *hovered && !this.thinking_menu {
+                    if !*hovered {
+                        this.close_model_submenu_after_hover(cx);
+                        return;
+                    }
+                    this.hover_submenus.entered();
+                    if !this.thinking_menu {
                         this.thinking_menu = true;
                         this.model_submenu = None;
                         cx.notify();
                     }
                 }))
                 .on_click(cx.listener(|this, _, _, cx| {
+                    this.hover_submenus.entered();
                     this.thinking_menu = !this.thinking_menu;
                     if this.thinking_menu {
                         this.model_submenu = None;
@@ -619,8 +632,10 @@ impl Workspace {
                     "管理模型"
                 })
                 .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                    if *hovered && this.thinking_menu {
+                    if *hovered && (this.thinking_menu || this.model_submenu.is_some()) {
                         this.thinking_menu = false;
+                        this.model_submenu = None;
+                        this.hover_submenus.entered();
                         cx.notify();
                     }
                 }))
@@ -631,7 +646,13 @@ impl Workspace {
                     this.open_settings(super::settings::Section::Providers, window, cx)
                 })),
         );
-        list
+        list.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            if *hovered {
+                this.hover_submenus.entered();
+            } else {
+                this.close_model_submenu_after_hover(cx);
+            }
+        }))
     }
 
     fn thinking_menu(&self, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -691,7 +712,10 @@ impl Workspace {
             .shadow_md()
             .flex()
             .flex_col()
-            .text_size(px(TEXT_SM));
+            .text_size(px(TEXT_SM))
+            // Electron's overlay-surface blur; the fill above it is the real
+            // 84/90% --glass-overlay, legible only over a blurred backdrop.
+            .child(crate::ui::backdrop(12.0, 28.0, 1.8));
 
         for (level, label) in options {
             if level.is_some_and(|l| allowed.as_ref().is_some_and(|v| !v.contains(&l))) {
@@ -719,7 +743,13 @@ impl Workspace {
             );
         }
 
-        list
+        list.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            if *hovered {
+                this.hover_submenus.entered();
+            } else {
+                this.close_model_submenu_after_hover(cx);
+            }
+        }))
     }
 
     /// The models of the provider whose row is open, standing beside the menu that named it. A
@@ -744,7 +774,10 @@ impl Workspace {
             .shadow_md()
             .flex()
             .flex_col()
-            .text_size(px(TEXT_SM));
+            .text_size(px(TEXT_SM))
+            // Electron's overlay-surface blur; the fill above it is the real
+            // 84/90% --glass-overlay, legible only over a blurred backdrop.
+            .child(crate::ui::backdrop(12.0, 28.0, 1.8));
         for m in self.models.iter().filter(|m| m.provider_id == provider_id) {
             let label = m.label.clone();
             let selected = Some(label.as_str()) == current.as_deref();
@@ -760,7 +793,13 @@ impl Workspace {
                 })),
             );
         }
-        list
+        list.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            if *hovered {
+                this.hover_submenus.entered();
+            } else {
+                this.close_model_submenu_after_hover(cx);
+            }
+        }))
     }
 
     fn context_menu_view(&self, cx: &mut Context<Self>) -> Div {
@@ -997,7 +1036,8 @@ impl Workspace {
                 .shadow_lg()
                 .flex()
                 .flex_col()
-                .text_size(px(TEXT_SM));
+                .text_size(px(TEXT_SM))
+                .child(crate::ui::backdrop(12.0, 28.0, 1.8));
             list = list.child(
                 div()
                     .px(px(2.0))

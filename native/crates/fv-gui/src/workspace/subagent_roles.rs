@@ -3,7 +3,10 @@ use super::model_menu::{PickerRow, picker_row_view, picker_rows, provider_groups
 use super::{
     Workspace,
     personalization::{outline_sm, primary_button, select_trigger},
-    settings::{Section, card, checkbox, dialog_head, menu_item, outline_button, popover, switch},
+    settings::{
+        Section, card, checkbox, dialog_card, dialog_head, menu_item, outline_button, popover,
+        switch,
+    },
 };
 use crate::ui::px;
 use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon, truncate};
@@ -71,6 +74,7 @@ impl Editor {
             thinking: None,
             read_only: false,
             tools: None,
+            builtin: false,
         });
         let prompt = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -135,6 +139,8 @@ impl Editor {
             thinking: self.thinking,
             read_only: self.read_only,
             tools,
+            // Whether the role was built in belongs to the server; a save never changes it.
+            builtin: self.expected.as_ref().is_some_and(|role| role.builtin),
         }
     }
 }
@@ -467,6 +473,9 @@ impl Workspace {
             .items_center()
             .gap(px(6.0))
             .pt(px(4.0));
+        if role.builtin {
+            chips = chips.child(chip(trs!(english, "subagent_roles.builtin_chip").into()));
+        }
         if role.read_only {
             chips = chips.child(chip(trs!(english, "subagent_roles.read_only_chip").into()));
         }
@@ -548,7 +557,26 @@ impl Workspace {
                     )
                     .child(chips),
             )
-            .child(
+            .child(if role.builtin {
+                // A built-in ships with the app: it is shown, never edited or deleted here.
+                // The same model · reasoning line stays as plain text so the row reads like
+                // its editable neighbours without promising a click that cannot save.
+                div()
+                    .flex_none()
+                    .self_center()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .max_w(px(256.0))
+                    .px(px(12.0))
+                    .py(px(6.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(p.c(Token::Border))
+                    .text_size(px(TEXT_SM))
+                    .child(truncate(format!("{model} · {thinking}")).muted(p))
+                    .child(chip(trs!(english, "subagent_roles.builtin_chip").into()))
+            } else {
                 div()
                     .flex_none()
                     .self_center()
@@ -612,12 +640,12 @@ impl Workspace {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.delete_role(remove.clone(), cx)
                             }))
-                    }),
-            )
+                    })
+            })
     }
 
     /// The role editor, drawn as a dialog by `settings_dialogs` while it is open.
-    pub(super) fn role_editor_dialog(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn role_editor_dialog(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let editor = self.subagent_roles.editor.as_ref()?;
         Some(self.role_editor(editor, cx))
     }
@@ -626,7 +654,7 @@ impl Workspace {
         self.subagent_roles.editor = None;
     }
 
-    fn role_editor(&self, e: &Editor, cx: &mut Context<Self>) -> Div {
+    fn role_editor(&self, e: &Editor, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = &self.palette;
         let english = self.english();
         let saved = self.subagent_roles.saved.as_ref();
@@ -1010,7 +1038,10 @@ impl Workspace {
                     )),
             );
         }
-        card(p)
+        dialog_card(p, 576.0)
+            .id("role-editor-scroll")
+            .max_h(px(640.0))
+            .overflow_y_scroll()
             .child(dialog_head(
                 if e.expected.is_some() {
                     trs!(english, "subagent_roles.edit_title")
@@ -1066,16 +1097,30 @@ fn capture_roles() -> SubagentRolesResponse {
         })
         .collect();
     let roles = if std::env::var_os("FV_FIXTURE_SAMPLE").is_some() {
-        vec![SubagentRole {
-            id: "reviewer".into(),
-            name: "代码审查".into(),
-            description: "审查改动，找出缺陷与遗漏的测试。".into(),
-            system_prompt: String::new(),
-            model: None,
-            thinking: Some(ThinkingLevel::High),
-            read_only: true,
-            tools: Some(vec!["read".into(), "grep".into(), "find".into()]),
-        }]
+        vec![
+            SubagentRole {
+                id: "reviewer".into(),
+                name: "代码审查".into(),
+                description: "审查改动，找出缺陷与遗漏的测试。".into(),
+                system_prompt: String::new(),
+                model: None,
+                thinking: Some(ThinkingLevel::High),
+                read_only: true,
+                tools: Some(vec!["read".into(), "grep".into(), "find".into()]),
+                builtin: false,
+            },
+            SubagentRole {
+                id: "explorer".into(),
+                name: "代码探索".into(),
+                description: "Read-only investigation of the codebase. Use for specific, well-scoped questions.".into(),
+                system_prompt: String::new(),
+                model: None,
+                thinking: None,
+                read_only: true,
+                tools: None,
+                builtin: true,
+            },
+        ]
     } else {
         Vec::new()
     };

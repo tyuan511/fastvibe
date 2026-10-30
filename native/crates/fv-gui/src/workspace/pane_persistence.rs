@@ -73,6 +73,9 @@ impl PaneState {
                             file: record,
                         }
                     }
+                    PaneTabKind::Chat { thread_id } => saved::TabKind::Chat {
+                        thread_id: thread_id.clone(),
+                    },
                     PaneTabKind::Git => saved::TabKind::Git,
                     PaneTabKind::Browser { url } => saved::TabKind::Browser { url: url.clone() },
                     PaneTabKind::Terminal => saved::TabKind::Terminal {
@@ -130,6 +133,7 @@ impl PaneState {
                     state.saved_files.insert(id.clone(), view);
                     PaneTabKind::Files { path }
                 }
+                saved::TabKind::Chat { thread_id } => PaneTabKind::Chat { thread_id },
                 saved::TabKind::Git => PaneTabKind::Git,
                 saved::TabKind::Browser { url } => PaneTabKind::Browser {
                     url: fv_core::safe_web_url(&url).unwrap_or_else(|| "about:blank".into()),
@@ -169,6 +173,7 @@ impl Workspace {
         self.git_views.remove(conversation);
         if let Some(pane) = self.panes.remove(conversation) {
             for tab in pane.tabs {
+                self.pane_chat_inputs.remove(&tab.id);
                 self.close_office(&tab.id, cx);
                 self.web_views.remove(&tab.id);
                 self.web_views
@@ -531,6 +536,33 @@ mod tests {
         assert!(state.show_preview);
         assert!(state.preview.is_none());
         assert!(state.tree_width.is_finite());
+    }
+
+    #[test]
+    fn auxiliary_chat_tabs_round_trip_the_child_thread_id() {
+        let pane = saved::Pane {
+            tabs: vec![saved::Tab {
+                id: "chat".into(),
+                title: "辅助对话".into(),
+                kind: saved::TabKind::Chat {
+                    thread_id: "child-1".into(),
+                },
+            }],
+            active: Some("chat".into()),
+            expanded: Vec::new(),
+            tree_width: 224.0,
+        };
+        let (state, terminals) = PaneState::recovered(pane);
+        assert!(terminals.is_empty());
+        assert!(matches!(
+            &state.active_tab().unwrap().kind,
+            PaneTabKind::Chat { thread_id } if thread_id == "child-1"
+        ));
+        let saved = state.saved_layout(|_| unreachable!(), |_| None);
+        assert!(matches!(
+            &saved.tabs[0].kind,
+            saved::TabKind::Chat { thread_id } if thread_id == "child-1"
+        ));
     }
 
     #[test]

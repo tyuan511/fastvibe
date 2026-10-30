@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use fv_core::{ContentBlock, Message};
 use fv_protocol::types::{Item, Turn};
 
@@ -15,6 +17,9 @@ pub fn turns_from_history(messages: &[Message]) -> Vec<Turn> {
 /// empty) giving the turns their start, end of work and end.
 pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn> {
     let mut turns: Vec<Turn> = Vec::new();
+    // Tool results normally arrive after many rendered items. Keep the current turn's call
+    // index so loading a long transcript does not scan every item for every result.
+    let mut tool_indices: HashMap<&str, usize> = HashMap::new();
     for (i, message) in messages.iter().enumerate() {
         if matches!(message, Message::MemoryContext { .. }) {
             continue;
@@ -28,6 +33,7 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
         }
         match message {
             Message::User { text } => {
+                tool_indices.clear();
                 let turn = format!("t{}", turns.len());
                 let mut t = Turn::new(
                     turn.clone(),
@@ -77,13 +83,17 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
                             id,
                             name,
                             arguments,
-                        } => turn.items.push(Item::ToolCall {
-                            id: id.clone(),
-                            name: name.clone(),
-                            arguments: arguments.clone(),
-                            output: None,
-                            is_error: false,
-                        }),
+                        } => {
+                            let index = turn.items.len();
+                            turn.items.push(Item::ToolCall {
+                                id: id.clone(),
+                                name: name.clone(),
+                                arguments: arguments.clone(),
+                                output: None,
+                                is_error: false,
+                            });
+                            tool_indices.insert(id.as_str(), index);
+                        }
                         _ => {}
                     }
                 }
@@ -143,6 +153,7 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
             // A divider where the conversation was summarized. The messages before it are
             // still in the transcript, and still drawn: only the model stops seeing them.
             Message::Compaction { stats, .. } => {
+                tool_indices.clear();
                 let turn = format!("t{}", turns.len());
                 let mut t = Turn::new(
                     turn.clone(),
@@ -169,18 +180,13 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
                 if at.is_some() {
                     turn.process_ended_at = at;
                 }
-                for item in &mut turn.items {
-                    if let Item::ToolCall {
-                        id,
-                        output,
-                        is_error,
-                        ..
-                    } = item
-                        && id == call_id
-                    {
-                        *output = Some(content.clone());
-                        *is_error = *failed;
-                    }
+                if let Some(&index) = tool_indices.get(call_id.as_str())
+                    && let Some(Item::ToolCall {
+                        output, is_error, ..
+                    }) = turn.items.get_mut(index)
+                {
+                    *output = Some(content.clone());
+                    *is_error = *failed;
                 }
             }
         }

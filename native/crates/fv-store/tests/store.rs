@@ -549,6 +549,7 @@ fn child_catalog_is_atomic_hidden_and_global_history_is_bounded() {
                 depth: 1,
                 role: None,
                 fork_context: false,
+                task_name: None,
                 tool_ceiling: None,
                 task: "task".into(),
                 status: SubagentStatus::Completed,
@@ -597,4 +598,72 @@ fn late_queue_mutations_cannot_recreate_rows_after_thread_deletion() {
     db.requeue_front("a", &row).unwrap();
     assert!(db.queue("a").unwrap().is_empty());
     assert!(db.queue_pause("a").unwrap().is_none());
+}
+
+/// Reordering writes the queue's order whole, and an id the caller did not name keeps its place
+/// at the end instead of vanishing — a stale client cannot drop somebody else's prompt.
+#[test]
+fn reordering_writes_the_whole_order_and_keeps_unnamed_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("queue.db")).unwrap();
+    db.put_thread(&thread("a", 0)).unwrap();
+    for (id, text) in [("one", "1"), ("two", "2"), ("three", "3")] {
+        db.push_queued(
+            "a",
+            &fv_store::QueuedPrompt {
+                id: id.into(),
+                text: text.into(),
+                at: 0,
+            },
+        )
+        .unwrap();
+    }
+    let order = |db: &Db| -> Vec<String> {
+        db.queue("a")
+            .unwrap()
+            .into_iter()
+            .map(|row| row.id)
+            .collect()
+    };
+    assert_eq!(order(&db), ["one", "two", "three"]);
+
+    db.reorder_queue("a", &["three".into(), "one".into(), "two".into()])
+        .unwrap();
+    assert_eq!(order(&db), ["three", "one", "two"]);
+
+    // `two` is not named, so it keeps its place behind the ones that were; `ghost` is not queued
+    // at all and is simply skipped.
+    db.reorder_queue("a", &["ghost".into(), "two".into()])
+        .unwrap();
+    assert_eq!(order(&db), ["two", "three", "one"]);
+}
+
+/// Editing a waiting prompt changes its words and nothing else — not its id, not its place.
+#[test]
+fn editing_a_queued_prompt_keeps_its_id_and_position() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("queue.db")).unwrap();
+    db.put_thread(&thread("a", 0)).unwrap();
+    for (id, text) in [("one", "1"), ("two", "2")] {
+        db.push_queued(
+            "a",
+            &fv_store::QueuedPrompt {
+                id: id.into(),
+                text: text.into(),
+                at: 0,
+            },
+        )
+        .unwrap();
+    }
+    assert!(db.edit_queued("a", "one", "first").unwrap());
+    let rows = db.queue("a").unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.id.as_str(), row.text.as_str()))
+            .collect::<Vec<_>>(),
+        [("one", "first"), ("two", "2")]
+    );
+    // A row that is no longer queued is not brought back by an edit.
+    assert!(!db.edit_queued("a", "gone", "x").unwrap());
+    assert_eq!(db.queue("a").unwrap().len(), 2);
 }

@@ -11,7 +11,10 @@ use std::time::Duration;
 use super::Workspace;
 use super::gpui::prelude::*;
 use super::gpui::{AnyElement, Context, FontWeight, SharedString, div, px};
-use super::settings::{card, outline_button, setting_row, switch};
+use super::settings::{
+    card, dialog_card, dialog_foot_with_cancel, dialog_head, modal, outline_button, setting_row,
+    switch,
+};
 use crate::computer_host::{self, Host, Pane, Permissions};
 use crate::ui::{Muted as _, TEXT_XS};
 use fv_protocol::methods::{ComputerHost, ComputerInstall, ComputerStatusGet};
@@ -27,6 +30,8 @@ const BUNDLE_ID: &str = "dev.fastvibe.desktop";
 pub(super) struct ComputerUi {
     status: Option<ComputerStatus>,
     progress: Option<ComputerInstallProgress>,
+    /// The driver install/update confirmation and progress dialog is open.
+    install_dialog: bool,
     host: Option<Host>,
     /// Starting or registering the daemon is in flight.
     busy: bool,
@@ -37,6 +42,15 @@ pub(super) struct ComputerUi {
 }
 
 impl Workspace {
+    pub(super) fn computer_install_dialog_is_open(&self) -> bool {
+        self.computer.install_dialog
+    }
+
+    pub(super) fn computer_close_install_dialog(&mut self, cx: &mut Context<Self>) {
+        self.computer.install_dialog = false;
+        cx.notify();
+    }
+
     /// Dev capture: canned state for `--settings computer[-downloading|-off]`.
     pub(super) fn computer_fixture(&mut self, name: &str) {
         self.app_settings.computer_control = name != "computer-off";
@@ -49,6 +63,7 @@ impl Workspace {
             ..Default::default()
         });
         if name == "computer-downloading" {
+            self.computer.install_dialog = true;
             self.computer.progress = Some(ComputerInstallProgress {
                 received: 17_400_000,
                 total: 43_629_843,
@@ -232,6 +247,7 @@ impl Workspace {
         if self.computer.status.as_ref().is_some_and(|s| s.installing) {
             return;
         }
+        self.computer.install_dialog = true;
         self.computer.error = None;
         self.computer.progress = None;
         if let Some(status) = &mut self.computer.status {
@@ -245,6 +261,7 @@ impl Workspace {
                 match result {
                     Ok(status) => {
                         this.computer.status = Some(status);
+                        this.computer.install_dialog = false;
                         this.computer_sync(cx);
                     }
                     Err(error) => {
@@ -261,6 +278,20 @@ impl Workspace {
 
     fn computer_toggle(&mut self, cx: &mut Context<Self>) {
         let enable = !self.app_settings.computer_control;
+        // Electron keeps the master switch unavailable until the driver exists. If the
+        // user asks to turn it on before that, show the same driver dialog instead of
+        // starting a download and leaving progress in the settings card.
+        if enable
+            && self
+                .computer
+                .status
+                .as_ref()
+                .is_some_and(|s| s.supported && !s.installed)
+        {
+            self.computer.install_dialog = true;
+            cx.notify();
+            return;
+        }
         self.patch_settings(
             AppSettingsPatch {
                 computer_control: Some(enable),
@@ -271,14 +302,6 @@ impl Workspace {
         if enable {
             if computer_host::GATED && !computer_host::permissions().ready() {
                 computer_host::request_permissions();
-            }
-            if self
-                .computer
-                .status
-                .as_ref()
-                .is_some_and(|s| s.supported && !s.installed)
-            {
-                self.computer_install(cx);
             }
         }
         self.computer_sync(cx);
@@ -291,20 +314,63 @@ impl Workspace {
         let status = self.computer.status.clone().unwrap_or_default();
         let on = self.app_settings.computer_control;
         let supported = self.computer.status.is_none() || status.supported;
+        let can_toggle = supported && status.installed;
         let toggle = switch(SharedString::from("computer-control"), on, p)
-            .when(!supported, |d| d.opacity(0.4))
+            .when(!can_toggle, |d| d.opacity(0.4).cursor_default())
             .on_click(cx.listener(move |this, _, _, cx| {
-                if supported {
+                if can_toggle {
                     this.computer_toggle(cx)
                 }
             }));
-        let mut body = card(p).child(setting_row(
-            trs!(english, "computer.allow"),
-            trs!(english, "computer.allow_description"),
-            false,
-            p,
-            toggle,
-        ));
+        let heading = |text: String| {
+            div()
+                .text_size(px(16.0))
+                .line_height(px(22.0))
+                .font_weight(FontWeight::MEDIUM)
+                .child(SharedString::from(text))
+        };
+        let mut body = div().flex().flex_col().gap(px(20.0));
+        if supported {
+            let driver_description = if status.installing {
+                trs!(english, "computer.downloading").to_string()
+            } else if let Some(error) = status.error.clone().or_else(|| self.computer.error.clone())
+            {
+                error
+            } else if status.installed {
+                status.version.clone().unwrap_or_default()
+            } else {
+                trs!(english, "computer.driver_missing").to_string()
+            };
+            let driver_control = if status.installing {
+                outline_button("computer-installing", p)
+                    .opacity(0.5)
+                    .cursor_default()
+                    .child(trs!(english, "computer.downloading"))
+            } else if status.installed {
+                outline_button("computer-check-update", p)
+                    .child(trs!(english, "computer.check_update"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.computer.install_dialog = true;
+                        cx.notify();
+                    }))
+            } else {
+                outline_button("computer-install", p)
+                    .child(trs!(english, "computer.download"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.computer.install_dialog = true;
+                        cx.notify();
+                    }))
+            };
+            body = body
+                .child(heading(trs!(english, "computer.driver").to_string()))
+                .child(card(p).child(setting_row(
+                    trs!(english, "computer.driver_name"),
+                    &driver_description,
+                    false,
+                    p,
+                    driver_control,
+                )));
+        }
         let line = |text: String| {
             div()
                 .px(px(16.0))
@@ -320,48 +386,11 @@ impl Workspace {
                 body.child(line(status.unsupported_reason.clone().unwrap_or_else(
                     || trs!(english, "computer.unsupported").to_string(),
                 )));
-        } else if status.installing {
-            let text = match &self.computer.progress {
-                Some(p) if p.total > 0 => tr!(
-                    english,
-                    "computer.downloading_progress",
-                    received = super::format_bytes(p.received),
-                    total = super::format_bytes(p.total)
-                ),
-                _ => trs!(english, "computer.downloading").to_string(),
-            };
-            body = body.child(line(text));
-        } else if status.installed {
-            let version = status.version.clone().unwrap_or_default();
-            let running = self.computer.host.is_some() && status.running;
-            body = body.child(line(tr!(
-                english,
-                "computer.installed",
-                version = version,
-                state = if running {
-                    trs!(english, "computer.running")
-                } else if on {
-                    trs!(english, "computer.waiting")
-                } else {
-                    trs!(english, "computer.stopped")
-                }
-            )));
-        } else if on {
-            body = body.child(
-                div()
-                    .px(px(16.0))
-                    .py(px(10.0))
-                    .border_t_1()
-                    .border_color(p.c(Token::Border))
-                    .child(
-                        outline_button("computer-install", p)
-                            .child(trs!(english, "computer.download"))
-                            .on_click(cx.listener(|this, _, _, cx| this.computer_install(cx))),
-                    ),
-            );
         }
         if on && supported && computer_host::GATED {
             let perms = computer_host::permissions();
+            body = body.child(heading(trs!(english, "computer.permissions").to_string()));
+            let mut permissions = card(p);
             for (id, label, granted, pane) in [
                 (
                     "computer-accessibility",
@@ -376,7 +405,7 @@ impl Workspace {
                     Pane::ScreenRecording,
                 ),
             ] {
-                body = body.child(setting_row(
+                permissions = permissions.child(setting_row(
                     label,
                     if granted {
                         trs!(english, "computer.granted")
@@ -397,10 +426,20 @@ impl Workspace {
                     }),
                 ));
             }
+            body = body.child(permissions);
             if !perms.ready() {
                 body = body.child(line(trs!(english, "computer.relaunch_note").to_string()));
             }
         }
+        body = body
+            .child(heading(trs!(english, "computer.control").to_string()))
+            .child(card(p).child(setting_row(
+                trs!(english, "computer.allow"),
+                trs!(english, "computer.allow_description"),
+                false,
+                p,
+                toggle,
+            )));
         if let Some(error) = &self.computer.error {
             body = body.child(
                 div()
@@ -415,5 +454,62 @@ impl Workspace {
             );
         }
         body.into_any_element()
+    }
+
+    /// The driver install/update flow mirrors Electron's modal: the settings card only
+    /// exposes the driver action, while bytes and retry state stay in this dialog.
+    pub(super) fn computer_install_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.computer.install_dialog {
+            return None;
+        }
+        let p = &self.palette;
+        let english = self.english();
+        let status = self.computer.status.clone().unwrap_or_default();
+        let installing = status.installing;
+        let description = if installing {
+            match &self.computer.progress {
+                Some(progress) if progress.total > 0 => tr!(
+                    english,
+                    "computer.downloading_progress",
+                    received = super::format_bytes(progress.received),
+                    total = super::format_bytes(progress.total)
+                ),
+                _ => trs!(english, "computer.downloading").to_string(),
+            }
+        } else if let Some(error) = status.error.clone().or_else(|| self.computer.error.clone()) {
+            error
+        } else {
+            trs!(english, "computer.driver_dialog_description").to_string()
+        };
+        let confirm = if installing {
+            trs!(english, "computer.download")
+        } else if status.installed {
+            trs!(english, "computer.update")
+        } else if status.error.is_some() || self.computer.error.is_some() {
+            trs!(english, "computer.retry")
+        } else {
+            trs!(english, "computer.download")
+        };
+        let body = dialog_card(p, 400.0)
+            .child(dialog_head(
+                trs!(english, "computer.driver_dialog_title"),
+                &description,
+                p,
+            ))
+            .child(dialog_foot_with_cancel(
+                p,
+                cx,
+                |this, cx| {
+                    this.computer.install_dialog = false;
+                    cx.notify();
+                },
+                trs!(english, "computer.close"),
+                confirm,
+                |this, _, cx| this.computer_install(cx),
+                installing,
+            ));
+        Some(modal(body, p, cx, |this| {
+            this.computer.install_dialog = false;
+        }))
     }
 }

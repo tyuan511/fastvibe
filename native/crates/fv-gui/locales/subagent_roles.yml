@@ -87,6 +87,11 @@ subagent_roles.empty:
 subagent_roles.read_only_chip:
   zh: "只读"
   en: "Read-only"
+subagent_roles.builtin_chip:
+  zh: "内置"
+  en: "Built-in"
+  zh: "只读"
+  en: "Read-only"
 subagent_roles.all_tools:
   zh: "全部可用工具"
   en: "All available tools"

@@ -1,5 +1,5 @@
 //! A shared message board for one tree of agents: the main conversation and every child it
-//! started. `send_input` and `wait_agent` only go from a parent to its direct child; the board
+//! started. `followup_task` and `wait_agent` only go from a caller to its own tree; the board
 //! lets any member leave a note the others read when they next look (findings, a decision, a
 //! file one of them is about to change), without going through the parent.
 //!

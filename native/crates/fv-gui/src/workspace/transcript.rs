@@ -6,7 +6,7 @@ use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{Status, Workspace, sticky, text};
+use super::{Status, Workspace, text};
 use crate::presentation::{self, FileChange, TurnLayout};
 use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon, icon_button, shimmer, spinner};
 use crate::view_model::ThreadView;
@@ -354,12 +354,6 @@ impl Workspace {
         let p = &self.palette;
         let language = self.app_settings.language;
         let view = self.selected.as_ref().and_then(|id| self.views.get(id));
-        // What the recorders measured while the last frame was drawn, taken so that they can
-        // refill it as this one is. A frame that does not draw the transcript (设置 covers it)
-        // leaves it empty and the next one that does measures again — one frame with nothing
-        // pinned, which is a frame the reader cannot see.
-        let spans = std::mem::take(&mut *self.sticky.borrow_mut());
-        let mut pinned_prompt: Option<AnyElement> = None;
         let mut body = div()
             .w_full()
             .max_w(px(THREAD_MAX))
@@ -405,12 +399,9 @@ impl Workspace {
                             .iter()
                             .position(|t| super::palette::turn_matches(t, query))
                     });
-                // This frame's own offset: the copy is positioned in content coordinates and the
-                // scroller translates it, so what gets painted is exactly where this says.
-                let pin = sticky::pinned(&spans, -f32::from(self.scroll.offset().y));
                 for (i, turn) in view.turns.iter().enumerate() {
                     let running = view.running && i == last;
-                    let row = self.turn(i, turn, running, pin.is_some_and(|it| it.turn == i), cx);
+                    let row = self.turn(turn, running, cx);
                     if target_turn == Some(i) {
                         body = body.child(
                             div()
@@ -425,11 +416,6 @@ impl Workspace {
                         body = body.child(row);
                     }
                 }
-                if let Some(pin) = pin
-                    && let Some(turn) = view.turns.get(pin.turn)
-                {
-                    pinned_prompt = Some(self.pinned_prompt(turn, pin.y, cx));
-                }
             }
         }
         div()
@@ -439,21 +425,133 @@ impl Workspace {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.capture_transcript_selection(window, cx);
+                }),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                // A plain click should dismiss a prior selection. Drag selection is captured
+                // from mouse-up; GPUI does not emit a click for the completed drag.
+                this.clear_transcript_selection(window, cx);
+            }))
             .child(body)
-            // The last child, so it is painted over the rows it stands in for.
-            .children(pinned_prompt)
+            .children(self.transcript_selection_actions(cx))
     }
 
-    /// One turn, as one box: the pinned prompt is scoped to it, and the gap inside is the gap
-    /// these rows had when they were siblings of the reading column.
-    fn turn(
+    /// The same server-backed transcript used by the main column, rendered inside an auxiliary
+    /// pane without changing the selected parent conversation.
+    pub(super) fn side_chat_transcript(
         &self,
-        index: usize,
-        turn: &Turn,
-        running: bool,
-        pinned: bool,
+        thread_id: &str,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> impl IntoElement {
+        let p = &self.palette;
+        let language = self.app_settings.language;
+        let view = self.views.get(thread_id);
+        let mut body = div()
+            .w_full()
+            .max_w(px(THREAD_MAX))
+            .mx_auto()
+            .px(px(16.0))
+            .pt(px(8.0))
+            .pb(px(24.0))
+            .flex()
+            .flex_col()
+            .gap(px(24.0));
+        match view {
+            None => {
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .muted(p)
+                        .child(spinner(
+                            "pane-chat-loading",
+                            14.0,
+                            p.c(Token::MutedForeground),
+                        ))
+                        .child(text::connecting(language)),
+                )
+            }
+            Some(view) => {
+                let last = view.turns.len().saturating_sub(1);
+                for (index, turn) in view.turns.iter().enumerate() {
+                    body = body.child(self.turn(turn, view.running && index == last, cx));
+                }
+            }
+        }
+        div()
+            .id("pane-chat-transcript")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(body)
+    }
+
+    fn transcript_selection_actions(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let text = self.transcript_selection.clone()?;
+        let p = &self.palette;
+        let copy_text = text.clone();
+        let add_text = text.clone();
+        let ask_text = text.clone();
+        let copy = action_button(
+            "selection-copy",
+            "copy01",
+            if self.english() { "Copy" } else { "复制" },
+            p,
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.copy_text(copy_text.clone(), cx);
+            this.clear_transcript_selection(window, cx);
+        }));
+        let add = action_button(
+            "selection-add",
+            "add01",
+            if self.english() {
+                "Add to conversation"
+            } else {
+                "添加到对话"
+            },
+            p,
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.add_selection_to_composer(add_text.clone(), window, cx);
+        }));
+        let ask = action_button(
+            "selection-ask-side",
+            "message-square",
+            if self.english() {
+                "Ask in side chat"
+            } else {
+                "询问侧边聊天"
+            },
+            p,
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.ask_selection_in_side_chat(ask_text.clone(), window, cx);
+        }));
+        Some(
+            super::settings::popover(p)
+                .absolute()
+                .right(px(16.0))
+                .bottom(px(16.0))
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .children([
+                    copy.into_any_element(),
+                    add.into_any_element(),
+                    ask.into_any_element(),
+                ]),
+        )
+    }
+
+    /// One turn, as one box: the gap inside is the gap between its rows.
+    fn turn(&self, turn: &Turn, running: bool, cx: &mut Context<Self>) -> AnyElement {
         // A compaction is a transcript-level rule of its own, before what follows it.
         let (compactions, items): (Vec<&Item>, Vec<&Item>) = turn
             .items
@@ -461,32 +559,9 @@ impl Workspace {
             .partition(|i| matches!(i, Item::ContextCompaction { .. }));
         let items: Vec<Item> = items.into_iter().cloned().collect();
         let layout = presentation::layout(&items, running);
-        let mut wrapper = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .gap(px(28.0))
-            .child(sticky::recorder(
-                self.sticky.clone(),
-                self.scroll.clone(),
-                index,
-                false,
-            ));
+        let mut wrapper = div().flex().flex_col().gap(px(28.0));
         if let Some(user) = layout.user {
-            wrapper = wrapper.child(
-                div()
-                    .relative()
-                    // The copy over the top edge stands in for this one, and both come from the
-                    // same `Pin`: no frame draws the prompt twice, or not at all.
-                    .when(pinned, |d| d.invisible())
-                    .child(self.user_row(&turn.id, user, turn.started_at, pinned, cx))
-                    .child(sticky::recorder(
-                        self.sticky.clone(),
-                        self.scroll.clone(),
-                        index,
-                        true,
-                    )),
-            );
+            wrapper = wrapper.child(self.user_row(&turn.id, user, turn.started_at, cx));
         }
         for c in compactions {
             wrapper = wrapper.child(self.compaction(c, running && layout.answer.is_empty()));
@@ -497,77 +572,23 @@ impl Workspace {
         wrapper.into_any_element()
     }
 
-    /// The prompt of the turn being read, drawn again over the top of the reading column.
-    ///
-    /// A second copy rather than a moved one, because the row in flow is what holds the turn's
-    /// place in it. Glass has no way to mask the reply scrolling under it (Electron's
-    /// `GLASS_CUT_FEATHER`), so the band carries a floating layer's fill instead of the page's own
-    /// and hides what is under it by being dense.
-    fn pinned_prompt(&self, turn: &Turn, y: f32, cx: &mut Context<Self>) -> AnyElement {
-        let p = &self.palette;
-        let Some(item) = turn
-            .items
-            .iter()
-            .find(|i| matches!(i, Item::UserMessage { .. }))
-        else {
-            return div().into_any_element();
-        };
-        let fill = if p.glass() {
-            // The band has to hide the reply under it, so it is opaque; but the floating layer's
-            // fill is near-white against the grey glass. Composite the pane over an estimate of
-            // the vibrancy material instead, so it reads as part of the column.
-            let pane = p.main_pane();
-            let material = if p.is_dark() { 0.13 } else { 0.90 };
-            let mix = |c: f32| c * pane.a + material * (1.0 - pane.a);
-            let rgb = pane.to_rgb();
-            Rgba {
-                r: mix(rgb.r),
-                g: mix(rgb.g),
-                b: mix(rgb.b),
-                a: 1.0,
-            }
-            .into()
-        } else {
-            p.c(Token::Background)
-        };
-        div()
-            .absolute()
-            .top(px(y))
-            .left_0()
-            .right_0()
-            .child(
-                div()
-                    .w_full()
-                    .max_w(px(THREAD_MAX))
-                    .mx_auto()
-                    .px(px(THREAD_PAD))
-                    .bg(fill)
-                    .child(self.user_row(&turn.id, item, turn.started_at, true, cx)),
-            )
-            .into_any_element()
-    }
-
-    /// `pinned` draws the copy that the scroller holds at its top edge: same row, but its element
-    /// ids carry a suffix, because two elements in one tree may not share an id.
     fn user_row(
         &self,
         turn_id: &str,
         item: &Item,
         at: Option<i64>,
-        pinned: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = &self.palette;
         let Item::UserMessage { id, text } = item else {
             return div().into_any_element();
         };
-        let suffix = if pinned { "-pin" } else { "" };
         // Edit puts the words back in the composer: correcting a prompt is a rewrite of that
         // turn, and sending it again would only add a second one after the reply it corrects.
         let edit_text = text.clone();
         let edit_turn = turn_id.to_string();
         let edit = action_button(
-            SharedString::from(format!("edit-{id}{suffix}")),
+            SharedString::from(format!("edit-{id}")),
             "pencil-edit02",
             trs!(self.english(), "transcript.edit"),
             p,
@@ -577,7 +598,7 @@ impl Workspace {
         }));
         let copy_text = text.clone();
         let copy = action_button(
-            SharedString::from(format!("copy-{id}{suffix}")),
+            SharedString::from(format!("copy-{id}")),
             "copy01",
             trs!(self.english(), "transcript.copy"),
             p,
@@ -585,7 +606,7 @@ impl Workspace {
         .on_click(cx.listener(move |this, _, _, cx| {
             this.copy_text(copy_text.clone(), cx);
         }));
-        let group = SharedString::from(format!("row-{id}{suffix}"));
+        let group = SharedString::from(format!("row-{id}"));
         let skill = crate::skill_draft::invocation(text);
         let body = skill.as_ref().map(|s| s.text).unwrap_or(text);
         div()

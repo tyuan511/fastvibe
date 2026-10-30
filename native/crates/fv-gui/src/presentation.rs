@@ -180,14 +180,17 @@ pub fn family_of(name: &str) -> Family {
         "web_search" => Family::Web,
         "tool_search" | "conversation_search" | "grep" | "search" => Family::Search,
         "update_plan" => Family::Todo,
-        "request_user_input" => Family::Question,
+        "request_user_input" | "request_user_input_async" | "send_message_to_user_async" => {
+            Family::Question
+        }
         _ if key.starts_with("mcp") || key.contains("__") => Family::Mcp,
         _ if key.contains("skill") => Family::Skill,
         _ if key.starts_with("spawn_agent")
-            || key.starts_with("send_input")
+            || key.starts_with("followup_task")
+            || key == "send_message"
+            || key.starts_with("interrupt_agent")
             || key.starts_with("wait_agent")
-            || key.starts_with("close_agent")
-            || key.starts_with("resume_agent")
+            || key.starts_with("list_agents")
             || key.starts_with("subagent") =>
         {
             Family::Agent

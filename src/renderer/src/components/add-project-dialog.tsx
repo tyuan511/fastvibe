@@ -307,7 +307,7 @@ export function AddProjectDialog({ open, onOpenChange, onAdded }: Props): JSX.El
                 <Button size="icon-xs" variant="ghost" disabled={busy || rawPath === "/"} onClick={() => void browse(parentRemotePath(rawPath))} aria-label={t("projectDialog.parent")}>
                   <HugeiconsIcon icon={ArrowLeft01Icon} />
                 </Button>
-                <Input value={rawPath} onChange={(event) => setRawPath(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !busy) void browse(); }} className="h-8 font-mono text-xs" />
+                <Input value={rawPath} onChange={(event) => setRawPath(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !busy) void browse(); }} className="h-9 font-mono text-xs" />
                 <Button size="icon-xs" variant="ghost" disabled={busy} onClick={() => void browse()} aria-label={t("projectDialog.refresh")}>
                   <HugeiconsIcon icon={RefreshIcon} />
                 </Button>

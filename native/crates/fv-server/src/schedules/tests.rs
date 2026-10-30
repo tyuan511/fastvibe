@@ -407,7 +407,7 @@ impl fv_agent::Model for ChildModel {
         let child = request
             .messages
             .iter()
-            .any(|m| matches!(m,Message::User{text}if text=="hanging child"));
+            .any(|m| matches!(m,Message::User{text}if text.ends_with("hanging child")));
         if child && self.fail {
             return fv_agent::testing::FailingModel("child failed".into()).stream(request);
         }
@@ -424,7 +424,7 @@ impl fv_agent::Model for ChildModel {
                 .tool(
                     "spawn",
                     "spawn_agent",
-                    serde_json::json!({"message":"hanging child"}),
+                    serde_json::json!({"message":"hanging child","task_name":"hang"}),
                 )
                 .done()
         };
