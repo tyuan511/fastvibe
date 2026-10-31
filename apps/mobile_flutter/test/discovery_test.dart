@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:nsd/nsd.dart' as nsd;
+
 import 'dart:io';
 
 import 'package:fastvibe_mobile/protocol/discovery.dart';
@@ -6,6 +10,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 InternetAddress ip(String text) => InternetAddress(text);
+Map<String, Uint8List> nativeTxt() => {
+  for (final entry in {
+    'v': '1',
+    'transport': 'fv-protocol',
+    'protocolVersion': '1',
+    'id': '12345678-1234-1234-1234-123456789abc',
+  }.entries)
+    entry.key: Uint8List.fromList(utf8.encode(entry.value)),
+};
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -40,6 +53,7 @@ void main() {
             'service.host': '192.168.22.139',
             'service.addresses': '192.168.22.139',
             'service.port': 7777,
+            'service.txt': nativeTxt(),
           });
         case 'stopDiscovery':
           await nativeEvent('onDiscoveryStopSuccessful', arguments);
@@ -75,6 +89,34 @@ void main() {
       nearby.dispose();
       binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
     }
+  });
+
+  test('native advertisements require explicit supported family metadata', () {
+    expect(
+      isNativeService(nsd.Service(type: fastvibeServiceType, txt: nativeTxt())),
+      isTrue,
+    );
+    expect(
+      isNativeService(nsd.Service(type: '_fastvibe._tcp', txt: nativeTxt())),
+      isFalse,
+    );
+    expect(
+      isNativeService(const nsd.Service(type: fastvibeServiceType)),
+      isFalse,
+    );
+    for (final key in ['v', 'transport', 'protocolVersion', 'id']) {
+      final txt = nativeTxt()..remove(key);
+      expect(
+        isNativeService(nsd.Service(type: fastvibeServiceType, txt: txt)),
+        isFalse,
+      );
+    }
+    final future = nativeTxt()
+      ..['protocolVersion'] = Uint8List.fromList(utf8.encode('2'));
+    expect(
+      isNativeService(nsd.Service(type: fastvibeServiceType, txt: future)),
+      isFalse,
+    );
   });
 
   group('originsFor', () {

@@ -47,6 +47,16 @@ async fn a_gemini_turn_keeps_its_thought_signature() {
     let events = events(collect(&model, request()).await);
 
     assert!(events.contains(&ModelEvent::Text("Reading a.txt.".into())));
+    let arguments: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::ToolCallArgs { delta, .. } => {
+                Some(serde_json::from_str::<serde_json::Value>(delta).unwrap())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(arguments, [json!({"path":"a.txt"})]);
     let msg = done(&events);
     assert_eq!(msg.stop, StopReason::ToolUse);
     assert!(

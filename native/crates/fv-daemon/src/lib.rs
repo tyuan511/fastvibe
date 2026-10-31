@@ -8,6 +8,8 @@
 //! one app starts it, so two apps opening together start one server), `server.pid` and
 //! `server.log` (what the server printed).
 
+pub mod ssh;
+
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
@@ -19,11 +21,25 @@ use fv_client::Client;
 use fv_protocol::methods::Initialize;
 use fv_protocol::types::{ClientCapabilities, ClientInfo, InitializeParams};
 use fv_protocol::{PROTOCOL_VERSION, ServerNotification, ServerRequest};
-use sha2::{Digest, Sha256};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 const START_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Nonblocking flock polls leave ownership in this future. Cancellation drops the file
+/// immediately; no detached blocking worker can retain a lock or use a recycled fd.
+async fn acquire_lock(lock: std::fs::File) -> Result<std::fs::File, DaemonError> {
+    loop {
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(lock);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(error.into());
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
 
 #[derive(Debug)]
 pub enum DaemonError {
@@ -76,21 +92,6 @@ pub struct Daemon {
     server_bin: PathBuf,
 }
 
-/// `cargo dev` supplies a metadata-only identity so the GUI does not hash the whole debug
-/// executable a second time after the xtask has already built it. Packaged/direct launches keep
-/// the content hash below.
-fn built_identity(path: &Path) -> Result<String, std::io::Error> {
-    if let Ok(identity) = std::env::var("FASTVIBE_DEV_SERVER_ID")
-        && !identity.is_empty()
-    {
-        return Ok(identity);
-    }
-    let mut file = std::fs::File::open(path)?;
-    let mut digest = Sha256::new();
-    std::io::copy(&mut file, &mut digest)?;
-    Ok(format!("{:x}", digest.finalize()))
-}
-
 /// A connected, initialized client, and what is worth knowing about the server behind it.
 pub struct Connection {
     pub client: Client,
@@ -98,10 +99,8 @@ pub struct Connection {
     pub requests: UnboundedReceiver<ServerRequest>,
     pub server_version: String,
     pub features: Vec<String>,
-    /// The server is from a different build than this app; it should be restarted when idle.
+    /// The server's version or required features do not match this app; restart when idle.
     pub version_mismatch: bool,
-    /// Identity of the running executable, absent on servers built before this handshake field.
-    pub build_fingerprint: Option<String>,
     /// `None` means the running server is too old to report activity; restart conservatively.
     pub has_running_turns: Option<bool>,
 }
@@ -187,13 +186,7 @@ impl Daemon {
             .truncate(false)
             .write(true)
             .open(self.data_dir.join("server.lock"))?;
-        let fd = lock.as_raw_fd();
-        let locked =
-            tokio::task::spawn_blocking(move || unsafe { libc::flock(fd, libc::LOCK_EX) }).await;
-        if !matches!(locked, Ok(0)) {
-            return Err(DaemonError::Io(std::io::Error::last_os_error()));
-        }
-        // `fd` stays valid because `lock` outlives the call above and the code below.
+        let lock = acquire_lock(lock).await?;
         if self.reachable().await {
             return Ok(self.socket());
         }
@@ -270,8 +263,7 @@ impl Daemon {
         connect_to(&socket, client_name, client_version).await
     }
 
-    /// Desktop startup must compare builds, even when both are version 0.1.0. Otherwise a
-    /// resident server can silently discard new preference fields and push defaults back.
+    /// Reuse a server with the same version and all required desktop features.
     /// Keep a busy (or too old to report activity) server alive and flag the mismatch instead.
     pub async fn connect_current(
         &self,
@@ -280,12 +272,8 @@ impl Daemon {
         required_features: &[&str],
     ) -> Result<Connection, DaemonError> {
         let mut connection = self.connect(client_name, client_version).await?;
-        let binary = self.server_bin.clone();
-        let built = tokio::task::spawn_blocking(move || built_identity(&binary))
-            .await
-            .map_err(|e| DaemonError::Rpc(e.to_string()))??;
         let current = |connection: &Connection| {
-            connection.build_fingerprint.as_deref() == Some(&built)
+            connection.server_version == client_version
                 && required_features
                     .iter()
                     .all(|feature| connection.features.iter().any(|f| f == feature))
@@ -295,21 +283,13 @@ impl Daemon {
         }
 
         // Serialize replacement with other apps starting/replacing this same data directory.
-        // The blocking task owns the file, so cancellation cannot leave flock using a closed fd.
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
             .open(self.data_dir.join("server.lock"))?;
-        let _lock = tokio::task::spawn_blocking(move || {
-            if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(lock)
-        })
-        .await
-        .map_err(|e| DaemonError::Rpc(e.to_string()))??;
-        // Another app may already have replaced it while we waited. Recheck build and activity.
+        let _lock = acquire_lock(lock).await?;
+        // Another app may already have replaced it while we waited. Recheck compatibility and activity.
         drop(connection);
         if !self.reachable().await {
             self.start().await?;
@@ -400,7 +380,6 @@ pub async fn connect_to(
         server_version: hello.server_version,
         features: hello.features,
         version_mismatch,
-        build_fingerprint: hello.build_fingerprint,
         has_running_turns: hello.has_running_turns,
     })
 }

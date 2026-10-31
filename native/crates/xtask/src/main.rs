@@ -1,6 +1,6 @@
 //! Project tasks, run as `cargo <alias>`.
 //!
-//!   cargo dev [-- app args]   build both, update an idle changed server, start the app
+//!   cargo dev [-- app args]   build both and start the app
 //!
 //! Runnable from the repository root as well as from `native/`: every cargo call below names
 //! this workspace's manifest, so the invocation's directory decides nothing.
@@ -121,42 +121,6 @@ fn dist_mac_local(args: Vec<String>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Restart {
-    Unchanged,
-    Now,
-    Busy,
-}
-
-/// Decide from the running executable's own report, never from timestamps or package versions.
-/// An old server that cannot report a fingerprint/activity is deliberately left alone: killing
-/// a conversation just because two builds speak different protocol versions is worse than a
-/// one-line warning explaining how to replace it once idle.
-fn restart_needed(current: Option<&str>, running: Option<bool>, built: &str) -> Restart {
-    match current {
-        Some(current) if current == built => Restart::Unchanged,
-        _ if running == Some(false) => Restart::Now,
-        _ => Restart::Busy,
-    }
-}
-
-/// Development builds are rebuilt locally and only need a cheap identity for deciding whether
-/// the resident server came from the same build. Reading the 100+ MiB executable for SHA-256
-/// made every `cargo dev` pay an avoidable disk read before the GUI could connect.
-fn development_identity(path: &Path) -> std::io::Result<String> {
-    let metadata = std::fs::metadata(path)?;
-    let modified = metadata
-        .modified()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    Ok(format!(
-        "dev:{size}:{seconds}:{nanos}",
-        size = metadata.len(),
-        seconds = modified.as_secs(),
-        nanos = modified.subsec_nanos()
-    ))
-}
-
 fn requested_data_dir(app_args: &[String]) -> Result<Option<PathBuf>, &'static str> {
     let mut data_dir = std::env::var_os("FASTVIBE_DATA_DIR").map(Into::into);
     let mut args = app_args.iter();
@@ -172,7 +136,7 @@ fn requested_data_dir(app_args: &[String]) -> Result<Option<PathBuf>, &'static s
 }
 
 /// A blocking handshake is fine here: no server runtime or GUI exists on this thread yet.
-fn prepare_server(daemon: &Daemon, built: &str) -> Result<(), String> {
+fn prepare_server(daemon: &Daemon) -> Result<(), String> {
     if !daemon.socket().exists() {
         return Ok(());
     }
@@ -187,26 +151,17 @@ fn prepare_server(daemon: &Daemon, built: &str) -> Result<(), String> {
             // GUI's normal connection path will retry/report it without us killing anything.
             Err(_) => return Ok(()),
         };
-    match restart_needed(
-        connection.build_fingerprint.as_deref(),
-        connection.has_running_turns,
-        built,
-    ) {
-        Restart::Unchanged => Ok(()),
-        Restart::Busy => {
-            eprintln!(
-                "FastVibe server update available; keeping the running server to avoid interrupting a conversation. Stop the old server or rerun cargo dev when idle to update."
-            );
-            Ok(())
-        }
-        Restart::Now => {
-            drop(connection);
-            daemon
-                .stop_and_wait()
-                .map(|_| ())
-                .map_err(|error| format!("could not restart the development server: {error}"))
-        }
+    if connection.has_running_turns != Some(false) {
+        eprintln!(
+            "Keeping the running FastVibe server to avoid interrupting work. Rerun cargo dev when idle to use the newly built server."
+        );
+        return Ok(());
     }
+    drop(connection);
+    daemon
+        .stop_and_wait()
+        .map(|_| ())
+        .map_err(|error| format!("could not restart the development server: {error}"))
 }
 
 fn dev(app_args: Vec<String>) -> ExitCode {
@@ -232,22 +187,14 @@ fn dev(app_args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let built_fingerprint = match development_identity(&server_bin) {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!("could not identify {}: {error}", server_bin.display());
-            return ExitCode::FAILURE;
-        }
-    };
     let daemon = fv_daemon::Daemon::new(data_dir, server_bin);
-    if let Err(error) = prepare_server(&daemon, &built_fingerprint) {
+    if let Err(error) = prepare_server(&daemon) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
 
     let status = cargo("run")
         .args(["-q", "-p", "fv-gui", "--bin", "fastvibe", "--"])
-        .env("FASTVIBE_DEV_SERVER_ID", &built_fingerprint)
         .args(app_args)
         .status();
     match status {
@@ -259,38 +206,6 @@ fn dev(app_args: Vec<String>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_unchanged_build_never_restarts() {
-        assert_eq!(
-            restart_needed(Some("same"), Some(false), "same"),
-            Restart::Unchanged
-        );
-        assert_eq!(
-            restart_needed(Some("same"), Some(true), "same"),
-            Restart::Unchanged
-        );
-        assert_eq!(
-            restart_needed(Some("same"), None, "same"),
-            Restart::Unchanged
-        );
-    }
-
-    #[test]
-    fn a_changed_build_restarts_only_when_idle() {
-        assert_eq!(
-            restart_needed(Some("old"), Some(false), "new"),
-            Restart::Now
-        );
-        assert_eq!(
-            restart_needed(Some("old"), Some(true), "new"),
-            Restart::Busy
-        );
-        assert_eq!(restart_needed(Some("old"), None, "new"), Restart::Busy);
-        assert_eq!(restart_needed(None, Some(false), "new"), Restart::Now);
-        assert_eq!(restart_needed(None, Some(true), "new"), Restart::Busy);
-        assert_eq!(restart_needed(None, None, "new"), Restart::Busy);
-    }
 
     /// The workspace is located from the crate, so a `cargo dev` typed anywhere in the
     /// repository builds the same thing. A wrong number of `..` would silently resolve to a

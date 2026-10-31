@@ -16,6 +16,8 @@ path = "src/main.rs"
 fv-update = { path = "../fv-update" }
 reqwest = { version = "0.13", features = ["rustls", "json"] }
 fv-env = { path = "../fv-env" }
+fv-daemon = { path = "../fv-daemon" }
+fv-rtc = { path = "../fv-rtc" }
 fv-protocol = { path = "../fv-protocol" }
 fv-core = { path = "../fv-core" }
 fv-agent = { path = "../fv-agent" }
@@ -25,6 +27,7 @@ fv-provider = { path = "../fv-provider" }
 fv-tools = { path = "../fv-tools" }
 fv-mcp = { path = "../fv-mcp" }
 fv-import = { path = "../fv-import" }
+rusqlite = { version = "0.40", features = ["bundled"] }
 serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "unbounded_depth"] }
 base64 = "0.22"
@@ -35,6 +38,10 @@ futures-util.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
 sha2 = "0.10"
+scrypt = { version = "0.11", default-features = false }
+axum = { version = "0.8", features = ["ws"] }
+socket2 = "0.6"
+mdns-sd = { version = "0.21.6", default-features = false, features = ["logging"] }
 flate2 = "1"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }

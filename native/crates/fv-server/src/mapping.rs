@@ -113,7 +113,7 @@ impl EventMapper {
                         turn_id,
                         item: Item::AgentMessage {
                             id,
-                            text: fv_core::strip_memory_citation(&text),
+                            text: fv_core::strip_memory_citation(&text).into_owned(),
                         },
                     }]
                 }

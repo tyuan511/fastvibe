@@ -171,6 +171,7 @@ pub fn update(
     write(state, &projects)?;
     if params.path != project.path {
         crate::settings::relocate_project(state, &params.path, &project.path)?;
+        crate::providers::relocate_project_defaults(state, &params.path, Some(&project.path))?;
     }
     changed(state);
     Ok(info(&project))
@@ -182,6 +183,7 @@ pub fn remove(state: &ServerState, path: &str) -> Result<ProjectListResponse, Er
     let mut projects = read(state)?;
     projects.retain(|p| p.path != path);
     write(state, &projects)?;
+    crate::providers::relocate_project_defaults(state, path, None)?;
     changed(state);
     list(state)
 }

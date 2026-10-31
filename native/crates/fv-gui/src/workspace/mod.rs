@@ -1,6 +1,7 @@
 //! The main window: sidebar of conversations, the transcript of the open one, and the
 //! composer. Everything it knows comes from the server through [`Backend`].
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::ui::px;
@@ -20,9 +21,11 @@ mod about;
 mod app_menu;
 mod ask;
 mod browser_bridge;
+mod browser_controls;
+mod browser_settings;
 mod composer;
 mod computer;
-mod diff;
+pub(crate) mod diff;
 mod file_mention;
 mod goal_tray;
 mod header_git;
@@ -42,6 +45,8 @@ mod personalization;
 mod projects;
 mod provider_test;
 mod queue_tray;
+mod remote_preview;
+mod resources;
 mod schedules;
 pub mod settings;
 mod shortcuts;
@@ -49,10 +54,16 @@ mod sidebar;
 mod sidebar_actions;
 mod skill_picker;
 mod skills;
+mod ssh_workspace;
 mod subagent_roles;
 mod subagents;
+mod terminal_tool;
 mod transcript;
+mod transcript_files;
+mod transcript_scroll;
 mod usage;
+#[cfg(target_os = "macos")]
+mod web_menu_layer;
 
 use crate::backend::{Backend, BackendEvent};
 use crate::theme::Palette;
@@ -158,9 +169,21 @@ impl Notice {
 
 pub struct Workspace {
     update_data_dir: Option<std::path::PathBuf>,
+    ssh_host: Option<String>,
+    remote_previews: HashMap<String, remote_preview::RemotePreview>,
     web_views: HashMap<String, pane_web::ContentView>,
     web_drag_blocked: bool,
+    browser_services: browser_settings::BrowserServices,
+    #[cfg(target_os = "macos")]
+    web_menu_layer: Option<web_menu_layer::HostedMenu>,
+    resources: resources::Resources,
     office_views: HashMap<String, pane_office::OfficeView>,
+    /// Cached markdown source by item id. Streaming updates replace the entry; settled items
+    /// reuse the same SharedString allocation across animation frames.
+    markdown_cache: RefCell<HashMap<String, ((usize, usize), SharedString)>>,
+    /// Keep the cache bounded when a user visits many conversations in one window.
+    markdown_cache_order: RefCell<Vec<String>>,
+    markdown_cache_limit: usize,
     subagents: subagents::Subagents,
     subagent_roles: subagent_roles::RoleSettings,
     schedules_ui: schedules::ScheduleUi,
@@ -176,6 +199,9 @@ pub struct Workspace {
     models: Vec<ModelEntry>,
     model_request: u64,
     defaults: ModelDefaults,
+    draft_defaults_path: Option<String>,
+    draft_defaults: Option<ModelDefaults>,
+    draft_defaults_epoch: u64,
     /// The model picked on the empty page, before a conversation exists.
     pending_model: Option<String>,
     pending_thinking: Option<ThinkingLevel>,
@@ -192,6 +218,8 @@ pub struct Workspace {
     /// them in a submenu per provider; only that one and the effort flyout can be open at a time.
     model_submenu: Option<String>,
     hover_submenus: HoverSubmenuController,
+    #[cfg(test)]
+    submenu_hover: Option<(model_menu::SubmenuTarget, Task<()>)>,
     context_menu: bool,
     compact_pending: HashSet<ThreadId>,
     input: Entity<TextareaState>,
@@ -201,6 +229,14 @@ pub struct Workspace {
     /// Child thread snapshots currently being loaded for restored side-chat tabs.
     pane_chat_loading: HashSet<String>,
     scroll: ScrollHandle,
+    transcript_scroll: transcript_scroll::TranscriptScroll,
+    jump_turn: Option<(ThreadId, String)>,
+    /// Invalidates asynchronous composer callbacks when navigation or a newer send wins.
+    composer_epoch: u64,
+    draft_send_pending: bool,
+    draft_send_epoch: u64,
+    connection_epoch: u64,
+    thread_list_request: u64,
     /// How far through each waiting question set the user is.
     ask: HashMap<RequestId, ask::AskProgress>,
     ask_input: Entity<InputState>,
@@ -229,8 +265,6 @@ pub struct Workspace {
     sidebar_menu: Option<Point<Pixels>>,
     sidebar_notice: Option<String>,
     dock_badge: u32,
-    /// Scroll to the end once the transcript has been laid out (opening a conversation).
-    stick_to_bottom: bool,
     /// 设置, while it is open (it covers the workspace, which keeps its state behind it).
     settings: Option<settings::SettingsState>,
     /// ⌘K: the search box, while it is open.
@@ -367,7 +401,6 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 if let Some(b) = backend {
                     this.backend = Some(b);
-                    this.status = Status::Ready;
                     match recovery {
                         Ok(storage) => this.restore_panes(storage),
                         Err(error) => {
@@ -377,14 +410,6 @@ impl Workspace {
                                 error = error
                             )))
                         }
-                    }
-                    this.refresh_all(cx);
-                    if let Some(input) = &this.search_box {
-                        let query = input.read(cx).value().trim().to_lowercase();
-                        this.search_palette(query, cx);
-                    }
-                    if let Some(id) = this.selected.clone() {
-                        this.select(id, cx);
                     }
                 }
                 cx.notify();
@@ -461,7 +486,14 @@ impl Workspace {
         cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| {
             match ev {
                 // Every keystroke can open, narrow or close a `@` mention.
-                InputEvent::Change => this.composer_changed(window, cx),
+                InputEvent::Change => {
+                    // Clearing for a submission emits Change too; it must not invalidate that
+                    // submission's own failure callback. Typing a replacement draft does.
+                    if !this.input.read(cx).value().is_empty() {
+                        this.composer_epoch = this.composer_epoch.wrapping_add(1);
+                    }
+                    this.composer_changed(window, cx);
+                }
                 InputEvent::Focus => this.composer_focus(true, cx),
                 InputEvent::Blur => this.composer_focus(false, cx),
                 // Enter takes the highlighted file while the `@` menu is open, rather than
@@ -497,13 +529,23 @@ impl Workspace {
             },
         )
         .detach();
-        let scroll = ScrollHandle::new();
+        let transcript_scroll = transcript_scroll::TranscriptScroll::default();
+        let scroll = transcript_scroll.handle.clone();
         let search_anchor = ScrollAnchor::for_handle(scroll.clone());
         let this = Self {
             update_data_dir: None,
+            ssh_host: None,
+            remote_previews: HashMap::new(),
             web_views: HashMap::new(),
             web_drag_blocked: false,
+            browser_services: Default::default(),
+            #[cfg(target_os = "macos")]
+            web_menu_layer: None,
+            resources: resources::Resources::new(),
             office_views: HashMap::new(),
+            markdown_cache: RefCell::new(HashMap::new()),
+            markdown_cache_order: RefCell::new(Vec::new()),
+            markdown_cache_limit: 512,
             subagents: Default::default(),
             subagent_roles: Default::default(),
             schedules_ui: Default::default(),
@@ -518,6 +560,9 @@ impl Workspace {
             models: Vec::new(),
             model_request: 0,
             defaults: ModelDefaults::default(),
+            draft_defaults_path: None,
+            draft_defaults: None,
+            draft_defaults_epoch: 0,
             pending_model: None,
             pending_thinking: None,
             draft_project: None,
@@ -528,12 +573,21 @@ impl Workspace {
             thinking_menu: false,
             model_submenu: None,
             hover_submenus: Default::default(),
+            #[cfg(test)]
+            submenu_hover: None,
             context_menu: false,
             compact_pending: HashSet::new(),
             input,
             pane_chat_inputs: HashMap::new(),
             pane_chat_loading: HashSet::new(),
             scroll,
+            transcript_scroll,
+            jump_turn: None,
+            composer_epoch: 0,
+            draft_send_pending: false,
+            draft_send_epoch: 0,
+            connection_epoch: 0,
+            thread_list_request: 0,
             ask: HashMap::new(),
             ask_input,
             transcript_selection: None,
@@ -557,7 +611,6 @@ impl Workspace {
             sidebar_menu: None,
             sidebar_notice: None,
             dock_badge: 0,
-            stick_to_bottom: true,
             settings: None,
             search_box: None,
             editing_turn: None,
@@ -638,6 +691,7 @@ impl Workspace {
                         .as_ref()
                         .and_then(|id| this.views.get(id))
                         .is_some_and(|v| v.running);
+                    this.resources_git_tick(cx);
                     if running {
                         cx.notify();
                     }
@@ -804,7 +858,9 @@ impl Workspace {
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.close_menus(cx);
-                    cx.reveal_path(std::path::Path::new(&reveal_path));
+                    if this.ssh_host.is_none() {
+                        cx.reveal_path(std::path::Path::new(&reveal_path));
+                    }
                 })),
             )
             .child(
@@ -862,6 +918,10 @@ impl Workspace {
         self.thinking_menu = false;
         self.model_submenu = None;
         self.hover_submenus.entered();
+        #[cfg(test)]
+        {
+            self.submenu_hover = None;
+        }
         self.context_menu = false;
         self.access_menu = false;
         self.approval_menu = false;
@@ -1140,7 +1200,7 @@ impl Workspace {
         let root = fv_theme::clamp_ui_font_size(self.app_settings.ui_font_size as f32);
         gpui_kit::component::Theme::global_mut(cx).font_size = gpui_kit::px(root);
         window.set_background_appearance(crate::vibrancy::background(palette.glass()));
-        crate::vibrancy::set(window, palette.glass());
+        crate::vibrancy::set(window, &palette);
         self.palette = palette;
         cx.notify();
     }
@@ -1327,6 +1387,7 @@ impl Workspace {
     }
 
     fn refresh_all(&mut self, cx: &mut Context<Self>) {
+        self.refresh_draft_defaults(cx);
         self.refresh_app_settings(cx);
         self.refresh_subagents(cx);
         self.refresh_schedules(cx);
@@ -1345,6 +1406,8 @@ impl Workspace {
         let Some(b) = self.backend.clone() else {
             return;
         };
+        self.thread_list_request = self.thread_list_request.wrapping_add(1);
+        let request = self.thread_list_request;
         let call = b.call::<ThreadList>(ThreadListParams {
             include_archived: false,
         });
@@ -1352,6 +1415,14 @@ impl Workspace {
             let r = call.await;
             if let Ok(list) = r {
                 this.update(cx, |this, cx| {
+                    if this.thread_list_request != request {
+                        return;
+                    }
+                    for thread in &list.threads {
+                        if let Some(view) = this.views.get_mut(&thread.id) {
+                            view.thread = thread.clone();
+                        }
+                    }
                     this.threads = list.threads;
                     this.threads
                         .sort_by_key(|t| std::cmp::Reverse(t.updated_at));
@@ -1392,7 +1463,10 @@ impl Workspace {
     }
 
     fn select(&mut self, id: ThreadId, cx: &mut Context<Self>) {
+        self.remote_previews.clear();
         self.schedules_ui.open = false;
+        self.composer_epoch = self.composer_epoch.wrapping_add(1);
+        self.draft_send_pending = false;
         if self
             .search_target
             .as_ref()
@@ -1561,12 +1635,16 @@ impl Workspace {
         let Some(b) = self.backend.clone() else {
             return;
         };
+        let connection_epoch = self.connection_epoch;
         let call = b.call::<ThreadResume>(ThreadIdParams {
             thread_id: id.clone(),
         });
         cx.spawn(async move |this, cx| {
             let snapshot = call.await.ok();
             this.update(cx, |this, cx| {
+                if this.connection_epoch != connection_epoch {
+                    return;
+                }
                 this.pane_chat_loading.remove(&id);
                 if let Some(snapshot) = snapshot {
                     let mut view = ThreadView::from_snapshot(snapshot);
@@ -1608,7 +1686,6 @@ impl Workspace {
                         this.search_jump_pending = true;
                     }
                     this.views.insert(id, view);
-                    this.stick_to_bottom = !this.search_jump_pending;
                 }
                 cx.notify();
             })
@@ -1620,6 +1697,28 @@ impl Workspace {
     fn on_event(&mut self, event: BackendEvent, cx: &mut Context<Self>) {
         match event {
             BackendEvent::Connected { version_mismatch } => {
+                self.status = Status::Ready;
+                self.connection_epoch = self.connection_epoch.wrapping_add(1);
+                self.pending_questions.clear();
+                self.pending_approvals.clear();
+                self.ask.clear();
+                self.focused_for = None;
+                self.pane_chat_loading.clear();
+                for view in self.views.values_mut() {
+                    view.questions.clear();
+                    view.approvals.clear();
+                }
+                self.refresh_all(cx);
+                if let Some(input) = &self.search_box {
+                    let query = input.read(cx).value().trim().to_lowercase();
+                    self.search_palette(query, cx);
+                }
+                let mut loaded: HashSet<_> = self.views.keys().cloned().collect();
+                loaded.extend(self.selected.clone());
+                for id in loaded {
+                    self.load_view(id, cx);
+                }
+                cx.notify();
                 self.computer_refresh(cx);
                 self.invalidate_provider_checks();
                 self.refresh_mcp(cx);
@@ -1638,6 +1737,16 @@ impl Workspace {
                 }
             }
             BackendEvent::Failed(message) => {
+                self.connection_epoch = self.connection_epoch.wrapping_add(1);
+                self.composer_epoch = self.composer_epoch.wrapping_add(1);
+                self.draft_send_pending = false;
+                self.pending_questions.clear();
+                self.pending_approvals.clear();
+                self.ask.clear();
+                for view in self.views.values_mut() {
+                    view.questions.clear();
+                    view.approvals.clear();
+                }
                 self.invalidate_provider_checks();
                 self.status = Status::Failed(message);
                 cx.notify();
@@ -1791,9 +1900,6 @@ impl Workspace {
                 ) {
                     self.refresh_threads(cx);
                 }
-                if self.search_target.is_none() {
-                    self.scroll.scroll_to_bottom();
-                }
                 self.sync_suggestion();
                 cx.notify();
             }
@@ -1806,6 +1912,9 @@ impl Workspace {
             return;
         }
         let text = self.input.read(cx).value().trim().to_string();
+        if self.draft_send_pending && self.selected.is_none() {
+            return;
+        }
         if text.is_empty() {
             return;
         }
@@ -1826,6 +1935,8 @@ impl Workspace {
                 .update(cx, |state, cx| state.set_value("", window, cx));
             self.editing_turn = None;
             self.notice = None;
+            let epoch = self.composer_epoch;
+            let owner = self.selected.clone();
             let handle_input = self.input.clone();
             let window_handle = window.window_handle();
             cx.spawn(async move |this, cx| {
@@ -1840,6 +1951,16 @@ impl Workspace {
                     })
                     .await;
                 if let Err(e) = result {
+                    let current = this
+                        .update(cx, |this, cx| {
+                            this.composer_epoch == epoch
+                                && this.selected == owner
+                                && this.input.read(cx).value().is_empty()
+                        })
+                        .unwrap_or(false);
+                    if !current {
+                        return;
+                    }
                     let _ = cx.update_window(window_handle, |_, window, cx| {
                         handle_input.update(cx, |st, cx| {
                             st.set_value(crate::skill_draft::content(text.clone()), window, cx)
@@ -1875,6 +1996,8 @@ impl Workspace {
                 .update(cx, |state, cx| state.set_value("", window, cx));
             self.notice = None;
             let sent_text = self.prompt_with_attachments(&text);
+            let epoch = self.composer_epoch;
+            let owner = self.selected.clone();
             let handle_input = self.input.clone();
             let window_handle = window.window_handle();
             cx.spawn(async move |this, cx| {
@@ -1903,6 +2026,16 @@ impl Workspace {
                     })
                     .await;
                 if let Err(e) = queued {
+                    let current = this
+                        .update(cx, |this, cx| {
+                            this.composer_epoch == epoch
+                                && this.selected == owner
+                                && this.input.read(cx).value().is_empty()
+                        })
+                        .unwrap_or(false);
+                    if !current {
+                        return;
+                    }
                     let _ = cx.update_window(window_handle, |_, window, cx| {
                         handle_input.update(cx, |st, cx| {
                             st.set_value(crate::skill_draft::content(text.clone()), window, cx)
@@ -1948,34 +2081,67 @@ impl Workspace {
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.notice = None;
         self.search_target = None;
+        self.composer_epoch = self.composer_epoch.wrapping_add(1);
+        let epoch = self.composer_epoch;
         let selected = self.selected.clone();
+        let owner = std::rc::Rc::new(std::cell::RefCell::new(selected.clone()));
+        self.draft_send_pending = selected.is_none();
+        self.draft_send_epoch = self.draft_send_epoch.wrapping_add(1);
+        let draft_send_epoch = self.draft_send_epoch;
         let pending_model = self.pending_model.clone();
         let pending_thinking = self.pending_thinking;
         let project = self.draft_project.clone();
-        let no_model = self.defaults.model.is_none() && pending_model.is_none();
+        let no_model = self.current_model_label().is_none();
         // The files picked with `@` are consumed by the send, whether or not it succeeds: a
         // failed send restores the words, and the reference block is appended again next time.
         // Files picked with `@` travel as a reference block, the way the Electron composer sends
         // them: the model is given paths it can open, and the reader's own sentence stays as they
         // typed it. Built before the spawn because it consumes the attachment list.
         let sent_text = self.prompt_with_attachments(&text);
+        let optimistic_thread = selected.clone();
+        if let Some(id) = optimistic_thread.as_deref()
+            && let Some(view) = self.views.get_mut(id)
+        {
+            view.add_optimistic_prompt(sent_text.clone());
+        }
+        cx.notify();
         let handle_input = self.input.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             // A send that did not go through puts the words back and says why.
             let fail = |why: String, text: String, this: &WeakEntity<Self>, cx: &mut AsyncApp| {
+                let current = this
+                    .update(cx, |this, cx| {
+                        if this.selected == *owner.borrow()
+                            && this.draft_send_epoch == draft_send_epoch
+                        {
+                            this.draft_send_pending = false;
+                        }
+                        this.composer_epoch == epoch
+                            && this.selected == *owner.borrow()
+                            && this.input.read(cx).value().is_empty()
+                    })
+                    .unwrap_or(false);
+                if !current {
+                    return;
+                }
                 let _ = cx.update_window(window_handle, |_, window, cx| {
                     handle_input.update(cx, |st, cx| {
                         st.set_value(crate::skill_draft::content(text), window, cx)
                     });
                 });
                 this.update(cx, |this, cx| {
+                    if let Some(id) = owner.borrow().as_ref()
+                        && let Some(view) = this.views.get_mut(id)
+                    {
+                        view.rollback_optimistic_prompt();
+                    }
                     this.fail(why, cx);
                     cx.notify();
                 })
                 .ok();
             };
-            let id = match selected {
+            let id = match selected.clone() {
                 Some(id) => id,
                 None => {
                     // Without a project the server gives the conversation a scratch folder.
@@ -2016,14 +2182,30 @@ impl Workspace {
                         }
                     };
                     this.update(cx, |this, cx| {
+                        this.views
+                            .insert(id.clone(), ThreadView::from_snapshot(snapshot.clone()));
+                        this.refresh_threads(cx);
+                        if this.selected == *owner.borrow()
+                            && this.draft_send_epoch == draft_send_epoch
+                        {
+                            this.draft_send_pending = false;
+                        }
+                        if this.composer_epoch != epoch || this.selected != *owner.borrow() {
+                            return;
+                        }
+                        this.draft_send_pending = false;
                         pane_web::promote_draft(&mut this.panes, &id);
                         this.navigation
                             .visit(this.selected.clone(), Some(id.clone()));
                         this.selected = Some(id.clone());
+                        *owner.borrow_mut() = Some(id.clone());
                         this.pending_model = None;
                         this.pending_thinking = None;
                         this.views
                             .insert(id.clone(), ThreadView::from_snapshot(snapshot));
+                        if let Some(view) = this.views.get_mut(&id) {
+                            view.add_optimistic_prompt(sent_text.clone());
+                        }
                         cx.notify();
                     })
                     .ok();
@@ -2186,7 +2368,13 @@ impl Workspace {
     /// or its patch finds the change applied and does nothing — and either way the transcript
     /// looks right. So the user is asked, and "keep my files" is a real answer: they may have
     /// edited things by hand since the prompt.
-    fn retry(&mut self, turn_id: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn retry_thread(
+        &mut self,
+        thread_id: ThreadId,
+        turn_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let answer = window.prompt(
             PromptLevel::Info,
             trs!(self.english(), "mod.retry_this_turn"),
@@ -2205,7 +2393,7 @@ impl Workspace {
             match choice {
                 1 | 2 => {
                     this.update(cx, |this, cx| {
-                        this.rewind_turn(turn_id, choice == 2, cx);
+                        this.rewind_thread(thread_id, turn_id, choice == 2, cx);
                     })
                     .ok();
                 }
@@ -2216,14 +2404,20 @@ impl Workspace {
     }
 
     /// The call behind 重试: re-run the turn, with or without putting the workspace back.
-    fn rewind_turn(&mut self, turn_id: String, rewind_files: bool, cx: &mut Context<Self>) {
-        let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
+    fn rewind_thread(
+        &mut self,
+        id: ThreadId,
+        turn_id: String,
+        rewind_files: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(b) = self.backend.clone() else {
             return;
         };
         cx.spawn(async move |this, cx| {
             let result = b
                 .call::<TurnRewind>(TurnRewindParams {
-                    thread_id: id,
+                    thread_id: id.clone(),
                     turn_id,
                     text: None,
                     rewind_files,
@@ -2232,6 +2426,7 @@ impl Workspace {
             match result {
                 Ok(answer) => {
                     this.update(cx, |this, cx| {
+                        let foreground = this.selected.as_ref() == Some(&id);
                         // A rewind that could not put everything back has to say so: the retry is
                         // running, and the tree is only partly where it was.
                         let files = answer.files;
@@ -2242,22 +2437,29 @@ impl Workspace {
                                 .map(|s| s.path.as_str())
                                 .take(5)
                                 .collect();
-                            this.notice = Some(Notice::Partial(tr!(
+                            let message = tr!(
                                 this.english(),
                                 "mod.files_could_not_be_rolled",
                                 count = files.skipped.len(),
                                 names = names.join("、")
-                            )));
-                        } else if rewind_files && files.had_checkpoint {
-                            this.done(
-                                tr!(
-                                    this.english(),
-                                    "mod.workspace_rolled_back_files_restored",
-                                    restored = files.restored,
-                                    removed = files.removed
-                                ),
-                                cx,
                             );
+                            if foreground {
+                                this.notice = Some(Notice::Partial(message));
+                            } else {
+                                this.sidebar_notice = Some(message);
+                            }
+                        } else if rewind_files && files.had_checkpoint {
+                            let message = tr!(
+                                this.english(),
+                                "mod.workspace_rolled_back_files_restored",
+                                restored = files.restored,
+                                removed = files.removed
+                            );
+                            if foreground {
+                                this.done(message, cx);
+                            } else {
+                                this.sidebar_notice = Some(message);
+                            }
                         }
                         cx.notify();
                     })
@@ -2265,7 +2467,12 @@ impl Workspace {
                 }
                 Err(e) => {
                     this.update(cx, |this, cx| {
-                        this.fail(tr!(this.english(), "mod.could_not_retry_e", e = e), cx);
+                        if this.selected.as_ref() == Some(&id) {
+                            this.fail(tr!(this.english(), "mod.could_not_retry_e", e = e), cx);
+                        } else {
+                            this.sidebar_notice =
+                                Some(tr!(this.english(), "mod.could_not_retry_e", e = e));
+                        }
                         cx.notify();
                     })
                     .ok();
@@ -2347,6 +2554,8 @@ impl Workspace {
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.notice = None;
         let sent_text = self.prompt_with_attachments(&text);
+        let epoch = self.composer_epoch;
+        let owner = self.selected.clone();
         let handle_input = self.input.clone();
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx| {
@@ -2357,6 +2566,16 @@ impl Workspace {
                 })
                 .await;
             if let Err(e) = result {
+                let current = this
+                    .update(cx, |this, cx| {
+                        this.composer_epoch == epoch
+                            && this.selected == owner
+                            && this.input.read(cx).value().is_empty()
+                    })
+                    .unwrap_or(false);
+                if !current {
+                    return;
+                }
                 let _ = cx.update_window(window_handle, |_, window, cx| {
                     handle_input.update(cx, |st, cx| {
                         st.set_value(crate::skill_draft::content(text.clone()), window, cx)
@@ -2602,25 +2821,39 @@ impl Workspace {
     }
 
     fn interrupt(&mut self, cx: &mut Context<Self>) {
-        let (Some(b), Some(id)) = (self.backend.clone(), self.selected.clone()) else {
-            return;
-        };
-        cx.spawn(async move |_, _| {
-            let _ = b
-                .call::<TurnInterrupt>(ThreadIdParams { thread_id: id })
-                .await;
-        })
-        .detach();
+        if let Some(id) = self.selected.clone() {
+            self.interrupt_thread(id, cx);
+        }
     }
 
     pub(super) fn interrupt_thread(&mut self, thread_id: String, cx: &mut Context<Self>) {
         let Some(backend) = self.backend.clone() else {
             return;
         };
-        cx.spawn(async move |_, _| {
-            let _ = backend
-                .call::<TurnInterrupt>(ThreadIdParams { thread_id })
-                .await;
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = backend
+                .call::<TurnInterrupt>(ThreadIdParams {
+                    thread_id: thread_id.clone(),
+                })
+                .await
+            {
+                let _ = this.update(cx, |this, cx| {
+                    let message = format!(
+                        "{}: {error}",
+                        if this.english() {
+                            "Could not stop the reply"
+                        } else {
+                            "无法停止回复"
+                        }
+                    );
+                    if this.selected.as_ref() == Some(&thread_id) {
+                        this.fail(message, cx);
+                    } else {
+                        this.sidebar_notice = Some(message);
+                        cx.notify();
+                    }
+                });
+            }
         })
         .detach();
     }
@@ -2633,7 +2866,20 @@ impl Workspace {
     }
 
     fn current_thinking(&self) -> Option<ThinkingLevel> {
-        let requested = self.explicit_thinking().or(self.defaults.thinking);
+        let project = self
+            .selected
+            .is_none()
+            .then(|| {
+                self.draft_defaults
+                    .as_ref()
+                    .filter(|_| self.draft_defaults_path == self.draft_project)
+                    .and_then(|defaults| defaults.thinking)
+            })
+            .flatten();
+        let requested = self
+            .explicit_thinking()
+            .or(project)
+            .or(self.defaults.thinking);
         self.current_model_label()
             .and_then(|l| self.models.iter().find(|m| m.label == l))
             .map_or(requested, |m| m.model.effective_thinking(requested))
@@ -2772,14 +3018,46 @@ impl Workspace {
 
     // ---- what the model in force is called
 
+    fn refresh_draft_defaults(&mut self, cx: &mut Context<Self>) {
+        self.draft_defaults_epoch = self.draft_defaults_epoch.wrapping_add(1);
+        self.draft_defaults_path = self.draft_project.clone();
+        self.draft_defaults = None;
+        let (Some(path), Some(backend)) = (self.draft_project.clone(), self.backend.clone()) else {
+            return;
+        };
+        let epoch = self.draft_defaults_epoch;
+        cx.spawn(async move |this, cx| {
+            let result = backend
+                .call::<ProjectModelDefaultsGet>(ProjectPathParams { path: path.clone() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.draft_defaults_epoch != epoch || this.draft_project.as_ref() != Some(&path)
+                {
+                    return;
+                }
+                this.draft_defaults = result.ok();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn current_model_label(&self) -> Option<String> {
-        let thread = self
-            .selected
-            .as_ref()
-            .and_then(|id| self.views.get(id))
-            .and_then(|v| v.thread.model.clone());
-        thread
-            .or_else(|| self.pending_model.clone())
+        if let Some(id) = &self.selected {
+            return self
+                .views
+                .get(id)
+                .and_then(|v| v.thread.model.clone())
+                .or_else(|| self.defaults.model.clone());
+        }
+        self.pending_model
+            .clone()
+            .or_else(|| {
+                self.draft_defaults
+                    .as_ref()
+                    .filter(|_| self.draft_defaults_path == self.draft_project)
+                    .and_then(|defaults| defaults.model.clone())
+            })
             .or_else(|| self.defaults.model.clone())
     }
 }
@@ -2805,8 +3083,14 @@ mod text_tests {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.draft_defaults_path != self.draft_project {
+            self.refresh_draft_defaults(cx);
+        }
         self.web_drag_blocked = cx.has_active_drag();
         self.prepare_web_views(cx);
+        if self.ssh_host.is_none() && !self.app_settings.browser_use_system {
+            self.prepare_agent_browsers(window, cx);
+        }
         self.sync_personalization_editor(window, cx);
         self.sync_model_editor(window, cx);
         self.sync_provider_key_clear(window, cx);
@@ -2897,21 +3181,18 @@ impl Render for Workspace {
             self.queue_drop = None;
         }
         self.focus_pending(window, cx);
-        // The handle only knows the content's height after a layout, so the jump to the end
-        // waits for a frame that has one.
-        if !self.schedules_ui.open
-            && self.stick_to_bottom
-            && self.scroll.max_offset().y > gpui_kit::px(0.0)
-        {
-            self.scroll.scroll_to_bottom();
-            self.stick_to_bottom = false;
-        } else if !self.schedules_ui.open && self.stick_to_bottom {
-            cx.notify();
+        if self.transcript_scroll.bind(self.selected.as_ref()) {
+            self.scroll = self.transcript_scroll.handle.clone();
+            self.search_anchor = ScrollAnchor::for_handle(self.scroll.clone());
+            self.resources.conversation_changed();
         }
         if self.search_jump_pending {
+            self.transcript_scroll.pause();
             self.search_anchor.scroll_to(window, cx);
             self.search_jump_pending = false;
         }
+        #[cfg(target_os = "macos")]
+        self.sync_web_menu_layer(window, cx);
         let p = self.palette.clone();
         let root = div()
             .relative()
@@ -2993,6 +3274,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_save_preview))
             .on_action(cx.listener(Self::on_browser_address))
             .on_action(cx.listener(Self::on_browser_reload))
+            .on_action(cx.listener(Self::on_browser_find))
             .on_action(cx.listener(Self::on_mention_up))
             .on_action(cx.listener(Self::on_mention_down))
             .on_action(cx.listener(Self::on_mention_dismiss))
@@ -3025,7 +3307,7 @@ impl Render for Workspace {
         };
         // While a popup is open, a click anywhere else closes it. The catcher sits under the
         // popups (priority 10) and over everything else.
-        let catcher = self.any_menu_open().then(|| {
+        let catcher = (self.any_menu_open() || self.resources_popover_open()).then(|| {
             deferred(
                 div()
                     .id("menu-catcher")
@@ -3034,18 +3316,22 @@ impl Render for Workspace {
                     .occlude()
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.close_menus(cx)),
+                        cx.listener(|this, _, _, cx| this.outside_press(cx)),
                     )
                     .on_mouse_down(
                         MouseButton::Right,
-                        cx.listener(|this, _, _, cx| this.close_menus(cx)),
+                        cx.listener(|this, _, _, cx| this.outside_press(cx)),
                     ),
             )
             .with_priority(5)
         });
         self.prepare_web_views(cx);
+        #[cfg(not(target_os = "macos"))]
+        let browser_menu = self.browser_menu_view(window, cx);
+        #[cfg(target_os = "macos")]
+        let browser_menu: Option<AnyElement> = None;
         root.children(self.pane_menu_view(window, cx))
-            .children(self.browser_menu_view(window, cx))
+            .children(browser_menu)
             .children(self.entry_menu_view(window, cx))
             .children(self.sidebar_menu_view(window, cx))
             .children(self.header_git_menu_view(window, cx))
@@ -3082,6 +3368,7 @@ actions!(
         SavePreview,
         BrowserAddress,
         BrowserReload,
+        BrowserFind,
         MentionUp,
         MentionDown,
         MentionDismiss,
@@ -3324,6 +3611,7 @@ pub(super) fn preview_fixture(path: &str) -> FilePreview {
                     _ => None,
                 },
                 text: text.lines().take(60).collect::<Vec<_>>().join("\n"),
+                revision: None,
             }
         }
         Err(e) => FilePreview::Error {
@@ -3364,6 +3652,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-s", SavePreview, None),
         KeyBinding::new("secondary-l", BrowserAddress, None),
         KeyBinding::new("secondary-r", BrowserReload, None),
+        KeyBinding::new("secondary-f", BrowserFind, None),
     ]);
     // Composer menu keys and empty-draft Tab match at the input's depth; otherwise the
     // input's own cursor/indent actions and global Escape would take precedence.
@@ -3504,6 +3793,8 @@ impl Workspace {
                 self.entry_dialog = None;
             }
             cx.notify();
+        } else if self.resources_popover_open() {
+            self.close_resources_popover(true, cx);
         } else if self.any_menu_open() {
             self.close_menus(cx);
         } else if self.settings.is_none() && self.search_box.is_none() && self.dismiss_pending(cx) {

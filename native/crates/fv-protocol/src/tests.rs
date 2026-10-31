@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::methods::{CLIENT_METHODS, Initialize, ThreadList};
+use crate::methods::{CLIENT_METHODS, ClientNotification, Initialize, ThreadList, method_schemas};
 use crate::*;
 
 #[test]
@@ -60,6 +60,28 @@ fn notification_has_no_id() {
 }
 
 #[test]
+fn request_cancel_notification_has_typed_wire_params() {
+    let n = ClientNotification::RequestCancel(types::CancelRequestParams {
+        request_id: RequestId::Number(42),
+    });
+    assert_eq!(
+        serde_json::to_value(&n).unwrap(),
+        json!({"method": "request/cancel", "params": {"requestId": 42}})
+    );
+    let parsed: ClientNotification = serde_json::from_value(json!({
+        "method": "request/cancel",
+        "params": {"requestId": "request-42"}
+    }))
+    .unwrap();
+    assert_eq!(
+        parsed,
+        ClientNotification::RequestCancel(types::CancelRequestParams {
+            request_id: RequestId::String("request-42".into()),
+        })
+    );
+}
+
+#[test]
 fn thread_events_flatten_their_body() {
     let n = ServerNotification::AgentMessageDelta(types::ThreadEvent {
         thread_id: "t1".into(),
@@ -100,12 +122,49 @@ fn imported_thread_source_is_optional_for_old_records() {
 }
 
 #[test]
+fn fork_and_migration_optional_fields_are_backward_compatible() {
+    let full: types::ThreadForkParams = serde_json::from_value(json!({"threadId":"t"})).unwrap();
+    assert!(full.turn_id.is_none());
+    let selected: types::ThreadForkParams =
+        serde_json::from_value(json!({"threadId":"t","turnId":"second"})).unwrap();
+    assert_eq!(selected.turn_id.as_deref(), Some("second"));
+    let migration: crate::migration::ElectronMigrationCommitParams =
+        serde_json::from_value(json!({"sourceDir":"/source","fingerprint":"id"})).unwrap();
+    assert!(!migration.include_api_keys && !migration.overwrite_settings);
+}
+
+#[test]
 fn method_names_are_unique_and_typed_markers_agree() {
     let mut names = CLIENT_METHODS.to_vec();
     names.sort_unstable();
     names.dedup();
     assert_eq!(names.len(), CLIENT_METHODS.len());
     assert_eq!(ThreadList::METHOD, "thread/list");
+}
+
+#[test]
+fn every_client_method_has_params_and_response_schemas() {
+    let schemas = method_schemas();
+    assert_eq!(schemas.len(), CLIENT_METHODS.len());
+    for method in CLIENT_METHODS {
+        let entry = schemas
+            .get(method)
+            .unwrap_or_else(|| panic!("missing schema for {method}"));
+        assert!(
+            entry.get("params").is_some(),
+            "missing params schema for {method}"
+        );
+        assert!(
+            entry.get("response").is_some(),
+            "missing response schema for {method}"
+        );
+    }
+    assert_eq!(schemas["initialize"]["params"]["title"], "InitializeParams");
+    assert_eq!(
+        schemas["workspace/writeFile"]["response"]["title"],
+        "WriteFileResponse"
+    );
+    assert!(schemas["remote/status"]["response"].get("$ref").is_none());
 }
 
 #[test]
@@ -130,6 +189,7 @@ fn frames_are_told_apart_by_shape() {
 fn schema_matches_committed_snapshot() {
     let schema = serde_json::json!({
         "clientRequest": schemars::schema_for!(ClientRequest),
+        "methodSchemas": methods::method_schemas(),
         "clientNotification": schemars::schema_for!(ClientNotification),
         "serverNotification": schemars::schema_for!(ServerNotification),
         "serverRequest": schemars::schema_for!(ServerRequest),

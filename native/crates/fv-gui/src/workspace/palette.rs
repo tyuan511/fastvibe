@@ -3,7 +3,7 @@
 use crate::ui::px;
 use fv_protocol::{methods::ThreadSearch, types::*};
 use fv_theme::Token;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
 use super::Workspace;
@@ -493,7 +493,13 @@ impl Workspace {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .child(Input::new(&input).appearance(false).bordered(false)),
+                                .child(
+                                    crate::ui::input(&input)
+                                        .h_8()
+                                        .py_0()
+                                        .appearance(false)
+                                        .bordered(false),
+                                ),
                         ),
                 ),
             )

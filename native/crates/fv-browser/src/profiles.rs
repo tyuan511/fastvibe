@@ -343,7 +343,7 @@ mod tests {
         assert!(cookies[0].expires.is_none());
         assert_eq!(
             source
-                .query_row("SELECT count(*) FROM cookies", [], |r| r.get::<_, usize>(0))
+                .query_row("SELECT count(*) FROM cookies", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
             4
         );

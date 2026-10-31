@@ -125,9 +125,44 @@ enum Line {
         timestamp: i64,
         status: TurnStatus,
         error: Option<RecordedError>,
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        #[serde(
+            default,
+            skip_serializing_if = "BTreeMap::is_empty",
+            with = "numeric_duration_map"
+        )]
         reasoning_durations: BTreeMap<usize, u64>,
     },
+}
+
+mod numeric_duration_map {
+    use std::collections::BTreeMap;
+
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(map: &BTreeMap<usize, u64>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        map.iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect::<BTreeMap<_, _>>()
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<BTreeMap<usize, u64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        BTreeMap::<String, u64>::deserialize(deserializer)?
+            .into_iter()
+            .map(|(key, value)| {
+                key.parse::<usize>()
+                    .map(|key| (key, value))
+                    .map_err(|_| D::Error::custom(format!("invalid reasoning ordinal: {key}")))
+            })
+            .collect()
+    }
 }
 
 pub struct Loaded {
@@ -490,6 +525,39 @@ impl TranscriptStore {
         )
     }
 
+    /// Install a staged transcript atomically before its catalog row is published. A retry
+    /// replaces an unpublished partial attempt rather than trusting that file's existence.
+    pub fn install_loaded(
+        &self,
+        id: &str,
+        loaded: &Loaded,
+        messages: &[Message],
+    ) -> Result<(), StoreError> {
+        let staging = self.dir.join(format!(".stage-{}", uuid::Uuid::new_v4()));
+        let temporary = TranscriptStore::new(staging.clone())?;
+        let result = (|| {
+            temporary.copy_loaded(id, loaded, messages)?;
+            if !temporary.exists(id) {
+                temporary.append_record(
+                    id,
+                    Line::Session {
+                        version: 1,
+                        id: id.into(),
+                        created_at: now_ms(),
+                    },
+                )?;
+            }
+            let mut tails = self.tails.lock().unwrap();
+            tails.check_live(id)?;
+            std::fs::rename(temporary.path(id), self.path(id))?;
+            tails.ids.remove(id);
+            tails.usage_scanned.remove(id);
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(staging);
+        result
+    }
+
     /// Copy active history and its boundaries together. Forks must not silently discard an
     /// error or turn a steer into a separate user turn. Picture paths may have been remapped.
     pub fn copy_loaded(
@@ -598,7 +666,7 @@ impl TranscriptStore {
         self.append_with_origins(conversation_id, messages, timestamps, Some(&origins))
     }
 
-    fn append_with_origins(
+    pub fn append_with_origins(
         &self,
         conversation_id: &str,
         messages: &[Message],

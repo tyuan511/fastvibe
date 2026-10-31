@@ -229,23 +229,15 @@ impl Workspace {
         let provider = n.provider.clone();
         let model = n.model.clone();
         Some(
-            div()
+            super::settings::popover(p)
                 .id("provider-check-notice")
                 .absolute()
                 .right(px(20.0))
                 .bottom(px(24.0))
                 .w(px(380.0))
                 .p(px(14.0))
-                .rounded(px(12.0))
-                .border_1()
-                .border_color(p.c(Token::Border))
-                .bg(p.overlay())
-                .shadow_lg()
                 .occlude()
-                .flex()
-                .flex_col()
                 .gap(px(8.0))
-                .child(crate::ui::backdrop(12.0, 28.0, 1.8))
                 .child(
                     div()
                         .flex()

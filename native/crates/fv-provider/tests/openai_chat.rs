@@ -123,6 +123,15 @@ async fn reasoning_text_and_a_tool_call_come_back_as_blocks() {
 
     assert!(events.contains(&ModelEvent::Thinking("The user wants a file.".into())));
     assert!(events.contains(&ModelEvent::Text("Reading ".into())));
+    let deltas: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::ToolCallArgs { id, delta } if id == "call_1" => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas, ["{\"path\":", "\"a.txt\"}"]);
+
     let msg = done(&events);
     assert_eq!(msg.stop, StopReason::ToolUse);
     assert_eq!(
@@ -241,4 +250,64 @@ data: [DONE]
     let model = GenaiModel::new(config(&mock.url)).unwrap();
     let events = events(collect(&model, request()).await);
     assert_eq!(done(&events).stop, StopReason::Length);
+}
+
+#[tokio::test]
+async fn large_interleaved_tool_arguments_stream_exactly_once_before_the_final_message() {
+    let arguments = json!({"patch": "line with unicode 界, quote \" and slash \\n".repeat(4096)});
+    let raw = arguments.to_string();
+    let mut frames = String::new();
+    let chunks: Vec<String> = raw
+        .chars()
+        .collect::<Vec<_>>()
+        .chunks(137)
+        .map(|chars| chars.iter().collect())
+        .collect();
+    for (i, chunk) in chunks.iter().enumerate() {
+        let function = if i == 0 {
+            json!({"name":"apply_patch","arguments":chunk})
+        } else {
+            json!({"arguments":chunk})
+        };
+        let mut call = json!({"index":0,"function":function});
+        if i == 0 {
+            call["id"] = json!("large");
+            call["type"] = json!("function");
+        }
+        frames.push_str(&format!("data: {}\n\n", json!({"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[call]},"finish_reason":null}]})));
+        if i == 1 {
+            frames.push_str(&format!("data: {}\n\n", json!({"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"small","type":"function","function":{"name":"read","arguments":"{\"path\":\"b.txt\"}"}}]},"finish_reason":null}]})));
+        }
+    }
+    frames.push_str(&format!("data: {}\n\ndata: [DONE]\n\n", json!({"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]})));
+    let mock = serve(vec![Reply::sse(&frames)]).await;
+    let model = GenaiModel::new(config(&mock.url)).unwrap();
+    let events = events(collect(&model, request()).await);
+    let mut streamed = String::new();
+    let mut started = false;
+    let mut count = 0;
+    for event in &events {
+        match event {
+            ModelEvent::ToolCallStart { id, name } if id == "large" => {
+                assert!(!started);
+                assert_eq!(name, "apply_patch");
+                started = true;
+            }
+            ModelEvent::ToolCallArgs { id, delta } if id == "large" => {
+                assert!(started);
+                assert_eq!(delta, &chunks[count]);
+                streamed.push_str(delta);
+                count += 1;
+            }
+            ModelEvent::Done(_) => assert_eq!(streamed, raw),
+            _ => {}
+        }
+    }
+    assert_eq!(count, chunks.len());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&streamed).unwrap(),
+        arguments
+    );
+    assert!(events.iter().any(|event| matches!(event, ModelEvent::ToolCallArgs {id,delta} if id == "small" && delta == "{\"path\":\"b.txt\"}")));
+    assert!(done(&events).content.iter().any(|block| matches!(block, ContentBlock::ToolCall { id, arguments: final_args, .. } if id == "large" && final_args == &arguments)));
 }

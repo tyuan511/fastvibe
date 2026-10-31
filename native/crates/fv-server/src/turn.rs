@@ -82,6 +82,16 @@ async fn drive(
     cancel: CancellationToken,
     wait_for_mcp: bool,
 ) -> bool {
+    // The first prompt names a conversation as soon as the turn is accepted. The fallback is
+    // visible immediately, while the model-backed title request runs beside the turn.
+    let mut history = rt.history();
+    let first_turn = !history
+        .iter()
+        .any(|m| matches!(m, fv_core::Message::User { .. }));
+    if first_turn {
+        state.touch_thread(&thread_id, Some(&text));
+        spawn_session_title(&state, &thread_id, &text);
+    }
     record_start(&state, &thread_id, &turn_id);
     rt.publish(
         &state,
@@ -123,12 +133,6 @@ async fn drive(
     )
     .await;
     let first_prompt = text.clone();
-    let mut history = rt.history();
-    // Whether this is the conversation's first turn: the one that names it. A later prompt never
-    // renames a chat the first one already spoke for.
-    let first_turn = !history
-        .iter()
-        .any(|m| matches!(m, fv_core::Message::User { .. }));
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut mapper = EventMapper::new(turn_id.clone(), fv_agent::effective_context_window(&ctx));
     let outcome = {
@@ -163,10 +167,11 @@ async fn drive(
     while let Ok(id) = withdrawn_rx.try_recv() {
         announce_resolved(&state, &thread_id, id).await;
     }
-    rt.set_history(history.clone());
     // The bill is part of the stats a client draws, and the catalog prices by the label each
     // reply recorded: recompute it once the turn's messages are all in.
-    if rt.reprice(&state.catalog.snapshot(), &history).is_some() {
+    let repriced = rt.reprice(&state.catalog.snapshot(), &history).is_some();
+    rt.set_history(history);
+    if repriced {
         rt.publish(&state, LogEvent::StatsSnapshot).await;
     }
 
@@ -177,11 +182,6 @@ async fn drive(
     };
     finish_turn(&state, &rt, &thread_id, &turn_id, status, error.clone()).await;
     state.touch_thread(&thread_id, Some(&first_prompt));
-    // The catalog now holds the prompt's first line. A chat whose first message says more than a
-    // name is named by the conversation's own model instead — see `session_title`.
-    if first_turn {
-        spawn_session_title(&state, &thread_id, &first_prompt);
-    }
     // Whatever was queued behind this turn goes next — unless this turn failed, in which case
     // the queue stops where it is rather than being fed to a run that is already broken.
     //
@@ -196,7 +196,7 @@ async fn drive(
     // "Running" ends only now, after the completion event: a client that sees the thread idle
     // has already seen everything the turn did.
     rt.end(&state).await;
-    crate::subagents::settled(&state, &thread_id, status, error, &rt.turns());
+    crate::subagents::settled(&state, &thread_id, status, error, rt.last_turn());
     // The guess at the user's next message is not part of the turn: it is started once the thread
     // is idle, so it can never hold up the run that produced what it is guessing from.
     //
@@ -512,7 +512,7 @@ pub async fn rewind(
                 &thread_id,
                 TurnStatus::Failed,
                 Some(error.message.clone()),
-                &rt.turns(),
+                rt.last_turn(),
             );
             return Err(error);
         }
@@ -719,9 +719,7 @@ async fn finish_turn(
             message: message.clone(),
         });
     let reasoning_durations = rt
-        .turns()
-        .into_iter()
-        .find(|turn| turn.id == turn_id)
+        .turn(turn_id)
         .map(|turn| {
             let mut durations = BTreeMap::new();
             let mut ordinal = 0;
@@ -804,7 +802,7 @@ async fn recover_panic(
         thread_id,
         TurnStatus::Failed,
         Some("Internal error.".into()),
-        &rt.turns(),
+        rt.last_turn(),
     );
 }
 
@@ -1018,6 +1016,7 @@ async fn build_context(
         .map(|s| s.computer_control)
         .unwrap_or(false);
     let status = state.computer_status();
+    crate::computer::apply_preferences(state, &mut mcp.tools);
     if !crate::computer::keep_basic_computer_tool(desktop, status.running, status.supported) {
         mcp.tools.retain(|name| name != "computer");
     }
@@ -1244,10 +1243,11 @@ async fn drive_compaction(
             rt.publish(&state, e).await;
         }
     }
-    rt.set_history(history.clone());
     // The bill is part of the stats a client draws, and the catalog prices by the label each
     // reply recorded: recompute it once the turn's messages are all in.
-    if rt.reprice(&state.catalog.snapshot(), &history).is_some() {
+    let repriced = rt.reprice(&state.catalog.snapshot(), &history).is_some();
+    rt.set_history(history);
+    if repriced {
         rt.publish(&state, LogEvent::StatsSnapshot).await;
     }
     let (status, error) = match result {
@@ -1260,7 +1260,7 @@ async fn drive_compaction(
     finish_turn(&state, &rt, &thread_id, &turn_id, status, error.clone()).await;
     state.touch_thread(&thread_id, None);
     rt.end(&state).await;
-    crate::subagents::settled(&state, &thread_id, status, error, &rt.turns());
+    crate::subagents::settled(&state, &thread_id, status, error, rt.last_turn());
     // A compaction divider is not a place the user answers from, and guessing there would spend a
     // request on material that says nothing about the work.
     if rt.forget_suggestion() {

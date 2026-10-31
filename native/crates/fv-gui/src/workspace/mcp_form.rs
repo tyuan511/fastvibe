@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use crate::ui::px;
 use fv_protocol::methods::McpUpdate;
 use fv_protocol::types::*;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 
 use super::super::Workspace;
@@ -446,7 +446,7 @@ impl Workspace {
                     .child(
                         field(trs!(english, "mcp_form.name").into())
                             .flex_1()
-                            .child(Input::new(&form.name)),
+                            .child(crate::ui::input(&form.name)),
                     )
                     .child(
                         field(trs!(english, "mcp_form.transport").into())
@@ -460,7 +460,7 @@ impl Workspace {
             if form.transport == McpTransport::Stdio {
                 body = body.child(
                     field(trs!(english, "mcp_form.launch_command").into())
-                        .child(Input::new(&form.command)),
+                        .child(crate::ui::input(&form.command)),
                 );
                 let mut args = field(trs!(english, "mcp_form.arguments").into());
                 for (i, arg) in form.args.iter().enumerate() {
@@ -469,7 +469,7 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(8.0))
-                            .child(div().flex_1().child(Input::new(arg)))
+                            .child(div().flex_1().child(crate::ui::input(arg)))
                             .child(
                                 remove_glyph(SharedString::from(format!("mcp-remove-arg-{i}")))
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -504,7 +504,7 @@ impl Workspace {
                 );
                 body = body.child(args);
             } else {
-                body = body.child(field("URL".into()).child(Input::new(&form.url)));
+                body = body.child(field("URL".into()).child(crate::ui::input(&form.url)));
             }
             let local = form.transport == McpTransport::Stdio;
             let rows = if local { &form.env } else { &form.headers };
@@ -522,8 +522,8 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .child(div().flex_1().child(Input::new(&row.key)))
-                        .child(div().flex_1().child(Input::new(&row.value).mask_toggle()))
+                        .child(div().flex_1().child(crate::ui::input(&row.key)))
+                        .child(div().flex_1().child(crate::ui::input(&row.value).mask_toggle()))
                         .child(
                             remove_glyph(SharedString::from(format!("mcp-remove-pair-{i}")))
                                 .on_click(cx.listener(move |this, _, _, cx| {

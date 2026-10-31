@@ -36,6 +36,8 @@ enum Reader {
 pub(super) struct KillSwitch {
     pid: u32,
     live: AtomicBool,
+    #[cfg(not(unix))]
+    error: std::sync::Mutex<Option<String>>,
     #[cfg(unix)]
     tty: std::sync::Mutex<Option<Arc<tokio::io::unix::AsyncFd<std::fs::File>>>>,
 }
@@ -45,6 +47,8 @@ impl KillSwitch {
         Self {
             pid,
             live: AtomicBool::new(true),
+            #[cfg(not(unix))]
+            error: std::sync::Mutex::new(None),
             #[cfg(unix)]
             tty: std::sync::Mutex::new(None),
         }
@@ -64,6 +68,42 @@ impl KillSwitch {
             libc::kill(-(self.pid as i32), signal);
         }
     }
+    #[cfg(windows)]
+    fn terminate_tree(&self) -> Result<(), String> {
+        let mut child = std::process::Command::new("taskkill.exe")
+            .args(["/PID", &self.pid.to_string(), "/T", "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|error| format!("Could not terminate command process tree: {error}"))?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    return if status.success() {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "taskkill failed to terminate command process tree ({status})"
+                        ))
+                    };
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error.to_string());
+                }
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("Timed out terminating command process tree".into());
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    }
+
     pub fn kill(&self) {
         if self.live.swap(false, Ordering::AcqRel) {
             #[cfg(unix)]
@@ -71,12 +111,25 @@ impl KillSwitch {
                 self.signal(libc::SIGKILL);
                 self.tty.lock().unwrap().take();
             }
+            #[cfg(windows)]
+            if let Err(error) = self.terminate_tree() {
+                *self.error.lock().unwrap() = Some(error);
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                *self.error.lock().unwrap() =
+                    Some("Process-tree termination is unsupported on this platform".into());
+            }
         }
     }
     pub fn interrupt(&self) {
         if self.live.load(Ordering::Acquire) {
             #[cfg(unix)]
             self.signal(libc::SIGINT);
+            // A pipe child has no shared Windows console to deliver Ctrl-C into. Terminate
+            // its tree explicitly instead of pretending the interrupt was delivered.
+            #[cfg(not(unix))]
+            self.kill();
         }
     }
 }
@@ -287,6 +340,10 @@ pub(super) async fn monitor(
     {
         readers_cancel.cancel();
         drain.await;
+    }
+    #[cfg(not(unix))]
+    if let Some(error) = spawned.guard.0.error.lock().unwrap().take() {
+        session.push(&format!("\n[process cleanup failed: {error}]\n"));
     }
     session.finish(end);
 }

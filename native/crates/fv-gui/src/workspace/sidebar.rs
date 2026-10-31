@@ -7,7 +7,6 @@ use crate::ui::px;
 use fv_protocol::types::ThreadUpdateParams;
 use fv_protocol::types::{SidebarSettingsPatch, Thread, UiLanguage};
 use fv_theme::Token;
-use gpui_kit::component::input::Input;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -648,7 +647,16 @@ impl Workspace {
         })
         .when(lead_slot, |d| d.child(div().size(px(14.0)).flex_none()))
         .map(|d| match renaming {
-            Some(input) => d.child(div().flex_1().min_w_0().child(Input::new(&input))),
+            Some(input) => d.child(
+                div().flex_1().min_w_0().child(
+                    crate::ui::input(&input)
+                        .h_6()
+                        .px(px(6.0))
+                        .py_0()
+                        .text_size(px(TEXT_XS))
+                        .line_height(px(16.0)),
+                ),
+            ),
             None => d.child(
                 div()
                     .flex()
@@ -738,10 +746,8 @@ impl Workspace {
                     .tooltip(move |window, cx| {
                         Tooltip::new(trs!(english, "sidebar.account")).build(window, cx)
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.sidebar_notice =
-                            Some(trs!(english, "sidebar.fastvibe_account_sign_in_is").into());
-                        cx.notify();
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_account_settings(window, cx);
                     }))
                     .child(icon("user02", 14.0, p.c(Token::MutedForeground))),
             )

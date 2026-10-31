@@ -1,0 +1,83 @@
+_version: 2
+
+account.title:
+  zh: "FastVibe 账号"
+  en: "FastVibe account"
+account.description:
+  zh: "登录后可通过官方连接访问这台电脑。"
+  en: "Sign in to access this computer through Official Connection."
+account.signed_out:
+  zh: "尚未登录"
+  en: "Signed out"
+account.signing_in:
+  zh: "请在系统浏览器中完成登录。"
+  en: "Complete sign-in in your system browser."
+account.sign_in:
+  zh: "在浏览器中登录"
+  en: "Sign in with browser"
+account.sign_out:
+  zh: "退出登录"
+  en: "Sign out"
+account.cancel:
+  zh: "取消登录"
+  en: "Cancel sign-in"
+account.reopen:
+  zh: "重新打开登录页面"
+  en: "Reopen sign-in page"
+account.loading:
+  zh: "正在读取账号状态…"
+  en: "Loading account status…"
+account.working:
+  zh: "正在处理…"
+  en: "Working…"
+account.retry:
+  zh: "重试"
+  en: "Retry"
+account.refresh:
+  zh: "刷新状态"
+  en: "Refresh status"
+account.unavailable:
+  zh: "暂时无法读取账号状态，请重试。"
+  en: "Account status is unavailable. Try again."
+account.login_ended:
+  zh: "登录未完成，请重新登录。"
+  en: "Sign-in did not finish. Try signing in again."
+account.official_title:
+  zh: "官方连接"
+  en: "Official Connection"
+account.official_description:
+  zh: "允许同一 FastVibe 账号的设备连接这台电脑。"
+  en: "Allow devices signed in to the same FastVibe account to connect to this computer."
+account.official_off:
+  zh: "已关闭"
+  en: "Off"
+account.official_signed_out:
+  zh: "请先登录 FastVibe 账号。"
+  en: "Sign in to your FastVibe account first."
+account.official_connecting:
+  zh: "正在连接…"
+  en: "Connecting…"
+account.official_online:
+  zh: "已就绪，可从其他设备连接。"
+  en: "Ready for connections from your other devices."
+account.official_error:
+  zh: "连接失败，请重试。"
+  en: "Connection failed. Try again."
+account.official_unavailable:
+  zh: "暂时无法读取官方连接状态，请重试。"
+  en: "Official Connection status is unavailable. Try again."
+account.computer_name:
+  zh: "电脑名称"
+  en: "Computer name"
+account.name_hint:
+  zh: "其他设备上显示的名称"
+  en: "Name shown on your other devices"
+account.save:
+  zh: "保存名称"
+  en: "Save name"
+account.saved:
+  zh: "已保存"
+  en: "Saved"
+account.connected_devices:
+  zh: "已连接设备"
+  en: "Connected devices"

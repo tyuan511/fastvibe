@@ -89,6 +89,7 @@ async fn every_client_gets_changes_and_failed_operations_do_not_overwrite_or_pub
         cwd: None,
         path: file.path.clone(),
         text: "retained bytes".into(),
+        baseline: None,
     })
     .await
     .unwrap();

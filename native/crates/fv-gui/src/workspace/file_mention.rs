@@ -420,6 +420,13 @@ impl Workspace {
     /// Files chosen with 添加附件 or dropped on the card travel exactly like `@` picks: as
     /// references in the reference block, once each.
     pub(super) fn attach_paths(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
+        if self.ssh_host.is_some() {
+            self.notice = Some(super::Notice::Failed(
+                trs!(self.english(), "ssh.remote_attachment").into(),
+            ));
+            cx.notify();
+            return;
+        }
         for path in paths.iter().filter(|p| p.is_file()) {
             let abs = path.display().to_string();
             if self.attached_files.iter().any(|f| f.path == abs) {
@@ -439,6 +446,13 @@ impl Workspace {
 
     /// 添加附件: the system file picker.
     pub(super) fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        if self.ssh_host.is_some() {
+            self.notice = Some(super::Notice::Failed(
+                trs!(self.english(), "ssh.remote_attachment").into(),
+            ));
+            cx.notify();
+            return;
+        }
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -460,7 +474,6 @@ impl Workspace {
         if self.attached_files.is_empty() {
             return None;
         }
-        let p = &self.palette;
         let mut row = div()
             .flex()
             .flex_wrap()

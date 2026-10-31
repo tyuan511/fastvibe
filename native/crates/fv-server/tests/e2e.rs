@@ -79,10 +79,8 @@ fn init_params() -> InitializeParams {
 async fn initialized(h: &Harness) -> (Client, Notes) {
     let (c, n) = h.connect().await;
     let hello = c.call::<Initialize>(init_params()).await.unwrap();
-    assert_eq!(
-        hello.build_fingerprint,
-        fv_server::build_fingerprint().await
-    );
+    assert_eq!(hello.server_version, fv_server::SERVER_VERSION);
+    assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
     assert_eq!(hello.has_running_turns, Some(false));
     (c, n)
 }
@@ -273,6 +271,40 @@ async fn raw_exchange(state: Arc<ServerState>, lines: &[&str]) -> Vec<serde_json
         out.push(serde_json::from_str(&reply).unwrap());
     }
     out
+}
+
+#[tokio::test]
+async fn initialize_reports_version_and_features_without_build_fingerprint() {
+    let h = start().await;
+    let request = serde_json::json!({
+        "id": 1,
+        "method": "initialize",
+        "params": init_params(),
+    })
+    .to_string();
+    let replies = raw_exchange(h.state.clone(), &[&request]).await;
+    assert_eq!(replies[0]["id"], 1);
+    let result = &replies[0]["result"];
+    assert!(
+        !result
+            .as_object()
+            .expect("initialize response must be an object")
+            .contains_key("buildFingerprint")
+    );
+    let hello: InitializeResponse = serde_json::from_value(result.clone()).unwrap();
+    assert_eq!(hello.server_version, fv_server::SERVER_VERSION);
+    assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(hello.data_dir, h.dir.path().display().to_string());
+    assert_eq!(hello.has_running_turns, Some(false));
+    for feature in ["mcp", "codeMode"] {
+        assert!(
+            hello
+                .features
+                .iter()
+                .any(|implemented| implemented == feature),
+            "initialize must advertise {feature}"
+        );
+    }
 }
 
 #[tokio::test]

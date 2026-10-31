@@ -10,7 +10,7 @@ use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::event::{AgentEvent, BlockKind};
-use crate::history::normalize;
+use crate::history::normalize_owned;
 use crate::model::{Model, ModelEvent, ModelRequest};
 use crate::tool::{ToolCtx, ToolRegistry};
 
@@ -67,9 +67,11 @@ pub trait MemorySource: Send + Sync {
     fn instructions(&self) -> String;
 }
 
-fn refresh_memory(ctx: &AgentContext, history: &mut Vec<Message>, events: &Events) {
+/// Append the latest memory snapshot to the history when it changed. `true` when a snapshot
+/// was committed, so the caller knows a request built earlier no longer covers the history.
+fn refresh_memory(ctx: &AgentContext, history: &mut Vec<Message>, events: &Events) -> bool {
     let Some(summary) = ctx.memory.as_ref().and_then(|m| m.snapshot()) else {
-        return;
+        return false;
     };
     let previous = history.iter().rev().find_map(|m| match m {
         Message::MemoryContext { summary } => Some(summary),
@@ -77,7 +79,9 @@ fn refresh_memory(ctx: &AgentContext, history: &mut Vec<Message>, events: &Event
     });
     if previous != Some(&summary) {
         commit(history, events, Message::MemoryContext { summary });
+        return true;
     }
+    false
 }
 
 pub(crate) fn request_messages(ctx: &AgentContext, history: &[Message]) -> Vec<Message> {
@@ -122,7 +126,7 @@ pub(crate) fn request_messages(ctx: &AgentContext, history: &[Message]) -> Vec<M
             }
         })
         .collect();
-    normalize(&projected)
+    normalize_owned(projected)
 }
 
 pub(crate) fn model_request(ctx: &AgentContext, history: &[Message]) -> ModelRequest {
@@ -163,6 +167,10 @@ pub(crate) fn learn_capacity(ctx: &AgentContext, request: &ModelRequest, events:
     let output = request.max_output_tokens.map(u64::from).unwrap_or_else(|| {
         crate::budget::reply_reserve(ctx.model.as_ref(), ctx.budget.window(ctx.model.as_ref()))
     });
+    learn_capacity_values(ctx, used, output, events)
+}
+
+fn learn_capacity_values(ctx: &AgentContext, used: u64, output: u64, events: &Events) -> bool {
     let changed = ctx.budget.reject(ctx.model.as_ref(), used, output);
     if changed {
         emit(
@@ -268,8 +276,14 @@ async fn run_turn_inner(
         // would be deciding with half of its own work missing.
         drain_steers(ctx, history, events);
         refresh_memory(ctx, history, events);
+        // One build per iteration: the compaction check reads this request instead of paying
+        // for a second one, and the memory refresh after the check rebuilds it only when a
+        // snapshot was actually committed.
+        let mut request = model_request(ctx, history);
         // Make room before the window is full, not after the provider has refused the request.
-        if capacity_recovery || crate::compact::needs_compaction(ctx, history) {
+        if capacity_recovery
+            || crate::budget::request_tokens(&request) >= crate::compact::input_limit(ctx)
+        {
             if !auto_compaction(ctx) {
                 return TurnOutcome::Failed(AUTO_COMPACTION_DISABLED.into());
             }
@@ -294,11 +308,15 @@ async fn run_turn_inner(
                     "The conversation is too large to continue, even after summarizing it.".into(),
                 );
             }
+            // The summarization replaced the history; this request no longer describes it.
+            request = model_request(ctx, history);
         }
-        refresh_memory(ctx, history, events);
-        let mut request = model_request(ctx, history);
+        if refresh_memory(ctx, history, events) {
+            request = model_request(ctx, history);
+        }
         let used = crate::budget::request_tokens(&request);
         let window = ctx.budget.window(ctx.model.as_ref());
+        let mut sent_output = crate::budget::reply_reserve(ctx.model.as_ref(), window);
         if ctx.budget.learned(ctx.model.as_ref()) {
             let room = window
                 .saturating_sub(used)
@@ -314,8 +332,8 @@ async fn run_turn_inner(
                 room.min(ctx.model.max_output_tokens().map(u64::from).unwrap_or(4096))
                     .min(u32::MAX as u64) as u32,
             );
+            sent_output = u64::from(request.max_output_tokens.unwrap());
         }
-        let capacity_request = request.clone();
         match sample(ctx, request, events, cancel).await {
             Sampled::Done(message) => {
                 let stop = message.stop.clone();
@@ -454,7 +472,9 @@ async fn run_turn_inner(
                 overflow: true,
                 ..
             } => {
-                if !learn_capacity(ctx, &capacity_request, events) {
+                // Nothing has touched the history since `request` was built, so the capacity
+                // lesson is learned from the same request the provider refused.
+                if !learn_capacity_values(ctx, used, sent_output, events) {
                     ctx.budget.block(ctx.model.as_ref(), history);
                     return TurnOutcome::Failed(CAPACITY_PAUSED.into());
                 }

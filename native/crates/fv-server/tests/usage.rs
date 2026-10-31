@@ -120,8 +120,9 @@ async fn real_requests_are_shared_not_duplicated_by_forks_and_retained_after_del
             .contains("private reply text")
     );
     let fork = a
-        .call::<ThreadFork>(ThreadIdParams {
+        .call::<ThreadFork>(ThreadForkParams {
             thread_id: id.clone(),
+            turn_id: None,
         })
         .await
         .unwrap()

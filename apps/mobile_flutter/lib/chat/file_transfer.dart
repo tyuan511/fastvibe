@@ -11,7 +11,11 @@ import '../protocol/client.dart' show TransportError, ConnectionError;
 /// every other method uses. The official connection is one WebRTC data channel with no HTTP
 /// beside it, so there is nowhere to stream a download from — the phone asks for the next
 /// slice until the machine says it reached the end.
-typedef FileCall = Future<Object?> Function(String method, Object? payload, int? timeoutMs);
+typedef FileCall = Future<Object?> Function(
+  String method,
+  Object? payload,
+  int? timeoutMs,
+);
 
 const String readFileMethod = 'workspace:read-file';
 const String officeRenderMethod = 'office:render';
@@ -33,7 +37,8 @@ class FileTransferError implements Exception {
   final String? detail;
 
   @override
-  String toString() => 'FileTransferError($code${detail == null ? '' : ': $detail'})';
+  String toString() =>
+      'FileTransferError($code${detail == null ? '' : ': $detail'})';
 }
 
 class CancelToken {
@@ -43,30 +48,45 @@ class CancelToken {
   bool get discardOnCancel => _discardOnCancel;
   final Set<void Function()> _listeners = <void Function()>{};
   void Function() onCancel(void Function() listener) {
-    if (_cancelled) { listener(); return () {}; }
+    if (_cancelled) {
+      listener();
+      return () {};
+    }
     _listeners.add(listener);
     return () => _listeners.remove(listener);
   }
+
   /// File reads are side-effect free; a closed sheet need not wait for a dead socket.
   Future<T> race<T>(Future<T> operation) async {
     final cancelled = Completer<T>();
     final remove = onCancel(() {
-      if (!cancelled.isCompleted) cancelled.completeError(const FileTransferError('cancelled'));
+      if (!cancelled.isCompleted) {
+        cancelled.completeError(const FileTransferError('cancelled'));
+      }
     });
-    try { return await Future.any(<Future<T>>[operation, cancelled.future]); }
-    finally { remove(); }
+    try {
+      return await Future.any(<Future<T>>[operation, cancelled.future]);
+    } finally {
+      remove();
+    }
   }
 
   void cancel({bool discard = true}) {
     _cancelled = true;
     _discardOnCancel |= discard;
-    for (final listener in _listeners.toList()) { listener(); }
+    for (final listener in _listeners.toList()) {
+      listener();
+    }
     if (discard) _listeners.clear();
   }
 }
 
 class FileStat {
-  const FileStat({required this.size, required this.mtimeMs, required this.resumable});
+  const FileStat({
+    required this.size,
+    required this.mtimeMs,
+    required this.resumable,
+  });
 
   final int size;
   final num? mtimeMs;
@@ -74,7 +94,13 @@ class FileStat {
 }
 
 class _Slice {
-  const _Slice({required this.size, required this.mtimeMs, required this.bytes, required this.eof, required this.resumable});
+  const _Slice({
+    required this.size,
+    required this.mtimeMs,
+    required this.bytes,
+    required this.eof,
+    required this.resumable,
+  });
 
   final int size;
   final num? mtimeMs;
@@ -86,11 +112,19 @@ class _Slice {
 /// Reads one conversation's files. The conversation is what lets the machine resolve a path
 /// the agent wrote relative to its working directory.
 class FileTransfer {
-  FileTransfer({required this.call, required this.conversationId, this.serverId = ""});
+  FileTransfer({
+    required this.call,
+    required this.conversationId,
+    this.serverId = "",
+    this.readMethod = readFileMethod,
+    this.threadField = 'conversationId',
+  });
 
   final FileCall call;
   final String conversationId;
   final String serverId;
+  final String readMethod;
+  final String threadField;
   static final Set<String> _activeDownloads = <String>{};
 
   /// Remove orphaned/expired checkpoints on launch and before downloads. Only our
@@ -103,14 +137,19 @@ class FileTransfer {
   }) async {
     if (!await directory.exists()) return;
     final cutoff = (now ?? DateTime.now()).subtract(maxAge);
-    final candidates = <({File part, File metadata, DateTime modified, int bytes})>[];
+    final candidates =
+        <({File part, File metadata, DateTime modified, int bytes})>[];
     final owned = RegExp(r'^\.fastvibe-([0-9a-f]{64})\.part(?:\.json)?$');
     final paths = <String>{};
     await for (final entry in directory.list(followLinks: false)) {
       if (entry is! File) continue;
       final name = entry.uri.pathSegments.last;
       if (!owned.hasMatch(name)) continue;
-      paths.add(entry.path.endsWith('.json') ? entry.path.substring(0, entry.path.length - 5) : entry.path);
+      paths.add(
+        entry.path.endsWith('.json')
+            ? entry.path.substring(0, entry.path.length - 5)
+            : entry.path,
+      );
     }
     Future<void> remove(File part, File metadata) async {
       if (!_activeDownloads.add(part.path)) return;
@@ -118,8 +157,11 @@ class FileTransfer {
         for (final file in <File>[part, metadata]) {
           if (await file.exists()) await file.delete();
         }
-      } finally { _activeDownloads.remove(part.path); }
+      } finally {
+        _activeDownloads.remove(part.path);
+      }
     }
+
     for (final path in paths) {
       if (_activeDownloads.contains(path)) continue;
       final part = File(path);
@@ -127,19 +169,31 @@ class FileTransfer {
       try {
         final stat = await part.stat();
         final metaStat = await metadata.stat();
-        if (stat.type != FileSystemEntityType.file || metaStat.type != FileSystemEntityType.file) {
+        if (stat.type != FileSystemEntityType.file ||
+            metaStat.type != FileSystemEntityType.file) {
           await remove(part, metadata);
           continue;
         }
         final stored = jsonDecode(await metadata.readAsString());
-        final expectedKey = owned.firstMatch(part.uri.pathSegments.last)!.group(1);
-        if (stored is! Map || stored['key'] != expectedKey || stored['size'] is! int ||
-            (stored['size'] as int) < stat.size || stored['mtimeMs'] is! num ||
-            !(stored['mtimeMs'] as num).isFinite || stat.modified.isBefore(cutoff)) {
+        final expectedKey = owned
+            .firstMatch(part.uri.pathSegments.last)!
+            .group(1);
+        if (stored is! Map ||
+            stored['key'] != expectedKey ||
+            stored['size'] is! int ||
+            (stored['size'] as int) < stat.size ||
+            stored['mtimeMs'] is! num ||
+            !(stored['mtimeMs'] as num).isFinite ||
+            stat.modified.isBefore(cutoff)) {
           await remove(part, metadata);
           continue;
         }
-        candidates.add((part: part, metadata: metadata, modified: stat.modified, bytes: stat.size + metaStat.size));
+        candidates.add((
+          part: part,
+          metadata: metadata,
+          modified: stat.modified,
+          bytes: stat.size + metaStat.size,
+        ));
       } on FormatException {
         await remove(part, metadata);
       } on FileSystemException {
@@ -151,42 +205,58 @@ class FileTransfer {
     for (final item in candidates) {
       if (bytes <= maxBytes) break;
       if (_activeDownloads.contains(item.part.path)) continue;
-      try { await remove(item.part, item.metadata); bytes -= item.bytes; }
-      on FileSystemException { /* Retry next sweep. */ }
+      try {
+        await remove(item.part, item.metadata);
+        bytes -= item.bytes;
+      } on FileSystemException {
+        /* Retry next sweep. */
+      }
     }
   }
 
   Future<_Slice> _slice(String path, int offset, int length) async {
-    final reply = await call(
-      readFileMethod,
-      <String, Object?>{
-        'path': path,
-        'conversationId': conversationId,
-        'offset': offset,
-        'length': length,
-      },
-      _sliceTimeout.inMilliseconds,
-    );
+    final reply = await call(readMethod, <String, Object?>{
+      'path': path,
+      threadField: conversationId,
+      'offset': offset,
+      'length': length,
+    }, _sliceTimeout.inMilliseconds);
     if (reply is! Map) throw const FileTransferError('invalid');
     final size = reply['size'];
     final data = reply['data'];
     final eof = reply['eof'];
     final mtime = reply['mtimeMs'];
-    if (size is! int || size < 0 || data is! String || eof is! bool ||
+    if (size is! int ||
+        size < 0 ||
+        data is! String ||
+        eof is! bool ||
         (mtime != null && (mtime is! num || !mtime.isFinite)) ||
         (reply.containsKey('offset') && reply['offset'] != offset)) {
       throw const FileTransferError('invalid');
     }
     Uint8List bytes;
-    try { bytes = data.isEmpty ? Uint8List(0) : base64Decode(data); }
-    on FormatException { throw const FileTransferError('invalid'); }
+    try {
+      bytes = data.isEmpty ? Uint8List(0) : base64Decode(data);
+    } on FormatException {
+      throw const FileTransferError('invalid');
+    }
     if (bytes.length > length) throw const FileTransferError('invalid');
-    return _Slice(size: size, mtimeMs: mtime as num?, bytes: bytes, eof: eof, resumable: mtime != null && reply.containsKey('offset'));
+    return _Slice(
+      size: size,
+      mtimeMs: mtime as num?,
+      bytes: bytes,
+      eof: eof,
+      resumable: mtime != null && reply.containsKey('offset'),
+    );
   }
 
   Future<FileStat> stat(String path) async {
     final slice = await _slice(path, 0, 0);
-    return FileStat(size: slice.size, mtimeMs: slice.mtimeMs, resumable: slice.resumable);
+    return FileStat(
+      size: slice.size,
+      mtimeMs: slice.mtimeMs,
+      resumable: slice.resumable,
+    );
   }
 
   /// The rendered HTML page for an Office file, as a path on the machine that has it.
@@ -195,14 +265,15 @@ class FileTransfer {
   /// page back through the same slice channel as any other file.
   Future<String> renderOffice(String path, {CancelToken? cancel}) async {
     if (cancel?.cancelled == true) throw const FileTransferError('cancelled');
-    final reply = await call(
-      officeRenderMethod,
-      <String, Object?>{'path': path, 'conversationId': conversationId},
-      const Duration(seconds: 90).inMilliseconds,
-    );
+    final reply = await call(officeRenderMethod, <String, Object?>{
+      'path': path,
+      'conversationId': conversationId,
+    }, const Duration(seconds: 90).inMilliseconds);
     if (reply is! Map) throw const FileTransferError('invalid');
     final rendered = reply['path'];
-    if (rendered is! String || rendered.isEmpty) throw const FileTransferError('invalid');
+    if (rendered is! String || rendered.isEmpty) {
+      throw const FileTransferError('invalid');
+    }
     return rendered;
   }
 
@@ -225,10 +296,14 @@ class FileTransfer {
         break;
       }
       final slice = await _slice(path, builder.length, want);
-      if (mtime != null && slice.mtimeMs != mtime) throw const FileTransferError('changed');
+      if (mtime != null && slice.mtimeMs != mtime) {
+        throw const FileTransferError('changed');
+      }
       mtime = slice.mtimeMs;
       size = slice.size;
-      if (slice.bytes.isEmpty && !slice.eof) throw const FileTransferError('stalled');
+      if (slice.bytes.isEmpty && !slice.eof) {
+        throw const FileTransferError('stalled');
+      }
       builder.add(slice.bytes);
       onProgress?.call(builder.length, size);
       if (slice.eof) break;
@@ -248,7 +323,11 @@ class FileTransfer {
   }) async {
     await directory.create(recursive: true);
     await cleanupCheckpoints(directory);
-    final key = sha256.convert(utf8.encode(jsonEncode(<String>[serverId, conversationId, path]))).toString();
+    final key = sha256
+        .convert(
+          utf8.encode(jsonEncode(<String>[serverId, conversationId, path])),
+        )
+        .toString();
     final part = File('${directory.path}/.fastvibe-$key.part');
     final metadata = File('${part.path}.json');
     if (!_activeDownloads.add(part.path)) throw const FileTransferError('busy');
@@ -260,9 +339,14 @@ class FileTransfer {
         if (await file.exists()) await file.delete();
       }
     }
+
     final removeCancel = cancel?.onCancel(() {
       if (cancel.discardOnCancel && _activeDownloads.add(part.path)) {
-        unawaited(clean().whenComplete(() => _activeDownloads.remove(part.path)).catchError((Object _) {}));
+        unawaited(
+          clean()
+              .whenComplete(() => _activeDownloads.remove(part.path))
+              .catchError((Object _) {}),
+        );
       }
     });
     try {
@@ -272,16 +356,27 @@ class FileTransfer {
       if (await part.exists() && await metadata.exists()) {
         try {
           final stored = jsonDecode(await metadata.readAsString());
-          if (stored is Map && stored['key'] == key && stored['size'] is int && stored['mtimeMs'] is num) {
+          if (stored is Map &&
+              stored['key'] == key &&
+              stored['size'] is int &&
+              stored['mtimeMs'] is num) {
             offset = await part.length();
             expectedSize = stored['size'] as int;
             mtime = stored['mtimeMs'] as num;
           }
-        } on FormatException { /* An incomplete checkpoint is restarted. */ }
+        } on FormatException {
+          /* An incomplete checkpoint is restarted. */
+        }
         if (expectedSize != null && offset > 0 && offset <= expectedSize) {
-          if (cancel?.cancelled == true) throw const FileTransferError('cancelled');
-          final current = await (cancel == null ? stat(path) : cancel.race(stat(path)));
-          if (!current.resumable || current.size != expectedSize || current.mtimeMs != mtime) {
+          if (cancel?.cancelled == true) {
+            throw const FileTransferError('cancelled');
+          }
+          final current = await (cancel == null
+              ? stat(path)
+              : cancel.race(stat(path)));
+          if (!current.resumable ||
+              current.size != expectedSize ||
+              current.mtimeMs != mtime) {
             offset = 0;
             expectedSize = null;
             mtime = null;
@@ -293,23 +388,46 @@ class FileTransfer {
         }
       }
       if (offset == 0) await clean();
-      sink = await part.open(mode: offset > 0 ? FileMode.append : FileMode.write);
+      sink = await part.open(
+        mode: offset > 0 ? FileMode.append : FileMode.write,
+      );
       if (offset > 0) onProgress?.call(offset, expectedSize!);
       while (true) {
-        if (cancel?.cancelled == true) throw const FileTransferError('cancelled');
-        final slice = await (cancel == null ? _slice(path, offset, sliceBytes) : cancel.race(_slice(path, offset, sliceBytes)));
-        if (cancel?.cancelled == true) throw const FileTransferError('cancelled');
-        if ((mtime != null && slice.mtimeMs != mtime) || (expectedSize != null && slice.size != expectedSize)) throw const FileTransferError('changed');
+        if (cancel?.cancelled == true) {
+          throw const FileTransferError('cancelled');
+        }
+        final slice = await (cancel == null
+            ? _slice(path, offset, sliceBytes)
+            : cancel.race(_slice(path, offset, sliceBytes)));
+        if (cancel?.cancelled == true) {
+          throw const FileTransferError('cancelled');
+        }
+        if ((mtime != null && slice.mtimeMs != mtime) ||
+            (expectedSize != null && slice.size != expectedSize)) {
+          throw const FileTransferError('changed');
+        }
         mtime = slice.mtimeMs;
         expectedSize = slice.size;
-        if (slice.bytes.isEmpty && !slice.eof) throw const FileTransferError('stalled');
-        if (offset + slice.bytes.length > slice.size || (slice.eof && offset + slice.bytes.length != slice.size)) throw const FileTransferError('invalid');
+        if (slice.bytes.isEmpty && !slice.eof) {
+          throw const FileTransferError('stalled');
+        }
+        if (offset + slice.bytes.length > slice.size ||
+            (slice.eof && offset + slice.bytes.length != slice.size)) {
+          throw const FileTransferError('invalid');
+        }
         await sink.writeFrom(slice.bytes);
         offset += slice.bytes.length;
         // Offset is the part file's length. Metadata only records immutable identity,
         // so a lost reply can safely retry the same read after reconnecting.
         if (slice.resumable && !await metadata.exists()) {
-          await metadata.writeAsString(jsonEncode(<String, Object?>{'key': key, 'size': slice.size, 'mtimeMs': mtime}), flush: true);
+          await metadata.writeAsString(
+            jsonEncode(<String, Object?>{
+              'key': key,
+              'size': slice.size,
+              'mtimeMs': mtime,
+            }),
+            flush: true,
+          );
         }
         onProgress?.call(offset, slice.size);
         if (slice.eof) break;
@@ -322,11 +440,28 @@ class FileTransfer {
       if (await metadata.exists()) await metadata.delete();
       return saved;
     } catch (error) {
-      final transient = error is TransportError && const <String>{'timeout', 'dropped', 'closed'}.contains(error.code)
-          || error is ConnectionError && const <String>{'timeout', 'unreachable', 'closed-early'}.contains(error.code)
-          || error is SocketException || error is TimeoutException;
-      final paused = cancel?.cancelled == true && cancel?.discardOnCancel != true;
-      keep = (transient || paused) && cancel?.discardOnCancel != true && await part.exists() && await metadata.exists();
+      final transient =
+          error is TransportError &&
+              const <String>{
+                'timeout',
+                'dropped',
+                'closed',
+              }.contains(error.code) ||
+          error is ConnectionError &&
+              const <String>{
+                'timeout',
+                'unreachable',
+                'closed-early',
+              }.contains(error.code) ||
+          error is SocketException ||
+          error is TimeoutException;
+      final paused =
+          cancel?.cancelled == true && cancel?.discardOnCancel != true;
+      keep =
+          (transient || paused) &&
+          cancel?.discardOnCancel != true &&
+          await part.exists() &&
+          await metadata.exists();
       if (keep && !paused) throw const FileTransferError('interrupted');
       rethrow;
     } finally {
@@ -345,9 +480,13 @@ class FileTransfer {
 
 /// A name that cannot walk out of the directory, and does not replace an earlier download.
 String safeFileName(String name) {
-  final cleaned = name.replaceAll(RegExp(r'[\\/\u0000-\u001f:*?"<>|]'), '_').trim();
+  final cleaned = name
+      .replaceAll(RegExp(r'[\\/\u0000-\u001f:*?"<>|]'), '_')
+      .trim();
   if (cleaned.isEmpty || cleaned == '.' || cleaned == '..') return 'file';
-  return cleaned.length > 120 ? cleaned.substring(cleaned.length - 120) : cleaned;
+  return cleaned.length > 120
+      ? cleaned.substring(cleaned.length - 120)
+      : cleaned;
 }
 
 File _uniqueFile(Directory directory, String name) {

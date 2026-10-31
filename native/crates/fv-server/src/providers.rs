@@ -146,9 +146,16 @@ fn validate_url(url: &str) -> Result<String, ErrorObject> {
 
 pub fn upsert(
     state: &ServerState,
-    mut params: ProviderUpsertParams,
+    params: ProviderUpsertParams,
 ) -> Result<ProviderUpsertResponse, ErrorObject> {
     let _lock = state.providers_lock.lock().unwrap();
+    upsert_locked(state, params)
+}
+
+pub(crate) fn upsert_locked(
+    state: &ServerState,
+    mut params: ProviderUpsertParams,
+) -> Result<ProviderUpsertResponse, ErrorObject> {
     let name = params.name.trim().to_string();
     if name.is_empty() {
         return Err(invalid("the provider needs a name"));
@@ -261,7 +268,11 @@ pub async fn fetch_models(
                     .map_err(internal)?
                     .unwrap_or_default(),
             };
-            (p.protocol, params.base_url.unwrap_or(p.base_url), key)
+            (
+                params.protocol.unwrap_or(p.protocol),
+                params.base_url.unwrap_or(p.base_url),
+                key,
+            )
         }
         None => (
             params
@@ -274,9 +285,19 @@ pub async fn fetch_models(
         ),
     };
     let base_url = validate_url(&base_url)?;
-    let fetched = fv_provider::fetch_models(to_protocol(protocol), &base_url, &key)
-        .await
-        .map_err(invalid)?;
+    let proxy = crate::settings::read(state)?.proxy_url;
+    let fetched = fv_provider::fetch_models_with_proxy(
+        to_protocol(protocol),
+        &base_url,
+        &key,
+        (!proxy.is_empty()).then_some(proxy.as_str()),
+    )
+    .await
+    .map_err(|e| {
+        let mut error = invalid(e.to_string());
+        error.data = Some(serde_json::json!({ "category": e.category(), "status": e.status() }));
+        error
+    })?;
     let catalog = state.catalog.snapshot();
     let models = fetched
         .into_iter()
@@ -312,6 +333,87 @@ pub fn model_list(state: &ServerState) -> Result<ModelListResponse, ErrorObject>
 
 const DEFAULT_MODEL: &str = "default_model";
 const DEFAULT_THINKING: &str = "default_thinking";
+
+fn project_defaults_key(path: &str) -> String {
+    format!("project.model-defaults:{path}")
+}
+
+pub fn read_project_defaults(
+    state: &ServerState,
+    path: &str,
+) -> Result<ModelDefaults, ErrorObject> {
+    if crate::projects::of_thread(state, path).is_none() {
+        return Err(invalid("no such project"));
+    }
+    project_defaults(state, path)
+}
+
+fn project_defaults(state: &ServerState, path: &str) -> Result<ModelDefaults, ErrorObject> {
+    state
+        .store
+        .db
+        .get_setting(&project_defaults_key(path))
+        .map_err(internal)?
+        .map(|text| serde_json::from_str(&text).map_err(internal))
+        .transpose()
+        .map(|defaults| defaults.unwrap_or_default())
+}
+
+pub fn set_project_defaults(
+    state: &ServerState,
+    params: ProjectModelDefaultsSetParams,
+) -> Result<ModelDefaults, ErrorObject> {
+    let _lock = state.providers_lock.lock().unwrap();
+    read_project_defaults(state, &params.path)?;
+    if let Some(label) = &params.defaults.model {
+        resolve(state, label, None).map_err(invalid)?;
+    }
+    let text = serde_json::to_string(&params.defaults).map_err(internal)?;
+    let value = (params.defaults != ModelDefaults::default()).then_some(text.as_str());
+    state
+        .store
+        .db
+        .set_setting(&project_defaults_key(&params.path), value)
+        .map_err(internal)?;
+    state.broadcast(ServerNotification::ProvidersChanged(Empty {}));
+    Ok(params.defaults)
+}
+
+pub(crate) fn relocate_project_defaults(
+    state: &ServerState,
+    old: &str,
+    new: Option<&str>,
+) -> Result<(), ErrorObject> {
+    if new == Some(old) {
+        return Ok(());
+    }
+    state
+        .store
+        .db
+        .move_setting(
+            &project_defaults_key(old),
+            new.map(project_defaults_key).as_deref(),
+        )
+        .map_err(internal)
+}
+
+/// Freeze inherited picks at creation; later project/global edits do not rewrite existing chats.
+pub(crate) fn new_thread_defaults(
+    state: &ServerState,
+    project: Option<&str>,
+    model: Option<String>,
+    thinking: Option<ThinkingLevel>,
+) -> Result<ModelDefaults, ErrorObject> {
+    let global = read_defaults(state)?;
+    let project = project
+        .map(|path| project_defaults(state, path))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(ModelDefaults {
+        model: model.or(project.model).or(global.model),
+        thinking: thinking.or(project.thinking).or(global.thinking),
+    })
+}
 
 pub fn read_defaults(state: &ServerState) -> Result<ModelDefaults, ErrorObject> {
     let model = state
@@ -363,17 +465,18 @@ pub fn any_configured(state: &ServerState) -> bool {
 }
 
 /// The model a side request for this conversation runs on, when the conversation actually has
-/// one: its own pick, else the user's default.
-///
-/// `None` is a real answer here — a chat on a server with no provider has nothing to ask, and
-/// the caller then keeps the title the server wrote from the prompt. It is deliberately not
-/// `model_for`, whose fallback to the server's own command-line model would spend a scripted
-/// model's next reply on naming in a test, and name a chat with a model the user never chose.
+/// one: its own pick, else the user's default, with the same built-in fallback as an ordinary turn.
+/// An invalid explicit choice still skips the side request rather than replacing a user-visible
+/// turn error with a second error from title generation.
 pub fn chosen_model(state: &ServerState, thread: &Thread) -> Option<Arc<dyn Model>> {
     let defaults = read_defaults(state).unwrap_or_default();
-    let label = thread.model.clone().or(defaults.model)?;
+    let label = thread.model.clone().or(defaults.model);
     let thinking = thread.thinking.or(defaults.thinking);
-    resolve(state, &label, thinking).ok()
+    match label {
+        Some(label) => resolve(state, &label, thinking).ok(),
+        None if !any_configured(state) => Some(state.agent.model.clone()),
+        None => None,
+    }
 }
 
 /// Turn `provider_id/model_id` into a model that can be called, or say why it cannot.

@@ -28,8 +28,12 @@ pub async fn apply(
             Operation::Delete(params) => (serde_json::to_value(Empty {}), Some(delete(params)?)),
             Operation::Write(params) => {
                 let path = crate::workspace::resolve(params.cwd.as_deref(), &params.path);
-                crate::workspace::write_file(&path.display().to_string(), &params.text)?;
-                (serde_json::to_value(Empty {}), None)
+                let revision = crate::workspace::write_file(
+                    &path.display().to_string(),
+                    &params.text,
+                    params.baseline.as_deref(),
+                )?;
+                (serde_json::to_value(WriteFileResponse { revision }), None)
             }
         };
         // Once a filesystem mutation starts, disconnecting its caller cannot roll it back.

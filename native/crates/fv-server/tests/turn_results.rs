@@ -164,8 +164,9 @@ async fn failures_before_and_after_partial_output_survive_restart_fork_and_retry
     );
     let fork = run
         .client
-        .call::<ThreadFork>(ThreadIdParams {
+        .call::<ThreadFork>(ThreadForkParams {
             thread_id: thread.clone(),
+            turn_id: None,
         })
         .await
         .unwrap()

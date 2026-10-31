@@ -9,7 +9,6 @@ use crate::ui::px;
 use fv_protocol::RequestId;
 use fv_protocol::types::*;
 use fv_theme::Token;
-use gpui_kit::component::input::Input;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -398,7 +397,10 @@ impl Workspace {
                     .child(icon("pencil-edit02", 16.0, p.c(Token::MutedForeground)))
                     .child(
                         div().flex_1().child(
-                            Input::new(&self.ask_input)
+                            crate::ui::input(&self.ask_input)
+                                .h_5()
+                                .px_0()
+                                .py_0()
                                 .appearance(false)
                                 .bordered(false),
                         ),

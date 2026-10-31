@@ -275,6 +275,7 @@ mod tests {
                                     name: "中文.rs".into(),
                                     language: Some("rust".into()),
                                     text: "old".into(),
+                                    revision: None,
                                 },
                                 baseline: Some("old".into()),
                                 text: "未保存 🦀\n".into(),
@@ -350,8 +351,10 @@ mod tests {
         .unwrap();
         assert!(old.browser_bookmarks.is_empty() && old.browser_history.is_empty());
         assert!(old.resources_open);
-        let mut current = Layout::default();
-        current.resources_open = false;
+        let mut current = Layout {
+            resources_open: false,
+            ..Default::default()
+        };
         current.browser_bookmarks.push(super::Bookmark {
             title: "Docs".into(),
             url: "https://example.com".into(),

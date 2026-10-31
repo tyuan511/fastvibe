@@ -1,5 +1,8 @@
 //! The conversation column, after `App.tsx`'s header, `message-list.tsx` and `message-row.tsx`.
 
+use std::collections::HashMap;
+
+use crate::terminal_transcript;
 use crate::ui::px;
 use fv_protocol::types::*;
 use fv_theme::Token;
@@ -17,10 +20,23 @@ pub const THREAD_PAD: f32 = 24.0;
 /// A reply's own cap, `max-w-2xl`.
 const REPLY_MAX: f32 = 672.0;
 
+fn projected_items<'a>(turn: &'a Turn, terminals: &'a HashMap<String, Item>) -> Vec<&'a Item> {
+    turn.items
+        .iter()
+        .map(|item| match item {
+            Item::ToolCall { id, .. } => terminals.get(id).unwrap_or(item),
+            _ => item,
+        })
+        .filter(|item| !terminal_transcript::hidden(item))
+        .collect()
+}
+
 impl Workspace {
     pub(super) fn main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let empty = self.selected.is_none() && matches!(self.status, Status::Ready);
+        let resources = self.resources_elements(window, cx);
         div()
+            .relative()
             .flex_1()
             .min_w_0()
             .h_full()
@@ -37,6 +53,7 @@ impl Workspace {
                         .child(self.composer(window, cx))
                 }
             })
+            .children(resources)
     }
 
     fn header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -74,6 +91,7 @@ impl Workspace {
             left = left.children(self.header_git_chip(window, cx));
         }
         let english = language == UiLanguage::English;
+        let viewport = f32::from(window.viewport_size().width);
         let sidebar_closed = self.app_settings.sidebar.collapsed;
         let open_fraction = (self.sidebar_motion.width
             / self.sidebar_resting_width(f32::from(window.viewport_size().width)))
@@ -135,7 +153,13 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(4.0))
-                    .child(icon_button("resources", "ai-expand", p))
+                    .child(
+                        icon_button("resources", "ai-expand", p)
+                            .aria_label(trs!(english, "resources.title"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_resources(viewport, cx);
+                            })),
+                    )
                     .when(self.side_pane_collapsed, |d| {
                         d.child(
                             icon_button("expand-side-pane", "panel-right-open", p)
@@ -351,6 +375,7 @@ impl Workspace {
     }
 
     fn transcript(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.transcript_scroll.prepare();
         let p = &self.palette;
         let language = self.app_settings.language;
         let view = self.selected.as_ref().and_then(|id| self.views.get(id));
@@ -389,19 +414,26 @@ impl Workspace {
             }
             (Status::Ready, None) => {}
             (Status::Ready, Some(view)) => {
+                let terminals = terminal_transcript::project(&view.turns, self.english());
                 let last = view.turns.len().saturating_sub(1);
                 let target_turn = self
-                    .search_target
+                    .jump_turn
                     .as_ref()
                     .filter(|(id, _)| Some(id) == self.selected.as_ref())
-                    .and_then(|(_, query)| {
-                        view.turns
-                            .iter()
-                            .position(|t| super::palette::turn_matches(t, query))
+                    .and_then(|(_, turn)| view.turns.iter().position(|t| &t.id == turn))
+                    .or_else(|| {
+                        self.search_target
+                            .as_ref()
+                            .filter(|(id, _)| Some(id) == self.selected.as_ref())
+                            .and_then(|(_, query)| {
+                                view.turns
+                                    .iter()
+                                    .position(|t| super::palette::turn_matches(t, query))
+                            })
                     });
                 for (i, turn) in view.turns.iter().enumerate() {
                     let running = view.running && i == last;
-                    let row = self.turn(turn, running, cx);
+                    let row = self.turn(&view.thread.id, turn, &terminals, running, cx);
                     if target_turn == Some(i) {
                         body = body.child(
                             div()
@@ -424,7 +456,7 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .track_scroll(&self.scroll)
+            .track_scroll(&self.transcript_scroll.handle)
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -437,6 +469,7 @@ impl Workspace {
                 this.clear_transcript_selection(window, cx);
             }))
             .child(body)
+            .child(self.transcript_scroll.recorder())
             .children(self.transcript_selection_actions(cx))
     }
 
@@ -477,9 +510,16 @@ impl Workspace {
                 )
             }
             Some(view) => {
+                let terminals = terminal_transcript::project(&view.turns, self.english());
                 let last = view.turns.len().saturating_sub(1);
                 for (index, turn) in view.turns.iter().enumerate() {
-                    body = body.child(self.turn(turn, view.running && index == last, cx));
+                    body = body.child(self.turn(
+                        thread_id,
+                        turn,
+                        &terminals,
+                        view.running && index == last,
+                        cx,
+                    ));
                 }
             }
         }
@@ -551,29 +591,39 @@ impl Workspace {
     }
 
     /// One turn, as one box: the gap inside is the gap between its rows.
-    fn turn(&self, turn: &Turn, running: bool, cx: &mut Context<Self>) -> AnyElement {
-        // A compaction is a transcript-level rule of its own, before what follows it.
-        let (compactions, items): (Vec<&Item>, Vec<&Item>) = turn
-            .items
-            .iter()
+    fn turn(
+        &self,
+        thread_id: &str,
+        turn: &Turn,
+        terminals: &HashMap<String, Item>,
+        running: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // Compaction remains a transcript-level rule. Only terminal calls are replaced;
+        // prose and large media payloads stay borrowed from the original turn.
+        let (compactions, items): (Vec<&Item>, Vec<&Item>) = projected_items(turn, terminals)
+            .into_iter()
             .partition(|i| matches!(i, Item::ContextCompaction { .. }));
-        let items: Vec<Item> = items.into_iter().cloned().collect();
-        let layout = presentation::layout(&items, running);
+        let layout = presentation::layout_refs(
+            &items,
+            running || items.iter().any(|i| terminal_transcript::active(i)),
+        );
         let mut wrapper = div().flex().flex_col().gap(px(28.0));
         if let Some(user) = layout.user {
-            wrapper = wrapper.child(self.user_row(&turn.id, user, turn.started_at, cx));
+            wrapper = wrapper.child(self.user_row(thread_id, &turn.id, user, turn.started_at, cx));
         }
         for c in compactions {
             wrapper = wrapper.child(self.compaction(c, running && layout.answer.is_empty()));
         }
         if !layout.process.is_empty() || !layout.answer.is_empty() || running {
-            wrapper = wrapper.child(self.reply(turn, &layout, running, cx));
+            wrapper = wrapper.child(self.reply(thread_id, turn, &layout, running, cx));
         }
         wrapper.into_any_element()
     }
 
     fn user_row(
         &self,
+        thread_id: &str,
         turn_id: &str,
         item: &Item,
         at: Option<i64>,
@@ -587,6 +637,7 @@ impl Workspace {
         // turn, and sending it again would only add a second one after the reply it corrects.
         let edit_text = text.clone();
         let edit_turn = turn_id.to_string();
+        let edit_thread = thread_id.to_string();
         let edit = action_button(
             SharedString::from(format!("edit-{id}")),
             "pencil-edit02",
@@ -594,6 +645,9 @@ impl Workspace {
             p,
         )
         .on_click(cx.listener(move |this, _, window, cx| {
+            if this.selected.as_deref() != Some(edit_thread.as_str()) {
+                this.select(edit_thread.clone(), cx);
+            }
             this.start_edit(edit_turn.clone(), edit_text.clone(), window, cx);
         }));
         let copy_text = text.clone();
@@ -608,7 +662,11 @@ impl Workspace {
         }));
         let group = SharedString::from(format!("row-{id}"));
         let skill = crate::skill_draft::invocation(text);
-        let body = skill.as_ref().map(|s| s.text).unwrap_or(text);
+        let body = fv_core::strip_attachment_block(skill.as_ref().map(|s| s.text).unwrap_or(text));
+        let files: Vec<_> = fv_core::attachment_paths(text)
+            .into_iter()
+            .filter_map(|path| self.transcript_path(thread_id, &path))
+            .collect();
         div()
             .group(group.clone())
             .w_full()
@@ -616,6 +674,7 @@ impl Workspace {
             .flex_col()
             .items_end()
             .gap(px(11.0))
+            .children(self.attachment_row(&files, id, cx))
             .children(
                 skill
                     .as_ref()
@@ -713,6 +772,7 @@ impl Workspace {
 
     fn reply(
         &self,
+        thread_id: &str,
         turn: &Turn,
         layout: &TurnLayout<'_>,
         running: bool,
@@ -821,12 +881,12 @@ impl Workspace {
             );
             if open {
                 let mut inner = div().pt(px(12.0)).flex().flex_col().gap(px(10.0));
-                inner = inner.children(self.parts(&layout.process, false, cx));
+                inner = inner.children(self.parts(thread_id, &layout.process, false, cx));
                 fold = fold.child(inner);
             }
             col = col.child(fold);
         }
-        col = col.children(self.parts(&layout.answer, running, cx));
+        col = col.children(self.parts(thread_id, &layout.answer, running, cx));
         let live_tail = layout
             .answer
             .iter()
@@ -858,7 +918,10 @@ impl Workspace {
             );
         }
         if !running && !layout.changes.is_empty() {
-            col = col.child(self.changes_card(&layout.changes).mt(px(4.0)));
+            col = col.child(
+                self.changes_card(thread_id, turn_id, &layout.changes, cx)
+                    .mt(px(4.0)),
+            );
         }
         if !running {
             // 用时: the whole turn, from the user's message to the last entry (Electron's
@@ -896,8 +959,8 @@ impl Workspace {
                 p,
             )
             .on_click(cx.listener(move |this, _, _, cx| this.copy_text(answer.clone(), cx)));
-            // Forking copies the whole thread; `turn_id` names a turn, which the server has no thread for.
-            let fork_thread_id = self.selected.clone();
+            let fork_thread_id = thread_id.to_string();
+            let fork_turn_id = turn_id.to_string();
             let fork = action_button(
                 SharedString::from(format!("fork-{turn_id}")),
                 "git-fork",
@@ -909,13 +972,12 @@ impl Workspace {
                 p,
             )
             .on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(id) = fork_thread_id.clone() {
-                    this.fork_thread(id, cx)
-                }
+                this.fork_thread_at(fork_thread_id.clone(), Some(fork_turn_id.clone()), cx);
             }));
             // 重试 asks for this turn again: its reply is thrown away and the same prompt is
             // re-sent, which is the only sense in which a reply can be "run again".
             let retry_id = turn_id.to_string();
+            let retry_thread = thread_id.to_string();
             let retry = action_button(
                 SharedString::from(format!("retry-{turn_id}")),
                 "rotate-ccw",
@@ -926,9 +988,9 @@ impl Workspace {
                 },
                 p,
             )
-            .on_click(
-                cx.listener(move |this, _, window, cx| this.retry(retry_id.clone(), window, cx)),
-            );
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.retry_thread(retry_thread.clone(), retry_id.clone(), window, cx)
+            }));
             col = col.child(actions(
                 &group,
                 stamp,
@@ -943,6 +1005,29 @@ impl Workspace {
         col.into_any_element()
     }
 
+    pub(super) fn cached_markdown(&self, id: &str, text: &str) -> SharedString {
+        let identity = (text.as_ptr() as usize, text.len());
+        if let Some((cached, source)) = self.markdown_cache.borrow().get(id)
+            && *cached == identity
+        {
+            return source.clone();
+        }
+        let source = SharedString::from(fv_core::strip_memory_citation(text).into_owned());
+        let key = id.to_owned();
+        let mut cache = self.markdown_cache.borrow_mut();
+        let mut order = self.markdown_cache_order.borrow_mut();
+        cache.insert(key.clone(), (identity, source.clone()));
+        order.retain(|existing| existing != &key);
+        order.push(key);
+        while order.len() > self.markdown_cache_limit {
+            if let Some(oldest) = order.first().cloned() {
+                order.remove(0);
+                cache.remove(&oldest);
+            }
+        }
+        source
+    }
+
     fn markdown(&self, id: &str, text: &str) -> Div {
         div()
             .w_full()
@@ -950,7 +1035,7 @@ impl Workspace {
             .line_height(px(24.0))
             .child(crate::markdown::view(
                 SharedString::from(format!("a-{id}")),
-                SharedString::from(fv_core::strip_memory_citation(text)),
+                self.cached_markdown(id, text),
                 &self.palette,
             ))
     }
@@ -983,12 +1068,47 @@ impl Workspace {
         None
     }
 
-    fn process_item(&self, item: &Item, cx: &mut Context<Self>) -> Div {
-        self.process_item_live(item, false, cx)
+    fn open_media(&mut self, thread_id: &str, id: &str, cx: &mut Context<Self>) {
+        let Some((mime, data)) = self
+            .views
+            .get(thread_id)
+            .into_iter()
+            .flat_map(|view| view.turns.iter())
+            .flat_map(|turn| turn.items.iter())
+            .find_map(|item| match item {
+                Item::Audio {
+                    id: item_id,
+                    mime,
+                    data,
+                    ..
+                }
+                | Item::Image {
+                    id: item_id,
+                    mime,
+                    data,
+                    ..
+                } if item_id == id => Some((mime.as_str(), data.as_str())),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let url = format!("data:{mime};base64,{data}");
+        cx.open_url(&url);
+    }
+
+    fn process_item(&self, thread_id: &str, item: &Item, cx: &mut Context<Self>) -> Div {
+        self.process_item_live(thread_id, item, false, cx)
     }
 
     /// A thought or a tool call: one quiet line, opened by a click to what it said or did.
-    fn process_item_live(&self, item: &Item, live: bool, cx: &mut Context<Self>) -> Div {
+    fn process_item_live(
+        &self,
+        thread_id: &str,
+        item: &Item,
+        live: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let p = &self.palette;
         let language = self.app_settings.language;
         let (id, header, body): (String, Div, Option<Div>) = match item {
@@ -1086,21 +1206,49 @@ impl Workspace {
                 output,
                 is_error,
             } => {
-                let view =
-                    presentation::describe(name, arguments, output.is_none(), self.english());
-                let row = self.tool_head(id, &view, *is_error, output.is_none());
-                let open = self.open_items.contains(id);
-                let detail =
-                    open.then(|| self.tool_detail(name, arguments, output.as_deref(), *is_error));
+                let running = terminal_transcript::running(arguments, output.as_deref());
+                let view = presentation::describe(name, arguments, running, self.english());
+                let path = presentation::tool_path(name, arguments);
+                let row = self
+                    .tool_head(thread_id, item, &view, path.as_deref(), cx)
+                    .children(terminal_transcript::status(arguments, self.english()).map(
+                        |status| {
+                            div()
+                                .flex_none()
+                                .text_color(p.c(Token::MutedForeground))
+                                .child(status)
+                        },
+                    ));
+                let open = terminal_transcript::active(item) || self.open_items.contains(id);
+                let detail = open.then(|| {
+                    if presentation::family_of(name) == presentation::Family::Terminal {
+                        div().child(super::terminal_tool::TerminalTool {
+                            id: SharedString::from(format!("terminal-tool-{id}")),
+                            command: SharedString::from(
+                                presentation::terminal_command(name, arguments).to_string(),
+                            ),
+                            prompt: Some("$"),
+                            running,
+                            output: output
+                                .as_deref()
+                                .map(|text| SharedString::from(text.to_string())),
+                            english: self.english(),
+                            palette: self.palette.clone(),
+                        })
+                    } else {
+                        self.tool_detail(name, arguments, output.as_deref(), *is_error)
+                    }
+                });
                 (id.clone(), row, detail)
             }
             Item::Audio {
                 id,
                 name,
                 mime,
-                data,
+                data: _,
             } => {
-                let url = format!("data:{mime};base64,{data}");
+                let media_id = id.clone();
+                let media_thread_id = thread_id.to_owned();
                 let label = if name.is_empty() {
                     if language == UiLanguage::English {
                         "Audio artifact"
@@ -1130,7 +1278,9 @@ impl Workspace {
                             } else {
                                 "播放"
                             })
-                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_media(&media_thread_id, &media_id, cx)
+                            })),
                     );
                 (id.clone(), row, None)
             }
@@ -1138,9 +1288,10 @@ impl Workspace {
                 id,
                 name,
                 mime,
-                data,
+                data: _,
             } => {
-                let url = format!("data:{mime};base64,{data}");
+                let media_id = id.clone();
+                let media_thread_id = thread_id.to_owned();
                 let label = if name.is_empty() {
                     if language == UiLanguage::English {
                         "Image artifact"
@@ -1170,7 +1321,9 @@ impl Workspace {
                             } else {
                                 "查看"
                             })
-                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_media(&media_thread_id, &media_id, cx)
+                            })),
                     );
                 (id.clone(), row, None)
             }
@@ -1190,7 +1343,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Div {
         let p = &self.palette;
-        let open = self.open_items.contains(&id);
+        let open = body.is_some() && (self.open_items.contains(&id) || !chevron_always);
         let key = id.clone();
         let group = SharedString::from(format!("tool-{id}"));
         div()
@@ -1246,7 +1399,25 @@ impl Workspace {
 
     /// The row a call opens with: its family's icon, the category in muted words, what it acted
     /// on in mono, and the directory or glob after that in fainter mono.
-    fn tool_head(&self, id: &str, v: &presentation::ToolView, failed: bool, running: bool) -> Div {
+    fn tool_head(
+        &self,
+        thread_id: &str,
+        item: &Item,
+        v: &presentation::ToolView,
+        path: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let Item::ToolCall {
+            id,
+            arguments,
+            output,
+            is_error: failed,
+            ..
+        } = item
+        else {
+            return div();
+        };
+        let running = terminal_transcript::running(arguments, output.as_deref());
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
         let icon_el: AnyElement = if running {
@@ -1286,11 +1457,21 @@ impl Workspace {
             .child(icon_el)
             .child(label_el)
             .when(!v.subject.is_empty(), |d| {
-                d.child(
-                    ui::truncate(v.subject.clone())
-                        .font_family(crate::assets::MONO_FONT)
-                        .text_color(p.c(Token::Foreground)),
-                )
+                if let Some(path) = path {
+                    d.child(self.file_link(
+                        thread_id,
+                        format!("tool-file-{id}"),
+                        path,
+                        v.subject.clone(),
+                        cx,
+                    ))
+                } else {
+                    d.child(
+                        ui::truncate(v.subject.clone())
+                            .font_family(crate::assets::MONO_FONT)
+                            .text_color(p.c(Token::Foreground)),
+                    )
+                }
             })
             .when(!v.context.is_empty(), |d| {
                 d.child(
@@ -1300,7 +1481,7 @@ impl Workspace {
                         .text_color(p.c(Token::MutedForeground).opacity(0.6)),
                 )
             })
-            .when(failed, |d| {
+            .when(*failed, |d| {
                 d.child(
                     div()
                         .flex_none()
@@ -1311,7 +1492,7 @@ impl Workspace {
     }
 
     /// Several settled calls folded into one line, 「已运行 2 个命令，读取 App.tsx」.
-    fn run_row(&self, items: &[&Item], cx: &mut Context<Self>) -> Div {
+    fn run_row(&self, thread_id: &str, items: &[&Item], cx: &mut Context<Self>) -> Div {
         let p = &self.palette;
         let Some(Item::ToolCall { id, .. }) = items.first() else {
             return div();
@@ -1329,15 +1510,13 @@ impl Workspace {
                 presentation::Piece::Text(t) => line.child(SharedString::from(t)),
                 // A file is the underlined path link the transcript uses everywhere; only a
                 // query or a tool name is a chip.
-                presentation::Piece::Path(n) => line.child(
-                    div()
-                        .mx(px(2.0))
-                        .flex_none()
-                        .font_family(crate::assets::MONO_FONT)
-                        .text_color(p.c(Token::Primary))
-                        .underline()
-                        .child(SharedString::from(n)),
-                ),
+                presentation::Piece::Path(n) => line.child(self.file_link(
+                    thread_id,
+                    format!("run-file-{id}-{n}"),
+                    &n,
+                    n.clone(),
+                    cx,
+                )),
                 presentation::Piece::Name(n) => line.child(
                     div()
                         .mx(px(2.0))
@@ -1361,7 +1540,7 @@ impl Workspace {
         let body = self.open_items.contains(&id).then(|| {
             let mut col = div().w_full().flex().flex_col().gap(px(8.0));
             for item in items {
-                col = col.child(self.process_item(item, cx));
+                col = col.child(self.process_item(thread_id, item, cx));
             }
             col
         });
@@ -1372,6 +1551,7 @@ impl Workspace {
     /// markdown, settled calls in a row each or folded into one, and the tail marked live.
     pub(super) fn parts(
         &self,
+        thread_id: &str,
         items: &[&Item],
         running: bool,
         cx: &mut Context<Self>,
@@ -1380,7 +1560,9 @@ impl Workspace {
         presentation::fold_runs(items, running, self.app_settings.collapse_thinking)
             .into_iter()
             .map(|part| match part {
-                presentation::Part::Run(batch) => self.run_row(&batch, cx).into_any_element(),
+                presentation::Part::Run(batch) => {
+                    self.run_row(thread_id, &batch, cx).into_any_element()
+                }
                 presentation::Part::Item(item) => {
                     let live = running && last.is_some_and(|l| std::ptr::eq(l, item));
                     match item {
@@ -1390,7 +1572,9 @@ impl Workspace {
                         Item::Error { message, .. } => {
                             self.error_notice(message).into_any_element()
                         }
-                        other => self.process_item_live(other, live, cx).into_any_element(),
+                        other => self
+                            .process_item_live(thread_id, other, live, cx)
+                            .into_any_element(),
                     }
                 }
             })
@@ -1593,7 +1777,13 @@ impl Workspace {
     }
 
     /// `TurnFileChips`: 已修改 N 个文件, the totals, 查看变更, then one row per file.
-    fn changes_card(&self, files: &[FileChange]) -> Div {
+    fn changes_card(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        files: &[FileChange],
+        cx: &mut Context<Self>,
+    ) -> Div {
         let p = &self.palette;
         let language = self.app_settings.language;
         let added: u32 = files.iter().map(|f| f.added).sum();
@@ -1614,36 +1804,43 @@ impl Workspace {
                         .child(SharedString::from(format!("-{r}"))),
                 )
         };
-        let mut rows = div().px(px(6.0)).pb(px(6.0)).flex().flex_col();
+        let review_path = files
+            .first()
+            .and_then(|file| self.transcript_path(thread_id, &file.path));
+        let review_thread = thread_id.to_string();
+        let mut rows = div().px(px(6.0)).flex().flex_col();
         for f in files {
             let (name, dir) = presentation::split_path(&f.path);
-            rows = rows.child(
-                div()
-                    .h(px(32.0))
-                    .px(px(8.0))
-                    .rounded(px(8.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .text_size(px(TEXT_SM))
-                    .child(
-                        img(crate::file_icons::path(name, !p.is_dark()))
-                            .size(px(16.0))
-                            .flex_none(),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .child(SharedString::from(name.to_string())),
-                    )
-                    .child(
-                        ui::truncate(dir.to_string())
-                            .flex_1()
-                            .text_size(px(TEXT_XS))
-                            .text_color(p.c(Token::MutedForeground).opacity(0.7)),
-                    )
-                    .child(counts(f.added, f.removed)),
-            );
+            let row = div()
+                .id(SharedString::from(format!(
+                    "changed-file-{turn_id}-{}",
+                    f.path
+                )))
+                .h(px(32.0))
+                .px(px(8.0))
+                .rounded(px(8.0))
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .text_size(px(TEXT_SM))
+                .child(
+                    img(crate::file_icons::path(name, !p.is_dark()))
+                        .size(px(16.0))
+                        .flex_none(),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .child(SharedString::from(name.to_string())),
+                )
+                .child(
+                    ui::truncate(dir.to_string())
+                        .flex_1()
+                        .text_size(px(TEXT_XS))
+                        .text_color(p.c(Token::MutedForeground).opacity(0.7)),
+                )
+                .child(counts(f.added, f.removed));
+            rows = rows.child(self.file_actions(thread_id, row, &f.path, true, cx));
         }
         div()
             .w_full()
@@ -1676,6 +1873,20 @@ impl Workspace {
                     .child(div().flex_1())
                     .child(
                         div()
+                            .id(SharedString::from(format!("review-turn-changes-{turn_id}")))
+                            .role(Role::Button)
+                            .aria_label(text::view_changes(language))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if let Some(path) = &review_path {
+                                    this.review_transcript_file_for(
+                                        &review_thread,
+                                        path.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }))
                             .h(px(24.0))
                             .px(px(10.0))
                             .flex()
@@ -1689,7 +1900,9 @@ impl Workspace {
                             .child(text::view_changes(language)),
                     ),
             )
-            .child(rows)
+            // GPUI dispatches a wheel event to scrollable ancestors too. File rows stay
+            // content-sized so scrolling over this card moves the conversation only.
+            .child(div().pb(px(6.0)).child(rows))
     }
 }
 
@@ -1705,6 +1918,10 @@ fn action_button(
     let hover = p.c(Token::Muted);
     div()
         .id(id)
+        .role(Role::Button)
+        .focusable()
+        .tab_index(0)
+        .aria_label(label)
         .p(px(2.0))
         .rounded(px(6.0))
         .cursor_pointer()
@@ -1817,5 +2034,160 @@ fn compact_count(value: u64) -> String {
         format!("{:.1}K", value as f64 / 1_000.0)
     } else {
         value.to_string()
+    }
+}
+
+#[cfg(test)]
+mod terminal_projection_tests {
+    use super::{presentation, projected_items, terminal_transcript};
+    use fv_protocol::types::{Item, Turn};
+    use serde_json::json;
+
+    fn tool(id: &str, name: &str, arguments: serde_json::Value, output: Option<&str>) -> Item {
+        Item::ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+            output: output.map(str::to_string),
+            is_error: false,
+        }
+    }
+
+    #[test]
+    fn continuation_output_belongs_to_latest_session_owner_without_mutating_history() {
+        let running =
+            "Wall time: 0.1 seconds\nProcess running with session ID 7\nProcess ID: 12\nOutput:\n";
+        let exited = "Wall time: 0.1 seconds\nProcess exited with code 0\nOutput:\n";
+        let turns = vec![
+            Turn::new(
+                "first".into(),
+                vec![tool(
+                    "old",
+                    "exec_command",
+                    json!({"cmd":"old"}),
+                    Some(&format!("{running}old")),
+                )],
+            ),
+            Turn::new(
+                "second".into(),
+                vec![
+                    tool(
+                        "old-poll",
+                        "write_stdin",
+                        json!({"session_id":7,"chars":""}),
+                        Some(&format!("{exited}-done")),
+                    ),
+                    tool(
+                        "read",
+                        "read_file",
+                        json!({"path":"notes.md"}),
+                        Some("unrelated output"),
+                    ),
+                    tool(
+                        "new",
+                        "exec_command",
+                        json!({"cmd":"new"}),
+                        Some(&format!("{running}new")),
+                    ),
+                    tool(
+                        "new-poll",
+                        "write_stdin",
+                        json!({"session_id":7,"chars":""}),
+                        Some(&format!("{exited}-tail")),
+                    ),
+                ],
+            ),
+        ];
+        let before = serde_json::to_value(&turns).unwrap();
+        let projected = terminal_transcript::project(&turns, true);
+        let output = |id: &str| match &projected[id] {
+            Item::ToolCall {
+                output: Some(output),
+                ..
+            } => output.as_str(),
+            _ => panic!("command output"),
+        };
+        assert_eq!(output("old"), "old-done");
+        assert_eq!(output("new"), "new-tail");
+        let second = projected_items(&turns[1], &projected);
+        assert_eq!(second.len(), 2);
+        assert!(
+            std::ptr::eq(second[0], &turns[1].items[1]),
+            "unrelated tool is preserved"
+        );
+        assert_eq!(serde_json::to_value(&turns).unwrap(), before);
+    }
+
+    #[test]
+    fn render_projection_borrows_media_hides_polls_and_keeps_active_commands_visible() {
+        let turns = vec![
+            Turn::new(
+                "original-turn".into(),
+                vec![
+                    tool(
+                        "exec",
+                        "exec_command",
+                        json!({"cmd":"watch"}),
+                        Some(
+                            "Wall time: 0.1 seconds\nProcess running with session ID 7\nProcess ID: 12\nOutput:\nfirst",
+                        ),
+                    ),
+                    Item::AgentMessage {
+                        id: "reply".into(),
+                        text: "Working".into(),
+                    },
+                    Item::Image {
+                        id: "image".into(),
+                        name: "plot.png".into(),
+                        mime: "image/png".into(),
+                        data: "large-payload".repeat(1000),
+                    },
+                ],
+            ),
+            Turn::new(
+                "poll-turn".into(),
+                vec![tool(
+                    "poll",
+                    "write_stdin",
+                    json!({"session_id":7,"chars":""}),
+                    None,
+                )],
+            ),
+        ];
+        let projected = terminal_transcript::project(&turns, true);
+        let first = projected_items(&turns[0], &projected);
+        assert!(
+            std::ptr::eq(first[2], &turns[0].items[2]),
+            "media payload stays borrowed"
+        );
+        assert!(
+            projected_items(&turns[1], &projected).is_empty(),
+            "continuation has no separate row"
+        );
+        assert!(terminal_transcript::active(first[0]));
+        let layout = presentation::layout_refs(
+            &first,
+            first.iter().any(|item| terminal_transcript::active(item)),
+        );
+        assert!(
+            !layout.folded,
+            "active command must not hide behind completed-turn process"
+        );
+        let parts = presentation::fold_runs(&first, false, true);
+        assert!(
+            matches!(parts.first(), Some(presentation::Part::Item(Item::ToolCall { id, .. })) if id == "exec")
+        );
+        let Item::ToolCall {
+            arguments, output, ..
+        } = first[0]
+        else {
+            panic!("command")
+        };
+        assert!(terminal_transcript::running(arguments, output.as_deref()));
+        assert!(terminal_transcript::status(arguments, true).is_some());
+        assert_eq!(turns[0].id, "original-turn");
+        assert!(
+            matches!(&turns[1].items[0], Item::ToolCall { name, output: None, .. } if name == "write_stdin")
+        );
     }
 }

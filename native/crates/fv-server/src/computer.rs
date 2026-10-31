@@ -15,7 +15,11 @@
 //! The version and checksums are the ones the Electron app pins; the two must move together.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
+
+use futures_util::future::BoxFuture;
+use fv_agent::{Tool, ToolCtx, ToolOutput, ToolRegistry, ToolSpec};
+use serde_json::Value;
 use std::time::{Duration, Instant};
 
 use fv_protocol::ErrorObject;
@@ -89,6 +93,108 @@ pub(crate) fn keep_basic_computer_tool(
     supported: bool,
 ) -> bool {
     control_on && supported && !driver_running
+}
+
+/// Apply host preferences at the shared dispatch boundary, including calls from code mode,
+/// delegated agents and schedules. A turn retains this wrapper, but never a settings snapshot.
+/// Only parameters present in the real driver's schema receive a default.
+pub(crate) fn apply_preferences(state: &Arc<ServerState>, registry: &mut ToolRegistry) {
+    for spec in registry.all_specs() {
+        if !spec.name.starts_with("mcp_computer_") {
+            continue;
+        }
+        if let Some(tool) = registry.get(&spec.name) {
+            registry.register(ComputerTool {
+                state: Arc::downgrade(state),
+                tool,
+                delivery_mode: spec.schema["properties"]["delivery_mode"]["enum"]
+                    .as_array()
+                    .is_some_and(|values| {
+                        values.iter().any(|v| v == "background")
+                            && values.iter().any(|v| v == "foreground")
+                    }),
+                clipboard: matches!(
+                    spec.name.as_str(),
+                    "mcp_computer_clipboard_read" | "mcp_computer_clipboard_write"
+                ),
+            });
+        }
+    }
+}
+
+struct ComputerTool {
+    state: Weak<ServerState>,
+    tool: Arc<dyn Tool>,
+    delivery_mode: bool,
+    clipboard: bool,
+}
+
+impl Tool for ComputerTool {
+    fn spec(&self) -> ToolSpec {
+        self.tool.spec()
+    }
+    fn mutates(&self) -> bool {
+        self.tool.mutates()
+    }
+    fn hosted(&self) -> bool {
+        self.tool.hosted()
+    }
+    fn orchestrates(&self) -> bool {
+        self.tool.orchestrates()
+    }
+    fn deferred(&self) -> bool {
+        self.tool.deferred()
+    }
+    fn enabled(&self, registry: &ToolRegistry) -> bool {
+        self.tool.enabled(registry)
+    }
+    fn finish_turn(&self) -> BoxFuture<'static, ()> {
+        self.tool.finish_turn()
+    }
+
+    fn call(&self, ctx: ToolCtx, mut arguments: Value) -> BoxFuture<'static, ToolOutput> {
+        let state = self.state.upgrade();
+        let tool = self.tool.clone();
+        let clipboard = self.clipboard;
+        let delivery_mode = self.delivery_mode;
+        Box::pin(async move {
+            let Some(state) = state else {
+                return ToolOutput::err("Computer-control service closed.");
+            };
+            let settings = match crate::settings::read(&state) {
+                Ok(settings) => settings,
+                Err(error) => return ToolOutput::err(error.message),
+            };
+            let english = settings.language == fv_protocol::types::UiLanguage::English;
+            if !settings.computer_control {
+                return ToolOutput::err(if english {
+                    "Computer control is switched off. Enable it in Settings › Computer control."
+                } else {
+                    "电脑操控尚未开启。请在设置 › 电脑操控中打开「允许操作电脑」。"
+                });
+            }
+            if clipboard && !settings.computer_clipboard {
+                return ToolOutput::err(if english {
+                    "Clipboard access is switched off. Enable Read and write the clipboard in Settings › Computer control."
+                } else {
+                    "剪贴板访问尚未开启。请在设置 › 电脑操控中打开「读写剪贴板」。"
+                });
+            }
+            if delivery_mode && let Some(args) = arguments.as_object_mut() {
+                args.entry("delivery_mode").or_insert_with(|| {
+                    Value::String(
+                        if settings.computer_prefer_background {
+                            "background"
+                        } else {
+                            "foreground"
+                        }
+                        .into(),
+                    )
+                });
+            }
+            tool.call(ctx, arguments).await
+        })
+    }
 }
 
 fn executable_name() -> &'static str {
@@ -192,7 +298,22 @@ pub fn server_config(binary: &Path, socket: &str) -> McpServerConfig {
 
 impl ServerState {
     pub fn computer_status(&self) -> ComputerStatus {
-        self.computer.status(&self.data_dir)
+        let mut status = self.computer.status(&self.data_dir);
+        if !status.supported
+            && crate::settings::read(self)
+                .is_ok_and(|settings| settings.language == fv_protocol::types::UiLanguage::English)
+        {
+            status.unsupported_reason = Some(if std::env::consts::OS == "linux" {
+                "Computer control on Linux requires compositor-specific components this app does not ship.".into()
+            } else {
+                format!(
+                    "Computer control is unavailable for {}/{}.",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                )
+            });
+        }
+        status
     }
 
     fn computer_changed(&self) {
@@ -243,20 +364,25 @@ impl ServerState {
             inner.error = None;
         }
         self.computer_changed();
-        let client = http_client(self)?;
+        // Client construction may fail (for example an invalid proxy persisted by an older
+        // build). Settle the install state through the same path as a download failure.
         let state = self.clone();
-        let result = install(
-            &client,
-            &self.data_dir,
-            &artifact,
-            &[
-                format!("{RELEASE}/{}", artifact.filename),
-                format!("{MIRROR}{RELEASE}/{}", artifact.filename),
-            ],
-            move |progress| {
-                state.broadcast(ServerNotification::ComputerInstallProgress(progress));
-            },
-        )
+        let result = async {
+            let client = http_client(self).map_err(|error| error.message)?;
+            install(
+                &client,
+                &self.data_dir,
+                &artifact,
+                &[
+                    format!("{RELEASE}/{}", artifact.filename),
+                    format!("{MIRROR}{RELEASE}/{}", artifact.filename),
+                ],
+                move |progress| {
+                    state.broadcast(ServerNotification::ComputerInstallProgress(progress));
+                },
+            )
+            .await
+        }
         .await;
         {
             let mut inner = self.computer.inner.lock().unwrap();
@@ -452,6 +578,152 @@ pub(crate) fn extract(archive: &Path, artifact: &Artifact, dest: &Path) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RecordingTool {
+        name: String,
+        delivery: bool,
+    }
+    impl Tool for RecordingTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: self.name.clone(),
+                description: String::new(),
+                schema: if self.delivery {
+                    serde_json::json!({"properties":{"delivery_mode":{"enum":["background","foreground"]}}})
+                } else {
+                    serde_json::json!({"properties":{}})
+                },
+            }
+        }
+        fn deferred(&self) -> bool {
+            true
+        }
+        fn call(&self, _: ToolCtx, arguments: Value) -> BoxFuture<'static, ToolOutput> {
+            Box::pin(async move { ToolOutput::ok(arguments.to_string()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn preferences_are_live_for_retained_tools_and_only_real_delivery_fields_are_defaulted() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            ServerState::new(
+                dir.path().into(),
+                crate::agent_with_builtin_tools(Arc::new(fv_agent::testing::NoModel)),
+            )
+            .unwrap(),
+        );
+        let mut registry = ToolRegistry::new();
+        for (name, delivery) in [
+            ("mcp_computer_click", true),
+            ("mcp_computer_clipboard_read", false),
+            ("mcp_computer_clipboard_write", false),
+            ("mcp_computer_type_text", false),
+        ] {
+            registry.register(RecordingTool {
+                name: name.into(),
+                delivery,
+            });
+        }
+        apply_preferences(&state, &mut registry);
+        let call = |name: &str, arguments| {
+            registry.get(name).unwrap().call(
+                ToolCtx::new(tokio_util::sync::CancellationToken::new(), None),
+                arguments,
+            )
+        };
+        assert!(
+            call("mcp_computer_click", serde_json::json!({}))
+                .await
+                .is_error
+        );
+        crate::settings::set(
+            &state,
+            fv_protocol::types::AppSettingsPatch {
+                computer_control: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            call("mcp_computer_click", serde_json::json!({}))
+                .await
+                .content,
+            r#"{"delivery_mode":"background"}"#
+        );
+        assert_eq!(
+            call(
+                "mcp_computer_click",
+                serde_json::json!({"delivery_mode":"foreground"})
+            )
+            .await
+            .content,
+            r#"{"delivery_mode":"foreground"}"#
+        );
+        assert_eq!(
+            call(
+                "mcp_computer_type_text",
+                serde_json::json!({"text":"hello"})
+            )
+            .await
+            .content,
+            r#"{"text":"hello"}"#
+        );
+        for name in [
+            "mcp_computer_clipboard_read",
+            "mcp_computer_clipboard_write",
+        ] {
+            assert!(call(name, serde_json::json!({})).await.is_error);
+        }
+        crate::settings::set(
+            &state,
+            fv_protocol::types::AppSettingsPatch {
+                computer_clipboard: Some(true),
+                computer_prefer_background: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !call("mcp_computer_clipboard_read", serde_json::json!({}))
+                .await
+                .is_error
+        );
+        assert_eq!(
+            call("mcp_computer_click", serde_json::json!({}))
+                .await
+                .content,
+            r#"{"delivery_mode":"foreground"}"#
+        );
+        crate::settings::set(
+            &state,
+            fv_protocol::types::AppSettingsPatch {
+                computer_clipboard: Some(false),
+                language: Some(fv_protocol::types::UiLanguage::English),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            call("mcp_computer_clipboard_read", serde_json::json!({}))
+                .await
+                .content
+                .starts_with("Clipboard access")
+        );
+        crate::settings::set(
+            &state,
+            fv_protocol::types::AppSettingsPatch {
+                computer_control: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            call("mcp_computer_click", serde_json::json!({}))
+                .await
+                .is_error
+        );
+    }
 
     #[test]
     fn the_basic_tool_follows_the_switch_the_driver_and_the_platform() {

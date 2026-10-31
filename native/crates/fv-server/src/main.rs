@@ -18,6 +18,8 @@ use fv_server::{ServerState, UnixServer, serve_connection};
 enum Listen {
     Unix,
     Stdio,
+    /// SSH transports relay to a resident daemon rather than own its agent tasks.
+    Relay,
 }
 
 fn usage() -> ! {
@@ -89,9 +91,6 @@ async fn run() {
     let termination = terminated();
     let interruption = tokio::signal::ctrl_c();
     tokio::pin!(termination, interruption);
-    // Start reading the executable now, before a later build can replace this path; the
-    // hash itself finishes in the background so it never delays the socket.
-    fv_server::warm_build_fingerprint();
     let mut data_dir = None;
     let mut listen = Listen::Unix;
     let mut echo = false;
@@ -106,6 +105,7 @@ async fn run() {
                 listen = match value().as_str() {
                     "unix" => Listen::Unix,
                     "stdio" => Listen::Stdio,
+                    "relay" => Listen::Relay,
                     _ => usage(),
                 }
             }
@@ -119,6 +119,27 @@ async fn run() {
         }
     }
     let Some(data_dir) = data_dir else { usage() };
+    if matches!(listen, Listen::Relay) {
+        let executable = std::env::current_exe().unwrap_or_else(|error| fail(error));
+        let daemon = fv_daemon::Daemon::new(data_dir, executable);
+        let socket = daemon
+            .ensure_running()
+            .await
+            .unwrap_or_else(|error| fail(error));
+        let mut stream = tokio::net::UnixStream::connect(socket)
+            .await
+            .unwrap_or_else(|error| fail(error));
+        let (mut read, mut write) = stream.split();
+        let mut input = tokio::io::stdin();
+        let mut output = tokio::io::stdout();
+        tokio::select! {
+            _ = tokio::io::copy(&mut input, &mut write) => {},
+            _ = tokio::io::copy(&mut read, &mut output) => {},
+            _ = &mut interruption => {},
+            _ = &mut termination => {},
+        }
+        return;
+    }
 
     let environment = tokio::select! {
         environment = fv_env::initialize() => environment,
@@ -178,11 +199,22 @@ async fn run() {
                 _ = &mut termination => {},
             }
         }
+        Listen::Relay => unreachable!("relay exits before opening state"),
         Listen::Unix => {
             let server = UnixServer::bind(state.clone(), &data_dir.join("server.sock"))
                 .await
                 .unwrap_or_else(|e| fail(e));
             state.start_services();
+            let remote = fv_server::remote::Remote::for_state(&state)
+                .unwrap_or_else(|error| fail(error.message));
+            remote.restore().await.unwrap_or_else(|error| {
+                eprintln!("remote listener unavailable: {}", error.message)
+            });
+            fv_server::official::Official::for_state(&state)
+                .and_then(|official| official.restore())
+                .unwrap_or_else(|error| {
+                    eprintln!("official connection unavailable: {}", error.message)
+                });
             eprintln!("listening on {}", server.path().display());
             tokio::select! {
                 r = server.run() => { if let Err(e) = r { fail(format!("listener stopped: {e}")); } }
@@ -191,6 +223,8 @@ async fn run() {
             }
         }
     }
+    fv_server::remote::shutdown(&state);
+    fv_server::official::shutdown(&state);
     // A clean exit folds the write-ahead log back into the database file.
     state.shutdown_schedules().await;
     state.close_command_sessions();

@@ -57,11 +57,6 @@ pub struct InitializeResponse {
     pub features: Vec<String>,
     /// Where the server keeps its data; informational for clients on the same machine.
     pub data_dir: String,
-    /// An identity of the running server executable. Packaged builds use a content digest;
-    /// `cargo dev` uses a metadata-only identity so every GUI launch avoids rereading the debug
-    /// executable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub build_fingerprint: Option<String>,
     /// Whether any conversation has a turn or a yielded command in flight. A restart must
     /// not interrupt either.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +66,13 @@ pub struct InitializeResponse {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Empty {}
+
+/// `request/cancel`: cancel an in-flight client request by its JSON-RPC id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelRequestParams {
+    pub request_id: RequestId,
+}
 
 /// A read-only source adapter available to the native import surface.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -217,7 +219,16 @@ pub struct ThreadStartResponse {
     pub thread: Thread,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadForkParams {
+    pub thread_id: ThreadId,
+    /// When present, copy through this complete turn and omit all later turns.
+    #[serde(default)]
+    pub turn_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadIdParams {
     pub thread_id: ThreadId,
@@ -854,6 +865,9 @@ pub enum FilePreview {
         #[serde(default)]
         language: Option<String>,
         text: String,
+        /// SHA-256 of the exact bytes read from disk. A write may send this as its baseline.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<String>,
     },
     Table {
         path: String,
@@ -885,6 +899,16 @@ pub struct WriteFileParams {
     pub text: String,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// SHA-256 of the exact bytes the client previewed. Omit for legacy unconditional writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<String>,
+}
+
+/// Result of a successful write, allowing the editor to advance its exact-byte baseline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteFileResponse {
+    pub revision: String,
 }
 
 // ---- git, as the 变更 view reads it
@@ -1576,6 +1600,35 @@ pub struct ProviderListResponse {
     pub providers: Vec<ProviderInfo>,
 }
 
+/// A provider found in another local provider manager. Credentials are never serialized.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderImportCandidate {
+    pub id: String,
+    pub name: String,
+    pub app_label: String,
+    pub base_url: String,
+    pub protocol: ApiProtocol,
+    pub model_count: usize,
+    pub importable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderImportScan {
+    pub found: bool,
+    pub path: String,
+    pub candidates: Vec<ProviderImportCandidate>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCcSwitchImportParams {
+    pub ids: Vec<String>,
+}
+
 /// Create a provider (no `id`) or replace one. The key is write-only: absent keeps the stored
 /// one, an empty string clears it, anything else replaces it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2039,6 +2092,12 @@ pub struct AppSettings {
     /// runs it (`computer/host`).
     #[serde(default)]
     pub computer_control: bool,
+    /// 优先后台投递: use the driver's background delivery route where it supports the action.
+    #[serde(default = "default_true")]
+    pub computer_prefer_background: bool,
+    /// 读写剪贴板: allow the computer tools to read or replace the shared system clipboard.
+    #[serde(default)]
+    pub computer_clipboard: bool,
     /// 会话资源: the docked resources panel beside the conversation is open. A narrow window
     /// keeps the popover form, which only a deliberate open turns on.
     #[serde(default = "default_true")]
@@ -2168,6 +2227,8 @@ impl Default for AppSettings {
             auto_archive_after_days: None,
             keep_awake: true,
             computer_control: false,
+            computer_prefer_background: true,
+            computer_clipboard: false,
             resource_panel_open: true,
             proxy_url: String::new(),
         }
@@ -2241,6 +2302,10 @@ pub struct AppSettingsPatch {
     pub keep_awake: Option<bool>,
     #[serde(default)]
     pub computer_control: Option<bool>,
+    #[serde(default)]
+    pub computer_prefer_background: Option<bool>,
+    #[serde(default)]
+    pub computer_clipboard: Option<bool>,
     #[serde(default)]
     pub resource_panel_open: Option<bool>,
     #[serde(default)]
@@ -2372,6 +2437,12 @@ impl AppSettings {
         }
         if let Some(v) = patch.computer_control {
             self.computer_control = v;
+        }
+        if let Some(v) = patch.computer_prefer_background {
+            self.computer_prefer_background = v;
+        }
+        if let Some(v) = patch.computer_clipboard {
+            self.computer_clipboard = v;
         }
         if let Some(v) = patch.resource_panel_open {
             self.resource_panel_open = v;
@@ -2530,6 +2601,13 @@ pub struct ProjectListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectPathParams {
     pub path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectModelDefaultsSetParams {
+    pub path: String,
+    pub defaults: ModelDefaults,
 }
 
 /// `project/create`: a name (the first folder's name when absent) and its folders, the first

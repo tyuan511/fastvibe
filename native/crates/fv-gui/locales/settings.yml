@@ -564,3 +564,162 @@ settings.proxy_apply:
 settings.home_page_desc:
   zh: "新标签页打开的地址，留空为空白页"
   en: "Where a new tab opens; empty is a blank page"
+settings.enter_name_url_key:
+  zh: "请填写名称、Base URL 与 API 密钥"
+  en: "Enter a name, Base URL, and API key"
+settings.manual_model_id:
+  zh: "手动模型 ID（可选）"
+  en: "Manual model ID (optional)"
+settings.manual_model_id_desc:
+  zh: "模型列表不可用时，直接填写供应商接受的模型 ID；填写后可跳过模型列表。"
+  en: "If the model list is unavailable, enter the model ID accepted by the provider to continue without it."
+settings.add_manual_model:
+  zh: "添加手动模型"
+  en: "Add manual model"
+settings.retry:
+  zh: "重试"
+  en: "Retry"
+settings.onboarding_provider_hint:
+  zh: "支持 OpenAI Chat、Responses、Anthropic Messages 和 Google Generative AI。"
+  en: "Supports OpenAI Chat, Responses, Anthropic Messages, and Google Generative AI."
+settings.remote_preview_title:
+  zh: "远程访问尚未可用"
+  en: "Remote access is not available yet"
+settings.remote_preview_desc:
+  zh: "远程访问界面会在后端连接协议就绪后开放。当前不会创建连接、账户或密码配置。"
+  en: "Remote access will open when its backend protocol is ready. No connection, account, or password configuration is created yet."
+settings.ssh_preview_title:
+  zh: "SSH 主机尚未可用"
+  en: "SSH hosts are not available yet"
+settings.ssh_preview_desc:
+  zh: "SSH 主机配置会在后端连接协议就绪后开放。当前不会创建主机或隧道配置。"
+  en: "SSH host configuration will open when its backend protocol is ready. No host or tunnel configuration is created yet."
+settings.saved:
+  zh: "已保存"
+  en: "Saved"
+settings.preview_unavailable:
+  zh: "当前版本尚未开放"
+  en: "Unavailable in this preview"
+settings.migration_title:
+  zh: "从 Electron 版 FastVibe 迁移"
+  en: "Migrate from Electron FastVibe"
+settings.migration_desc:
+  zh: "先只读扫描旧版数据并检查范围，再复制到原生版。原始数据保留；订阅登录与 OAuth 凭据不会迁移。"
+  en: "Scan the previous app's data and review the scope, then copy it into the native app. Originals are kept; subscription and OAuth credentials are excluded."
+settings.migration_scan:
+  zh: "扫描并预览"
+  en: "Scan and preview"
+settings.migration_keys:
+  zh: "同时复制 API 密钥（需明确选择）"
+  en: "Also copy API keys (explicit opt-in)"
+settings.migration_commit:
+  zh: "确认迁移"
+  en: "Confirm migration"
+settings.migration_already:
+  zh: "此快照已迁移"
+  en: "This snapshot was already migrated"
+settings.migration_done:
+  zh: "迁移完成"
+  en: "Migration complete"
+settings.migration_threads:
+  zh: "对话"
+  en: "Chats"
+settings.project_defaults_title:
+  zh: "项目默认模型"
+  en: "Project model defaults"
+settings.project_defaults_desc:
+  zh: "选择项目后设置其新对话默认模型和推理强度。现有对话保持原配置。"
+  en: "Choose a project to set the model and thinking level for its new chats. Existing chats keep their configuration."
+settings.project_defaults_empty:
+  zh: "添加项目后即可设置项目默认模型。"
+  en: "Add a project to configure its default model."
+settings.project_defaults_inherit:
+  zh: "使用全局默认"
+  en: "Use global defaults"
+settings.cc_title:
+  zh: "从 CC Switch 导入供应商"
+  en: "Import providers from CC Switch"
+settings.cc_desc:
+  zh: "扫描本机 CC Switch，选择要复制的配置。只导入支持的 API 供应商；订阅登录与 OAuth 凭据不会导入。"
+  en: "Scan local CC Switch data and choose configurations to copy. Only supported API providers are imported; subscription and OAuth credentials are excluded."
+settings.cc_empty:
+  zh: "没有发现可导入的 CC Switch 供应商。"
+  en: "No CC Switch providers were found to import."
+settings.cc_import:
+  zh: "导入所选供应商"
+  en: "Import selected providers"
+settings.cc_done:
+  zh: "已导入所选 CC Switch 供应商"
+  en: "Selected CC Switch providers imported"
+settings.remote_device_name:
+  zh: "局域网电脑名称"
+  en: "LAN computer name"
+settings.remote_enabled:
+  zh: "允许局域网连接"
+  en: "Allow LAN connections"
+settings.remote_listening:
+  zh: "局域网服务正在监听；连接需要密码。"
+  en: "The LAN listener is running; a password is required to connect."
+settings.remote_stopped:
+  zh: "局域网服务尚未监听。启用前请先设置密码。"
+  en: "The LAN listener is stopped. Set a password before enabling it."
+settings.remote_port:
+  zh: "监听端口（当前 %{port}）"
+  en: "Listener port (currently %{port})"
+settings.remote_password_saved:
+  zh: "已设置密码。输入新密码可更新；密码不会显示或保存在界面设置中。"
+  en: "A password is set. Enter a new password to replace it; it is never shown or saved in UI preferences."
+settings.remote_password_needed:
+  zh: "请先设置连接密码。服务不会在没有密码时对局域网开放。"
+  en: "Set a connection password first. The service will not open to the LAN without one."
+settings.remote_save_password:
+  zh: "设置连接密码"
+  en: "Set connection password"
+settings.remote_revoke:
+  zh: "撤销设备"
+  en: "Revoke device"
+settings.migration_converted:
+  zh: "转换并导入"
+  en: "Convert and import"
+settings.migration_preserved:
+  zh: "仅归档保留"
+  en: "Preserve in archive"
+settings.migration_skipped:
+  zh: "跳过"
+  en: "Skip"
+settings.migration_projects:
+  zh: "项目"
+  en: "Projects"
+settings.migration_settings:
+  zh: "偏好设置"
+  en: "Preferences"
+settings.migration_credentials:
+  zh: "订阅、OAuth 与远程凭据"
+  en: "Subscription, OAuth and remote credentials"
+settings.migration_usage:
+  zh: "使用统计"
+  en: "Usage history"
+settings.migration_images:
+  zh: "图片与附件"
+  en: "Images and attachments"
+settings.migration_checkpoints:
+  zh: "工作区检查点"
+  en: "Workspace checkpoints"
+settings.migration_dags:
+  zh: "多代理任务"
+  en: "Multi-agent tasks"
+settings.migration_queue:
+  zh: "排队消息"
+  en: "Queued messages"
+settings.migration_schedules:
+  zh: "定时任务"
+  en: "Scheduled tasks"
+settings.migration_reasoning:
+  zh: "思考记录"
+  en: "Thinking records"
+settings.migration_memory:
+  zh: "记忆状态"
+  en: "Memory state"
+settings.migration_overwrite:
+  zh: "使用 Electron 偏好设置替换现有原生偏好（默认保留现有设置）"
+  en: "Replace existing native preferences with Electron preferences (keep current preferences by default)"

@@ -2,7 +2,7 @@
 use super::*;
 use crate::ui::px;
 use crate::workspace::settings::{dialog_card, dialog_foot, dialog_head, modal};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 
 #[derive(Clone)]
 pub(crate) struct EntryMenu {
@@ -508,7 +508,7 @@ impl Workspace {
                             .muted(p)
                             .child(ui::truncate(d.path.clone())),
                     )
-                    .when(!deleting, |col| col.child(Input::new(&d.name)))
+                    .when(!deleting, |col| col.child(crate::ui::input(&d.name)))
                     .when_some(d.error.clone(), |col, error| {
                         col.child(
                             div()
@@ -569,6 +569,7 @@ mod tests {
                 .to_string(),
             language: None,
             text: text.into(),
+            revision: None,
         })
     }
     fn tab(id: &str, path: &str) -> PaneTab {

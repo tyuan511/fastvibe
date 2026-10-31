@@ -129,7 +129,7 @@ async fn nested_patch_is_visible_after_restart_but_only_printed_output_reaches_t
             .count(),
         1
     );
-    let branch = restored.fork_thread(&thread).unwrap();
+    let branch = restored.fork_thread(&thread, None).unwrap();
     assert!(
         restored.store.transcripts.read(&branch.id).unwrap().turns()[0]
             .items

@@ -10,6 +10,8 @@ mod credentials;
 mod db;
 mod history;
 mod images;
+mod migration;
+pub use migration::MigrationFile;
 mod schedules;
 mod search;
 mod stats;
@@ -45,11 +47,13 @@ impl Store {
         std::fs::create_dir_all(data_dir)?;
         let db = std::sync::Arc::new(Db::open(&data_dir.join("fastvibe.db"))?);
         let transcripts = TranscriptStore::with_usage(data_dir.join("sessions"), db.clone())?;
-        Ok(Self {
+        let store = Self {
             db,
             transcripts,
             images: ImageStore::new(data_dir.join("tool-images"))?,
             credentials: CredentialStore::new(data_dir.join("credentials.json")),
-        })
+        };
+        store.recover_migration(data_dir)?;
+        Ok(store)
     }
 }

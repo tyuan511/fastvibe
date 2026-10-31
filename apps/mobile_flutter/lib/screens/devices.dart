@@ -67,7 +67,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
   /// Pull-to-refresh: the saved list, and — signed in — which of the account's computers
   /// are online right now.
   Future<void> _refresh() async {
-    if (AccountService.instance.signedIn) await OfficialDevices.instance.refresh();
+    if (AccountService.instance.signedIn) {
+      await OfficialDevices.instance.refresh();
+    }
     await _reload();
   }
 
@@ -127,28 +129,28 @@ class _DevicesScreenState extends State<DevicesScreen> {
     ),
     // A computer on the account is named, listed and removed by the account.
     if (!server.isOfficial) ...<SheetOption>[
-    SheetOption(
-      value: 'rename',
-      label: t('common.rename'),
-      icon: AppIcons.pencilEdit,
-      onSelect: () => _rename(server),
-    ),
-    SheetOption(
-      value: 'copy',
-      label: t('devices.copyAddress'),
-      icon: AppIcons.copy,
-      onSelect: () async {
-        await copyToClipboard(server.origin);
-        toastSuccess(t('toast.addressCopied'));
-      },
-    ),
-    SheetOption(
-      value: 'delete',
-      label: t('common.delete'),
-      icon: AppIcons.delete,
-      destructive: true,
-      onSelect: () => _remove(server),
-    )
+      SheetOption(
+        value: 'rename',
+        label: t('common.rename'),
+        icon: AppIcons.pencilEdit,
+        onSelect: () => _rename(server),
+      ),
+      SheetOption(
+        value: 'copy',
+        label: t('devices.copyAddress'),
+        icon: AppIcons.copy,
+        onSelect: () async {
+          await copyToClipboard(server.origin);
+          toastSuccess(t('toast.addressCopied'));
+        },
+      ),
+      SheetOption(
+        value: 'delete',
+        label: t('common.delete'),
+        icon: AppIcons.delete,
+        destructive: true,
+        onSelect: () => _remove(server),
+      ),
     ],
   ];
 
@@ -268,10 +270,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
       children: <Widget>[
         SettingsRow(
           icon: AppIcons.login,
-          label: signingIn ? t('account.signingIn') : t('official.signInPrompt'),
+          label: signingIn
+              ? t('account.signingIn')
+              : t('official.signInPrompt'),
           description: account.error ?? t('account.signedOutBody'),
           onTap: signingIn ? null : account.login,
-          trailing: signingIn ? DesktopSpinner(size: 16, color: paletteOf(context).muted) : null,
+          trailing: signingIn
+              ? DesktopSpinner(size: 16, color: paletteOf(context).muted)
+              : null,
         ),
       ],
     );
@@ -285,7 +291,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
         Connection.instance.server?.id == server.id &&
         Connection.instance.status == ConnectionStatus.ready &&
         !Connection.instance.reconnecting;
-    final online = server.isOfficial && OfficialDevices.instance.isOnline(server);
+    final online =
+        server.isOfficial && OfficialDevices.instance.isOnline(server);
     final when = server.lastConnectedAt == null
         ? null
         : relativeTime(server.lastConnectedAt!);
@@ -296,7 +303,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
       child: InkWell(
         onTap: () {
           Haptic.tap();
-          context.push('/server/${server.id}');
+          context.push(
+            '/${server.nativeProtocol ? 'native' : 'server'}/${server.id}',
+          );
         },
         onLongPress: () => _menu(server),
         child: Padding(

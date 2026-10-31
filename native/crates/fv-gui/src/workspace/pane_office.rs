@@ -200,6 +200,21 @@ impl Workspace {
         back: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.ssh_host.is_some() {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(self.preview_head(name, back, cx))
+                .child(
+                    div()
+                        .p(px(16.))
+                        .text_size(px(TEXT_XS))
+                        .muted(&self.palette)
+                        .child(trs!(self.english(), "ssh.remote_office")),
+                )
+                .into_any_element();
+        }
         let Some(tab) = self
             .panes
             .get(self.selected.as_deref().unwrap_or("__draft__"))

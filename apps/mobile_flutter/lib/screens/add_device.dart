@@ -8,9 +8,8 @@ import 'package:hugeicons/hugeicons.dart';
 import '../chat/option_sheet.dart';
 import '../i18n/core.dart';
 import '../protocol/address.dart';
-import '../protocol/client.dart';
+import '../protocol/native_client.dart';
 import '../protocol/discovery.dart';
-import '../session/connection.dart';
 import '../storage/servers.dart';
 import '../theme/theme.dart';
 import '../ui/app_screen.dart';
@@ -93,12 +92,17 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
         ? _shownAlias.trim()
         : address.host;
     try {
-      final remote = RemoteClient();
-      final token = await remote.login(
-        address.origin,
+      final token = await NativeClient.login(
+        Uri.parse(address.origin),
         _password.text,
         'FastVibe $name',
       );
+      final native = NativeClient();
+      try {
+        await native.connect(Uri.parse(address.origin), token);
+      } finally {
+        await native.dispose();
+      }
       final saved = await ServerStore.instance.upsert(
         SavedServer(
           id: newServerId(),
@@ -107,20 +111,13 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
           host: address.host,
           kind: address.kind,
           createdAt: DateTime.now().millisecondsSinceEpoch,
+          nativeProtocol: true,
         ),
       );
       await writeToken(saved.id, token);
-      await Connection.instance.connectSaved(saved);
       if (!mounted) return;
-      if (Connection.instance.status != ConnectionStatus.ready) {
-        setState(
-          () =>
-              _error = Connection.instance.error ?? t('add.savedNotConnected'),
-        );
-        return;
-      }
       Haptic.success();
-      context.replace('/server/${saved.id}');
+      context.replace('/native/${saved.id}');
     } catch (error) {
       Haptic.warning();
       if (!mounted) return;
@@ -250,7 +247,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                         decoration: InputDecoration(
                           border: InputBorder.none,
                           isDense: true,
-                          hintText: t('add.addressPlaceholder', context: context),
+                          hintText: t(
+                            'add.addressPlaceholder',
+                            context: context,
+                          ),
                           hintStyle: TextStyle(
                             color: palette.subtle,
                             fontSize: 17,

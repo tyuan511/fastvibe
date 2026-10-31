@@ -9,7 +9,7 @@ publish.workspace = true
 fv-env = { path = "../fv-env" }
 fv-client = { path = "../fv-client" }
 fv-protocol = { path = "../fv-protocol" }
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "fs"] }
 libc = "0.2"
 sha2 = "0.10"
 

@@ -11,7 +11,7 @@ use fv_protocol::methods::{ProviderModelGet, ProviderModelUpdate};
 use fv_protocol::models::*;
 use fv_protocol::types::{ApiProtocol, ModelInfo, ThinkingLevel};
 use fv_theme::Token;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::InputState;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::collections::HashSet;
@@ -453,7 +453,7 @@ impl Workspace {
             content = content
                 .child(field(
                     trs!(english, "model_detail.display_name"),
-                    Input::new(&e.name).into_any_element(),
+                    crate::ui::input(&e.name).into_any_element(),
                 ))
                 .child(field(
                     trs!(english, "model_detail.model_id"),
@@ -525,14 +525,14 @@ impl Workspace {
                         .child(
                             field(
                                 trs!(english, "model_detail.context_window_tokens"),
-                                Input::new(&e.context).into_any_element(),
+                                crate::ui::input(&e.context).into_any_element(),
                             )
                             .flex_1(),
                         )
                         .child(
                             field(
                                 trs!(english, "model_detail.max_output_tokens"),
-                                Input::new(&e.output).into_any_element(),
+                                crate::ui::input(&e.output).into_any_element(),
                             )
                             .flex_1(),
                         ),

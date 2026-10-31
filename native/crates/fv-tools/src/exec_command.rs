@@ -258,16 +258,57 @@ fn note(mut out: ToolOutput, text: &str) -> ToolOutput {
     out
 }
 
+fn shell_arguments(shell: &str, login: bool, command: &str) -> Vec<String> {
+    // Parse both separators so the Windows contract can be tested on every build host.
+    let name = shell
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(shell)
+        .to_ascii_lowercase();
+    let flags: &[&str] = match name.as_str() {
+        "cmd" | "cmd.exe" => &["/D", "/S", "/C"],
+        "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe" => &["-NoLogo", "-Command"],
+        _ if login => &["-lc"],
+        _ => &["-c"],
+    };
+    flags
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(command.to_string()))
+        .collect()
+}
+
+#[cfg(test)]
+mod shell_tests {
+    use super::shell_arguments;
+    #[test]
+    fn shell_flags_match_cmd_powershell_and_unix_contracts() {
+        assert_eq!(
+            shell_arguments(r"C:\Windows\System32\cmd.exe", true, "echo ok"),
+            ["/D", "/S", "/C", "echo ok"]
+        );
+        assert_eq!(
+            shell_arguments("pwsh.exe", false, "Write-Output ok"),
+            ["-NoLogo", "-Command", "Write-Output ok"]
+        );
+        assert_eq!(
+            shell_arguments("/bin/zsh", true, "echo ok"),
+            ["-lc", "echo ok"]
+        );
+        assert_eq!(
+            shell_arguments("/bin/sh", false, "echo ok"),
+            ["-c", "echo ok"]
+        );
+    }
+}
+
 async fn run(
     request: &Request,
     policy: Option<&Policy>,
     sessions: &Arc<crate::ExecSessions>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Ran {
-    let shell_args = vec![
-        if request.login { "-lc" } else { "-c" }.to_string(),
-        request.cmd.clone(),
-    ];
+    let shell_args = shell_arguments(&request.shell, request.login, &request.cmd);
     let (program, args) = match policy {
         Some(policy) => match fv_sandbox::wrap(policy, &request.shell, &shell_args) {
             Ok(Some(wrapped)) => (wrapped.program, wrapped.args),

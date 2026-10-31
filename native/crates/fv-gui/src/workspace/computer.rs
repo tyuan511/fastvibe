@@ -24,7 +24,7 @@ use fv_protocol::types::{
 use fv_theme::Token;
 
 /// The label the driver shows for who is controlling the desktop.
-const BUNDLE_ID: &str = "dev.fastvibe.desktop";
+const BUNDLE_ID: &str = "dev.fastvibe.native";
 
 #[derive(Default)]
 pub(super) struct ComputerUi {
@@ -110,6 +110,10 @@ impl Workspace {
 
     /// Make the daemon match what is wanted.
     pub(super) fn computer_sync(&mut self, cx: &mut Context<Self>) {
+        // A remote server's driver path and socket belong to that host, never this desktop.
+        if self.ssh_host.is_some() {
+            return;
+        }
         let Some(status) = self.computer.status.clone() else {
             return;
         };
@@ -121,8 +125,9 @@ impl Workspace {
         if let Some(host) = &mut self.computer.host
             && !host.alive()
         {
-            self.computer.host = None;
+            self.computer_stop(cx);
             self.computer.error = Some(trs!(self.english(), "computer.daemon_exited").to_string());
+            return;
         }
         let wanted = self.app_settings.computer_control && status.supported && status.installed;
         let permitted = !computer_host::GATED || self.computer.permissions.ready();
@@ -139,7 +144,9 @@ impl Workspace {
         } else if self.computer.host.is_some() {
             self.computer_stop(cx);
         }
-        if wanted && !permitted {
+        if wanted {
+            // Keep observing after grants arrive too: revocation or an exited driver must
+            // withdraw the managed tools even when nobody reopens this settings page.
             self.computer_poll_permissions(cx);
         }
     }
@@ -160,11 +167,26 @@ impl Workspace {
                 this.computer.busy = false;
                 match started {
                     Ok(host) => {
-                        let endpoint = host.endpoint().to_string();
-                        this.computer.host = Some(host);
-                        this.computer_register(endpoint, cx);
+                        // The user may have disabled control or revoked a grant during the
+                        // blocking start. Never register a result for an obsolete request.
+                        let wanted = this.app_settings.computer_control
+                            && this
+                                .computer
+                                .status
+                                .as_ref()
+                                .is_some_and(|s| s.supported && s.installed)
+                            && computer_host::permissions().ready();
+                        if wanted {
+                            let endpoint = host.endpoint().to_string();
+                            this.computer.host = Some(host);
+                            this.computer_register(endpoint, cx);
+                        } else {
+                            cx.background_executor()
+                                .spawn(async move { drop(host) })
+                                .detach();
+                        }
                     }
-                    Err(error) => this.computer.error = Some(error),
+                    Err(error) => this.computer.error = Some(error.message(this.english())),
                 }
                 cx.notify();
             })
@@ -185,7 +207,10 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 if let Err(error) = result {
                     // A daemon the server will not use is only a process holding a screen grant.
-                    this.computer.host = None;
+                    let host = this.computer.host.take();
+                    cx.background_executor()
+                        .spawn(async move { drop(host) })
+                        .detach();
                     this.computer.error = Some(error.to_string());
                 }
                 cx.notify();
@@ -221,15 +246,26 @@ impl Workspace {
                     .update(cx, |this, cx| {
                         let now = computer_host::permissions();
                         let changed = now != this.computer.permissions;
-                        let wanted = this.app_settings.computer_control;
-                        if !wanted || now.ready() {
+                        let wanted = this.app_settings.computer_control
+                            && this
+                                .computer
+                                .status
+                                .as_ref()
+                                .is_some_and(|s| s.supported && s.installed);
+                        if !wanted {
                             this.computer.polling = false;
                         }
-                        if changed || now.ready() {
+                        if changed
+                            || this
+                                .computer
+                                .host
+                                .as_mut()
+                                .is_some_and(|host| !host.alive())
+                        {
                             this.computer_sync(cx);
                             cx.notify();
                         }
-                        wanted && !now.ready()
+                        wanted
                     })
                     .unwrap_or(false);
                 if !keep {
@@ -429,15 +465,53 @@ impl Workspace {
                 body = body.child(line(trs!(english, "computer.relaunch_note").to_string()));
             }
         }
+        let preferences_ready = on && can_toggle && computer_host::permissions().ready();
+        let mut controls = card(p).child(setting_row(
+            trs!(english, "computer.allow"),
+            trs!(english, "computer.allow_description"),
+            false,
+            p,
+            toggle,
+        ));
+        for (id, label, description, value, patch) in [
+            (
+                "computer-background",
+                trs!(english, "computer.background"),
+                trs!(english, "computer.background_description"),
+                self.app_settings.computer_prefer_background,
+                (|v| AppSettingsPatch {
+                    computer_prefer_background: Some(v),
+                    ..Default::default()
+                }) as fn(bool) -> AppSettingsPatch,
+            ),
+            (
+                "computer-clipboard",
+                trs!(english, "computer.clipboard"),
+                trs!(english, "computer.clipboard_description"),
+                self.app_settings.computer_clipboard,
+                (|v| AppSettingsPatch {
+                    computer_clipboard: Some(v),
+                    ..Default::default()
+                }) as fn(bool) -> AppSettingsPatch,
+            ),
+        ] {
+            controls = controls.child(setting_row(
+                label,
+                description,
+                true,
+                p,
+                switch(SharedString::from(id), value, p)
+                    .when(!preferences_ready, |d| d.opacity(0.4).cursor_default())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if preferences_ready {
+                            this.patch_settings(patch(!value), cx);
+                        }
+                    })),
+            ));
+        }
         body = body
             .child(heading(trs!(english, "computer.control").to_string()))
-            .child(card(p).child(setting_row(
-                trs!(english, "computer.allow"),
-                trs!(english, "computer.allow_description"),
-                false,
-                p,
-                toggle,
-            )));
+            .child(controls);
         if let Some(error) = &self.computer.error {
             body = body.child(
                 div()

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,11 +14,12 @@ use crate::StoreError;
 /// a key is written when the user sets it, read when a request to its provider is made, and
 /// deleted with the provider. It is not in settings, which are handed to every client.
 pub struct CredentialStore {
-    path: PathBuf,
-    lock: Mutex<()>,
+    pub(crate) path: PathBuf,
+    pub(crate) lock: Mutex<()>,
+    cached: Mutex<Option<Arc<File>>>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct File {
     version: u32,
     providers: BTreeMap<String, String>,
@@ -29,15 +30,25 @@ impl CredentialStore {
         Self {
             path,
             lock: Mutex::new(()),
+            cached: Mutex::new(None),
         }
     }
 
-    fn read(&self) -> Result<File, StoreError> {
+    fn read_uncached(&self) -> Result<File, StoreError> {
         match std::fs::read_to_string(&self.path) {
             Ok(text) => Ok(serde_json::from_str(&text)?),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(File::default()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    fn read(&self) -> Result<Arc<File>, StoreError> {
+        if let Some(file) = self.cached.lock().unwrap().clone() {
+            return Ok(file);
+        }
+        let file = Arc::new(self.read_uncached()?);
+        *self.cached.lock().unwrap() = Some(file.clone());
+        Ok(file)
     }
 
     /// Replace the file in one step: a crash leaves the old keys or the new ones, never half.
@@ -53,7 +64,12 @@ impl CredentialStore {
         out.write_all(serde_json::to_string_pretty(&file)?.as_bytes())?;
         out.sync_all()?;
         std::fs::rename(&tmp, &self.path)?;
+        *self.cached.lock().unwrap() = Some(Arc::new(file));
         Ok(())
+    }
+
+    pub(crate) fn invalidate_cache(&self) {
+        *self.cached.lock().unwrap() = None;
     }
 
     pub fn get(&self, provider_id: &str) -> Result<Option<String>, StoreError> {
@@ -72,7 +88,7 @@ impl CredentialStore {
 
     pub fn set(&self, provider_id: &str, key: &str) -> Result<(), StoreError> {
         let _g = self.lock.lock().unwrap();
-        let mut file = self.read()?;
+        let mut file = (*self.read()?).clone();
         file.providers
             .insert(provider_id.to_string(), key.to_string());
         self.write(file)
@@ -80,7 +96,7 @@ impl CredentialStore {
 
     pub fn remove(&self, provider_id: &str) -> Result<(), StoreError> {
         let _g = self.lock.lock().unwrap();
-        let mut file = self.read()?;
+        let mut file = (*self.read()?).clone();
         if file.providers.remove(provider_id).is_some() {
             self.write(file)?;
         }

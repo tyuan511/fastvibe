@@ -172,9 +172,13 @@ impl Workspace {
         );
     }
     pub(super) fn new_chat(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        self.remote_previews.clear();
+        self.composer_epoch = self.composer_epoch.wrapping_add(1);
+        self.draft_send_pending = false;
         self.schedules_ui.open = false;
         self.navigation.visit(self.selected.clone(), None);
         self.selected = None;
+        self.editing_turn = None;
         self.draft_project = project;
         self.search_target = None;
         self.search_jump_pending = false;
@@ -186,8 +190,12 @@ impl Workspace {
         if let Some(id) = self.navigation.step(forward, |id| {
             threads.iter().any(|t| t.id == id && !t.archived)
         }) {
+            self.remote_previews.clear();
+            self.composer_epoch = self.composer_epoch.wrapping_add(1);
+            self.draft_send_pending = false;
             self.schedules_ui.open = false;
             self.selected = id.clone();
+            self.editing_turn = None;
             self.search_target = None;
             self.search_jump_pending = false;
             self.close_menus(cx);
@@ -417,17 +425,32 @@ impl Workspace {
     }
 
     pub(super) fn fork_thread(&mut self, id: String, cx: &mut Context<Self>) {
+        self.fork_thread_at(id, None, cx);
+    }
+
+    pub(super) fn fork_thread_at(
+        &mut self,
+        id: String,
+        turn_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let origin = self.selected.clone();
         self.close_menus(cx);
         let Some(b) = self.backend.clone() else {
             return;
         };
-        let call = b.call::<fv_protocol::methods::ThreadFork>(ThreadIdParams { thread_id: id });
+        let call = b.call::<fv_protocol::methods::ThreadFork>(ThreadForkParams {
+            thread_id: id,
+            turn_id,
+        });
         cx.spawn(async move |this, cx| {
             let result = call.await;
             this.update(cx, |this, cx| match result {
                 Ok(result) => {
                     this.threads.push(result.thread.clone());
-                    this.select(result.thread.id, cx);
+                    if this.selected == origin {
+                        this.select(result.thread.id, cx);
+                    }
                     this.refresh_threads(cx);
                 }
                 Err(e) => {

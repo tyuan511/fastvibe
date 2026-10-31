@@ -31,6 +31,8 @@ use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon, icon_button, icon_butt
 
 #[path = "pane_entries.rs"]
 pub(super) mod entries;
+#[path = "file_tree_keyboard.rs"]
+mod file_tree_keyboard;
 #[path = "pane_persistence.rs"]
 mod persistence;
 
@@ -61,15 +63,19 @@ fn editable_text(preview: &FilePreview) -> Option<String> {
             kind, path, text, ..
         } => match kind {
             FilePreviewKind::Code | FilePreviewKind::Diff | FilePreviewKind::Html => {
-                Some(text.clone())
+                Some(editor_text(text))
             }
             // A `.md` written by a tool is the file; a `.docx` rendered to Markdown is not. The
             // extension is what tells them apart.
-            FilePreviewKind::Markdown if markdown_extension(path) => Some(text.clone()),
+            FilePreviewKind::Markdown if markdown_extension(path) => Some(editor_text(text)),
             _ => None,
         },
         _ => None,
     }
+}
+
+fn editor_text(text: &str) -> String {
+    text.replace("\r\n", "\n")
 }
 
 /// Whether `editable_text` would return something, without copying the text.
@@ -198,6 +204,14 @@ pub struct PaneState {
     /// The code editor for the open file. `EditorState`, not `TextareaState`: languages, line
     /// numbers, folding, indent guides and the LSP hooks exist on that kind only.
     pub editor: Option<Entity<EditorState>>,
+    /// The path currently focused in the file tree. It is separate from the open preview.
+    pub tree_focus: Option<String>,
+    /// Shared focus target for the tree container; created lazily because PaneState has no App.
+    pub tree_focus_handle: Option<FocusHandle>,
+    /// The tree's scroll state and one-shot anchor for keyboard focus.
+    pub tree_scroll: ScrollHandle,
+    pub tree_anchor: ScrollAnchor,
+    pub tree_scroll_pending: bool,
     /// The directory being dragged over, for the splitter.
     pub tree_width: f32,
     /// The open Markdown file's text as a `SharedString`, keyed by path and length. `TextView`
@@ -208,6 +222,7 @@ pub struct PaneState {
 
 impl Default for PaneState {
     fn default() -> Self {
+        let tree_scroll = ScrollHandle::new();
         Self {
             tabs: Vec::new(),
             active: None,
@@ -225,6 +240,11 @@ impl Default for PaneState {
             editing: false,
             baseline: None,
             editor: None,
+            tree_focus: None,
+            tree_focus_handle: None,
+            tree_scroll: tree_scroll.clone(),
+            tree_anchor: ScrollAnchor::for_handle(tree_scroll),
+            tree_scroll_pending: false,
             tree_width: TREE_WIDTH,
             markdown_source: None,
             saved_files: HashMap::new(),
@@ -976,6 +996,7 @@ impl Workspace {
     }
 
     fn activate_pane_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.remote_previews.clear();
         self.cancel_terminal_compositions(cx);
         let conversation = self.selected.clone().unwrap_or_else(|| "__draft__".into());
         let Some(state) = self.panes.get_mut(&conversation) else {
@@ -1003,6 +1024,7 @@ impl Workspace {
     }
 
     fn close_pane_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.remote_previews.clear();
         let conversation = self.selected.clone().unwrap_or_else(|| "__draft__".into());
         self.pane_chat_inputs.remove(id);
         self.close_office(id, cx);
@@ -1355,6 +1377,10 @@ impl Workspace {
             return;
         };
         let text = editor.read(cx).value().to_string();
+        let baseline = match &state.preview {
+            Some(FilePreview::Text { revision, .. }) => revision.clone(),
+            _ => None,
+        };
         let tab = state.active.clone();
         cx.spawn(async move |this, cx| {
             let result = b
@@ -1362,13 +1388,14 @@ impl Workspace {
                     path: path.clone(),
                     text: text.clone(),
                     cwd: None,
+                    baseline,
                 })
                 .await;
             this.update(cx, |this, cx| {
                 let english = this.english();
                 if let Some(state) = this.panes.get_mut(&conversation) {
                     match result {
-                        Ok(_) => {
+                        Ok(saved_file) => {
                             // A save can finish after a tab switch, rename, delete or reload.
                             // Only the exact view whose bytes were sent gains this baseline.
                             if state.active == tab
@@ -1379,10 +1406,14 @@ impl Workspace {
                                 })
                             {
                                 state.baseline = Some(text.clone());
-                                if let Some(FilePreview::Text { text: content, .. }) =
-                                    &mut state.preview
+                                if let Some(FilePreview::Text {
+                                    text: content,
+                                    revision,
+                                    ..
+                                }) = &mut state.preview
                                 {
                                     *content = text;
+                                    *revision = Some(saved_file.revision.clone());
                                 }
                             } else if let Some(saved) =
                                 tab.as_ref().and_then(|id| state.saved_files.get_mut(id))
@@ -1393,15 +1424,27 @@ impl Workspace {
                                 })
                             {
                                 saved.baseline = Some(text.clone());
-                                if let Some(FilePreview::Text { text: content, .. }) =
-                                    &mut saved.preview
+                                if let Some(FilePreview::Text {
+                                    text: content,
+                                    revision,
+                                    ..
+                                }) = &mut saved.preview
                                 {
                                     *content = text;
+                                    *revision = Some(saved_file.revision);
                                 }
                             }
-                            state.notice = None;
+                            if state.active == tab {
+                                state.notice = None;
+                            }
                         }
                         Err(e) => {
+                            if state.active != tab
+                                || preview_path(state.preview.as_ref()).as_deref()
+                                    != Some(path.as_str())
+                            {
+                                return;
+                            }
                             state.notice = Some(tr!(
                                 english,
                                 "pane.could_not_save_path_e",
@@ -1414,6 +1457,57 @@ impl Workspace {
                 cx.notify();
             })
             .ok();
+        })
+        .detach();
+    }
+
+    fn confirm_reload_preview(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(conversation) = self.selected.clone() else {
+            return;
+        };
+        let Some(state) = self.panes.get(&conversation) else {
+            return;
+        };
+        let editor = state.editor.clone();
+        let dirty = editor.as_ref().is_some_and(|editor| {
+            state.baseline.as_deref() != Some(editor.read(cx).value().as_ref())
+        });
+        if !dirty {
+            self.load_preview(path, window, cx);
+            return;
+        }
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            trs!(self.english(), "pane.reload_file"),
+            Some(trs!(self.english(), "pane.reload_discards_draft")),
+            &[
+                PromptButton::cancel(trs!(self.english(), "sidebar_actions.cancel")),
+                PromptButton::ok(trs!(self.english(), "pane.reload_file")),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await != Ok(1) {
+                return;
+            }
+            let _ = cx.update(|window, cx| {
+                this.update(cx, |this, cx| {
+                    let still_current = this.selected.as_deref() == Some(conversation.as_str())
+                        && this.panes.get(&conversation).is_some_and(|state| {
+                            preview_path(state.preview.as_ref()).as_deref() == Some(path.as_str())
+                                && state.editor.as_ref().map(|e| e.entity_id())
+                                    == editor.as_ref().map(|e| e.entity_id())
+                        });
+                    if still_current {
+                        this.load_preview(path, window, cx);
+                    }
+                })
+            });
         })
         .detach();
     }
@@ -1444,6 +1538,10 @@ impl Workspace {
         state.preview_epoch = state.preview_epoch.wrapping_add(1);
         let epoch = state.preview_epoch;
         let tab = state.active.clone();
+        let editor_at_read = state
+            .editor
+            .as_ref()
+            .map(|editor| (editor.entity_id(), editor.read(cx).value().to_string()));
         state.preview_loading = Some((path.clone(), epoch));
         let window_handle = window.window_handle();
         // The entity itself: applying the reply needs a `Context<Self>` (building the editor is a
@@ -1472,6 +1570,18 @@ impl Workspace {
                     }
                     if this.selected.as_ref() != Some(&conversation) {
                         if let Some(state) = this.panes.get_mut(&conversation) { state.preview_loading = None; }
+                        return;
+                    }
+                    let editor_now = this.panes.get(&conversation)
+                        .and_then(|state| state.editor.as_ref())
+                        .map(|editor| (editor.entity_id(), editor.read(cx).value().to_string()));
+                    if editor_now != editor_at_read {
+                        let notice = trs!(this.english(), "pane.reload_draft_changed").to_string();
+                        if let Some(state) = this.panes.get_mut(&conversation) {
+                            state.preview_loading = None;
+                            state.notice = Some(notice);
+                        }
+                        cx.notify();
                         return;
                     }
                     let preview = match result {
@@ -1581,6 +1691,9 @@ impl Workspace {
         }
         let (entries, tree_width, notice, preview, markdown) = {
             let state = self.panes.entry(conversation.to_string()).or_default();
+            if state.tree_focus_handle.is_none() {
+                state.tree_focus_handle = Some(cx.focus_handle());
+            }
             // Markdown is drawn from a cached `SharedString`, so the preview handed to the body
             // carries no copy of the text: cloning a large file every frame is what a scroll paid.
             let markdown = if state.show_preview
@@ -1617,6 +1730,7 @@ impl Workspace {
                     name: name.clone(),
                     language: language.clone(),
                     text: String::new(),
+                    revision: None,
                 }),
                 other => other.clone(),
             });
@@ -1650,6 +1764,13 @@ impl Workspace {
                 ..
             })
         ) || (editing && preview.as_ref().is_some_and(is_editable))
+            || matches!(
+                &preview,
+                Some(FilePreview::Text {
+                    kind: FilePreviewKind::Code | FilePreviewKind::Diff,
+                    ..
+                })
+            )
             || (!editing && is_markdown_text);
         let preview_body = self.preview_body(preview, markdown, cx);
 
@@ -1659,6 +1780,31 @@ impl Workspace {
             .panes
             .get(conversation)
             .is_some_and(|s| s.expanded.contains(&root));
+        let tree_focus = self
+            .panes
+            .get(conversation)
+            .and_then(|state| state.tree_focus.clone());
+        let (tree_focus_handle, tree_scroll, tree_anchor, tree_scroll_pending) = self
+            .panes
+            .get(conversation)
+            .map(|state| {
+                (
+                    state
+                        .tree_focus_handle
+                        .clone()
+                        .expect("file tree focus handle initialized above"),
+                    state.tree_scroll.clone(),
+                    state.tree_anchor.clone(),
+                    state.tree_scroll_pending,
+                )
+            })
+            .expect("file tree state initialized above");
+        if tree_scroll_pending {
+            if let Some(state) = self.panes.get_mut(conversation) {
+                state.tree_scroll_pending = false;
+            }
+            tree_anchor.scroll_to(window, cx);
+        }
         let root_name = std::path::Path::new(&root)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -1669,7 +1815,7 @@ impl Workspace {
         let mut tree_rows: Vec<AnyElement> = Vec::new();
         if roots.len() <= 1 {
             for entry in entries.iter() {
-                tree_rows.extend(self.tree_row(entry, &root, 0, false, cx));
+                tree_rows.extend(self.tree_row(entry, &root, 0, false, &tree_anchor, cx));
             }
         } else {
             for (index, folder) in roots.iter().enumerate() {
@@ -1697,6 +1843,9 @@ impl Workspace {
                     .child(
                         div()
                             .id(SharedString::from(format!("pane-root-{folder}")))
+                            .when(tree_focus.as_deref() == Some(folder.as_str()), |d| {
+                                d.anchor_scroll(Some(tree_anchor.clone()))
+                            })
                             .h(px(32.0))
                             .px(px(8.0))
                             .flex()
@@ -1766,7 +1915,8 @@ impl Workspace {
                             .unwrap_or_default()
                     };
                     for entry in listed.iter() {
-                        card = card.children(self.tree_row(entry, folder, 1, true, cx));
+                        card =
+                            card.children(self.tree_row(entry, folder, 1, true, &tree_anchor, cx));
                     }
                 }
                 tree_rows.push(card.into_any_element());
@@ -1785,15 +1935,15 @@ impl Workspace {
                         .w(px(tree_width))
                         .flex_none()
                         .h_full()
-                        .child(
-                            div()
-                                .id("pane-tree")
-                                .size_full()
-                                .overflow_y_scroll()
-                                .border_r_1()
-                                .border_color(p.c(Token::SidebarBorder))
-                                .child(tree_body(tree_rows)),
-                        )
+                        .border_r_1()
+                        .border_color(p.c(Token::Border))
+                        .child(self.tree_container(
+                            "pane-tree",
+                            tree_rows,
+                            tree_focus_handle.clone(),
+                            tree_scroll.clone(),
+                            cx,
+                        ))
                         .child(self.tree_splitter(cx)),
                 )
                 .child(
@@ -1821,13 +1971,13 @@ impl Workspace {
                     .child(preview_body),
             )
         } else {
-            div().flex_1().min_h_0().flex().child(
-                div()
-                    .id("pane-tree")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .child(tree_body(tree_rows)),
-            )
+            div().flex_1().min_h_0().flex().child(self.tree_container(
+                "pane-tree",
+                tree_rows,
+                tree_focus_handle.clone(),
+                tree_scroll.clone(),
+                cx,
+            ))
         };
 
         div()
@@ -1848,6 +1998,141 @@ impl Workspace {
             .into_any_element()
     }
 
+    fn file_tree_keyboard_rows_for(
+        &self,
+        conversation: String,
+    ) -> Vec<file_tree_keyboard::VisibleTreeRow> {
+        let roots = self.project_roots_for(&conversation);
+        let Some(state) = self.panes.get(&conversation) else {
+            return Vec::new();
+        };
+        let multi_root = roots.len() > 1;
+        let nodes = roots
+            .into_iter()
+            .flat_map(|root| {
+                let children = state
+                    .listings
+                    .get(&root)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|entry| self.file_tree_keyboard_node(&entry, state))
+                    .collect::<Vec<_>>();
+                if multi_root {
+                    vec![file_tree_keyboard::TreeNode::directory(root, children)]
+                } else {
+                    children
+                }
+            })
+            .collect::<Vec<_>>();
+        file_tree_keyboard::visible_rows(&nodes, &state.expanded)
+    }
+
+    fn file_tree_keyboard_node(
+        &self,
+        entry: &DirEntry,
+        state: &PaneState,
+    ) -> file_tree_keyboard::TreeNode {
+        if entry.kind == EntryKind::Directory {
+            let children = state
+                .listings
+                .get(&entry.path)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|child| self.file_tree_keyboard_node(&child, state))
+                .collect();
+            file_tree_keyboard::TreeNode::directory(entry.path.clone(), children)
+        } else {
+            file_tree_keyboard::TreeNode::file(entry.path.clone())
+        }
+    }
+
+    fn tree_container(
+        &self,
+        id: &'static str,
+        content: Vec<AnyElement>,
+        focus: FocusHandle,
+        tree_scroll: ScrollHandle,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let english = self.english();
+        div()
+            .id(id)
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&tree_scroll)
+            .anchor_scroll(None)
+            .track_focus(&focus)
+            .focusable()
+            .role(Role::Tree)
+            .aria_label(if english { "Files" } else { "文件" })
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let key = match event.keystroke.key.as_str() {
+                    "up" => file_tree_keyboard::TreeKey::Up,
+                    "down" => file_tree_keyboard::TreeKey::Down,
+                    "left" => file_tree_keyboard::TreeKey::Left,
+                    "right" => file_tree_keyboard::TreeKey::Right,
+                    "home" => file_tree_keyboard::TreeKey::Home,
+                    "end" => file_tree_keyboard::TreeKey::End,
+                    "enter" => file_tree_keyboard::TreeKey::Enter,
+                    "space" => file_tree_keyboard::TreeKey::Space,
+                    _ => return,
+                };
+                let Some(conversation) = this.selected.clone() else {
+                    return;
+                };
+                if event.keystroke.modifiers.platform
+                    || event.keystroke.modifiers.control
+                    || event.keystroke.modifiers.alt
+                {
+                    return;
+                }
+                let rows = this.file_tree_keyboard_rows_for(conversation.clone());
+                let focused = this
+                    .panes
+                    .get(&conversation)
+                    .and_then(|state| state.tree_focus.as_deref());
+                let retained = file_tree_keyboard::retain_focus(&rows, focused);
+                if let Some(state) = this.panes.get_mut(&conversation)
+                    && state.tree_focus != retained
+                {
+                    state.tree_focus = retained;
+                    state.tree_scroll_pending = state.tree_focus.is_some();
+                }
+                let focused = this
+                    .panes
+                    .get(&conversation)
+                    .and_then(|state| state.tree_focus.as_deref());
+                let Some(action) = file_tree_keyboard::action_for_key(&rows, focused, key) else {
+                    return;
+                };
+                cx.stop_propagation();
+                match action {
+                    file_tree_keyboard::TreeAction::Focus(path) => {
+                        if let Some(state) = this.panes.get_mut(&conversation) {
+                            state.tree_focus = Some(path);
+                            state.tree_scroll_pending = true;
+                        }
+                        window.focus(&focus, cx);
+                        cx.notify();
+                    }
+                    file_tree_keyboard::TreeAction::Toggle(path) => this.toggle_dir(path, cx),
+                    file_tree_keyboard::TreeAction::Open(path) => {
+                        let name = std::path::Path::new(&path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        this.pending_open = Some((path, name));
+                        cx.notify();
+                    }
+                }
+            }))
+            .child(tree_body(content))
+            .into_any_element()
+    }
+
     /// One tree row and, when it is an expanded directory, its children (`chat-tree-row`): no
     /// chevron, a 14px icon, and one indent guide per level drawn through the parent's icon.
     ///
@@ -1859,6 +2144,7 @@ impl Workspace {
         root: &str,
         depth: usize,
         card: bool,
+        tree_anchor: &ScrollAnchor,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let p = &self.palette;
@@ -1895,6 +2181,10 @@ impl Workspace {
         }
         let row = div()
             .id(SharedString::from(format!("tree-{}", entry.path)))
+            .when(
+                state.is_some_and(|s| s.tree_focus.as_deref() == Some(entry.path.as_str())),
+                |d| d.anchor_scroll(Some(tree_anchor.clone())),
+            )
             .h(px(24.0))
             .w_full()
             .px(px(8.0))
@@ -1938,7 +2228,26 @@ impl Workspace {
                     );
                 }),
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .role(Role::TreeItem)
+            .aria_selected(
+                state.is_some_and(|s| s.tree_focus.as_deref() == Some(entry.path.as_str())),
+            )
+            .when(is_dir, |d| d.aria_expanded(expanded))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let Some(conversation) = this.selected.clone() else {
+                    return;
+                };
+                if let Some(state) = this.panes.get_mut(&conversation) {
+                    state.tree_focus = Some(path.clone());
+                    state.tree_scroll_pending = true;
+                }
+                if let Some(handle) = this
+                    .panes
+                    .get(&conversation)
+                    .and_then(|state| state.tree_focus_handle.clone())
+                {
+                    window.focus(&handle, cx);
+                }
                 if is_dir {
                     this.toggle_dir(path.clone(), cx);
                 } else {
@@ -1958,7 +2267,7 @@ impl Workspace {
                 .cloned()
                 .unwrap_or_default();
             for child in children {
-                rows.extend(self.tree_row(&child, root, depth + 1, card, cx));
+                rows.extend(self.tree_row(&child, root, depth + 1, card, tree_anchor, cx));
             }
         }
         rows
@@ -2070,8 +2379,12 @@ impl Workspace {
         // In the narrow layout the preview owns the pane, so its header carries 返回.
         let back = !self.side_pane_width_side_by_side();
         let Some(preview) = preview else {
+            self.remote_previews.clear();
             return self.pane_empty().into_any_element();
         };
+        if !matches!(&preview, FilePreview::Media { .. }) {
+            self.remote_previews.clear();
+        }
         match preview {
             FilePreview::Text {
                 kind,
@@ -2089,6 +2402,7 @@ impl Workspace {
                     name: name.clone(),
                     language: None,
                     text: String::new(),
+                    revision: None,
                 });
                 let editing = self
                     .selected
@@ -2108,7 +2422,9 @@ impl Workspace {
                     })
                 });
 
-                let shows_editor = editing && editable && editor.is_some();
+                let shows_editor = editor.is_some()
+                    && ((editing && editable)
+                        || matches!(kind, FilePreviewKind::Code | FilePreviewKind::Diff));
                 let body: AnyElement = match (editing && editable, editor) {
                     (true, Some(editor)) => {
                         // The editor draws its own gutter, so the pane adds none: one number per
@@ -2125,6 +2441,23 @@ impl Workspace {
                             .font_family(crate::assets::MONO_FONT)
                             .child(
                                 Editor::new(&editor)
+                                    .bordered(false)
+                                    .rounded(px(0.0))
+                                    .h(relative(1.0)),
+                            )
+                            .into_any_element()
+                    }
+                    (false, Some(editor))
+                        if matches!(kind, FilePreviewKind::Code | FilePreviewKind::Diff) =>
+                    {
+                        div()
+                            .id("pane-source-reader")
+                            .size_full()
+                            .text_size(px(TEXT_SM))
+                            .font_family(crate::assets::MONO_FONT)
+                            .child(
+                                Editor::new(&editor)
+                                    .readonly(true)
                                     .bordered(false)
                                     .rounded(px(0.0))
                                     .h(relative(1.0)),
@@ -2160,6 +2493,12 @@ impl Workspace {
                     }
                     _ => self.code_view(&text).into_any_element(),
                 };
+                let reload_path = path.clone();
+                let reload = icon_button_xs("pane-reload-file", "refresh", &p)
+                    .aria_label(trs!(self.english(), "pane.reload_file"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.confirm_reload_preview(reload_path.clone(), window, cx);
+                    }));
                 let toggle = editable.then(|| {
                     let next = !editing;
                     icon_button_xs(
@@ -2167,7 +2506,11 @@ impl Workspace {
                         if editing { "view" } else { "source-code" },
                         &p,
                     )
-                    .aria_label(if editing { "预览" } else { "查看源码" })
+                    .aria_label(if editing {
+                        trs!(self.english(), "transcript.path_preview")
+                    } else {
+                        trs!(self.english(), "pane.source")
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(conversation) = this.selected.clone()
                             && let Some(state) = this.panes.get_mut(&conversation)
@@ -2201,7 +2544,23 @@ impl Workspace {
                     .w_full()
                     .flex()
                     .flex_col()
-                    .child(self.preview_head_with(&name, back, dirty, toggle, cx))
+                    .child(
+                        self.preview_head_with(
+                            &name,
+                            back,
+                            dirty,
+                            Some(
+                                div()
+                                    .id("pane-file-controls")
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.0))
+                                    .child(reload)
+                                    .children(toggle),
+                            ),
+                            cx,
+                        ),
+                    )
                     .child(preview_body_box(body_owns_scroll).child(body))
                     .into_any_element()
             }
@@ -2266,7 +2625,11 @@ impl Workspace {
                 mime_type,
                 ..
             } => {
-                let body = self.document_body(&path, None, Some(&mime_type), None, cx);
+                let body = if self.ssh_host.is_some() {
+                    self.remote_media_body(&path, &mime_type, cx)
+                } else {
+                    self.document_body(&path, None, Some(&mime_type), None, cx)
+                };
                 let refresh = icon_button_xs("refresh-media-preview", "refresh", &p)
                     .aria_label(if self.app_settings.language == UiLanguage::English {
                         "Refresh preview"
@@ -2274,6 +2637,7 @@ impl Workspace {
                         "刷新预览"
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
+                        this.invalidate_remote_preview(&path);
                         if let Some(tab) = this
                             .selected
                             .as_ref()
@@ -2392,7 +2756,7 @@ impl Workspace {
                         .parent()
                         .map(|d| d.display().to_string())
                 });
-                let local = !path.starts_with("remote:");
+                let local = self.ssh_host.is_none() && !path.starts_with("remote:");
                 let button =
                     |id: &'static str, glyph: &'static str, label: &'static str, outline: bool| {
                         div()
@@ -2692,12 +3056,11 @@ impl Workspace {
         crumbs
     }
 
-    /// Monospace text with its line numbers. The highlighter comes later; the shape of the view
-    /// (a gutter that does not scroll away) is what the pane needs first.
+    /// Fallback for text without an editor; file sources use the highlighted editor in read-only mode.
     fn code_view(&self, text: &str) -> Div {
         let p = &self.palette;
         let mut lines = div().flex().flex_col().py(px(6.0));
-        for (index, line) in text.lines().take(4000).enumerate() {
+        for (index, line) in text.lines().enumerate() {
             lines = lines.child(
                 div()
                     .flex()
@@ -2898,7 +3261,32 @@ mod preview_scroll_tests {
 
 #[cfg(test)]
 mod tab_tests {
-    use super::PaneState;
+    use super::{PaneState, editable_text};
+    use fv_protocol::types::{FilePreview, FilePreviewKind};
+
+    #[test]
+    fn editor_normalizes_crlf_without_truncating_the_loaded_file() {
+        let text = "line\r\n".repeat(4001);
+        let preview = FilePreview::Text {
+            kind: FilePreviewKind::Diff,
+            path: "/tmp/change.patch".into(),
+            name: "change.patch".into(),
+            language: None,
+            text: text.clone(),
+            revision: Some("disk-byte-revision".into()),
+        };
+        let editable = editable_text(&preview).unwrap();
+        assert_eq!(editable, "line\n".repeat(4001));
+        if let FilePreview::Text {
+            text: original,
+            revision,
+            ..
+        } = preview
+        {
+            assert_eq!(original, text);
+            assert_eq!(revision.as_deref(), Some("disk-byte-revision"));
+        }
+    }
     #[test]
     fn changing_tabs_restores_the_file_draft_and_preview_mode() {
         let mut state = PaneState::default();

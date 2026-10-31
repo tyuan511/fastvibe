@@ -12,13 +12,11 @@ use std::time::{Duration, Instant};
 
 use super::Workspace;
 use crate::ui::px;
-use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon, truncate};
+use crate::ui::{Muted as _, TEXT_SM, TEXT_XS, icon, icon_button_xs, truncate};
 use crate::view_model::ThreadView;
 use fv_protocol::methods::WorkspaceGitStatus;
 use fv_protocol::subagents::{Subagent, SubagentStatus};
-use fv_protocol::types::{
-    CwdParams, GitStatus, Item, PlanStatus, UiLanguage, AppSettingsPatch,
-};
+use fv_protocol::types::{AppSettingsPatch, CwdParams, GitStatus, Item, PlanStatus};
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -61,19 +59,26 @@ pub(super) struct Resources {
 }
 
 impl Resources {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             open: HashSet::from([SEC_ENVIRONMENT, SEC_AGENTS, SEC_OUTPUTS, SEC_CHANGES]),
             ..Default::default()
         }
     }
 
-    fn section_open(&self, key: &str, default: bool) -> bool {
+    pub(super) fn conversation_changed(&mut self) {
+        self.popover_for = None;
+        self.git.clear();
+        self.git_loaded_at = None;
+        self.git_epoch = self.git_epoch.wrapping_add(1);
+    }
+
+    fn section_open(&self, key: &str, _default: bool) -> bool {
         if key == SEC_TODOS {
             // The todo list starts collapsed, and its toggle only ever flips this key.
             self.open.contains(SEC_TODOS)
         } else {
-            self.open.contains(key) || default
+            self.open.contains(key)
         }
     }
 
@@ -105,8 +110,7 @@ impl Workspace {
     /// 1rem inset in each gutter — Electron's `calc(50rem + 600px)` probe, which scales with
     /// the interface font size exactly as the rem-sized probe there does.
     fn resources_docked(&self, viewport: f32) -> bool {
-        let column =
-            (viewport - self.sidebar_motion.width - self.pane_motion.width).max(0.0);
+        let column = (viewport - self.sidebar_motion.width - self.pane_motion.width).max(0.0);
         let font = self.app_settings.ui_font_size as f32;
         column >= 50.0 * font + 600.0
     }
@@ -117,12 +121,13 @@ impl Workspace {
     }
 
     /// The transient popover is open for the conversation on screen.
-    fn resources_popover_open(&self) -> bool {
-        self.resources_enabled() && self
-            .resources
-            .popover_for
-            .as_ref()
-            .is_some_and(|id| Some(id) == self.selected.as_ref())
+    pub(super) fn resources_popover_open(&self) -> bool {
+        self.resources_enabled()
+            && self
+                .resources
+                .popover_for
+                .as_ref()
+                .is_some_and(|id| Some(id) == self.selected.as_ref())
     }
 
     /// Anything of the panel is visible: the git reader only runs while it is.
@@ -135,7 +140,7 @@ impl Workspace {
     /// The header button: the docked form is the preference itself; the popover form opens for
     /// this conversation and remembers that it was wanted. Only deliberate presses write the
     /// setting — navigation and layout changes dismiss transiently.
-    fn toggle_resources(&mut self, viewport: f32, cx: &mut Context<Self>) {
+    pub(super) fn toggle_resources(&mut self, viewport: f32, cx: &mut Context<Self>) {
         if !self.resources_enabled() {
             return;
         }
@@ -156,7 +161,7 @@ impl Workspace {
 
     /// An intentional close (Escape, a click outside, the trigger): the preference records it,
     /// so a window that had the room does not bring the panel back on its own.
-    fn close_resources_popover(&mut self, persist: bool, cx: &mut Context<Self>) {
+    pub(super) fn close_resources_popover(&mut self, persist: bool, cx: &mut Context<Self>) {
         if self.resources.popover_for.take().is_some() && persist {
             self.remember_resources_open(false, cx);
         }
@@ -273,12 +278,21 @@ impl Workspace {
         .detach();
     }
 
+    pub(super) fn refresh_resource_repositories(&mut self, cx: &mut Context<Self>) {
+        if self.resources_visible() {
+            self.load_resources_git(cx);
+        }
+    }
+
     // ---- data
 
     /// The checklist the panel may draw, under the same rule as the composer's panel: the run is
     /// still working, the list belongs to the newest turn (a newer prompt closes it), and
     /// something is still open.
-    fn resources_todo<'a>(&self, view: &'a ThreadView) -> Option<&'a fv_protocol::types::PlanUpdated> {
+    fn resources_todo<'a>(
+        &self,
+        view: &'a ThreadView,
+    ) -> Option<&'a fv_protocol::types::PlanUpdated> {
         let plan = view.plan.as_ref()?;
         let current_turn = view.turns.last()?;
         if current_turn.id != plan.turn_id || !view.running {
@@ -318,71 +332,17 @@ impl Workspace {
     /// source the turn's own change chips read (`apply_patch`), plus the write-shaped names a
     /// tool or an MCP server may use.
     fn resources_outputs(&self, view: &ThreadView) -> Vec<OutputEntry> {
-        let cwd = view.thread.cwd.as_deref();
-        let mut files: Vec<OutputEntry> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for (index, turn) in view.turns.iter().enumerate() {
-            for item in &turn.items {
-                let Item::ToolCall {
-                    name,
-                    arguments,
-                    is_error,
-                    output,
-                    id,
-                } = item
-                else {
-                    continue;
-                };
-                if *is_error || output.is_none() {
-                    continue;
-                }
-                let key = name.trim().to_lowercase();
-                let paths: Vec<String> = if key == "apply_patch" {
-                    arguments
-                        .get("input")
-                        .and_then(|v| v.as_str())
-                        .map(crate::presentation::patch_changes)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|c| c.path)
-                        .collect()
-                } else if key == "present" {
-                    arguments
-                        .get("path")
-                        .and_then(|v| v.as_str())
-                        .filter(|p| !p.trim().is_empty())
-                        .map(|p| vec![p.to_string()])
-                        .unwrap_or_default()
-                } else if WRITE_TOOL_NAMES.contains(&key.as_str()) {
-                    ["path", "file_path", "filepath", "filename", "file", "target_file", "target"]
-                        .iter()
-                        .filter_map(|k| arguments.get(*k).and_then(|v| v.as_str()))
-                        .find(|p| !p.trim().is_empty())
-                        .map(|p| vec![p.to_string()])
-                        .unwrap_or_default()
-                } else {
-                    continue;
-                };
-                for path in paths {
-                    let resolved = resolve_output_path(&path, cwd);
-                    if resolved.is_empty()
-                        || resolved.starts_with("http://")
-                        || resolved.starts_with("https://")
-                        || resolved.starts_with("data:")
-                        || !seen.insert(resolved.clone())
-                    {
-                        continue;
-                    }
-                    files.push(OutputEntry {
-                        path: resolved,
-                        turn: index,
-                        item: id.clone(),
-                    });
-                }
-            }
-        }
-        files.sort_by(|a, b| b.turn.cmp(&a.turn).then_with(|| a.path.cmp(&b.path)));
-        files
+        crate::conversation_resources::outputs(&view.turns, view.thread.cwd.as_deref())
+            .into_iter()
+            .filter_map(|output| {
+                let turn = view.turns.iter().position(|turn| turn.id == output.turn)?;
+                Some(OutputEntry {
+                    item: output.path.clone(),
+                    path: output.path,
+                    turn,
+                })
+            })
+            .collect()
     }
 
     // ---- rendering
@@ -405,6 +365,7 @@ impl Workspace {
             self.resources.popover_for = None;
             return Vec::new();
         }
+        self.resources_git_tick(cx);
         if !docked && self.resources_popover_open() && self.resources.git_loaded_at.is_none() {
             self.load_resources_git(cx);
         }
@@ -415,10 +376,7 @@ impl Workspace {
         }
         if !docked && self.resources_popover_open() {
             let height = f32::from(window.viewport_size().height);
-            out.push(
-                crate::ui::float(self.resources_card(height, true, cx))
-                    .into_any_element(),
-            );
+            out.push(crate::ui::float(self.resources_card(height, true, cx)).into_any_element());
         }
         if let Some(at) = self.resources.copied_at
             && at.elapsed() < Duration::from_millis(1500)
@@ -453,12 +411,19 @@ impl Workspace {
             .text_color(p.c(Token::SidebarForeground))
             .text_size(px(TEXT_SM));
         let card = if popover {
-            settings_popover_frame(card, &p)
+            card.rounded(px(14.0))
+                .border_1()
+                .border_color(p.c(Token::Border))
         } else {
-            card.rounded(px(14.0)).border_1().border_color(
-                p.c(Token::SidebarBorder)
-                    .opacity(if p.get(Token::GlassShade).is_some() { 0.0 } else { 1.0 }),
-            )
+            card.rounded(px(14.0))
+                .border_1()
+                .border_color(p.c(Token::SidebarBorder).opacity(
+                    if p.get(Token::GlassShade).is_some() {
+                        0.0
+                    } else {
+                        1.0
+                    },
+                ))
         };
         let position = if popover {
             div().absolute().top(px(52.0)).right(px(8.0))
@@ -466,41 +431,39 @@ impl Workspace {
             div().absolute().top(px(48.0)).right(px(16.0))
         };
         position
-            .max_h((viewport_height - 64.0).max(0.0))
+            .max_h(px((viewport_height - 64.0).max(0.0)))
             .flex()
             .flex_col()
             .occlude()
-            .child(card.child(
-                div()
-                    .id("resources-scroll")
-                    .min_h_0()
-                    .max_h(px(max_h))
-                    .overflow_y_scroll()
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .flex()
-                    .flex_col()
-                    .child(self.resources_body(cx)),
-            ))
+            .child(
+                card.child(
+                    div()
+                        .id("resources-scroll")
+                        .min_h_0()
+                        .max_h(px(max_h))
+                        .overflow_y_scroll()
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .flex()
+                        .flex_col()
+                        .child(self.resources_body(cx)),
+                ),
+            )
     }
 
     /// The 「已复制路径」 note that follows a copy, bottom-right of the column for a moment.
-    fn resources_copied_notice(&self, cx: &mut Context<Self>) -> Deferred<AnyElement> {
+    fn resources_copied_notice(&self, cx: &mut Context<Self>) -> Deferred {
         let p = self.palette.clone();
         let english = self.english();
-        let note = div()
+        let note = crate::ui::overlay_surface(div(), 10.0, &p)
             .absolute()
             .bottom(px(24.0))
             .right(px(16.0))
             .px(px(10.0))
             .py(px(6.0))
-            .rounded(px(8.0))
-            .bg(p.overlay())
             .text_color(p.c(Token::PopoverForeground))
             .text_size(px(TEXT_XS))
-            .shadow_sm()
-            .child(trs!(english, "resources.copied"))
-            .into_any_element();
+            .child(trs!(english, "resources.copied"));
         let _ = cx;
         deferred(note.occlude()).with_priority(10)
     }
@@ -510,9 +473,9 @@ impl Workspace {
         let p = self.palette.clone();
         let english = self.english();
         let id = self.selected.clone();
-        let view = id.as_ref().and_then(|id| self.views.get(id));
+        let owned_view = id.as_ref().and_then(|id| self.views.get(id)).cloned();
+        let view = owned_view.as_ref();
         let mut body = div().w_full().flex().flex_col();
-        let hairline = |d: Div| d.border_t_1().border_color(p.c(Token::SidebarBorder).opacity(0.5));
 
         // 环境: host, working directory, branch.
         let thread = view.map(|v| v.thread.clone());
@@ -524,63 +487,67 @@ impl Workspace {
                 true,
                 cx,
             );
-            section = section
-                .child(self.resources_host_row())
-                .children(thread.cwd.clone().map(|cwd| {
-                    self.resources_cwd_row(cwd, cx)
-                }))
-                .children(self.resources_branch_row(&thread, cx));
+            if self.resources.section_open(SEC_ENVIRONMENT, true) {
+                section = section
+                    .child(self.resources_host_row())
+                    .children(
+                        thread
+                            .cwd
+                            .clone()
+                            .map(|cwd| self.resources_cwd_row(cwd, cx)),
+                    )
+                    .children(self.resources_branch_row(&thread, cx));
+            }
             body = body.child(section);
         }
 
         // 任务清单.
-        if let Some(view) = view {
-            if let Some(plan) = self.resources_todo(view) {
-                let done = plan
-                    .plan
-                    .iter()
-                    .filter(|s| matches!(s.status, PlanStatus::Completed))
-                    .count();
-                let summary: String = tr!(
-                    english,
-                    "resources.progress",
-                    done = done,
-                    total = plan.plan.len()
-                );
-                let mut section = self.resources_section(
-                    SEC_TODOS,
-                    trs!(english, "resources.todos"),
-                    Some(summary),
-                    false,
-                    cx,
-                );
-                if !self.resources.section_open(SEC_TODOS, false) {
-                    if let Some(current) = active_plan_step(&plan.plan) {
-                        section = section
-                            .child(plan_step_row("resources-todo-current", current, &p, true));
-                    }
-                } else {
-                    let mut rows = div().px(px(8.0)).flex().flex_col().gap(px(2.0));
-                    for (n, step) in plan.plan.iter().enumerate() {
-                        rows = rows.child(plan_step_row(
-                            SharedString::from(format!("resources-todo-{n}")),
-                            step,
-                            &p,
-                            false,
-                        ));
-                    }
-                    section = section.child(rows);
+        if let Some(view) = view
+            && let Some(plan) = self.resources_todo(view)
+        {
+            let done = plan
+                .plan
+                .iter()
+                .filter(|s| matches!(s.status, PlanStatus::Completed))
+                .count();
+            let summary: String = tr!(
+                english,
+                "resources.progress",
+                done = done,
+                total = plan.plan.len()
+            );
+            let mut section = self.resources_section(
+                SEC_TODOS,
+                trs!(english, "resources.todos"),
+                Some(summary),
+                false,
+                cx,
+            );
+            if !self.resources.section_open(SEC_TODOS, false) {
+                if let Some(current) = active_plan_step(&plan.plan) {
+                    section =
+                        section.child(plan_step_row("resources-todo-current", current, &p, true));
                 }
-                body = body.child(section);
+            } else {
+                let mut rows = div().px(px(8.0)).flex().flex_col().gap(px(2.0));
+                for (n, step) in plan.plan.iter().enumerate() {
+                    rows = rows.child(plan_step_row(
+                        SharedString::from(format!("resources-todo-{n}")),
+                        step,
+                        &p,
+                        false,
+                    ));
+                }
+                section = section.child(rows);
             }
+            body = body.child(section);
         }
 
         // 子代理.
         let agents = self.resources_agents();
         if !agents.is_empty() {
-            let (active, finished): (Vec<_>, Vec<_>) = agents
-                .into_iter()
-                .partition(|a| !agent_finished(a));
+            let (active, finished): (Vec<_>, Vec<_>) =
+                agents.into_iter().partition(|a| !agent_finished(a));
             let mut section = self.resources_section(
                 SEC_AGENTS,
                 trs!(english, "resources.agents"),
@@ -588,32 +555,29 @@ impl Workspace {
                 true,
                 cx,
             );
-            let shown = if self.resources.more_agents {
-                active.len()
-            } else {
-                active.len().min(5)
-            };
-            for agent in active.iter().take(shown) {
-                section = section.child(self.resources_agent_row(agent, cx));
-            }
-            if active.len() > 5 {
-                section = section.child(self.resources_more_row(
-                    "resources-more-agents",
-                    active.len() - 5,
-                    self.resources.more_agents,
-                    &p,
-                    cx,
-                ));
-            }
-            if !finished.is_empty() {
-                let fold_key = SEC_FINISHED_AGENTS;
-                let fold_open = self.resources.open.contains(fold_key);
-                let count = finished.len();
-                let mut fold = div()
-                    .id("resources-finished")
-                    .flex()
-                    .flex_col()
-                    .child(
+            if self.resources.section_open(SEC_AGENTS, true) {
+                let shown = if self.resources.more_agents {
+                    active.len()
+                } else {
+                    active.len().min(5)
+                };
+                for agent in active.iter().take(shown) {
+                    section = section.child(self.resources_agent_row(agent, cx));
+                }
+                if active.len() > 5 {
+                    section = section.child(self.resources_more_row(
+                        "resources-more-agents",
+                        active.len() - 5,
+                        self.resources.more_agents,
+                        &p,
+                        cx,
+                    ));
+                }
+                if !finished.is_empty() {
+                    let fold_key = SEC_FINISHED_AGENTS;
+                    let fold_open = self.resources.open.contains(fold_key);
+                    let count = finished.len();
+                    let mut fold = div().id("resources-finished").flex().flex_col().child(
                         div()
                             .id("resources-finished-toggle")
                             .min_h(px(32.0))
@@ -623,7 +587,10 @@ impl Workspace {
                             .gap(px(8.0))
                             .rounded(px(6.0))
                             .cursor_pointer()
-                            .hover(move |d| d.bg(p.c(Token::SidebarAccent)))
+                            .hover({
+                                let hover = p.c(Token::SidebarAccent);
+                                move |d| d.bg(hover)
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.resources.toggle_section(SEC_FINISHED_AGENTS);
                                 cx.notify();
@@ -633,35 +600,35 @@ impl Workspace {
                                 12.0,
                                 p.c(Token::MutedForeground).opacity(0.6),
                             ))
-                            .child(
-                                div()
-                                    .text_size(px(TEXT_XS))
-                                    .muted(&p)
-                                    .child(tr!(english, "resources.finished", count = count)),
-                            ),
+                            .child(div().text_size(px(TEXT_XS)).muted(&p).child(tr!(
+                                english,
+                                "resources.finished",
+                                count = count
+                            ))),
                     );
-                if fold_open {
-                    let shown = if self.resources.more_finished_agents {
-                        finished.len()
-                    } else {
-                        finished.len().min(5)
-                    };
-                    let mut rows = div().flex().flex_col();
-                    for agent in finished.iter().take(shown) {
-                        rows = rows.child(self.resources_agent_row(agent, cx));
+                    if fold_open {
+                        let shown = if self.resources.more_finished_agents {
+                            finished.len()
+                        } else {
+                            finished.len().min(5)
+                        };
+                        let mut rows = div().flex().flex_col();
+                        for agent in finished.iter().take(shown) {
+                            rows = rows.child(self.resources_agent_row(agent, cx));
+                        }
+                        fold = fold.child(rows);
+                        if finished.len() > 5 {
+                            fold = fold.child(self.resources_more_row(
+                                "resources-more-finished",
+                                finished.len() - 5,
+                                self.resources.more_finished_agents,
+                                &p,
+                                cx,
+                            ));
+                        }
                     }
-                    fold = fold.child(rows);
-                    if finished.len() > 5 {
-                        fold = fold.child(self.resources_more_row(
-                            "resources-more-finished",
-                            finished.len() - 5,
-                            self.resources.more_finished_agents,
-                            &p,
-                            cx,
-                        ));
-                    }
+                    section = section.child(fold);
                 }
-                section = section.child(fold);
             }
             body = body.child(section);
         }
@@ -678,22 +645,24 @@ impl Workspace {
                     true,
                     cx,
                 );
-                let shown = if self.resources.more_outputs {
-                    total
-                } else {
-                    total.min(5)
-                };
-                for output in outputs.iter().take(shown) {
-                    section = section.child(self.resources_output_row(output, cx));
-                }
-                if total > 5 {
-                    section = section.child(self.resources_more_row(
-                        "resources-more-outputs",
-                        total - 5,
-                        self.resources.more_outputs,
-                        &p,
-                        cx,
-                    ));
+                if self.resources.section_open(SEC_OUTPUTS, true) {
+                    let shown = if self.resources.more_outputs {
+                        total
+                    } else {
+                        total.min(5)
+                    };
+                    for output in outputs.iter().take(shown) {
+                        section = section.child(self.resources_output_row(output, cx));
+                    }
+                    if total > 5 {
+                        section = section.child(self.resources_more_row(
+                            "resources-more-outputs",
+                            total - 5,
+                            self.resources.more_outputs,
+                            &p,
+                            cx,
+                        ));
+                    }
                 }
                 body = body.child(section);
             }
@@ -702,9 +671,14 @@ impl Workspace {
         // 工作区变更.
         if let Some(id) = id.as_ref() {
             let roots = self.project_roots_for(id);
-            let rows: Vec<(&String, &GitStatus)> = roots
+            let rows: Vec<(String, GitStatus)> = roots
                 .iter()
-                .filter_map(|root| self.resources.git.get(root).map(|s| (root, s)))
+                .filter_map(|root| {
+                    self.resources
+                        .git
+                        .get(root)
+                        .map(|s| (root.clone(), s.clone()))
+                })
                 .filter(|(_, s)| s.is_repository)
                 .collect();
             if !rows.is_empty() {
@@ -715,28 +689,15 @@ impl Workspace {
                     true,
                     cx,
                 );
-                for (root, status) in rows {
-                    section = section.child(self.resources_repo_row(root, status, cx));
+                if self.resources.section_open(SEC_CHANGES, true) {
+                    for (root, status) in rows {
+                        section = section.child(self.resources_repo_row(&root, &status, cx));
+                    }
                 }
                 body = body.child(section);
             }
         }
 
-        // Hairlines between the groups, the Electron panel's `divide-y divide-border/50`.
-        let count = body.child_count();
-        body.map(|d| {
-            let mut first = true;
-            d.child_count_reset();
-            (0..count).fold(d, |d, _| {
-                let d = if first {
-                    first = false;
-                    d
-                } else {
-                    hairline(d)
-                };
-                d
-            })
-        });
         body
     }
 
@@ -753,6 +714,10 @@ impl Workspace {
         let p = self.palette.clone();
         let open = self.resources.section_open(key, default);
         let mut section = div()
+            .when(key != SEC_ENVIRONMENT, |d| {
+                d.border_t_1()
+                    .border_color(p.c(Token::SidebarBorder).opacity(0.5))
+            })
             .py(px(8.0))
             .flex()
             .flex_col()
@@ -768,12 +733,17 @@ impl Workspace {
                     .rounded(px(6.0))
                     .cursor_pointer()
                     .text_color(p.c(Token::MutedForeground))
-                    .hover(move |d| d.bg(p.c(Token::SidebarAccent)))
+                    .hover({
+                        let hover = p.c(Token::SidebarAccent);
+                        move |d| d.bg(hover)
+                    })
                     .child(div().flex_1().min_w_0().child(truncate(title)))
-                    .children(
-                        summary
-                            .map(|s| div().text_size(px(TEXT_XS)).font_family(crate::assets::MONO_FONT).child(s)),
-                    )
+                    .children(summary.map(|s| {
+                        div()
+                            .text_size(px(TEXT_XS))
+                            .font_family(crate::assets::MONO_FONT)
+                            .child(s)
+                    }))
                     .child(crate::ui::chevron(
                         open,
                         12.0,
@@ -800,7 +770,10 @@ impl Workspace {
             .px(px(8.0))
             .py(px(6.0))
             .child(icon("computer", 16.0, p.c(Token::MutedForeground)))
-            .child(truncate(trs!(self.english(), "resources.local")))
+            .child(truncate(self.ssh_host.as_ref().map_or_else(
+                || trs!(self.english(), "resources.local").to_string(),
+                |host| format!("{host} (SSH)"),
+            )))
     }
 
     /// The working directory: click copies it; the copy is confirmed by the note in the corner.
@@ -818,8 +791,16 @@ impl Workspace {
             .gap(px(8.0))
             .rounded(px(6.0))
             .cursor_pointer()
-            .title(cwd.clone())
-            .hover(move |d| d.bg(p.c(Token::SidebarAccent)))
+            .tooltip({
+                let text = cwd.clone();
+                move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+                }
+            })
+            .hover({
+                let hover = p.c(Token::SidebarAccent);
+                move |d| d.bg(hover)
+            })
             .child(icon("folder01", 16.0, p.c(Token::MutedForeground)))
             .child(truncate(cwd.clone()).flex_1())
             .child(icon(
@@ -853,12 +834,16 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
         let cwd = thread.cwd.clone()?;
-        let status = self
-            .resources
-            .git
-            .get(&cwd)
-            .or_else(|| self.header_git.status.as_ref().filter(|_| self.header_git.cwd.as_deref() == Some(cwd.as_str())))?;
-        let branch = status.is_repository.then(|| status.branch.clone()).flatten()?;
+        let status = self.resources.git.get(&cwd).or_else(|| {
+            self.header_git
+                .status
+                .as_ref()
+                .filter(|_| self.header_git.cwd.as_deref() == Some(cwd.as_str()))
+        })?;
+        let branch = status
+            .is_repository
+            .then(|| status.branch.clone())
+            .flatten()?;
         let p = self.palette.clone();
         let open_cwd = cwd.clone();
         Some(
@@ -873,12 +858,10 @@ impl Workspace {
                 .gap(px(8.0))
                 .rounded(px(6.0))
                 .cursor_pointer()
-                .title(format!(
-                    "{} {}",
-                    trs!(self.english(), "resources.open_branch"),
-                    branch
-                ))
-                .hover(move |d| d.bg(p.c(Token::SidebarAccent)))
+                .hover({
+                    let hover = p.c(Token::SidebarAccent);
+                    move |d| d.bg(hover)
+                })
                 .child(icon("git-branch", 16.0, p.c(Token::MutedForeground)))
                 .child(truncate(branch).flex_1())
                 .children(thread.worktree.as_ref().map(|_| {
@@ -915,7 +898,10 @@ impl Workspace {
         let open_root = root.to_string();
         let status = status.clone();
         div()
-            .id(SharedString::from(format!("resources-repo-{}", root.replace('/', "_"))))
+            .id(SharedString::from(format!(
+                "resources-repo-{}",
+                root.replace('/', "_")
+            )))
             .min_h(px(32.0))
             .w_full()
             .px(px(8.0))
@@ -925,8 +911,16 @@ impl Workspace {
             .gap(px(8.0))
             .rounded(px(6.0))
             .cursor_pointer()
-            .title(root.to_string())
-            .hover(move |d| d.bg(p.c(Token::SidebarAccent)))
+            .tooltip({
+                let text = root.to_string();
+                move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+                }
+            })
+            .hover({
+                let hover = p.c(Token::SidebarAccent);
+                move |d| d.bg(hover)
+            })
             .child(icon("git-compare", 16.0, p.c(Token::MutedForeground)))
             .child(
                 div()
@@ -944,7 +938,11 @@ impl Workspace {
                     .gap(px(6.0))
                     .text_size(px(TEXT_XS))
                     .font_family(crate::assets::MONO_FONT)
-                    .child(div().text_color(p.c(Token::Success)).child(format!("+{}", status.additions)))
+                    .child(
+                        div()
+                            .text_color(p.c(Token::Success))
+                            .child(format!("+{}", status.additions)),
+                    )
                     .child(
                         div()
                             .text_color(p.c(Token::Destructive))
@@ -962,10 +960,9 @@ impl Workspace {
         let Some(conversation) = self.selected.clone() else {
             return;
         };
-        self.git_views
-            .entry(conversation)
-            .or_default()
-            .select(&root);
+        let view = self.git_views.entry(conversation).or_default();
+        view.set_transcript_owner(None);
+        view.select(&root);
         self.resources.popover_for = None;
         self.open_git_tab(window, cx);
     }
@@ -983,9 +980,7 @@ impl Workspace {
             .role
             .as_ref()
             .map(|r| r.name.clone())
-            .unwrap_or_else(|| {
-                trs!(english, "subagents.subagent").to_string()
-            });
+            .unwrap_or_else(|| trs!(english, "subagents.subagent").to_string());
         let glyph_color = if attention {
             p.c(Token::Warning)
         } else {
@@ -1006,8 +1001,16 @@ impl Workspace {
             .gap(px(8.0))
             .rounded(px(6.0))
             .cursor_pointer()
-            .title(agent.task.clone())
-            .hover(move |d| d.bg(p.c(Token::SidebarAccent)))
+            .tooltip({
+                let text = agent.task.clone();
+                move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+                }
+            })
+            .hover({
+                let hover = p.c(Token::SidebarAccent);
+                move |d| d.bg(hover)
+            })
             .child(if live {
                 crate::ui::spinner(
                     SharedString::from(format!(
@@ -1052,7 +1055,11 @@ impl Workspace {
     }
 
     /// One produced file: icon and name; the arrow beside it jumps to the message that made it.
-    fn resources_output_row(&mut self, output: &OutputEntry, cx: &mut Context<Self>) -> Div {
+    fn resources_output_row(
+        &mut self,
+        output: &OutputEntry,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let p = self.palette.clone();
         let name = output
             .path
@@ -1080,7 +1087,10 @@ impl Workspace {
             .min_w_0()
             .rounded(px(6.0))
             .group("resources-output")
-            .hover(move |d| d.bg(p.c(Token::SidebarAccent)))
+            .hover({
+                let hover = p.c(Token::SidebarAccent);
+                move |d| d.bg(hover)
+            })
             .child(
                 div()
                     .id(SharedString::from(format!(
@@ -1095,14 +1105,27 @@ impl Workspace {
                     .gap(px(8.0))
                     .px(px(8.0))
                     .cursor_pointer()
-                    .title(path)
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(path.clone()).build(window, cx)
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let (name, path) = (open_path.rsplit('/').next().unwrap_or(&open_path).to_string(), open_path.clone());
+                        let (name, path) = (
+                            open_path
+                                .rsplit('/')
+                                .next()
+                                .unwrap_or(&open_path)
+                                .to_string(),
+                            open_path.clone(),
+                        );
                         this.resources.popover_for = None;
                         this.pending_open = Some((path, name));
                         cx.notify();
                     }))
-                    .child(img(crate::file_icons::path(&name, !p.is_dark())).size(px(16.0)).flex_none())
+                    .child(
+                        img(crate::file_icons::path(&name, !p.is_dark()))
+                            .size(px(16.0))
+                            .flex_none(),
+                    )
                     .child(truncate(name)),
             )
             .children(jump_turn.map(|turn| {
@@ -1118,7 +1141,7 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.resources_jump(turn_id.clone(), cx);
                     }))
-            }));
+            }))
     }
 
     /// 「展开更多（n）」 / 「收起」.
@@ -1131,6 +1154,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let english = self.english();
+        let p = p.clone();
         let which = match id {
             "resources-more-agents" => 0,
             "resources-more-finished" => 1,
@@ -1141,7 +1165,6 @@ impl Workspace {
         } else {
             tr!(english, "resources.more", count = count)
         };
-        let expanded = self.resources_more_state(which);
         div()
             .id(id)
             .w_full()
@@ -1152,15 +1175,17 @@ impl Workspace {
             .rounded(px(6.0))
             .cursor_pointer()
             .text_size(px(TEXT_XS))
-            .muted(p)
-            .hover(move |d| d.bg(p.c(Token::SidebarAccent)))
+            .muted(&p)
+            .hover({
+                let hover = p.c(Token::SidebarAccent);
+                move |d| d.bg(hover)
+            })
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
                 let value = !this.resources_more_state(which);
                 this.resources_set_more_state(which, value);
                 cx.notify();
             }))
-            .map(|d| if expanded { d } else { d })
     }
 
     fn resources_more_state(&self, which: u8) -> bool {
@@ -1180,40 +1205,10 @@ impl Workspace {
     }
 }
 
-/// The write-shaped tool names whose `path`-like argument is a produced file (the Electron
-/// panel's list, minus the engines native never runs).
-const WRITE_TOOL_NAMES: &[&str] = &[
-    "write",
-    "write_file",
-    "writefile",
-    "create_file",
-    "createfile",
-    "create",
-    "edit",
-    "edit_file",
-    "editfile",
-    "str_replace",
-    "strreplace",
-];
-
-fn resolve_output_path(path: &str, cwd: Option<&str>) -> String {
-    let path = path.trim();
-    if path.is_empty() {
-        return String::new();
-    }
-    if path.starts_with('/') {
-        return path.to_string();
-    }
-    match cwd {
-        Some(dir) if !dir.is_empty() => format!("{dir}/{path}"),
-        _ => path.to_string(),
-    }
-}
-
 /// The step the agent is on: what is in progress, else the next pending one.
-fn active_plan_step<'a>(
-    steps: &'a [fv_protocol::types::PlanStep],
-) -> Option<&'a fv_protocol::types::PlanStep> {
+fn active_plan_step(
+    steps: &[fv_protocol::types::PlanStep],
+) -> Option<&fv_protocol::types::PlanStep> {
     steps
         .iter()
         .find(|s| matches!(s.status, PlanStatus::InProgress))
@@ -1231,17 +1226,19 @@ fn plan_step_row(
     step: &fv_protocol::types::PlanStep,
     p: &crate::theme::Palette,
     working: bool,
-) -> Div {
+) -> Stateful<Div> {
+    let id: ElementId = id.into();
     let done = matches!(step.status, PlanStatus::Completed);
     let active = matches!(step.status, PlanStatus::InProgress);
     let glyph = if done {
-        icon("tick02", 12.0, p.c(Token::MutedForeground))
+        icon("tick02", 12.0, p.c(Token::MutedForeground)).into_any_element()
     } else if active && working {
         crate::ui::spinner(
-            SharedString::from(format!("{}-run", id.into().0.unwrap_or("plan-step"))),
+            SharedString::from(format!("{id:?}-run")),
             12.0,
             p.c(Token::MutedForeground),
         )
+        .into_any_element()
     } else {
         div()
             .size(px(8.0))
@@ -1250,6 +1247,7 @@ fn plan_step_row(
             .when(active, |d| d.bg(p.c(Token::Primary)))
             .border_1()
             .border_color(p.c(Token::MutedForeground).opacity(0.6))
+            .into_any_element()
     };
     div()
         .id(id)
@@ -1258,7 +1256,15 @@ fn plan_step_row(
         .gap(px(8.0))
         .min_h(px(28.0))
         .py(px(4.0))
-        .child(div().flex_none().size(px(16.0)).flex().items_center().justify_center().child(glyph))
+        .child(
+            div()
+                .flex_none()
+                .size(px(16.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(glyph),
+        )
         .child(
             div()
                 .flex_1()

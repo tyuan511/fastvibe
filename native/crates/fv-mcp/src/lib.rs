@@ -661,6 +661,7 @@ impl Manager {
                 registry.register_shared(Arc::new(tools::McpTool {
                     connection: connection.clone(),
                     tool: tool.clone(),
+                    spec: std::sync::OnceLock::new(),
                 }));
             }
         }

@@ -173,6 +173,50 @@ impl Db {
         })
     }
 
+    /// Publish a fully staged migration in one catalog transaction. Source identities and
+    /// usage keys make retrying a crash before/after this transaction idempotent.
+    pub fn commit_migration(
+        &self,
+        threads: &[Thread],
+        providers: &[StoredProvider],
+        settings: &[(String, String)],
+        usage: &[crate::UsageRecord],
+    ) -> Result<(), StoreError> {
+        let mut connection = self.conn.lock().unwrap();
+        connection.pragma_update(None, "synchronous", "FULL")?;
+        let transaction = connection.transaction()?;
+        for thread in threads {
+            transaction.execute(
+                "INSERT INTO conversations(id,updated_at,archived,data) VALUES (?1,?2,?3,?4)",
+                params![
+                    thread.id,
+                    thread.updated_at,
+                    thread.archived,
+                    serde_json::to_string(thread)?
+                ],
+            )?;
+        }
+        let first_position: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(position),-1)+1 FROM providers",
+            [],
+            |row| row.get(0),
+        )?;
+        for (position, provider) in (first_position..).zip(providers) {
+            transaction.execute(
+                "INSERT INTO providers(id,position,data) VALUES (?1,?2,?3)",
+                params![provider.id, position, serde_json::to_string(provider)?],
+            )?;
+        }
+        for record in usage {
+            transaction.execute("INSERT OR IGNORE INTO usage_ledger(request_key,thread_id,entry_id,at,data) VALUES (?1,?2,?3,?4,?5)",params![record.origin.key(),record.origin.thread_id,record.origin.entry_id,record.at,serde_json::to_string(record)?])?;
+        }
+        for (key, value) in settings {
+            transaction.execute("INSERT INTO settings(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value])?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn schema_version(&self) -> Result<i64, StoreError> {
         Ok(self
             .conn
@@ -337,6 +381,21 @@ impl Db {
             )?,
             None => conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?,
         };
+        Ok(())
+    }
+
+    /// Move a preference key atomically, preserving it when the identity stays unchanged.
+    pub fn move_setting(&self, from: &str, to: Option<&str>) -> Result<(), StoreError> {
+        if to == Some(from) {
+            return Ok(());
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        if let Some(to) = to {
+            tx.execute("INSERT INTO settings(key, value) SELECT ?2, value FROM settings WHERE key = ?1 ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![from, to])?;
+        }
+        tx.execute("DELETE FROM settings WHERE key = ?1", params![from])?;
+        tx.commit()?;
         Ok(())
     }
 

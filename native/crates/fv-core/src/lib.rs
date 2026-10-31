@@ -240,6 +240,67 @@ fn truncate_middle(s: &str, max_bytes: usize) -> String {
     format!("{}{marker}{}", &s[..head], &s[tail..])
 }
 
+/// The byte length `compaction_text` produces, without allocating the joined user messages.
+fn compaction_text_len(user_messages: &[String], summary: &str) -> usize {
+    let users_len = if user_messages.is_empty() {
+        "(none)".len()
+    } else {
+        user_messages
+            .iter()
+            .map(String::len)
+            .sum::<usize>()
+            .saturating_add(2usize.saturating_mul(user_messages.len().saturating_sub(1)))
+    };
+    let users = truncated_joined_len(user_messages, users_len, KEPT_USER_MESSAGE_BYTES);
+    let summary_len = if summary.trim().is_empty() {
+        "(no summary available)".len()
+    } else {
+        summary.len()
+    };
+    const PREFIX: &str = "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\n";
+    const INFIX: &str = "\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\n";
+    PREFIX.len() + users + INFIX.len() + summary_len
+}
+
+fn truncated_joined_len(messages: &[String], joined_len: usize, max_bytes: usize) -> usize {
+    if joined_len <= max_bytes || messages.is_empty() {
+        return joined_len;
+    }
+    let marker_len = format!("\n[… {} bytes omitted …]\n", joined_len - max_bytes).len();
+    let keep = max_bytes.saturating_sub(marker_len) / 2;
+    let mut head = keep;
+    while head > 0 && !joined_is_char_boundary(messages, joined_len, head) {
+        head -= 1;
+    }
+    let mut tail = joined_len - keep;
+    while tail < joined_len && !joined_is_char_boundary(messages, joined_len, tail) {
+        tail += 1;
+    }
+    head + marker_len + joined_len - tail
+}
+
+fn joined_is_char_boundary(messages: &[String], joined_len: usize, index: usize) -> bool {
+    if index == 0 || index == joined_len {
+        return true;
+    }
+    let mut offset = 0;
+    for (position, message) in messages.iter().enumerate() {
+        let end = offset + message.len();
+        if index <= end {
+            return message.is_char_boundary(index - offset);
+        }
+        offset = end;
+        if position + 1 < messages.len() {
+            let separator_end = offset + 2;
+            if index <= separator_end {
+                return true;
+            }
+            offset = separator_end;
+        }
+    }
+    true
+}
+
 /// What the model is sent: everything from the last compaction on (the compaction included),
 /// or all of it when there has been none.
 pub fn effective_history(messages: &[Message]) -> Vec<Message> {
@@ -278,7 +339,7 @@ pub fn estimate_tokens(messages: &[Message]) -> u64 {
                 user_messages,
                 summary,
                 ..
-            } => Message::compaction_text(user_messages, summary).len() as u64,
+            } => compaction_text_len(user_messages, summary) as u64,
         })
         .sum();
     bytes.div_ceil(4)
@@ -287,7 +348,7 @@ pub fn estimate_tokens(messages: &[Message]) -> u64 {
 /// Count the encoded size of a JSON value without allocating its serialized form. Tool
 /// arguments are often large and this function runs repeatedly while deciding whether to compact
 /// a turn, so `Value::to_string()` here would otherwise copy every argument on every pass.
-fn estimate_json_bytes(value: &Value) -> usize {
+pub fn estimate_json_bytes(value: &Value) -> usize {
     match value {
         Value::Null => 4,
         Value::Bool(true) => 4,
@@ -447,6 +508,21 @@ mod tests {
         assert!(text.contains("bytes omitted"));
         // Cut on a character boundary: this would have panicked otherwise.
         assert!(text.is_char_boundary(text.len()));
+    }
+
+    #[test]
+    fn compaction_size_estimate_matches_the_rendered_bridge() {
+        for messages in [
+            vec![],
+            vec!["first".into(), "second".into()],
+            vec!["é".repeat(90_000), "tail😀".into()],
+        ] {
+            for summary in ["", "summary", "  "] {
+                let rendered = Message::compaction_text(&messages, summary);
+                let estimated = compaction_text_len(&messages, summary);
+                assert_eq!(estimated, rendered.len());
+            }
+        }
     }
 
     #[test]

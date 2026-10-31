@@ -40,6 +40,7 @@ serde.workspace = true
 serde_json.workspace = true
 base64 = "0.22"
 url = "2"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 rust-i18n = "3"
 uuid = { version = "1", features = ["v4"] }
 unicode-width = "0.2"

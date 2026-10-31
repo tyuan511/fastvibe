@@ -1,6 +1,5 @@
 use super::*;
 use crate::ui;
-use gpui_kit::component::input::Input;
 use gpui_kit::prelude::FluentBuilder as _;
 
 #[derive(Default)]
@@ -233,7 +232,18 @@ impl Workspace {
             .items_center()
             .gap(px(4.))
             .px(px(8.))
-            .child(div().flex_1().child(Input::new(&input)))
+            .child(
+                div().flex_1().child(
+                    crate::ui::input(&input)
+                        .h_6()
+                        .px(px(4.0))
+                        .py_0()
+                        .appearance(false)
+                        .bordered(false)
+                        .text_size(px(ui::TEXT_XS))
+                        .line_height(px(16.0)),
+                ),
+            )
             .child(div().text_size(px(ui::TEXT_XS)).child(match found {
                 Some(true) => trs!(english, "browser.found"),
                 Some(false) => trs!(english, "browser.not_found"),
@@ -312,17 +322,6 @@ impl Workspace {
                     })),
             )
             .into_any_element()
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::Viewport;
-    #[test]
-    fn device_dimensions_rotate_and_responsive_fills_available_space() {
-        assert_eq!(Viewport::Responsive.dimensions(false), None);
-        assert_eq!(Viewport::Mobile.dimensions(false), Some((375., 812.)));
-        assert_eq!(Viewport::Mobile.dimensions(true), Some((812., 375.)));
-        assert_eq!(Viewport::Tablet.dimensions(false), Some((768., 1024.)));
     }
 }
 
@@ -925,5 +924,17 @@ fn download_bytes(value: u64) -> String {
         format!("{:.1} KB", value as f64 / 1024.)
     } else {
         format!("{:.1} MB", value as f64 / (1024. * 1024.))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Viewport;
+    #[test]
+    fn device_dimensions_rotate_and_responsive_fills_available_space() {
+        assert_eq!(Viewport::Responsive.dimensions(false), None);
+        assert_eq!(Viewport::Mobile.dimensions(false), Some((375., 812.)));
+        assert_eq!(Viewport::Mobile.dimensions(true), Some((812., 375.)));
+        assert_eq!(Viewport::Tablet.dimensions(false), Some((768., 1024.)));
     }
 }

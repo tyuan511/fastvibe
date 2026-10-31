@@ -3,13 +3,16 @@
 //! beyond the [`ClientOrigin`] its connection was accepted with.
 
 mod async_ask;
+pub mod auth;
 mod board;
 mod browser;
 mod catalog;
+mod cc_switch;
 mod commit_message;
 mod computer;
 mod connection;
 pub mod context;
+mod file_chunk;
 mod git;
 mod goal;
 mod guardian;
@@ -23,6 +26,8 @@ pub mod memory;
 mod mode;
 mod model_detail;
 pub mod office;
+pub mod official;
+mod outbound;
 mod policy;
 mod project_files;
 mod projects;
@@ -30,6 +35,8 @@ mod prompt;
 mod provider_test;
 mod providers;
 mod queue;
+pub mod remote;
+mod remote_discovery;
 mod runtime;
 mod schedules;
 mod search;
@@ -53,41 +60,6 @@ pub use state::ServerState;
 
 /// What `initialize` reports as the server's version.
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Captured once at process startup, never from a replacement executable on disk.
-///
-/// Development launches receive `FASTVIBE_DEV_SERVER_ID` from `cargo dev`, which is a
-/// metadata-only identity. Direct and packaged launches retain the content hash.
-pub async fn build_fingerprint() -> Option<String> {
-    use sha2::{Digest, Sha256};
-    static STARTED_WITH: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
-    STARTED_WITH
-        .get_or_init(|| async {
-            if let Ok(identity) = std::env::var("FASTVIBE_DEV_SERVER_ID")
-                && !identity.is_empty()
-            {
-                return Some(identity);
-            }
-            tokio::task::spawn_blocking(|| {
-                let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
-                Some(format!("{:x}", Sha256::digest(bytes)))
-            })
-            .await
-            .ok()
-            .flatten()
-        })
-        .await
-        .clone()
-}
-
-/// Begins capturing [build_fingerprint] without waiting for it. Call once, at the top of
-/// the process: what matters is that the executable is read as this process started with
-/// it, not that a packaged-build digest is ready before the first client.
-pub fn warm_build_fingerprint() {
-    tokio::spawn(async {
-        let _ = build_fingerprint().await;
-    });
-}
 
 /// The agent every server runs: the given model, and all of the built-in tools. `main` and the
 /// tests both build it here, so what the tests exercise is what ships.

@@ -6,7 +6,7 @@ use fv_protocol::methods::*;
 use fv_protocol::types::Empty;
 use fv_protocol::types::*;
 use fv_theme::Token;
-use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
+use gpui_kit::component::input::{InputState, Textarea, TextareaState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -241,6 +241,14 @@ impl Workspace {
     }
 
     fn pick_skill_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ssh_host.is_some() {
+            let message = trs!(self.english(), "ssh.remote_skills").to_string();
+            if let Some(s) = self.settings.as_mut() {
+                s.skills.notice = Some(message);
+            }
+            cx.notify();
+            return;
+        }
         let Some(s) = &self.settings else {
             return;
         };
@@ -448,14 +456,14 @@ impl Workspace {
                     .child(
                         div()
                             .w(px(224.0))
-                            .h(px(32.0))
+                            .h_9()
                             .px(px(10.0))
                             .flex()
                             .items_center()
                             .rounded_full()
                             .border_1()
                             .border_color(p.c(Token::Input))
-                            .child(Input::new(&s.query).appearance(false).prefix(icon(
+                            .child(crate::ui::input(&s.query).appearance(false).prefix(icon(
                                 "search01",
                                 16.0,
                                 p.c(Token::MutedForeground),
@@ -726,7 +734,7 @@ impl Workspace {
                     .gap(px(12.0))
                     .child(
                         field(trs!(english, "skills.name"))
-                            .child(Input::new(&s.name))
+                            .child(crate::ui::input(&s.name))
                             .child(
                                 div()
                                     .text_size(px(TEXT_XS))
@@ -736,7 +744,7 @@ impl Workspace {
                     )
                     .child(
                         field(trs!(english, "skills.description"))
-                            .child(Input::new(&s.description)),
+                            .child(crate::ui::input(&s.description)),
                     )
                     .child(
                         field(trs!(english, "skills.instructions"))

@@ -13,7 +13,7 @@ use crate::{
 use fv_protocol::types::{FilePreview, FilePreviewKind, UiLanguage};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    component::input::{Input, InputEvent, InputState},
+    component::input::{InputEvent, InputState},
     *,
 };
 use std::{
@@ -593,7 +593,11 @@ impl Workspace {
             .collect();
         for (id, url) in tabs {
             self.ensure_browser_view(&id, &url, cx);
-            self.web_views.get_mut(&id).unwrap().surface.set_download_directory(&self.app_settings.browser_download_dir);
+            self.web_views
+                .get_mut(&id)
+                .unwrap()
+                .surface
+                .set_download_directory(&self.app_settings.browser_download_dir);
             if let Some(view) = self.web_views.get_mut(&id)
                 && let Err(error) = view.surface.mount_hidden(window)
             {
@@ -765,10 +769,13 @@ impl Workspace {
                 .bg(p.c(fv_theme::Token::Muted).opacity(0.4))
                 .child(
                     div().flex_1().min_w_0().child(
-                        Input::new(&address)
+                        crate::ui::input(&address)
+                            .h_8()
+                            .py_0()
                             .appearance(false)
                             .bordered(false)
-                            .text_size(px(TEXT_XS)),
+                            .text_size(px(TEXT_XS))
+                            .line_height(px(16.0)),
                     ),
                 )
                 .child(

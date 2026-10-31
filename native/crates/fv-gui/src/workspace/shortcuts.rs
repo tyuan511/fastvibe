@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use crate::ui::px;
 use fv_protocol::shortcuts::{CATALOG, Chord, ShortcutEdit, ShortcutId, resolve};
 use fv_protocol::types::AppSettingsPatch;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
 use super::Workspace;
@@ -370,7 +370,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(24.0))
-            .child(Input::new(&state.query).prefix(icon(
+            .child(crate::ui::input(&state.query).prefix(icon(
                 "search01",
                 14.0,
                 p.c(Token::MutedForeground),

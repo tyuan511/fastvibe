@@ -175,6 +175,10 @@ impl Workspace {
         request: BrowserRequest,
         cx: &mut Context<Self>,
     ) {
+        if self.ssh_host.is_some() {
+            self.browser_answer(id, "Browser control is unavailable in SSH workspaces; the desktop browser is local to this computer", true);
+            return;
+        }
         if self.app_settings.browser_use_system {
             let Some(backend) = self.backend.clone() else {
                 self.browser_answer(id, "Backend unavailable", true);
@@ -219,7 +223,7 @@ impl Workspace {
                     }
                 }
             };
-            let task = backend.spawn(async move {
+            let task = backend.task(async move {
                 browser
                     .lock()
                     .await

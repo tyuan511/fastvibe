@@ -90,7 +90,13 @@ async fn browser_settings_validate_templates_and_persist() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("{query}"));
-    let error = client.call::<SettingsSet>(AppSettingsPatch {browser_engine:Some("arbitrary-command".into()),..Default::default()}).await.unwrap_err();
+    let error = client
+        .call::<SettingsSet>(AppSettingsPatch {
+            browser_engine: Some("arbitrary-command".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("browserEngine"));
     let saved = client
         .call::<SettingsSet>(AppSettingsPatch {
@@ -112,7 +118,7 @@ async fn browser_settings_validate_templates_and_persist() {
     );
     assert_eq!(saved.browser_download_dir, "/tmp/fastvibe-downloads");
     assert!(saved.browser_use_system);
-    assert_eq!(saved.browser_engine,"chrome");
+    assert_eq!(saved.browser_engine, "chrome");
     assert!(saved.keep_awake);
     assert_eq!(saved.proxy_url, "http://127.0.0.1:8888");
     assert_eq!(client.call::<SettingsGet>(Empty {}).await.unwrap(), saved);
@@ -582,8 +588,9 @@ async fn a_fork_has_independent_history_images_and_subscription() {
     tokio::spawn(UnixServer::bind(state.clone(), &sock).await.unwrap().run());
     let (c, _) = connect(&sock).await;
     let fork = c
-        .call::<ThreadFork>(ThreadIdParams {
+        .call::<ThreadFork>(ThreadForkParams {
             thread_id: original.id.clone(),
+            turn_id: None,
         })
         .await
         .unwrap()
@@ -627,8 +634,9 @@ async fn a_fork_has_independent_history_images_and_subscription() {
     let rt = state.runtime(&fork.id);
     rt.begin(&state, "busy").await.unwrap();
     assert!(
-        c.call::<ThreadFork>(ThreadIdParams {
-            thread_id: fork.id.clone()
+        c.call::<ThreadFork>(ThreadForkParams {
+            thread_id: fork.id.clone(),
+            turn_id: None
         })
         .await
         .is_err(),
@@ -671,4 +679,86 @@ async fn simultaneous_sidebar_patches_do_not_erase_each_other() {
     let (c, _) = connect(&sock).await;
     let prefs = c.call::<SettingsGet>(Empty {}).await.unwrap().sidebar;
     assert_eq!(prefs.order.len(), 12);
+}
+
+#[tokio::test]
+async fn fork_from_a_turn_includes_it_fully_and_excludes_every_later_turn() {
+    use fv_core::{AssistantMessage, ContentBlock, Message, StopReason, Usage};
+    use fv_protocol::methods::ThreadFork;
+    let data = tempfile::tempdir().unwrap();
+    let agent = fv_server::agent_with_builtin_tools(Arc::new(ScriptedModel::new([])));
+    let state = Arc::new(ServerState::new(data.path().to_path_buf(), agent).unwrap());
+    let original = state.create_thread(None, None, None, None).unwrap();
+    for id in ["first", "selected", "later"] {
+        state
+            .store
+            .transcripts
+            .start_turn(&original.id, id)
+            .unwrap();
+        state
+            .store
+            .transcripts
+            .append(
+                &original.id,
+                &[
+                    Message::User { text: id.into() },
+                    Message::Assistant(AssistantMessage {
+                        duration_ms: None,
+                        content: vec![ContentBlock::Text {
+                            text: format!("reply {id}"),
+                        }],
+                        stop: StopReason::Stop,
+                        usage: Usage {
+                            input_tokens: 1,
+                            ..Default::default()
+                        },
+                        model: Some("p/m".into()),
+                    }),
+                ],
+            )
+            .unwrap();
+        state
+            .store
+            .transcripts
+            .finish_turn(&original.id, id, TurnStatus::Completed, None)
+            .unwrap();
+    }
+    let socket = data.path().join("fork-boundary.sock");
+    tokio::spawn(
+        UnixServer::bind(state.clone(), &socket)
+            .await
+            .unwrap()
+            .run(),
+    );
+    let (client, _) = connect(&socket).await;
+    let fork = client
+        .call::<ThreadFork>(ThreadForkParams {
+            thread_id: original.id.clone(),
+            turn_id: Some("selected".into()),
+        })
+        .await
+        .unwrap()
+        .thread;
+    let copied = state.store.transcripts.read(&fork.id).unwrap();
+    assert_eq!(copied.messages.len(), 4);
+    assert_eq!(
+        copied
+            .turns()
+            .iter()
+            .map(|turn| turn.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "selected"]
+    );
+    assert_eq!(state.store.db.usage_records().unwrap().len(), 3);
+    let count = state.threads(true).unwrap().len();
+    assert!(
+        client
+            .call::<ThreadFork>(ThreadForkParams {
+                thread_id: original.id,
+                turn_id: Some("not-a-turn".into())
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(state.threads(true).unwrap().len(), count);
 }

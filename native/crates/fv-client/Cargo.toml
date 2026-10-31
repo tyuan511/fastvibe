@@ -12,6 +12,8 @@ serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 futures-util.workspace = true
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+reqwest = { version = "0.13", features = ["rustls", "json"] }
 
 [lints]
 workspace = true

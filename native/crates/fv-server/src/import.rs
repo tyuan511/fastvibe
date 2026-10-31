@@ -13,6 +13,9 @@ use fv_protocol::types::{
 
 use crate::state::ServerState;
 
+mod electron;
+pub use electron::{migration_commit, migration_scan};
+
 fn invalid(message: impl Into<String>) -> ErrorObject {
     ErrorObject::new(code::INVALID_PARAMS, message)
 }
@@ -182,30 +185,99 @@ pub fn commit(
         }
     }
     .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
+    persist_import(state, imported)
+}
+
+fn persist_import(
+    state: &ServerState,
+    imported: fv_import::ImportedSession,
+) -> Result<ThreadStartResponse, ErrorObject> {
+    use sha2::{Digest, Sha256};
+    let _guard = state.workspace_entries_lock.lock().unwrap();
     if imported.messages.is_empty() || imported.messages.len() != imported.timestamps.len() {
         return Err(invalid("import candidate has no complete conversation"));
     }
-    let thread = state.create_thread(imported.candidate.cwd.clone(), None, None, None)?;
-    if let Err(error) = state.store.transcripts.append_imported(
-        &thread.id,
-        &imported.messages,
-        &imported.timestamps,
-        &imported.candidate.source_id,
-    ) {
-        let _ = state.delete_thread(&thread.id);
-        return Err(ErrorObject::new(code::INTERNAL_ERROR, error.to_string()));
+    let source_identity = format!(
+        "{}\0{}",
+        imported.candidate.source, imported.candidate.source_id
+    );
+    let id = format!("import-{:x}", Sha256::digest(source_identity.as_bytes()));
+    if let Some(thread) = state.thread(&id)? {
+        return Ok(ThreadStartResponse { thread });
     }
-    let mut imported_thread = thread.clone();
-    imported_thread.title = imported.candidate.title;
-    imported_thread.source = Some(imported.candidate.source);
-    imported_thread.updated_at = imported_thread
-        .created_at
-        .max(imported.candidate.updated_at);
+    let cwd = imported
+        .candidate
+        .cwd
+        .clone()
+        .filter(|cwd| Path::new(cwd).is_dir());
+    let imported_thread = fv_protocol::types::Thread {
+        id,
+        title: imported.candidate.title,
+        cwd,
+        project: None,
+        source: Some(imported.candidate.source),
+        created_at: imported.candidate.created_at,
+        updated_at: imported.candidate.updated_at,
+        archived: false,
+        pinned: false,
+        unread: false,
+        worktree: None,
+        model: None,
+        thinking: None,
+    };
+    let origins = imported
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            imported
+                .origins
+                .get(i)
+                .and_then(Option::as_ref)
+                .map_or_else(
+                    || fv_store::UsageOrigin {
+                        thread_id: imported_thread.id.clone(),
+                        entry_id: format!(
+                            "turn:import:{}:{}:{i}",
+                            source_identity.len(),
+                            source_identity
+                        ),
+                    },
+                    |(session, entry)| electron::request_origin(session, entry),
+                )
+        })
+        .collect::<Vec<_>>();
+    let staged_dir =
+        tempfile::tempdir().map_err(|e| ErrorObject::new(code::INTERNAL_ERROR, e.to_string()))?;
+    let staged = fv_store::TranscriptStore::new(staged_dir.path().to_path_buf())
+        .map_err(|e| ErrorObject::new(code::INTERNAL_ERROR, e.to_string()))?;
+    staged
+        .append_with_origins(
+            &imported_thread.id,
+            &imported.messages,
+            &imported.timestamps,
+            Some(&origins),
+        )
+        .map_err(|e| ErrorObject::new(code::INTERNAL_ERROR, e.to_string()))?;
+    let loaded = staged
+        .read(&imported_thread.id)
+        .map_err(|e| ErrorObject::new(code::INTERNAL_ERROR, e.to_string()))?;
+    let messages = imported
+        .messages
+        .iter()
+        .map(|m| state.store.images.externalize(&imported_thread.id, m))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ErrorObject::new(code::INTERNAL_ERROR, e.to_string()))?;
+    state
+        .store
+        .transcripts
+        .install_loaded(&imported_thread.id, &loaded, &messages)
+        .map_err(|e| ErrorObject::new(code::INTERNAL_ERROR, e.to_string()))?;
     state
         .store
         .db
         .put_thread(&imported_thread)
-        .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))?;
+        .map_err(|e| ErrorObject::new(code::INTERNAL_ERROR, e.to_string()))?;
     state.broadcast(fv_protocol::ServerNotification::CatalogChanged(
         fv_protocol::types::CatalogChanged {},
     ));

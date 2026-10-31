@@ -141,7 +141,8 @@ pub fn render(messages: &[Message], budget: usize) -> Option<String> {
                 lines.push(format!("[user] {}", clip(&redact(text.trim()), 10_000)));
             }
             Message::Assistant(a) => {
-                let text = fv_core::strip_memory_citation(&a.text());
+                let answer = a.text();
+                let text = fv_core::strip_memory_citation(&answer);
                 if !text.trim().is_empty() {
                     answers += 1;
                     lines.push(format!(

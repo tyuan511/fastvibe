@@ -3,6 +3,8 @@
 //! Adapters deliberately stop at FastVibe's engine messages. Persistence, catalog registration,
 //! duplicate detection and UI selection remain separate so a scan can never mutate a source.
 
+pub mod electron;
+
 use fv_core::{AssistantMessage, ContentBlock, Message, StopReason, Usage};
 use serde_json::Value;
 use std::{
@@ -30,6 +32,8 @@ pub struct ImportedSession {
     pub messages: Vec<Message>,
     pub timestamps: Vec<i64>,
     pub skipped: Vec<String>,
+    /// Original request identities, parallel to messages when known (not target thread ids).
+    pub origins: Vec<Option<(String, String)>>,
 }
 
 #[derive(Debug)]
@@ -218,9 +222,8 @@ pub fn read_claude(path: &Path) -> Result<ImportedSession, ImportError> {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
-                let index = if id.is_empty() {
-                    messages.len()
-                } else if let Some(index) = assistant_by_id.get(&id) {
+                let index = if let Some(index) = assistant_by_id.get(&id).filter(|_| !id.is_empty())
+                {
                     *index
                 } else {
                     let index = messages.len();
@@ -291,6 +294,7 @@ pub fn read_claude(path: &Path) -> Result<ImportedSession, ImportError> {
     }
     Ok(ImportedSession {
         candidate,
+        origins: vec![None; messages.len()],
         messages,
         timestamps,
         skipped,
@@ -330,17 +334,66 @@ pub fn read_pi(path: &Path) -> Result<ImportedSession, ImportError> {
     let mut messages = Vec::new();
     let mut timestamps = Vec::new();
     let mut skipped = Vec::new();
+    let mut origins = Vec::new();
+    let mut session_id = candidate.source_id.clone();
     let mut model = None;
     let mut tool_names: HashMap<String, String> = HashMap::new();
-    for value in lines(path)? {
+    let entries = lines(path)?.collect::<Vec<_>>();
+    let mut active = std::collections::HashSet::new();
+    let indexed: HashMap<_, _> = entries
+        .iter()
+        .filter_map(|value| value.as_ref().ok())
+        .filter_map(|value| {
+            value
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| (id, value))
+        })
+        .collect();
+    let leaf = entries
+        .iter()
+        .rev()
+        .filter_map(|value| value.as_ref().ok())
+        .find(|value| value.get("parentId").is_some());
+    if let Some(leaf) = leaf {
+        let mut cursor = leaf.get("id").and_then(Value::as_str);
+        while let Some(id) = cursor {
+            if !active.insert(id.to_string()) {
+                break;
+            }
+            cursor = indexed
+                .get(id)
+                .and_then(|value| value.get("parentId"))
+                .and_then(Value::as_str);
+        }
+    }
+    drop(indexed);
+    for value in entries {
         let Ok(value) = value else {
             skipped.push("invalid JSON line".into());
             continue;
         };
         let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+        if !active.is_empty()
+            && value.get("parentId").is_some()
+            && !value
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| active.contains(id))
+        {
+            continue;
+        }
         let at = timestamp(value.get("timestamp"));
+        let before = messages.len();
         match kind {
-            "session" | "session_info" | "thinking_level_change" | "label" => {}
+            "session" => {
+                session_id = value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&session_id)
+                    .to_owned();
+            }
+            "session_info" | "thinking_level_change" | "label" => {}
             "model_change" => {
                 model = value
                     .get("modelId")
@@ -368,6 +421,7 @@ pub fn read_pi(path: &Path) -> Result<ImportedSession, ImportError> {
                         }
                     }
                     Some("toolResult") => {
+                        let images = image_parts(message.get("content"));
                         let call_id = message
                             .get("toolCallId")
                             .and_then(Value::as_str)
@@ -387,6 +441,17 @@ pub fn read_pi(path: &Path) -> Result<ImportedSession, ImportError> {
                                 .unwrap_or(false),
                         });
                         timestamps.push(at);
+                        if !images.is_empty() {
+                            messages.push(Message::ToolImages {
+                                call_id: call_id.into(),
+                                name: tool_names
+                                    .get(call_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| "imported_tool".into()),
+                                images,
+                            });
+                            timestamps.push(at);
+                        }
                     }
                     Some("assistant") => {
                         let mut content = Vec::new();
@@ -451,7 +516,12 @@ pub fn read_pi(path: &Path) -> Result<ImportedSession, ImportError> {
                             model: message
                                 .get("model")
                                 .and_then(Value::as_str)
-                                .map(str::to_string)
+                                .map(|id| {
+                                    message.get("provider").and_then(Value::as_str).map_or_else(
+                                        || id.to_owned(),
+                                        |provider| format!("{provider}/{id}"),
+                                    )
+                                })
                                 .or_else(|| model.clone()),
                         }));
                         timestamps.push(at);
@@ -461,9 +531,22 @@ pub fn read_pi(path: &Path) -> Result<ImportedSession, ImportError> {
             }
             _ => {}
         }
+        let origin = value.get("id").and_then(Value::as_str).map(|entry| {
+            (
+                value
+                    .get("fastvibeUsageSessionId")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or(&session_id)
+                    .to_owned(),
+                entry.to_owned(),
+            )
+        });
+        origins.extend((before..messages.len()).map(|_| origin.clone()));
     }
     Ok(ImportedSession {
         candidate,
+        origins,
         messages,
         timestamps,
         skipped,
@@ -671,6 +754,7 @@ pub fn read_codex(path: &Path) -> Result<ImportedSession, ImportError> {
     }
     Ok(ImportedSession {
         candidate,
+        origins: vec![None; messages.len()],
         messages,
         timestamps,
         skipped,
@@ -938,6 +1022,7 @@ fn read_sqlite_store(
     };
     Ok(ImportedSession {
         candidate,
+        origins: vec![None; assembled.messages.len()],
         messages: assembled.messages,
         timestamps: assembled.timestamps,
         skipped: assembled.skipped,
@@ -1641,6 +1726,25 @@ fn message_text(value: Option<&Value>) -> String {
         _ => String::new(),
     }
 }
+fn image_parts(value: Option<&Value>) -> Vec<fv_core::ImagePart> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| {
+            if part["type"].as_str() != Some("image") {
+                return None;
+            }
+            Some(fv_core::ImagePart {
+                mime: part["mimeType"].as_str()?.into(),
+                source: fv_core::ImageSource::Base64 {
+                    data: part["data"].as_str()?.into(),
+                },
+            })
+        })
+        .collect()
+}
+
 fn tool_result_text(value: Option<&Value>) -> String {
     message_text(value)
 }
@@ -1656,19 +1760,23 @@ fn usage(value: Option<&Value>) -> Usage {
     };
     Usage {
         input_tokens: value
-            .get("input_tokens")
+            .get("input")
+            .or_else(|| value.get("input_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0),
         output_tokens: value
-            .get("output_tokens")
+            .get("output")
+            .or_else(|| value.get("output_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0),
         cache_read_tokens: value
-            .get("cache_read_input_tokens")
+            .get("cacheRead")
+            .or_else(|| value.get("cache_read_input_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0),
         cache_write_tokens: value
-            .get("cache_creation_input_tokens")
+            .get("cacheWrite")
+            .or_else(|| value.get("cache_creation_input_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0),
     }
@@ -1678,6 +1786,34 @@ fn usage(value: Option<&Value>) -> Usage {
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn pi_import_uses_leaf_parent_chain_instead_of_combining_retry_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path,concat!(r#"{"type":"session","id":"s"}"#,"\n",r#"{"type":"message","id":"u","parentId":null,"message":{"role":"user","content":"prompt"}}"#,"\n",r#"{"type":"message","id":"old","parentId":"u","message":{"role":"assistant","content":[{"type":"text","text":"discarded"}]}}"#,"\n",r#"{"type":"message","id":"retry","parentId":"u","message":{"role":"assistant","content":[{"type":"text","text":"kept"}]}}"#,"\n")).unwrap();
+        let session = read_pi(&path).unwrap();
+        assert_eq!(session.messages.len(), 2);
+        assert!(
+            matches!(&session.messages[1],Message::Assistant(a)if matches!(&a.content[0],ContentBlock::Text{text}if text=="kept"))
+        );
+        assert_eq!(session.origins[1], Some(("s".into(), "retry".into())));
+    }
+
+    #[test]
+    fn pi_usage_and_oldest_request_identity_survive_forks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, concat!(r#"{"type":"session","id":"fork"}"#, "\n",r#"{"type":"message","id":"request","parentId":null,"timestamp":2000,"fastvibeUsageSessionId":"original","message":{"role":"assistant","provider":"custom","model":"x","content":[{"type":"text","text":"answer"}],"usage":{"input":3,"output":4,"cacheRead":5,"cacheWrite":6}}}"#,"\n")).unwrap();
+        let session = read_pi(&path).unwrap();
+        assert_eq!(
+            session.origins[0],
+            Some(("original".into(), "request".into()))
+        );
+        assert!(
+            matches!(&session.messages[0],Message::Assistant(a) if a.usage.input_tokens==3 && a.usage.output_tokens==4 && a.usage.cache_read_tokens==5 && a.usage.cache_write_tokens==6)
+        );
+    }
+
     #[test]
     fn claude_blocks_group_by_message_id_and_skip_meta() {
         let dir = tempfile::tempdir().unwrap();

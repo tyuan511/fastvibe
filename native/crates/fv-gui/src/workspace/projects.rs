@@ -6,7 +6,7 @@ use crate::ui::px;
 use fv_protocol::methods::{ProjectCreate, ProjectUpdate};
 use fv_protocol::types::{ProjectCreateParams, ProjectUpdateParams, UiLanguage};
 use fv_theme::Token;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -24,6 +24,7 @@ pub struct ProjectDialog {
     pub folders: Vec<String>,
     pub busy: bool,
     pub error: Option<String>,
+    pub remote_folder: Entity<InputState>,
 }
 
 impl Workspace {
@@ -67,6 +68,9 @@ impl Workspace {
             folders,
             busy: false,
             error: None,
+            remote_folder: cx.new(|cx| {
+                InputState::new(window, cx).placeholder(trs!(self.english(), "ssh.remote_folder"))
+            }),
         });
         self.close_menus(cx);
         cx.notify();
@@ -74,6 +78,20 @@ impl Workspace {
 
     /// 添加文件夹: the system's folder picker, any number of folders at once.
     pub(super) fn pick_folders(&mut self, cx: &mut Context<Self>) {
+        if self.ssh_host.is_some() {
+            let english = self.english();
+            if let Some(d) = self.project_dialog.as_mut() {
+                let path = d.remote_folder.read(cx).value().trim().to_string();
+                if !path.starts_with('/') || path.chars().any(char::is_control) {
+                    d.error = Some(trs!(english, "ssh.invalid_folder").into());
+                } else if !d.folders.contains(&path) {
+                    d.folders.push(path);
+                    d.error = None;
+                }
+            }
+            cx.notify();
+            return;
+        }
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -227,7 +245,7 @@ impl Workspace {
             .flex_col();
         for (i, folder) in d.folders.iter().enumerate() {
             let group = SharedString::from(format!("folder-{i}"));
-            let missing = !std::path::Path::new(folder).exists();
+            let missing = self.ssh_host.is_none() && !std::path::Path::new(folder).exists();
             let (primary_of, remove_of) = (folder.clone(), folder.clone());
             rows = rows.child(
                 div()
@@ -320,6 +338,14 @@ impl Workspace {
                     }),
             );
         }
+        if self.ssh_host.is_some() {
+            rows = rows.child(
+                div()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .child(crate::ui::input(&d.remote_folder)),
+            );
+        }
         rows = rows.child(
             div()
                 .id("add-folder")
@@ -333,7 +359,14 @@ impl Workspace {
                 .muted(p)
                 .hover(move |d| d.bg(hover))
                 .child(icon("add01", 16.0, p.c(Token::MutedForeground)))
-                .child(trs!(english, "projects.add_folder"))
+                .child(trs!(
+                    english,
+                    if self.ssh_host.is_some() {
+                        "ssh.add_folder"
+                    } else {
+                        "projects.add_folder"
+                    }
+                ))
                 .on_click(cx.listener(|this, _, _, cx| this.pick_folders(cx))),
         );
 
@@ -368,7 +401,7 @@ impl Workspace {
                             .relative()
                             .flex_1()
                             .min_w_0()
-                            .child(Input::new(&d.name).appearance(false).bordered(false))
+                            .child(crate::ui::input(&d.name).appearance(false).bordered(false))
                             .when_some(placeholder, |d, text| {
                                 d.child(
                                     div()

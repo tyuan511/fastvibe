@@ -29,6 +29,26 @@ pub(crate) struct TurnRecord {
 }
 
 impl Loaded {
+    /// Copy through the selected turn, including its tools, errors and usage provenance.
+    /// Legacy position-derived turn ids use the same projection that clients see on resume.
+    pub fn through_turn(mut self, id: &str) -> Option<Self> {
+        let turns = self.positioned_turns();
+        let index = turns.iter().position(|(_, turn)| turn.id == id)?;
+        let keep = turns
+            .get(index + 1)
+            .map_or(self.messages.len(), |(start, _)| *start);
+        let kept_ids: std::collections::HashSet<_> = turns[..=index]
+            .iter()
+            .map(|(_, turn)| turn.id.as_str())
+            .collect();
+        self.turn_records
+            .retain(|record| kept_ids.contains(record.id.as_str()));
+        self.messages.truncate(keep);
+        self.timestamps.truncate(keep);
+        self.origins.truncate(keep);
+        Some(self)
+    }
+
     /// Original turn ids and terminal errors survive process restarts. Older transcripts
     /// without boundary records keep the position-derived projection they used before.
     pub fn turns(&self) -> Vec<Turn> {

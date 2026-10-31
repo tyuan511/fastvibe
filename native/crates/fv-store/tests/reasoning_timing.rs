@@ -65,6 +65,8 @@ fn reasoning_durations_survive_reload_renumbering_and_fork() {
     assert_eq!(thoughts, [("first", Some(3500)), ("second", Some(1100))]);
     assert_eq!(loaded.messages, messages);
 
-    store.copy_loaded("fork", &loaded, &loaded.messages).unwrap();
+    store
+        .copy_loaded("fork", &loaded, &loaded.messages)
+        .unwrap();
     assert_eq!(store.read("fork").unwrap().turns(), turns);
 }

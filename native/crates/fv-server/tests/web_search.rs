@@ -162,8 +162,9 @@ async fn custom_search_metadata_inline_links_restart_fork_usage_and_opt_out_use_
     assert!(loaded.messages.iter().any(|m|matches!(m,fv_core::Message::Assistant(a)if a.tool_calls().count()==0&&a.content.iter().any(|b|matches!(b,ContentBlock::HostedSearch(_))))));
     assert_eq!(state.store.db.usage_records().unwrap().len(), 1);
     let branch = c
-        .call::<ThreadFork>(ThreadIdParams {
+        .call::<ThreadFork>(ThreadForkParams {
             thread_id: thread.clone(),
+            turn_id: None,
         })
         .await
         .unwrap()

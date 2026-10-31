@@ -14,7 +14,16 @@ fn internal(e: impl std::fmt::Display) -> ErrorObject {
 }
 
 pub fn read(state: &ServerState) -> Result<AppSettings, ErrorObject> {
-    read_db(&state.store.db).map_err(internal)
+    if let Some(settings) = state.settings_cache.lock().unwrap().clone() {
+        return Ok(settings);
+    }
+    let settings = read_db(&state.store.db).map_err(internal)?;
+    *state.settings_cache.lock().unwrap() = Some(settings.clone());
+    Ok(settings)
+}
+
+pub(crate) fn invalidate_cache(state: &ServerState) {
+    *state.settings_cache.lock().unwrap() = None;
 }
 
 pub(crate) fn read_db(db: &fv_store::Db) -> Result<AppSettings, fv_store::StoreError> {
@@ -46,7 +55,9 @@ pub fn set(state: &ServerState, mut patch: AppSettingsPatch) -> Result<AppSettin
     }
     if let Some(homepage) = patch.browser_homepage.as_mut() {
         *homepage = homepage.trim().to_string();
-        if homepage.is_empty() { *homepage="about:blank".into(); }
+        if homepage.is_empty() {
+            *homepage = "about:blank".into();
+        }
         if homepage != "about:blank" && fv_core::safe_web_url(homepage).is_none() {
             return Err(invalid(
                 "browserHomepage must be about:blank or an HTTP(S) URL",
@@ -143,6 +154,7 @@ fn write(state: &ServerState, settings: AppSettings) -> Result<AppSettings, Erro
         settings.auto_compaction_enabled,
         std::sync::atomic::Ordering::Release,
     );
+    *state.settings_cache.lock().unwrap() = Some(settings.clone());
     state.keep_awake.set(settings.keep_awake);
     state.computer_settings_changed(settings.computer_control);
     state.broadcast(ServerNotification::SettingsChanged(settings.clone()));

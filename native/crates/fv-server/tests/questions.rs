@@ -253,6 +253,28 @@ async fn a_question_stops_the_turn_until_the_client_answers() {
         "the model was asked again before the user answered"
     );
 
+    // Knowing a request id is insufficient: a separate initialized connection that never
+    // opened this thread must not consume its parked question.
+    let outsider = h.peer().await;
+    outsider
+        .client
+        .respond(
+            id.clone(),
+            json!({"answers": {"scope": {"answers": ["Everything"]}}}),
+        )
+        .await
+        .unwrap();
+    let (uninitialized, _) = Client::connect_unix(&h.sock).await.unwrap();
+    uninitialized
+        .respond(
+            id.clone(),
+            json!({"answers": {"scope": {"answers": ["Everything"]}}}),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(h.state.pending_prompts(&thread).len(), 1);
+
     p.client
         .respond(
             id.clone(),

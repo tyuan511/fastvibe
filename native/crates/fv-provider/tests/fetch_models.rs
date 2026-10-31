@@ -89,7 +89,7 @@ async fn relays_that_answer_with_other_shapes_are_still_read() {
 }
 
 #[tokio::test]
-async fn failures_say_what_the_provider_said() {
+async fn failures_are_safe_and_categorized() {
     let mock = serve(vec![
         Reply::status(401, r#"{"error":{"message":"Incorrect API key provided"}}"#),
         Reply::status(200, "<html>not json</html>"),
@@ -100,7 +100,9 @@ async fn failures_say_what_the_provider_said() {
         .await
         .unwrap_err();
     assert!(
-        err.contains("401") && err.contains("Incorrect API key"),
+        err.contains("401")
+            && err.contains("API key is invalid")
+            && !err.contains("Incorrect API key provided"),
         "{err}"
     );
     let err = fetch_models(Protocol::OpenAiChat, &mock.url, "k")
@@ -122,4 +124,65 @@ async fn failures_say_what_the_provider_said() {
         .await
         .unwrap_err();
     assert!(err.contains("could not reach"), "{err}");
+}
+
+#[tokio::test]
+async fn configured_proxy_is_used_and_body_secrets_never_escape() {
+    let proxy = serve(vec![Reply::status(401, "private-upstream-body-sk-typed")]).await;
+    let error = fv_provider::fetch_models_with_proxy(
+        Protocol::OpenAiChat,
+        "http://provider.invalid/v1",
+        "sk-typed",
+        Some(&proxy.url),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.category(), "authentication");
+    assert_eq!(error.status(), Some(401));
+    assert!(!error.to_string().contains("private-upstream-body"));
+    assert!(!error.to_string().contains("sk-typed"));
+    assert_eq!(
+        proxy.captured.lock().unwrap()[0].path,
+        "http://provider.invalid/v1/models"
+    );
+}
+
+#[tokio::test]
+async fn large_answers_and_cross_origin_redirects_are_refused() {
+    let oversized = "x".repeat(4 * 1024 * 1024 + 1);
+    let mock = serve(vec![
+        Reply::status(200, &oversized),
+        Reply::status(302, "").header("location", "https://elsewhere.invalid/models"),
+    ])
+    .await;
+    let error = fv_provider::fetch_models_with_proxy(Protocol::OpenAiChat, &mock.url, "k", None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.category(), "tooLarge");
+    let error = fv_provider::fetch_models_with_proxy(Protocol::OpenAiChat, &mock.url, "k", None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status(), Some(302));
+    assert_eq!(mock.captured.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn gemini_pages_and_openai_shaped_relays_are_read() {
+    let mock = serve(vec![
+        Reply::status(
+            200,
+            r#"{"models":[{"name":"models/a"}],"nextPageToken":"next"}"#,
+        ),
+        Reply::status(200, r#"{"data":[{"id":"models/b"}]}"#),
+    ])
+    .await;
+    let models = fetch_models(Protocol::Google, &mock.url, "k")
+        .await
+        .unwrap();
+    assert_eq!(ids(&models), ["a", "b"]);
+    assert!(
+        mock.captured.lock().unwrap()[1]
+            .path
+            .contains("pageToken=next")
+    );
 }

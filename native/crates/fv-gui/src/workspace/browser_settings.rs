@@ -37,9 +37,7 @@ impl Default for BrowserServices {
             loading: false,
             importing: None,
             notice: None,
-            system: Arc::new(tokio::sync::Mutex::new(SystemBrowser::new(
-                std::env::temp_dir().join("fastvibe-browser-profile"),
-            ))),
+            system: Arc::new(tokio::sync::Mutex::new(SystemBrowser::temporary())),
             cookie_surface: None,
             menu: BrowserMenu::Main,
             downloads: vec![],
@@ -92,7 +90,7 @@ impl Workspace {
                     Ok((cookies, skipped)) if system => {
                         if let Some(backend) = backend {
                             backend
-                                .spawn(async move {
+                                .task(async move {
                                     browser.lock().await.import(&engine, &cookies).await.map(
                                         |count| {
                                             (count, skipped + cookies.len().saturating_sub(count))

@@ -232,6 +232,9 @@ impl Terminals {
         }
         // A login shell, so the user's own profile is read: without it `PATH`, aliases and their
         // prompt are all missing, which is not the terminal they asked for.
+        // cmd.exe (the Windows default) has no -l option. Only Unix shells have the
+        // login-shell contract; passing it on Windows starts cmd with an invalid switch.
+        #[cfg(unix)]
         command.arg("-l");
         command.cwd(&dir);
         command.env("TERM", "xterm-256color");

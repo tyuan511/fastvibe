@@ -19,7 +19,7 @@
 use crate::ui::px;
 use fv_protocol::types::{QueuePauseReason, QueueState};
 use fv_theme::Token;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::InputState;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -170,7 +170,12 @@ impl Workspace {
                 );
             let editing_row = open.is_some();
             row = match open.as_ref() {
-                Some(input) => row.child(div().flex_1().min_w_0().child(Input::new(input))),
+                Some(input) => row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(crate::ui::input(input).h_8()),
+                ),
                 None => row
                     .children(
                         skill

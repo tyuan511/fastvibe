@@ -18,7 +18,7 @@ use fv_protocol::{
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    component::input::{Input, InputState, Textarea, TextareaState},
+    component::input::{InputState, Textarea, TextareaState},
     *,
 };
 use std::collections::HashSet;
@@ -1440,7 +1440,7 @@ impl Workspace {
         form = form
             .child(field(
                 trs!(english, "schedules.page.name"),
-                Input::new(&e.name).into_any_element(),
+                crate::ui::input(&e.name).into_any_element(),
                 None,
                 p,
             ))
@@ -1771,15 +1771,15 @@ impl Workspace {
                             .gap(px(16.0))
                             .child(half(
                                 trs!(english, "schedules.page.date"),
-                                Input::new(&e.day).into_any_element(),
+                                crate::ui::input(&e.day).into_any_element(),
                             ))
                             .child(half(
                                 trs!(english, "schedules.page.time"),
-                                Input::new(&e.time).into_any_element(),
+                                crate::ui::input(&e.time).into_any_element(),
                             ))
                             .child(half(
                                 trs!(english, "schedules.page.time_zone"),
-                                Input::new(&e.zone).into_any_element(),
+                                crate::ui::input(&e.zone).into_any_element(),
                             )),
                     )
                     .child(
@@ -1796,11 +1796,11 @@ impl Workspace {
                     .gap(px(16.0))
                     .child(half(
                         trs!(english, "schedules.page.time"),
-                        Input::new(&e.time).into_any_element(),
+                        crate::ui::input(&e.time).into_any_element(),
                     ))
                     .child(half(
                         trs!(english, "schedules.page.time_zone"),
-                        Input::new(&e.zone).into_any_element(),
+                        crate::ui::input(&e.zone).into_any_element(),
                     )),
             );
         }
@@ -2258,19 +2258,10 @@ fn select_trigger(
 
 /// `SelectContent`, laid in the form under its trigger.
 fn options(p: &crate::theme::Palette, id: &'static str) -> Stateful<Div> {
-    div()
+    super::settings::popover(p)
         .id(id)
         .max_h(px(200.0))
         .overflow_y_scroll()
-        .p(px(4.0))
-        .rounded(px(10.0))
-        .border_1()
-        .border_color(p.c(Token::Border))
-        .bg(p.overlay())
-        .shadow_md()
-        .flex()
-        .flex_col()
-        .child(crate::ui::backdrop(10.0, 28.0, 1.8))
 }
 
 fn option(

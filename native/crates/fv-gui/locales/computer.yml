@@ -84,3 +84,27 @@ computer.relaunch_note:
 computer.daemon_exited:
   zh: "电脑操控组件意外退出了。"
   en: "The computer-control component exited unexpectedly."
+computer.component_missing:
+  zh: "找不到电脑操控组件：%{path}"
+  en: "Computer-control component not found: %{path}"
+computer.launch_failed:
+  zh: "无法启动电脑操控组件：%{detail}"
+  en: "Could not start the computer-control component: %{detail}"
+computer.start_exited:
+  zh: "电脑操控组件启动后退出了：%{detail}"
+  en: "The computer-control component exited during startup: %{detail}"
+computer.start_timeout:
+  zh: "电脑操控组件未能及时就绪。请重试，或重新下载组件。"
+  en: "The computer-control component did not become ready in time. Retry or download it again."
+computer.background:
+  zh: "优先后台投递"
+  en: "Prefer background delivery"
+computer.background_description:
+  zh: "支持此选项的动作默认不抢焦点；仍可明确请求前台操作。不支持后台投递时会报错。"
+  en: "Default to background delivery for actions that support it; an explicit foreground request still takes priority. Unsupported background delivery returns an error."
+computer.clipboard:
+  zh: "读写剪贴板"
+  en: "Read and write the clipboard"
+computer.clipboard_description:
+  zh: "允许电脑工具读写共享剪贴板；写入会覆盖原有内容。"
+  en: "Allow computer tools to read and write the shared clipboard; writing replaces its contents."

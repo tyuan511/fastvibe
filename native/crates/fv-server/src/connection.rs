@@ -7,13 +7,24 @@ use fv_protocol::types::*;
 use fv_protocol::{ClientRequest, ErrorObject, Message, PROTOCOL_VERSION, RequestId};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 
 use crate::policy::allows;
 use crate::state::{ConnId, OUTBOUND_CAPACITY, ServerState};
 
 const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+
+struct ConnectionLease {
+    state: Arc<ServerState>,
+    conn: ConnId,
+    writer: tokio::task::AbortHandle,
+}
+impl Drop for ConnectionLease {
+    fn drop(&mut self) {
+        self.state.unregister(self.conn);
+        self.writer.abort();
+    }
+}
 
 /// Serve one client until it hangs up. The byte stream can be a unix socket, an `ssh` child's
 /// stdio or (in tests) an in-memory pipe; only `origin` says how far to trust it.
@@ -27,64 +38,111 @@ pub async fn serve_connection<R, W>(
     W: AsyncWrite + Unpin + Send + 'static,
 {
     state.start_services();
-    let (tx, mut rx) = mpsc::channel::<Message>(OUTBOUND_CAPACITY);
+    let (tx, mut rx) = crate::outbound::channel(OUTBOUND_CAPACITY);
     let conn = state.register(tx.clone());
+    let mut disconnected = tx.subscribe_closed();
 
-    let writer_task = tokio::spawn(async move {
+    let mut writer_task = tokio::spawn(async move {
         let mut sink = FramedWrite::new(writer, LinesCodec::new_with_max_length(MAX_FRAME_BYTES));
         while let Some(frame) = rx.recv().await {
-            let line = serde_json::to_string(&frame).expect("frames serialize");
-            if sink.send(line).await.is_err() {
+            let line = frame.encoded.to_string();
+            if !matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(15), sink.send(line)).await,
+                Ok(Ok(()))
+            ) {
                 break;
             }
         }
     });
 
+    let _lease = ConnectionLease {
+        state: state.clone(),
+        conn,
+        writer: writer_task.abort_handle(),
+    };
     let mut lines = FramedRead::new(reader, LinesCodec::new_with_max_length(MAX_FRAME_BYTES));
     let mut initialized = false;
     let mut resource_reads = tokio::task::JoinSet::new();
+    let mut cancellable = std::collections::HashMap::<RequestId, tokio::task::AbortHandle>::new();
     let mut entry_predecessor: Option<tokio::sync::oneshot::Receiver<()>> = None;
-    while let Some(line) = lines.next().await {
-        let Ok(line) = line else { break };
+    let mut writer_finished = false;
+    loop {
+        let line = tokio::select! {
+            _ = &mut writer_task => { writer_finished = true; break; }
+            _ = disconnected.changed() => break,
+            line = lines.next() => line,
+        };
+        let Some(Ok(line)) = line else { break };
         if line.trim().is_empty() {
+            continue;
+        }
+        let frame: Value = match serde_json::from_str(&line) {
+            Ok(frame) => frame,
+            Err(_) => {
+                if tx
+                    .send(error(
+                        RequestId::String(String::new()),
+                        code::PARSE_ERROR,
+                        "invalid JSON",
+                    ))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+        };
+        if initialized && frame.get("method").and_then(Value::as_str) == Some("request/cancel") {
+            if let Some(id) = frame
+                .pointer("/params/requestId")
+                .and_then(|id| serde_json::from_value::<RequestId>(id.clone()).ok())
+                && let Some(task) = cancellable.remove(&id)
+            {
+                task.abort();
+            }
             continue;
         }
         // Resource reads and OAuth discovery/exchange may take a minute. Keep control messages
         // flowing meanwhile. OAuth results check their captured config again before committing;
         // ordinary configuration mutations still retain their arrival order. Tree mutations
         // also leave Stop/question replies flowing; their own predecessor chain retains order.
-        let resource = serde_json::from_str::<Value>(&line).ok().filter(|frame| {
-            initialized
-                && matches!(
-                    frame.get("method").and_then(Value::as_str),
-                    Some(
-                        "office/render"
-                            | "office/watchStart"
-                            | "office/selection"
-                            | "mcp/resources"
-                            | "mcp/resourceTemplates"
-                            | "mcp/readResource"
-                            | "mcp/auth/begin"
-                            | "mcp/auth/complete"
-                            | "workspace/createEntry"
-                            | "workspace/renameEntry"
-                            | "workspace/deleteEntry"
-                            | "workspace/writeFile"
-                            | "terminal/copy"
-                            | "memory/read"
-                            | "memory/configure"
-                            | "memory/run"
-                            | "memory/clear"
-                            | "stats/usage"
-                            | "model/catalog/refresh"
-                            | "provider/model/test"
-                            | "import/scan"
-                            | "import/read"
-                            | "import/commit"
-                    )
+        let is_resource = initialized
+            && matches!(
+                frame.get("method").and_then(Value::as_str),
+                Some(
+                    "office/render"
+                        | "office/watchStart"
+                        | "office/selection"
+                        | "mcp/resources"
+                        | "mcp/resourceTemplates"
+                        | "mcp/readResource"
+                        | "mcp/auth/begin"
+                        | "mcp/auth/complete"
+                        | "workspace/createEntry"
+                        | "workspace/renameEntry"
+                        | "workspace/deleteEntry"
+                        | "workspace/writeFile"
+                        | "workspace/readFile"
+                        | "remote/setPassword"
+                        | "account/login"
+                        | "account/logout"
+                        | "terminal/copy"
+                        | "memory/read"
+                        | "memory/configure"
+                        | "memory/run"
+                        | "memory/clear"
+                        | "stats/usage"
+                        | "model/catalog/refresh"
+                        | "provider/model/test"
+                        | "import/scan"
+                        | "import/read"
+                        | "import/commit"
+                        | "migration/electron/scan"
+                        | "migration/electron/commit"
                 )
-        });
-        if let Some(frame) = resource {
+            );
+        if is_resource {
             while resource_reads.try_join_next().is_some() {}
             if resource_reads.len() >= 16 {
                 if let Some(id) = frame
@@ -118,7 +176,11 @@ pub async fn serve_connection<R, W>(
             } else {
                 (None, None)
             };
-            resource_reads.spawn(async move {
+            let request_id = frame
+                .get("id")
+                .and_then(|id| serde_json::from_value::<RequestId>(id.clone()).ok());
+            cancellable.retain(|_, task| !task.is_finished());
+            let task = resource_reads.spawn(async move {
                 if let Some(predecessor) = predecessor {
                     let _ = predecessor.await;
                 }
@@ -126,11 +188,14 @@ pub async fn serve_connection<R, W>(
                 let mut ready = true;
                 let mut followups = Vec::new();
                 if let Some(reply) =
-                    handle_frame(&state, origin, conn, &mut ready, &line, &mut followups).await
+                    handle_frame(&state, origin, conn, &mut ready, frame, &mut followups).await
                 {
                     let _ = tx.send(reply).await;
                 }
             });
+            if let Some(id) = request_id {
+                cancellable.insert(id, task);
+            }
             continue;
         }
         // Messages that must follow the reply (a resumed thread's unanswered questions).
@@ -140,7 +205,7 @@ pub async fn serve_connection<R, W>(
             origin,
             conn,
             &mut initialized,
-            &line,
+            frame,
             &mut followups,
         )
         .await;
@@ -160,9 +225,11 @@ pub async fn serve_connection<R, W>(
     resource_reads.abort_all();
     while resource_reads.join_next().await.is_some() {}
     resource_reads.shutdown().await;
-    state.unregister(conn);
     drop(tx);
-    let _ = writer_task.await;
+    drop(_lease);
+    if !writer_finished {
+        let _ = writer_task.await;
+    }
 }
 
 fn error(id: RequestId, code: i64, message: impl Into<String>) -> Message {
@@ -178,20 +245,9 @@ async fn handle_frame(
     origin: ClientOrigin,
     conn: ConnId,
     initialized: &mut bool,
-    line: &str,
+    frame: Value,
     followups: &mut Vec<Message>,
 ) -> Option<Message> {
-    let frame: Value = match serde_json::from_str(line) {
-        Ok(v) => v,
-        // No id to answer to; JSON-RPC answers a parse error with a null id.
-        Err(_) => {
-            return Some(error(
-                RequestId::String(String::new()),
-                code::PARSE_ERROR,
-                "invalid JSON",
-            ));
-        }
-    };
     let id = frame
         .get("id")
         .and_then(|v| serde_json::from_value::<RequestId>(v.clone()).ok());
@@ -201,11 +257,17 @@ async fn handle_frame(
         .map(str::to_owned);
 
     // An answer to a request of ours (a question put to the user).
-    if method.is_none()
+    if *initialized
+        && method.is_none()
         && let Some(id) = &id
         && (frame.get("result").is_some() || frame.get("error").is_some())
     {
-        crate::prompt::resolve(state, id.clone(), &frame).await;
+        if let Some(sender) = state.sender(conn)
+            && sender.offered(id)
+        {
+            sender.forget(id);
+            crate::prompt::resolve(state, id.clone(), &frame).await;
+        }
         return None;
     }
 
@@ -269,6 +331,70 @@ async fn dispatch(
     followups: &mut Vec<Message>,
 ) -> Result<Value, ErrorObject> {
     match request {
+        ClientRequest::RemoteStatusGet { .. } => {
+            to_value(crate::remote::Remote::for_state(state)?.status())
+        }
+        ClientRequest::RemoteConfigure { params, .. } => to_value(
+            crate::remote::Remote::for_state(state)?
+                .configure(params)
+                .await?,
+        ),
+        ClientRequest::RemoteSetPassword { params, .. } => to_value(
+            crate::remote::Remote::for_state(state)?
+                .set_password(params.password)
+                .await?,
+        ),
+        ClientRequest::RemoteRevoke { params, .. } => {
+            to_value(crate::remote::Remote::for_state(state)?.revoke(&params.device_id)?)
+        }
+        ClientRequest::AccountStatus { .. } => {
+            to_value(crate::official::Official::for_state(state)?.account_status())
+        }
+        ClientRequest::AccountLogin { .. } => {
+            to_value(crate::official::Official::for_state(state)?.login().await?)
+        }
+        ClientRequest::AccountCancelLogin { .. } => to_value(
+            crate::official::Official::for_state(state)?
+                .cancel_login()
+                .await,
+        ),
+        ClientRequest::AccountLogout { .. } => to_value(
+            crate::official::Official::for_state(state)?
+                .logout()
+                .await?,
+        ),
+        ClientRequest::OfficialStatusGet { .. } => {
+            to_value(crate::official::Official::for_state(state)?.status())
+        }
+        ClientRequest::OfficialConfigure { params, .. } => {
+            to_value(crate::official::Official::for_state(state)?.configure(params)?)
+        }
+        ClientRequest::WorkspaceReadFile { params, .. } => {
+            let state = state.clone();
+            to_value(
+                tokio::task::spawn_blocking(move || crate::file_chunk::read(&state, params))
+                    .await
+                    .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??,
+            )
+        }
+        ClientRequest::ElectronMigrationScan { params, .. } => {
+            let state = state.clone();
+            to_value(
+                tokio::task::spawn_blocking(move || crate::import::migration_scan(&state, params))
+                    .await
+                    .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??,
+            )
+        }
+        ClientRequest::ElectronMigrationCommit { params, .. } => {
+            let state = state.clone();
+            to_value(
+                tokio::task::spawn_blocking(move || {
+                    crate::import::migration_commit(&state, params)
+                })
+                .await
+                .map_err(|error| ErrorObject::new(code::INTERNAL_ERROR, error.to_string()))??,
+            )
+        }
         ClientRequest::Initialize { params, .. } => {
             if params.protocol_version != PROTOCOL_VERSION {
                 return Err(ErrorObject::new(
@@ -296,6 +422,9 @@ async fn dispatch(
                     "hostedWebSearch".into(),
                     "officePreview".into(),
                     "computerControl".into(),
+                    "electronMigration".into(),
+                    "officialConnection".into(),
+                    "accountManagement".into(),
                     "workspaceEntries".into(),
                     "terminalInteraction".into(),
                     "memory".into(),
@@ -309,7 +438,6 @@ async fn dispatch(
                     "importPreview".into(),
                 ],
                 data_dir: state.data_dir.display().to_string(),
-                build_fingerprint: crate::build_fingerprint().await,
                 has_running_turns: Some(state.has_running_turns()),
             })
         }
@@ -421,7 +549,7 @@ async fn dispatch(
                     "a turn is already running in this thread",
                 ));
             }
-            if rt.history().is_empty() {
+            if rt.history_is_empty() {
                 return Err(ErrorObject::new(
                     code::INVALID_PARAMS,
                     "there is nothing to summarize yet",
@@ -469,6 +597,18 @@ async fn dispatch(
             to_value(crate::model_detail::update(state, params)?)
         }
         ClientRequest::ModelList { .. } => to_value(crate::providers::model_list(state)?),
+        ClientRequest::ProjectModelDefaultsGet { params, .. } => to_value(
+            crate::providers::read_project_defaults(state, &params.path)?,
+        ),
+        ClientRequest::ProjectModelDefaultsSet { params, .. } => {
+            to_value(crate::providers::set_project_defaults(state, params)?)
+        }
+        ClientRequest::ProviderCcSwitchScan { .. } => {
+            to_value(crate::cc_switch::scan(state).await?)
+        }
+        ClientRequest::ProviderCcSwitchImport { params, .. } => {
+            to_value(crate::cc_switch::import(state, params.ids).await?)
+        }
         ClientRequest::ModelDefaultsGet { .. } => to_value(crate::providers::read_defaults(state)?),
         ClientRequest::ModelDefaultsSet { params, .. } => {
             to_value(crate::providers::set_defaults(state, params)?)
@@ -477,7 +617,7 @@ async fn dispatch(
             thread: state.update_thread(params)?,
         }),
         ClientRequest::ThreadFork { params, .. } => {
-            let thread = state.fork_thread(&params.thread_id)?;
+            let thread = state.fork_thread(&params.thread_id, params.turn_id.as_deref())?;
             state.runtime(&thread.id).subscribe(conn);
             to_value(ThreadStartResponse { thread })
         }

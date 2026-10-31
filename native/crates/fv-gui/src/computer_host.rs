@@ -21,6 +21,25 @@ const READY_TIMEOUT: Duration = Duration::from_secs(15);
 /// The tail of the daemon's stderr kept for a failure message.
 const STDERR_KEEP: usize = 8 * 1024;
 
+#[derive(Debug)]
+pub enum HostError {
+    Missing(String),
+    Launch(String),
+    Exited(String),
+    Timeout,
+}
+
+impl HostError {
+    pub fn message(&self, english: bool) -> String {
+        match self {
+            Self::Missing(path) => tr!(english, "computer.component_missing", path = path),
+            Self::Launch(detail) => tr!(english, "computer.launch_failed", detail = detail),
+            Self::Exited(detail) => tr!(english, "computer.start_exited", detail = detail),
+            Self::Timeout => tr!(english, "computer.start_timeout"),
+        }
+    }
+}
+
 pub struct Host {
     child: Child,
     endpoint: String,
@@ -46,9 +65,9 @@ impl Host {
     /// Start `binary serve --embedded` on `endpoint` and wait until it accepts connections.
     ///
     /// Blocking (up to [`READY_TIMEOUT`]): run it off the UI thread.
-    pub fn start(binary: &Path, endpoint: &str, bundle_id: &str) -> Result<Host, String> {
+    pub fn start(binary: &Path, endpoint: &str, bundle_id: &str) -> Result<Host, HostError> {
         if !binary.is_file() {
-            return Err(format!("找不到电脑操控组件：{}", binary.display()));
+            return Err(HostError::Missing(binary.display().to_string()));
         }
         if !cfg!(windows) {
             let _ = std::fs::remove_file(endpoint);
@@ -59,6 +78,9 @@ impl Host {
             // Only this exact value turns embedded mode on; anything else is ignored.
             .env("CUA_DRIVER_EMBEDDED", "1")
             .env("CUA_DRIVER_HOST_BUNDLE_ID", bundle_id)
+            // Keep the embedded daemon's advisory identity aligned with the packaged app. The
+            // host bundle id is also emitted in permission diagnostics, so a stale desktop id
+            // makes a correctly granted native app look like a different product.
             .env("CUA_DRIVER_PARENT_LIVENESS_STDIN", "1")
             // The driver reports product telemetry unless told otherwise, and running it for
             // the user implies no consent to that.
@@ -71,7 +93,7 @@ impl Host {
             .stderr(Stdio::piped());
         let mut child = command
             .spawn()
-            .map_err(|e| format!("无法启动电脑操控组件：{e}"))?;
+            .map_err(|e| HostError::Launch(e.to_string()))?;
         let stderr = Arc::new(Mutex::new(String::new()));
         if let Some(mut pipe) = child.stderr.take() {
             let keep = stderr.clone();
@@ -111,23 +133,23 @@ impl Host {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    fn wait_ready(&mut self, timeout: Duration) -> Result<(), String> {
+    fn wait_ready(&mut self, timeout: Duration) -> Result<(), HostError> {
         let deadline = Instant::now() + timeout;
         loop {
             if let Ok(Some(status)) = self.child.try_wait() {
                 let said = self.stderr.lock().unwrap().trim().to_string();
-                return Err(if said.is_empty() {
-                    format!("电脑操控组件启动后退出了（{status}）")
+                return Err(HostError::Exited(if said.is_empty() {
+                    status.to_string()
                 } else {
-                    format!("电脑操控组件启动后退出了：{said}")
-                });
+                    said
+                }));
             }
             if connectable(&self.endpoint) {
                 return Ok(());
             }
             if Instant::now() >= deadline {
                 self.stop();
-                return Err("电脑操控组件没有在预期时间内就绪".into());
+                return Err(HostError::Timeout);
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -364,11 +386,22 @@ mod tests {
         );
         let socket = dir.path().join("s.sock").display().to_string();
         let error = Host::start(&binary, &socket, "x").err().unwrap();
-        assert!(error.contains("permission denied for capture"), "{error}");
+        assert!(
+            error
+                .message(true)
+                .contains("permission denied for capture"),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .message(true)
+                .starts_with("The computer-control component")
+        );
         let missing = Host::start(&dir.path().join("nope"), &socket, "x")
             .err()
             .unwrap();
-        assert!(missing.contains("找不到"), "{missing}");
+        assert!(missing.message(false).contains("找不到"));
+        assert!(missing.message(true).contains("not found"));
     }
 
     #[test]

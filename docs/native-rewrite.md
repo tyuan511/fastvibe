@@ -8,11 +8,18 @@
 | 问题 | 决定 |
 | --- | --- |
 | 代码位置 | 本仓库 `gpui` 分支，`native/` 下的 Cargo workspace；Electron 版继续可发布，直到原生版追平 |
-| 旧 Electron 数据 | **最后实施**一次性导入（providers / API Key / MCP / 设置 / 会话目录 / pi v3 转写 / 用量账本）；不作为前期功能的依赖，导入后只用新格式 |
+| 执行顺序（2026-10-30 已批准） | 本机核心 → 配置与工作区 → Electron 迁移 → 远程 / 手机 / SSH；替代旧版“Electron 导入最后实施”顺序 |
+| 旧 Electron 数据 | 显式只读扫描与导入已实现：支持的数据转换，未支持的运行时状态和用户图片私有归档；API Key 复制须主动选择；独立审查所见缺陷已修复，store 恢复 4 项及冻结 lib 163 中的 migration 夹具通过，范围内复审无剩余发现；完整切换仍待验收，不称为无损完整运行时迁移 |
 | 手机端与远程协议 | 按当前原生 App Server / `fv-protocol` 重新设计，Flutter 同步适配；不兼容旧 Electron / App Protocol，不做新旧双栈 |
 | 网页内容 | `wry` 嵌入原生 WKWebView / WebView2 子视图 |
 | 平台 | 先 macOS，之后 Windows / Linux |
 | 插件 | 不支持第三方 TS 插件；内置功能用 Rust 实现，扩展点只有 MCP 与技能 |
+
+当前状态（2026-10-30）：真实进程 journey **9/9 PASS**；最终冻结 server lib **163 PASS / 0 failed / 1 ignored**（真实 mDNS opt-in）、指定 5 个集成目标 **19 PASS**；GUI / browser **221 PASS**（212 + 9）、all-targets check / 严格 Clippy PASS。迁移恢复 store 4 项、lib 内 migration 夹具与范围内独立复审通过；不称为无损完整运行时迁移。Flutter validator 集成后全套 **279 PASS / 1 环境跳过**、analyze 0、i18n check PASS；最后 name/installId 元数据变化后定向 **11 PASS**、真实 Rust LAN interop **1 PASS（5 秒）**、analyze 0，不重复累计。RTC **12 PASS**，真实 Flutter 强制本地 TURN 的 initialize / 128 KiB 回复 / relay stats PASS；协议/schema **22 PASS**、生成器新鲜度 **1 PASS**，142 方法的 Dart 元数据/运行时校验器已生成并集成，完整 typed DTO 生成仍未实现。
+
+模型发现 8/8、Provider lib 28、updater 9、tools lib 35 均通过（tools 本轮不含 session 集成）；core 最终严格 Clippy **BLOCKED（环境 / 验证未完成），不是 PASS**。机械 lint 清理发生在上述功能测试之后，未完整重跑功能测试；最后机械清理后仅格式、git diff 与生成文件一致性检查通过；协议 snapshot 为先前 22 项通过的证据，没有新的 cargo check / Clippy 完成结果，不代表最后源码全绿。真实 mDNS **BLOCKED（环境）**：多播发送 `EHOSTUNREACH` / errno 65，fake publisher 2 项不能替代真实发现。完整手机富内容、真实 SSH 主机、电脑操控真实权限/输入、真实浏览器端到端、签名线上升级及其它平台仍未验收，平台实测仅 macOS arm64。分批证据、日志、复验命令与剩余门禁集中在 [补齐清单的当前批次](native-completion.md#当前批次本机收口electron-迁移与原生远程2026-10-30验收进行中)，历史叙述不代表当前状态，也未宣称整个原生版完成。
+
+最终 core 严格 Clippy 的采样显示 `dyld dlopen → mapSegments → fcntl` 停在 `tracing_attributes` 宏动态库加载，两个 worker 超过 7 分钟 0 CPU；相同字节的新 inode 缓存副本有界重试仍未完成，已停止，未修改系统安全设置。阻塞日志与采样见 [补齐清单](native-completion.md#当前批次本机收口electron-迁移与原生远程2026-10-30验收进行中) 中 `/tmp/fv-native-core-final-clippy{2,3,4}.log` 与 `/tmp/fv-final-server-lint-sample.txt`；最后一次重试没有成功结果，不能宣称所有检查通过。
 
 ## 1. 总体架构：App Server
 
@@ -49,14 +56,14 @@
 - **server 常驻，GUI 可以随时关、崩溃、重启**，正在跑的回合不受影响。这也直接解决了现在「窗口关掉运行还在
   Main 里」「保持唤醒」「定时任务需要应用开着」的问题：它们都属于 server，不属于窗口。
 - GUI 启动时由 `fv-daemon` 连接已有的 server；没有就拉起一个。server 的数据目录内有 `server.pid`、`server.lock`、
-  `server.sock`（0600，父目录 0700）。GUI 升级后发现 server 版本不同，等它空闲再重启。
+  `server.sock`（0600，父目录 0700）。GUI 启动只核对 server 版本和必需功能，不读取或计算二进制指纹；兼容的常驻 server 直接复用。
+  版本不同或缺少必需功能时，仅在 server 报告空闲后重启；有任务运行或无法报告状态时保留旧进程并提示。
   `cargo dev`（仓库根和 `native/` 下都能运行：两处各有一份 `.cargo/config.toml` 别名，而 xtask 按自己所在的 crate 定位工作区、
-  用 `--manifest-path` 调 cargo，所以调用目录不参与解析）构建后比较本次服务端二进制的开发 identity 与握手中运行进程的报告：相同直接复用；
-  不同且没有回合运行时，停止本次数据目录下的旧 server、等它退出再启动 GUI。有回合运行或旧服务端无法报告状态时保留旧进程并提示，绝不因开发启动而中断会话。直接运行 GUI 仍复用常驻 server。
+  用 `--manifest-path` 调 cargo，所以调用目录不参与解析）构建后直接替换本次数据目录下的空闲 server，等它退出再启动 GUI，确保使用刚编译的代码；
+  有任务运行或无法报告状态时保留旧进程并在终端提示。开发启动不生成或传递额外的构建标识。
 - 「退出 FastVibe」= 停 server（有运行中的任务先确认）；只关窗口不停 server。是否在没有窗口时继续常驻是一个设置项
   （默认：有定时任务或远程访问开着时常驻）。
-- **同一个二进制也是 SSH 主机上的 Agent**：远端跑 `fastvibe-server --listen stdio`，经 `ssh` 的 stdio 直接连，
-  不再需要 SSH 端口转发 + 回环令牌那一套。
+- **同一个二进制也是 SSH 主机上的 Agent**：经 OpenSSH stdio 启动 `fastvibe-server --listen relay`，relay 拉起或连接远端驻留 daemon 并转发原生 JSON 帧；断开客户端只结束 relay，聊天与终端留在驻留服务中。实现见 [fv-daemon::ssh](../native/crates/fv-daemon/src/ssh.rs)。真实进程夹具通过，尚无真实 SSH 主机验证。
 - 测试与 CLI 可以用 in-process 模式（同一协议，内存 channel），codex 的 `in_process.rs` 同样做法。
 
 ### 1.2 协议（`fv-protocol`）
@@ -67,8 +74,7 @@
 - **方法表由宏生成四个枚举**：`ClientRequest`、`ServerNotification`、`ServerRequest`、`ClientNotification`
   （codex `app-server-protocol/src/protocol/common.rs` 的做法），新增一个方法只改一处，编译器保证 server 处理了它，
   策略表用 `match` 穷举，漏分类编译不过。
-- **类型导出**：`schemars` 生成 JSON Schema 并提交进仓库（`native/schema/`），Flutter 端从 schema 生成 Dart 类型；
-  GUI 直接用 Rust 类型。协议快照测试防止无意的破坏性改动。实验性方法用 `#[experimental]` 标注，握手声明后才可用。
+- **类型导出**：`schemars` 生成并提交 [JSON Schema](../native/schema/protocol.json)；[生成器](../native/crates/fv-protocol/src/tests.rs) 通过 `UPDATE_SCHEMA=1 cargo test --manifest-path native/Cargo.toml -p fv-protocol schema` 更新。GUI 直接用 Rust 类型；[Dart 生成器](../scripts/generate-native-protocol.mjs) 已从 schema 产出 [方法元数据与 schema 校验器](../apps/mobile_flutter/lib/protocol/native_schema.dart)，使用 `node scripts/generate-native-protocol.mjs` 生成、`--check` 核对。生成结果覆盖 142 个方法，参数/响应运行时校验已集成到 [NativeClient](../apps/mobile_flutter/lib/protocol/native_client.dart)；客户端仍使用精确方法名与 JSON，完整强类型 Dart DTO 生成尚未落地。最终协议/schema 普通非更新模式 22/22 PASS（`/tmp/fv-protocol-final-tests.log`），生成器新鲜度 1 PASS；快照测试防止无意的破坏性改动。实验性方法按能力握手开放。
 - **数据模型 Thread → Turn → Item**（codex `protocol/v2`）。FastVibe 的「会话」= thread，「一轮」= turn，
   Item 至少有：`UserMessage`、`AgentMessage`、`Reasoning`、`ToolCall`（exec_command/write_stdin/apply_patch/MCP/…，按工具族带结构化详情）、
   `FileChange`、`Todo`、`Question`、`Subagent`、`Present`、`ContextCompaction`、`ModelSwitch`、`Error`。
@@ -387,10 +393,10 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
   会话菜单支持重命名（Enter/失焦保存、Esc 取消）、置顶/取消、归档、创建分支和确认后删除；项目支持编辑、显示目录、确认后移除。
   `thread/fork` 复制完整已落盘历史并保留时间戳，图片独立复制，运行中的回合须结束后再分支。侧栏不画插件入口（原生版没有插件系统）。
   定时任务已在 2026-10-26 接入原生调度服务与卡片/编辑/历史页（见补齐清单第二十二批）；账号仍无原生服务接口，入口显示具体未接入说明。侧栏偏好变化不重建整套主题；宽度拖动请求完整窗口重绘，避免复用旧裁剪区域。
-- **宽度松手回弹修复（2026-10-24）**：直接运行 GUI 也经 `Daemon::connect_current` 核对构建与握手 `features`，
-  `sidebarSettings` 缺失的空闲旧进程会被替换；忙碌或无法报告活动的进程保留并提示稍后重开。过去服务端每次握手读取磁盘上的可执行文件，
-  重编译后旧进程会误报新文件的指纹；现在在服务端启动时固定指纹。回归测试模拟「指纹相同但不支持侧栏设置」的旧进程，
-  验证替换后宽度可保存与重连恢复、同版本进程复用、忙碌/未知活动的进程不退出。手动缩放后的 GPUI ClickEvent 还必须检查按下/松手距离，
+- **宽度松手回弹修复（2026-10-24）**：直接运行 GUI 也经 `Daemon::connect_current` 核对 server 版本与握手返回的 `features`，
+  `sidebarSettings` 缺失的空闲旧进程会被替换；忙碌或无法报告活动的进程保留并提示稍后重开。启动兼容性判断不再读取或计算 server
+  可执行文件指纹，避免重编译后用磁盘上的新文件去判断已经运行的旧进程。回归测试覆盖同版本进程复用、版本或功能不兼容的空闲进程替换，
+  以及忙碌/未知活动的进程不退出。手动缩放后的 GPUI ClickEvent 还必须检查按下/松手距离，
   快速连续拖动不能触发双击复位。
 - **发送、快捷键、搜索（2026-10-24）**：发送失败不再静默——文字放回输入框并在输入框上方说明原因，没有任何模型时直接提示去
   设置 → 模型与默认。快捷键：⌘N 新对话、⌘, 设置、⌘K 搜索、⌘Q 退出、Esc 依次关菜单 / 搜索 / 对话框 / 设置；macOS 菜单栏有对应条目。
@@ -666,26 +672,26 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
 - **还缺（需要新的协议数据或组件）**：标题栏与新对话页的 git 分支 / 改动 chip、压缩分隔线的
   「接近上限 · 128.0K → 24.4K」、工具卡展开后的详细样式、各种弹出菜单的 Nova 皮肤、右侧面板的终端 / Git / 浏览器标签页与设置页。
 
-## 5. 数据迁移（旧 Electron 导入最后实施）
+## 5. 数据迁移（2026-10-30：修复、定向验证与范围内复审通过）
 
-先完成其余原生功能、手机适配和交付验证，再实现本节旧 Electron 导入，最终切换前验收；不作为开发期启动、供应商配置或其它功能的前置依赖。以下保留最终导入范围。
+依已批准顺序，在本机核心、配置与工作区之后、远程 / 手机 / SSH 之前实施 Electron 迁移。当前入口是显式 `migration/electron/scan|commit`，由用户预览后确认；不自动迁移或接管旧目录。[协议](../native/crates/fv-protocol/src/migration.rs) 返回每个数据集的 `import / archive / exclude` 和警告，[导入实现](../native/crates/fv-server/src/import/electron.rs) 记录结果与私有归档。
 
-首次启动检测到 `~/Library/Application Support/FastVibe/` 时，弹窗确认后导入，之后**不再读写旧目录**：
+[源快照](../native/crates/fv-import/src/electron.rs) 对旧目录只读：先把数据库和已提交 WAL 复制到私有临时目录，再由 SQLite 读取副本，避免原目录的 shm / WAL 被 SQLite 改动；复制或扫描期间检测到变化会拒绝，提交重新核对 fingerprint。API Key 数据只用于一致性检查及明确选中的凭据复制，不进入普通归档或响应；OAuth、账号、订阅与旧远程凭据不读取或迁移。
 
-| 旧数据 | 去向 |
+| 旧数据 | 当前实现与边界 |
 | --- | --- |
-| `providers.json` + `agent/.env` | 自定义端点、模型配置与 API Key → 新供应商表 + 凭据文件（0600）；不导入 `agent/oauth.json` 等模型订阅凭据 |
-| `mcp.json`、`settings.json`、`memory.json` | 新配置文件（字段名对齐，`remote*` 不导入，需重新设置） |
-| `fastvibe.db`（会话目录、队列、DAG、定时任务、检查点、思考耗时、记忆账本） | 逐表转换 |
-| pi v3 转写 JSONL | 转成新转写格式（沿用 `import/writer.ts` 已验证的配对规则，反向执行） |
-| `memories/`、`tool-images/` | 复制 |
-| `usage-ledger.jsonl` | 导入原生 SQLite 用量账本，保留原请求来源（迁移仍待实现） |
+| 自定义供应商与 `runtime/engine/agent/.env` | 导入支持的自定义端点/模型；`includeApiKeys` 默认 false，选择后才复制 Key 到原生私有凭据文件 |
+| `settings.json` | 只转换支持的映射字段；默认保留现有原生设置，覆盖须显式选择；原设置归档。不宣称 MCP / 记忆配置和文件已全部迁入运行态 |
+| 会话目录、项目、pi 转写 | 本地项目及当前有效转写分支转换为原生格式；原始元数据、完整转写和远程绑定留档，不恢复旧远程连接 |
+| `usage-ledger.jsonl` 与转写用量 | 保留原会话/条目身份去重，避免账本、历史副本与 fork 重计；旧副本缺少来源身份的边界须由独立审查确认 |
+| DAG / 检查点 / 队列 / 定时任务及其它不支持的表 | 原始行、旧 JSON 与已有结果文件只归档；不激活旧任务，不重建可运行 DAG、检查点或排队状态 |
+| 图片 | 外部/内联源图保存在归档，支持的工具图另复制进原生历史；用户图片当前没有原生消息表示，**仅归档** |
 
-导入逐会话出结果（失败的列出原因），不做全有或全无；旧目录保持原样，可回退到 Electron 版。
+较早 importer 12 项、store 6 项之后，独立审查发现重复导入、凭据回滚、恢复与设置保真度方面的 5 个具体缺陷，已完成修复。修复后的 store 恢复 **4 PASS**、migration 夹具 **1 PASS**（包含在最终冻结 server lib **163 PASS / 0 failed / 1 ignored** 内，不重复累计）；最终只读独立审查在发布/恢复、语言枚举、用量归属与关闭自动归档的已审范围内**无剩余发现**。旧测试结果不替代修复后证据，范围内审查通过也不等于完整产品切换验收。这是支持数据转换并保留归档的迁移管道，不能称为无损完整运行时迁移；旧源目录保持原样，不把归档说成原生运行态已恢复。证据与命令统一见 [当前批次](native-completion.md#复验入口与协调方回填)。
 
 ## 6. 远程访问与手机端（按新架构重新设计）
 
-实施顺序（2026-10-26 用户修正）：先补齐应用本身的功能，远程连接与手机适配后置。旧 Electron 完整数据导入仍最后实施。
+实施顺序（2026-10-30 已批准）：本机核心 → 配置与工作区 → Electron 迁移 → 本节远程 / 手机 / SSH。LAN、账号/RTC、SSH 与 Flutter 原生基础通路已有实现；最终门禁和完整功能对齐仍待完成。
 
 以当前原生 `fastvibe-server`、`fv-protocol` 和事件模型为唯一业务协议。Flutter 手机端可以重新适配；不支持旧 Electron App Protocol、旧远程服务端、旧 WebRTC 帧格式或旧 SSH Agent，不做兼容转换和新旧双栈。既有实现只供连接经验参考，不作为新协议的格式约束。
 
@@ -699,17 +705,19 @@ Electron 版的皮肤 = 24 套 `ThemeSeed`（12 亮 12 暗）→ `buildTokens` �
 
 ### 6.2 连接方式
 
-- **局域网**：双栈监听、设备发现/扫码和设备身份认证由原生服务提供；密码换设备令牌、逐设备撤销与凭据隔离继续作为能力目标。发现与握手明确标识原生协议版本；未鉴权连接不得获得会话、配置或推送。
-- **官方连接**：账号设备发现、已认证信令、WebRTC 通道共同建立可信连接，随后使用同一套原生 RPC。信令和手机侧连接状态可随新设计调整；不受旧信令消息和候选投递格式约束。直连/中转识别、网络变化恢复和大数据传输按新桌面/手机组合验证，旧 NAT 优化只在证据支持时采用。
-- **SSH 主机**：连接和启动远端原生 `fastvibe-server`，复用原生协议与服务生命周期；安装、版本检查、终端和文件路径均面向远端主机，不适配旧 Electron 无头 Agent。
+- **局域网**：[原生监听](../native/crates/fv-server/src/remote.rs) 已接通双栈、密码换令牌、逐设备撤销、远程策略与分片文件读取；[真实 Rust socket 测试](../native/crates/fv-server/tests/remote.rs) 2 项通过。[mDNS](../native/crates/fv-server/src/remote_discovery.rs)、[桌面 QR](../native/crates/fv-gui/src/workspace/remote_qr.rs) 与手机保存身份带原生协议/版本，未鉴权不订阅；最终 remote 2 项已纳入指定集成 19 PASS（双栈、LAN 认证/分片/撤销），GUI / browser 221 与 Flutter 验证通过。真实 mDNS **BLOCKED（环境），不是 PASS**：2 秒接口监控已实现、fake publisher 2 项通过，但 9 秒实际用例无初始/改名记录；`mdns-sd` monitor 报 Announce 无错误，en1 / bridge 上向 `224.0.0.251:5353` 原始发送返回 `EHOSTUNREACH` / errno 65，而 OS `dns-sd` 注册/浏览可用。未改变权限或网络配置，真实发现仍待可用环境验收。
+- **官方连接**：[fv-rtc](../native/crates/fv-rtc/src/lib.rs) 已接账号、设备注册、信令和原生 RTC 通道；12 项 Rust 测试通过，含新增 4 项后台 STUN 刷新生命周期用例；冻结 server lib 的 official 5 项已通过，filtered 5 项亦复验通过（不重复累计）；core 最终严格 Clippy 因环境加载停滞而 BLOCKED，验证未完成。真实 Flutter 3.47.6 macOS runner + 产品依赖 `flutter_webrtc 1.6.2+hotfix.4` 的强制本地 TURN 互操作已通过 initialize、128 KiB 回复与 relay stats；夹具见 [flutter_interop.dart](../native/crates/fv-rtc/tests/flutter_interop.dart)。这不代表真实云账号/公网、网络切换和手机设备全流程已验证。
+- **SSH 主机**：GUI 主机管理与远端项目通过 [fv-daemon::ssh](../native/crates/fv-daemon/src/ssh.rs) 连接驻留原生 server，使用 `--listen relay`。4 项 [fake OpenSSH 包装的真实进程测试](../native/crates/fv-daemon/tests/ssh_gui.rs) 通过，relay 断开后聊天与终端仍存在；没有连接真实 SSH 主机，也未验证远端 Linux/macOS 部署。
 
 ### 6.3 Flutter 适配与验收
 
-- 从 `native/schema/` 生成 Dart 类型，替换旧 App Protocol 和远程传输适配；手机界面可复用，但账号、设备列表、LAN/官方连接、重连和协议状态须接入新服务。
-- 验收覆盖双端版本握手、鉴权/撤销、同账号设备隔离、多客户端与后台会话、流式回复、工具交互、Stop、快照重连、文件读取、终端及弱网络/中转大数据。只检测并拒绝不支持的版本，不测试旧协议兼容。
-- 当前 `native/` 的 Unix/stdio 通路与权限分类是已有基础；网络监听、官方连接和 Flutter 新适配仍属待实现工作。仅有设计文档或入口不能勾选远程完成。
+- [NativeClient](../apps/mobile_flutter/lib/protocol/native_client.dart) 直接使用当前原生方法名/JSON；[NativeRtcDialer](../apps/mobile_flutter/lib/protocol/native_rtc.dart) 适配新 RTC 通道；[NativeServerScreen](../apps/mobile_flutter/lib/screens/native_server.dart) 是独立的朴素功能页面。保存的设备身份决定原生路由，原生握手失败不会翻译为旧 Electron 连接；142 个方法的 Dart 元数据/schema 校验器生成已落地并接入 NativeClient 参数/响应运行时校验，完整强类型 DTO 生成尚未落地。
+- 真实 [Flutter → Rust LAN 测试](../apps/mobile_flutter/test/native_server_interop_test.dart) 已通过认证、断连后 resume 与文件下载；validator 集成后全套 **279 PASS / 1 环境跳过**、analyze **0**、i18n check PASS，另行实际 Rust LAN interop 1 PASS（6 秒）；最后 name/installId 元数据重新生成后 analyze 0、native protocol / discovery / native RTC 定向 **11 PASS**、实际最新 Rust LAN interop **1 PASS（5 秒）**。仅元数据变化后未再跑全套，重复覆盖不累加；校验失败挂住 pending 请求的问题已修复并有回归。已实现 [产出文件 chip 与 Markdown 路径](../apps/mobile_flutter/lib/chat/native_output_files.dart) 直接打开/下载，并复用 Markdown 回复渲染；文件入口不再依赖手动输入路径，[定向测试](../apps/mobile_flutter/test/native_output_files_test.dart) 已覆盖。环境跳过不能算本轮真实互操作通过；已通过的独立 LAN/TURN 实测仍保留。完整富媒体、Office、终端、所有工作区交互与手机真机验收仍待完成。
+- 完整验收仍覆盖双端版本握手、鉴权/撤销、同账号设备隔离、多客户端与后台会话、流式回复、工具交互、Stop、快照重连、文件读取、终端及弱网络/中转大数据。最终分批证据为冻结 server lib 163 PASS / 0 failed / 1 ignored、指定 5 个集成目标 19 PASS、GUI / browser 221 与 check / 严格 Clippy PASS、validator 后 Flutter 全套及最后元数据定向复验通过。较早中央 211 仅作其当时范围证据，不与最终 lib / 复验累加，也未声称单条全 workspace 命令通过。迁移范围内修复/复审通过，真实 mDNS BLOCKED；core 最终严格 Clippy **BLOCKED（环境 / 验证未完成）**，功能测试后的机械 lint 清理未完整重跑功能测试。只检测并拒绝不支持的原生版本，无旧协议兼容层；不把分批通过标成远程全部完成。
 
 ## 7. 里程碑
+
+下表 M1–M6 是原始范围与粗估，不再表示施工顺序；当前批准顺序以第零节为准。交付贯穿各阶段，切换前须验收；目前只验证 macOS arm64，不以本机编译推断 Windows / Linux / macOS x64 完成。
 
 每个里程碑结束：`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test` 全绿。
 本轮按用户要求仅检查代码与自动化测试，不使用 computer use；窗口操作与视觉回归须用户另行指定，不能把无界面用例写成视觉验收。
@@ -723,11 +731,15 @@ M1 工期因此增加约 1–2 周；24 套主题与玻璃效果的**机制**在
 | M3 工作区 | 项目与多文件夹、`@` 搜索、右侧面板（文件树、预览编辑、终端、Git 变更 / 历史 / 提交）、worktree、apply_patch | 5–6 周（文件树操作、多目录 Git、hunk 跳转、PTY 基础与工作区重启恢复已做；终端输入法接口、选择复制和历史回滚等交互的 macOS 定向代码与自动化验收已通过；跨平台仍列入交付） |
 | M4 能力 | 子 agent、记忆、MCP、代码模式、工具搜索、技能、内联产物预览、wry（浏览器 / HTML / Office / KaTeX）、电脑操控、web_search、定时任务 | 6–8 周（子 agent（含历史 fork 与角色模板）、代码模式基础、定时任务、托管网页搜索、长期记忆、MCP、工具搜索、技能加载/管理及输入框选择与徽标已做；其余待补，详见补齐清单） |
 | M5 外围 | 全部设置面板、24 套主题与玻璃、i18n、通知、Dock 角标、保持唤醒、命令面板、自动归档、账号、远程访问 + Flutter 适配、SSH 主机 Agent、从其他 Agent 导入、自动更新、签名打包 | 6–8 周 |
-| M6 最后实施与切换 | 在其余功能、Flutter 新适配及交付验证完成后，最后实现并验收旧 Electron 完整数据导入；随后进行切换验证、灰度和 Electron 版下线 | 2–3 周 |
+| M6 迁移与切换 | Electron 迁移已调整到配置/工作区之后、远程之前实施；支持项转换与未支持项归档分开验收。已审范围的独立复审通过；完整交付、灰度和 Electron 下线仍待完成 | 原估 2–3 周；不作为当前完成度证据 |
 
 合计约 6–8 个月（一人全职 + agent 辅助的估计）。M1 完成后可以作为内部日用版，逐步替代。
 
 ### 7.1 实现进度（`native/`）
+
+2026-10-30 当前批次的权威矩阵、复验命令与日志集中在 [补齐清单](native-completion.md#当前批次本机收口electron-迁移与原生远程2026-10-30验收进行中)，不再重复历史测试合计。最终冻结二进制的 [真实进程 journey](../scripts/native-core-journey.mjs) **9/9 PASS，4.517 秒**；server lib 163、指定集成 19、GUI / browser 221 与 check / 严格 Clippy、协议/schema 22 与生成器新鲜度 1、RTC 12、Flutter validator 后全套 279 / 1 环境跳过、最后元数据定向 11 / 实际 LAN 1 / analyze 0 均通过；范围与不重复计数规则见矩阵。142 方法的 Dart 元数据与运行时校验已生成并集成，尚非完整 typed DTO 生成。迁移修复与已审范围内独立复审通过；updater 9、tools lib 35、Provider lib 28、模型发现 8/8 通过。core 最终严格 Clippy **BLOCKED（环境 / 验证未完成）**，功能测试后的机械 lint 清理未完整重跑功能测试；真实 mDNS **BLOCKED（环境）**。真实浏览器/电脑操控/SSH、完整手机富内容、签名线上升级与其它平台仍保留验收，整个原生版未标为全部完成。
+
+以下保留早期基础实现与定向验证记录，时间和范围以各条注明为准，不替代当前批次最终门禁。
 
 M1 已完成：`fv-theme`（24 套主题，与 TS 版逐值对拍）、`fv-protocol`（含 schema 快照）、`fv-core`、
 `fv-agent`（回合循环、工具读写锁并行、取消、历史规范化、假模型）、`fv-server` + `fv-client`（unix socket / stdio、握手、

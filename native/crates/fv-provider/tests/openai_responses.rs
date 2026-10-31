@@ -76,6 +76,15 @@ async fn a_responses_turn_comes_back_as_blocks_with_usage() {
     let events = events(collect(&model, request()).await);
 
     assert!(events.contains(&ModelEvent::Text("On it.".into())));
+    let deltas: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::ToolCallArgs { id, delta } if id == "call_1" => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas, ["{\"path\":\"a.txt\"}"]);
+
     let msg = done(&events);
     assert_eq!(msg.stop, StopReason::ToolUse);
     let kinds: Vec<&str> = msg

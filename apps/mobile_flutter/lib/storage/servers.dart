@@ -21,6 +21,7 @@ class SavedServer {
     required this.createdAt,
     this.lastConnectedAt,
     this.favorite = false,
+    this.nativeProtocol = false,
   });
 
   factory SavedServer.fromJson(Map<String, Object?> json) => SavedServer(
@@ -32,6 +33,7 @@ class SavedServer {
     createdAt: (json['createdAt']! as num).toInt(),
     lastConnectedAt: (json['lastConnectedAt'] as num?)?.toInt(),
     favorite: json['favorite'] == true,
+    nativeProtocol: json['nativeProtocol'] == true,
   );
 
   final String id;
@@ -42,6 +44,7 @@ class SavedServer {
   final int createdAt;
   final int? lastConnectedAt;
   final bool favorite;
+  final bool nativeProtocol;
 
   int get sortKey => lastConnectedAt ?? createdAt;
 
@@ -50,7 +53,8 @@ class SavedServer {
   bool get isOfficial => kind == AddressKind.official;
 
   /// The account's id for this computer, for an [isOfficial] server.
-  String? get officialDeviceId => isOfficial ? Uri.tryParse(origin)?.host : null;
+  String? get officialDeviceId =>
+      isOfficial ? Uri.tryParse(origin)?.host : null;
 
   Map<String, Object?> toJson() => <String, Object?>{
     'id': id,
@@ -61,6 +65,7 @@ class SavedServer {
     'createdAt': createdAt,
     if (lastConnectedAt != null) 'lastConnectedAt': lastConnectedAt,
     'favorite': favorite,
+    'nativeProtocol': nativeProtocol,
   };
 
   SavedServer copyWith({String? alias, int? lastConnectedAt, bool? favorite}) =>
@@ -73,6 +78,7 @@ class SavedServer {
         createdAt: createdAt,
         lastConnectedAt: lastConnectedAt ?? this.lastConnectedAt,
         favorite: favorite ?? this.favorite,
+        nativeProtocol: nativeProtocol,
       );
 
   static bool isValid(Object? value) {
@@ -140,6 +146,7 @@ class ServerStore extends ChangeNotifier {
         createdAt: existing.createdAt,
         lastConnectedAt: server.lastConnectedAt ?? existing.lastConnectedAt,
         favorite: existing.favorite,
+        nativeProtocol: server.nativeProtocol,
       );
       servers[index] = saved;
     } else {
@@ -153,41 +160,52 @@ class ServerStore extends ChangeNotifier {
   /// Make the saved official computers match the account's list: add the new, rename the
   /// changed, drop the ones no longer on the account. Everything else in the list is left
   /// alone. Pass an empty list when signed out to drop them all.
-  Future<List<SavedServer>> syncOfficial(List<SavedServer> devices) => _enqueue(() async {
-    final servers = await _read();
-    final keep = servers.where((item) => !item.isOfficial).toList();
-    final byOrigin = <String, SavedServer>{
-      for (final item in servers.where((item) => item.isOfficial)) item.origin: item,
-    };
-    final next = <SavedServer>[...keep];
-    for (final device in devices) {
-      final existing = byOrigin[device.origin];
-      next.add(
-        existing == null
-            ? device
-            : SavedServer(
-                id: existing.id,
-                alias: device.alias,
-                origin: device.origin,
-                host: device.host,
-                kind: AddressKind.official,
-                createdAt: existing.createdAt,
-                lastConnectedAt: existing.lastConnectedAt,
-                favorite: existing.favorite,
+  Future<List<SavedServer>> syncOfficial(List<SavedServer> devices) =>
+      _enqueue(() async {
+        final servers = await _read();
+        final keep = servers.where((item) => !item.isOfficial).toList();
+        final byOrigin = <String, SavedServer>{
+          for (final item in servers.where((item) => item.isOfficial))
+            item.origin: item,
+        };
+        final next = <SavedServer>[...keep];
+        for (final device in devices) {
+          final existing = byOrigin[device.origin];
+          next.add(
+            existing == null
+                ? device
+                : SavedServer(
+                    id: existing.id,
+                    alias: device.alias,
+                    origin: device.origin,
+                    host: device.host,
+                    kind: AddressKind.official,
+                    createdAt: existing.createdAt,
+                    lastConnectedAt: existing.lastConnectedAt,
+                    favorite: existing.favorite,
+                    nativeProtocol: device.nativeProtocol,
+                  ),
+          );
+        }
+        // Nothing changed is not a write, so a refresh that finds the same list does not wake
+        // every screen that listens.
+        final same =
+            servers.length == next.length &&
+            servers.every(
+              (item) => next.any(
+                (other) =>
+                    jsonEncode(other.toJson()) == jsonEncode(item.toJson()),
               ),
-      );
-    }
-    // Nothing changed is not a write, so a refresh that finds the same list does not wake
-    // every screen that listens.
-    final same = servers.length == next.length &&
-        servers.every((item) => next.any((other) => jsonEncode(other.toJson()) == jsonEncode(item.toJson())));
-    if (same) return _sorted(servers);
-    for (final gone in byOrigin.values.where((item) => !devices.any((d) => d.origin == item.origin))) {
-      await deleteToken(gone.id);
-    }
-    await _write(next);
-    return _sorted(next);
-  });
+            );
+        if (same) return _sorted(servers);
+        for (final gone in byOrigin.values.where(
+          (item) => !devices.any((d) => d.origin == item.origin),
+        )) {
+          await deleteToken(gone.id);
+        }
+        await _write(next);
+        return _sorted(next);
+      });
 
   Future<List<SavedServer>> patch(
     String id, {

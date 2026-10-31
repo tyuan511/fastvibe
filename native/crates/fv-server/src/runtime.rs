@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use fv_core::Message;
 use fv_protocol::types::{SessionStats, ThreadId, Turn, TurnId};
+#[cfg(test)]
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -240,8 +241,30 @@ impl ThreadRuntime {
         self.inner.lock().unwrap().log.turns.clone()
     }
 
+    /// Clone only the requested turn. Completion bookkeeping and approval reviews often need one
+    /// turn, while cloning the whole transcript made those paths scale with conversation age.
+    pub fn turn(&self, turn_id: &str) -> Option<Turn> {
+        self.inner.lock().unwrap().log.turn(turn_id)
+    }
+
+    /// Clone only the last drawn turn, which is all suggestion and subagent settlement need.
+    pub fn last_turn(&self) -> Option<Turn> {
+        self.inner.lock().unwrap().log.turns.last().cloned()
+    }
+
     pub fn history(&self) -> Vec<Message> {
         self.inner.lock().unwrap().history.clone()
+    }
+
+    pub fn history_is_empty(&self) -> bool {
+        self.inner.lock().unwrap().history.is_empty()
+    }
+
+    /// Run a read-only calculation while the history lock is held, avoiding a deep clone when the
+    /// caller only needs a predicate or a small derived value.
+    pub fn with_history<R>(&self, f: impl FnOnce(&[Message]) -> R) -> R {
+        let g = self.inner.lock().unwrap();
+        f(&g.history)
     }
 
     /// Price the thread against the catalog after a message landed, and hand back the stats a
@@ -520,7 +543,16 @@ impl ThreadRuntime {
                 .filter_map(|c| state.sender(*c).map(|tx| (*c, tx)))
                 .collect()
         };
-        deliver(self, Staged { frame, targets }).await;
+        let prepared =
+            crate::outbound::PreparedFrame::from_message(frame).expect("frame serializes");
+        deliver(
+            self,
+            Staged {
+                frame: prepared,
+                targets,
+            },
+        )
+        .await;
     }
 
     /// Number the event and work out who gets it, all under the lock; sending happens after.
@@ -535,7 +567,8 @@ impl ThreadRuntime {
             .filter_map(|c| state.sender(*c).map(|tx| (*c, tx)))
             .collect();
         Staged {
-            frame: notification_frame(&note),
+            frame: crate::outbound::PreparedFrame::from_message(notification_frame(&note))
+                .expect("notification serializes"),
             targets,
         }
     }
@@ -546,8 +579,8 @@ impl ThreadRuntime {
 }
 
 struct Staged {
-    frame: fv_protocol::Message,
-    targets: Vec<(ConnId, mpsc::Sender<fv_protocol::Message>)>,
+    frame: crate::outbound::PreparedFrame,
+    targets: Vec<(ConnId, crate::outbound::Sender)>,
 }
 
 /// Events of one thread reach each subscriber in order: they are sent one after another from
@@ -555,8 +588,10 @@ struct Staged {
 /// instead of stalling everyone else.
 async fn deliver(rt: &ThreadRuntime, staged: Staged) {
     for (conn, tx) in staged.targets {
-        let sent = tokio::time::timeout(SLOW_SUBSCRIBER, tx.send(staged.frame.clone())).await;
+        let sent =
+            tokio::time::timeout(SLOW_SUBSCRIBER, tx.send_prepared(staged.frame.clone())).await;
         if !matches!(sent, Ok(Ok(()))) {
+            tx.close();
             rt.drop_subscriber(conn);
         }
     }

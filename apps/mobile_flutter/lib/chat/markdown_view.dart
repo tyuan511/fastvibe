@@ -133,11 +133,15 @@ class MarkdownView extends StatelessWidget {
     required this.palette,
     this.streaming = false,
     this.compact = false,
+    this.handleLink,
   });
   final String text;
   final Palette palette;
   final bool streaming;
   final bool compact;
+
+  /// Returns true when the owning surface handled a workspace link itself.
+  final bool Function(String url)? handleLink;
 
   @override
   Widget build(BuildContext context) {
@@ -162,6 +166,7 @@ class MarkdownView extends StatelessWidget {
         ),
         styleSheet: theme.styleSheet,
         onLinkTap: (url, title) {
+          if (handleLink?.call(url) == true) return;
           final uri = Uri.tryParse(url);
           if (uri == null ||
               !['https', 'http', 'mailto'].contains(uri.scheme)) {

@@ -5,18 +5,30 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 use tokio::process::{Child, Command};
 
 pub struct SystemBrowser {
-    root: PathBuf,
+    root: Option<PathBuf>,
     process: Option<Child>,
+    temporary_root: Option<tempfile::TempDir>,
     engine: String,
     port: u16,
     tabs: HashMap<String, (String, String)>,
     client: reqwest::Client,
 }
 impl SystemBrowser {
+    /// Use a caller-owned profile root. Its files are never removed by this instance.
     pub fn new(root: PathBuf) -> Self {
+        Self::with_root(Some(root))
+    }
+
+    /// A window's isolated profile, allocated on first use and owned until the last Arc drops.
+    pub fn temporary() -> Self {
+        Self::with_root(None)
+    }
+
+    fn with_root(root: Option<PathBuf>) -> Self {
         Self {
             root,
             process: None,
+            temporary_root: None,
             engine: String::new(),
             port: 0,
             tabs: HashMap::new(),
@@ -27,6 +39,21 @@ impl SystemBrowser {
                 .expect("local HTTP client"),
         }
     }
+    fn profile_root(&mut self) -> Result<&std::path::Path, String> {
+        if let Some(root) = &self.root {
+            return Ok(root.as_path());
+        }
+        if self.temporary_root.is_none() {
+            self.temporary_root = Some(
+                tempfile::Builder::new()
+                    .prefix("fastvibe-browser-profile-")
+                    .tempdir()
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+        Ok(self.temporary_root.as_ref().unwrap().path())
+    }
+
     async fn ensure(&mut self, choice: &str) -> Result<(), String> {
         let available = engines();
         let engine = if choice == "auto" { available.first() } else { available.iter().find(|e| e.id == choice) }.ok_or("没有找到所选浏览器，请安装 Chrome、Edge 或 Chromium / Selected browser is not installed")?;
@@ -45,7 +72,7 @@ impl SystemBrowser {
         }
         self.port = 0;
         self.tabs.clear();
-        let profile = self.root.join(engine.id);
+        let profile = self.profile_root()?.join(engine.id);
         std::fs::create_dir_all(&profile).map_err(|e| e.to_string())?;
         // A stale port file is never permission to attach to another process.
         let port_file = profile.join("DevToolsActivePort");
@@ -112,10 +139,13 @@ impl SystemBrowser {
         requested: Option<&str>,
     ) -> Result<Value, String> {
         let targets = self.targets().await?;
-        if !new_tab
-            && let Some(id) = requested.map(|v| v.strip_prefix("cdp:").unwrap_or(v))
-            && let Some(target) = targets.iter().find(|t| t["id"].as_str() == Some(id))
-        {
+        if !new_tab && let Some(id) = requested.map(|v| v.strip_prefix("cdp:").unwrap_or(v)) {
+            // An explicit tab is an exact target, including after it was closed. Falling
+            // back to the owner's current tab would send a click or text to another page.
+            let target = targets
+                .iter()
+                .find(|t| t["id"].as_str() == Some(id) && t["type"] == "page")
+                .ok_or("The requested browser tab is no longer available. List tabs and select it again.")?;
             self.tabs.insert(
                 owner.into(),
                 (
@@ -159,6 +189,10 @@ impl SystemBrowser {
         Ok(target)
     }
     /// A single request holds the caller's mutex, keeping navigation and evaluations ordered.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The existing browser action boundary keeps engine, owner, target and operation explicit"
+    )]
     pub async fn run(
         &mut self,
         engine: &str,
@@ -172,7 +206,7 @@ impl SystemBrowser {
         self.ensure(engine).await?;
         if action == "list" {
             let tabs: Vec<_>=self.targets().await?.into_iter().filter(|v|v["type"]=="page").map(|v|json!({"tabId":format!("cdp:{}",v["id"].as_str().unwrap_or("")),"url":v["url"],"title":v["title"]})).collect();
-            return Ok(serde_json::to_string(&tabs).map_err(|e| e.to_string())?);
+            return serde_json::to_string(&tabs).map_err(|e| e.to_string());
         }
         let target = self.target(owner, new_tab, tab_id).await?;
         match action {
@@ -257,6 +291,45 @@ impl SystemBrowser {
         Ok(written)
     }
 }
+impl Drop for SystemBrowser {
+    fn drop(&mut self) {
+        let mut process = self.process.take();
+        let temporary_root = self.temporary_root.take();
+        if process.is_none() && temporary_root.is_none() {
+            return;
+        }
+        if let Some(child) = &mut process {
+            let _ = child.start_kill();
+        }
+        // Reaping and removing a Chromium profile can take time. Neither belongs on the GUI
+        // thread, and the owned directory must outlive the child that was using it.
+        let _ = std::thread::Builder::new()
+            .name("fv-browser-cleanup".into())
+            .spawn(move || {
+                if let Some(mut child) = process {
+                    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                    let reaped = loop {
+                        match child.try_wait() {
+                            Ok(Some(_)) => break true,
+                            Err(_) => break false,
+                            Ok(None) if std::time::Instant::now() >= deadline => break false,
+                            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                        }
+                    };
+                    if !reaped {
+                        // Do not remove a profile while its process may still be alive. Only
+                        // this instance's directory is retained when best-effort reaping fails.
+                        if let Some(root) = temporary_root {
+                            let _ = root.keep();
+                        }
+                        return;
+                    }
+                }
+                drop(temporary_root);
+            });
+    }
+}
+
 async fn wait_loaded(target: &Value) -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(150)).await;
     for _ in 0..60 {
@@ -325,6 +398,78 @@ async fn call(target: &Value, method: &str, params: Value) -> Result<Value, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn temporary_profiles_are_lazy_unique_and_live_until_the_last_owner_drops() {
+        use std::sync::{Arc, Mutex};
+        let first = Arc::new(Mutex::new(SystemBrowser::temporary()));
+        let mut second = SystemBrowser::temporary();
+        assert!(first.lock().unwrap().temporary_root.is_none());
+        assert!(second.temporary_root.is_none());
+        let first_root = first.lock().unwrap().profile_root().unwrap().to_path_buf();
+        let second_root = second.profile_root().unwrap().to_path_buf();
+        assert_ne!(first_root, second_root);
+        std::fs::write(first_root.join("Cookies"), b"first-window").unwrap();
+        assert!(!second_root.join("Cookies").exists());
+        let retained = first.clone();
+        drop(first);
+        assert!(first_root.join("Cookies").exists());
+        drop(second);
+        wait_until_removed(&second_root).await;
+        assert!(
+            first_root.exists(),
+            "another browser's cleanup cannot touch this profile"
+        );
+        drop(retained);
+        wait_until_removed(&first_root).await;
+    }
+
+    #[test]
+    fn caller_owned_profiles_are_never_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let sentinel = root.path().join("Cookies");
+        std::fs::write(&sentinel, b"caller-owned").unwrap();
+        let mut browser = SystemBrowser::new(root.path().to_path_buf());
+        assert_eq!(browser.profile_root().unwrap(), root.path());
+        drop(browser);
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"caller-owned");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn temporary_profile_cleanup_reaps_the_owned_child_before_removing_its_files() {
+        let mut browser = SystemBrowser::temporary();
+        let root = browser.profile_root().unwrap().to_path_buf();
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        browser.process = Some(child);
+        drop(browser);
+        wait_until_removed(&root).await;
+        let alive = Command::new("/bin/kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            !alive.status.success(),
+            "the owned child is reaped before its profile disappears"
+        );
+    }
+
+    async fn wait_until_removed(path: &std::path::Path) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("owned temporary profile cleanup completes");
+    }
+
     async fn mock(reply: Value) -> (Value, tokio::task::JoinHandle<Value>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -352,6 +497,66 @@ mod tests {
             task,
         )
     }
+    #[tokio::test]
+    async fn an_explicit_missing_or_nonpage_tab_never_falls_back_or_sends_a_mutation() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                let n = socket.read(&mut bytes).await.unwrap();
+                seen.lock().unwrap().push(
+                    String::from_utf8_lossy(&bytes[..n])
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_string(),
+                );
+                let body = json!([
+                    {"id":"current","type":"page","url":"https://fixture.invalid/current","webSocketDebuggerUrl":format!("ws://{address}/mutation")},
+                    {"id":"worker","type":"service_worker","url":"https://fixture.invalid/worker","webSocketDebuggerUrl":format!("ws://{address}/mutation")}
+                ]).to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let mut browser = SystemBrowser::new(dir.path().into());
+        browser.port = address.port();
+        browser.tabs.insert(
+            "owner".into(),
+            ("current".into(), "https://fixture.invalid/current".into()),
+        );
+        for requested in ["cdp:closed", "closed", "", "cdp:worker"] {
+            let error = browser
+                .target("owner", false, Some(requested))
+                .await
+                .unwrap_err();
+            assert!(error.contains("no longer available"), "{error}");
+            assert_eq!(
+                browser.tabs["owner"].0, "current",
+                "a refusal must not replace the owner binding"
+            );
+        }
+        // Omission still reuses a live owner binding; it is not an explicit stale target.
+        assert_eq!(
+            browser.target("owner", false, None).await.unwrap()["id"],
+            "current"
+        );
+        assert_eq!(
+            requests.lock().unwrap().as_slice(),
+            ["GET /json/list HTTP/1.1"; 5]
+        );
+        server.abort();
+    }
+
     #[tokio::test]
     async fn cdp_replies_are_correlated_and_events_are_not_results() {
         let (target, task) = mock(json!({"id":1,"result":{"result":{"value":"page text"}}})).await;

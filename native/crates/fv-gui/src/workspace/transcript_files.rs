@@ -1,62 +1,48 @@
 //! File actions shared by tool subjects, folded summaries and turn changes.
-use super::{Workspace, diff};
+use super::Workspace;
 use crate::conversation_resources::resolve;
-use crate::ui::px;
 use fv_theme::Token;
-use gpui_kit::component::hover_card::HoverCard;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 impl Workspace {
-    pub(super) fn transcript_path(&self, path: &str) -> Option<String> {
-        let cwd = self
-            .selected
-            .as_ref()
-            .and_then(|id| self.project_root_for(id));
+    pub(super) fn transcript_path(&self, thread_id: &str, path: &str) -> Option<String> {
+        let cwd = self.project_root_for(thread_id);
         resolve(path, cwd.as_deref())
     }
 
-    /// Left click previews (or reviews a turn change); the context menu always
-    /// offers the same three file actions. A child link must not toggle its fold.
+    /// Left click previews (or reviews a turn change); hovering names the path and the
+    /// context menu always offers the same three file actions. A child link must not
+    /// toggle its fold.
     pub(super) fn file_actions(
         &self,
-        mut element: Stateful<Div>,
+        thread_id: &str,
+        element: Stateful<Div>,
         path: &str,
         review: bool,
-        patch: Option<&str>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(path) = self.transcript_path(path) else {
+        let Some(path) = self.transcript_path(thread_id, path) else {
             return element.into_any_element();
         };
         let click_path = path.clone();
+        let thread_id = thread_id.to_string();
         let title = path.rsplit('/').next().unwrap_or(&path).to_string();
         let preview_title = title.clone();
         let weak = cx.entity().downgrade();
         let menu_owner = weak.clone();
         let english = self.english();
-        let palette = self.palette.clone();
-        let hover_path = path.clone();
-        let patch = patch.map(str::to_string);
-        let hover_id = SharedString::from(format!(
-            "file-hover-{:?}",
-            element.interactivity().element_id
-        ));
-        let trigger = element
+        let local = self.ssh_host.is_none();
+        let tooltip_path = path.clone();
+        element
             .cursor_pointer()
-            .when(patch.is_none(), |d| {
-                d.tooltip({
-                    let path = hover_path.clone();
-                    move |window, cx| Tooltip::new(path.clone()).build(window, cx)
-                })
-            })
+            .tooltip(move |window, cx| Tooltip::new(tooltip_path.clone()).build(window, cx))
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 _ = weak.update(cx, |this, cx| {
                     if review {
-                        this.review_transcript_file(click_path.clone(), window, cx);
+                        this.review_transcript_file_for(&thread_id, click_path.clone(), window, cx);
                     } else {
                         this.open_in_pane(click_path.clone(), title.clone(), window, cx);
                     }
@@ -79,7 +65,9 @@ impl Workspace {
                 .item(
                     PopupMenuItem::new(super::static_text(english, "mod.show_in_file_manager"))
                         .on_click(move |_, _, cx| {
-                            cx.reveal_path(std::path::Path::new(&reveal_path))
+                            if local {
+                                cx.reveal_path(std::path::Path::new(&reveal_path));
+                            }
                         }),
                 )
                 .item(
@@ -89,31 +77,19 @@ impl Workspace {
                         }),
                 )
             })
-            .into_any_element();
-        let Some(patch) = patch else { return trigger };
-        HoverCard::new(hover_id)
-            .anchor(Anchor::TopLeft)
-            .open_delay(std::time::Duration::from_millis(300))
-            .close_delay(std::time::Duration::from_millis(150))
-            .trigger(trigger)
-            .content(move |_, window, _| {
-                div()
-                    .w(px(600.0))
-                    .max_w(window.viewport_size().width - window.rem_size() * 2.0)
-                    .child(div().px(px(8.0)).py(px(4.0)).child(hover_path.clone()))
-                    .child(diff::view("file-hover-diff", &patch, &palette))
-            })
             .into_any_element()
     }
 
     pub(super) fn file_link(
         &self,
+        thread_id: &str,
         id: String,
         path: &str,
         label: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.file_actions(
+            thread_id,
             div()
                 .id(SharedString::from(id))
                 .min_w_0()
@@ -123,8 +99,81 @@ impl Workspace {
                 .child(crate::ui::truncate(label)),
             path,
             false,
-            None,
             cx,
         )
+    }
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::Workspace;
+    use crate::theme::Palette;
+    use gpui_kit::gpui;
+    use gpui_kit::{AppContext, Context, Render, TestAppContext, Window, div};
+
+    struct Host;
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui_kit::IntoElement {
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn child_paths_and_git_reviews_use_child_worktree_without_navigating_parent(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let host = cx.add_window(|_, _| Host);
+        host.update(cx, |_, window, cx| {
+            let workspace = cx.new(|cx| {
+                Workspace::fixture(
+                    Palette::new(fv_theme::Preferences::default().resolve(false, false)),
+                    crate::fixture::theme_conversation(),
+                    window,
+                    cx,
+                )
+            });
+            workspace.update(cx, |this, cx| {
+                let parent = this.selected.clone().unwrap();
+                let mut child = this.views[&parent].thread.clone();
+                child.id = "child".into();
+                child.cwd = Some("/worktrees/child".into());
+                let mut parent_thread = child.clone();
+                parent_thread.id = parent.clone();
+                parent_thread.cwd = Some("/projects/parent".into());
+                this.views.get_mut(&parent).unwrap().thread = parent_thread;
+                this.threads.push(child);
+                assert_eq!(
+                    this.transcript_path("child", "src/main.rs").as_deref(),
+                    Some("/worktrees/child/src/main.rs")
+                );
+                assert_eq!(
+                    this.transcript_path(&parent, "src/main.rs").as_deref(),
+                    Some("/projects/parent/src/main.rs")
+                );
+                assert_eq!(
+                    this.transcript_path("child", "/other/file.rs").as_deref(),
+                    Some("/other/file.rs")
+                );
+                let attached = "Inspect this\n\n<fastvibe-attachments>\n- images/chart.png\n- /shared/data.csv\n</fastvibe-attachments>";
+                assert_eq!(fv_core::strip_attachment_block(attached), "Inspect this");
+                let files: Vec<_> = fv_core::attachment_paths(attached).into_iter()
+                    .filter_map(|path| this.transcript_path("child", &path)).collect();
+                assert_eq!(files, ["/worktrees/child/images/chart.png", "/shared/data.csv"]);
+                assert!(this.attachment_row(&files, "child-message", cx).is_some());
+                this.review_transcript_file_for(
+                    "child",
+                    "/worktrees/child/src/main.rs".into(),
+                    window,
+                    cx,
+                );
+                assert_eq!(this.selected.as_deref(), Some(parent.as_str()));
+                assert_eq!(this.git_views[&parent].repository(), "/worktrees/child");
+                assert_eq!(this.git_cwd().as_deref(), Some("/worktrees/child"));
+                this.review_transcript_file("/projects/parent/src/main.rs".into(), window, cx);
+                assert_eq!(this.git_cwd().as_deref(), Some("/projects/parent"));
+            });
+        })
+        .unwrap();
     }
 }

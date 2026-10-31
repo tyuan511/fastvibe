@@ -185,7 +185,10 @@ pub fn prefix_tokens(system: &str, tools: &[crate::ToolSpec]) -> u64 {
     let prefix = system.len() as u64
         + tools
             .iter()
-            .map(|t| (t.name.len() + t.description.len() + t.schema.to_string().len() + 64) as u64)
+            .map(|t| {
+                (t.name.len() + t.description.len() + fv_core::estimate_json_bytes(&t.schema) + 64)
+                    as u64
+            })
             .sum::<u64>();
     prefix.div_ceil(3)
 }

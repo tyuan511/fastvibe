@@ -18,6 +18,18 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
                 | ClientRequest::OfficeSelectionGet { .. }
                 | ClientRequest::ComputerInstall { .. }
                 | ClientRequest::ComputerHost { .. }
+                | ClientRequest::ElectronMigrationScan { .. }
+                | ClientRequest::ElectronMigrationCommit { .. }
+                | ClientRequest::RemoteStatusGet { .. }
+                | ClientRequest::RemoteConfigure { .. }
+                | ClientRequest::RemoteSetPassword { .. }
+                | ClientRequest::RemoteRevoke { .. }
+                | ClientRequest::AccountStatus { .. }
+                | ClientRequest::AccountLogin { .. }
+                | ClientRequest::AccountCancelLogin { .. }
+                | ClientRequest::AccountLogout { .. }
+                | ClientRequest::OfficialStatusGet { .. }
+                | ClientRequest::OfficialConfigure { .. }
         ),
         ClientOrigin::Lan | ClientOrigin::Official => match request {
             ClientRequest::Initialize { .. }
@@ -61,6 +73,8 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::ProviderModelUpdate { .. }
             | ClientRequest::ModelCatalogGet { .. }
             | ClientRequest::ModelCatalogRefresh { .. }
+            | ClientRequest::ProjectModelDefaultsGet { .. }
+            | ClientRequest::ProjectModelDefaultsSet { .. }
             | ClientRequest::ModelDefaultsGet { .. }
             | ClientRequest::ModelDefaultsSet { .. }
             | ClientRequest::ProjectList { .. }
@@ -68,6 +82,7 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             | ClientRequest::ProjectUpdate { .. }
             | ClientRequest::ProjectRemove { .. }
             | ClientRequest::WorkspaceReadDir { .. }
+            | ClientRequest::WorkspaceReadFile { .. }
             | ClientRequest::OfficeRender { .. }
             | ClientRequest::WorkspacePreview { .. }
             | ClientRequest::WorkspaceSearchFiles { .. }
@@ -141,9 +156,23 @@ pub fn allows(origin: ClientOrigin, request: &ClientRequest) -> bool {
             // Fetching a provider's model list makes this machine request an address the
             // caller chose: a lever a remote client does not need.
             ClientRequest::ProviderFetchModels { .. }
+            | ClientRequest::ProviderCcSwitchScan { .. }
+            | ClientRequest::ProviderCcSwitchImport { .. }
             | ClientRequest::ImportScan { .. }
             | ClientRequest::ImportRead { .. }
             | ClientRequest::ImportCommit { .. }
+            | ClientRequest::ElectronMigrationScan { .. }
+            | ClientRequest::ElectronMigrationCommit { .. }
+            | ClientRequest::RemoteStatusGet { .. }
+            | ClientRequest::RemoteConfigure { .. }
+            | ClientRequest::RemoteSetPassword { .. }
+            | ClientRequest::RemoteRevoke { .. }
+            | ClientRequest::AccountStatus { .. }
+            | ClientRequest::AccountLogin { .. }
+            | ClientRequest::AccountCancelLogin { .. }
+            | ClientRequest::AccountLogout { .. }
+            | ClientRequest::OfficialStatusGet { .. }
+            | ClientRequest::OfficialConfigure { .. }
             | ClientRequest::OfficeWatchStart { .. }
             | ClientRequest::OfficeWatchStop { .. }
             | ClientRequest::OfficeWatchStateGet { .. }

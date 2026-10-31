@@ -89,6 +89,15 @@ async fn a_tool_turn_streams_and_comes_back_whole() {
         |e| matches!(e, ModelEvent::ToolCallStart { id, name } if id == "toolu_1" && name == "read")
     ));
 
+    let deltas: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::ToolCallArgs { id, delta } if id == "toolu_1" => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas, ["{\"path\":", "\"a.txt\"}"]);
+
     // ...and the authoritative message at the end.
     let msg = done(&events);
     assert_eq!(msg.stop, StopReason::ToolUse);

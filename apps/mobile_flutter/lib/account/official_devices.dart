@@ -21,10 +21,13 @@ String officialOrigin(String deviceId) => '$officialScheme://$deviceId';
 /// source of truth — the account, refreshed here — and the live `online` flag, which is only
 /// meaningful for a moment and so is not saved.
 class OfficialDevices extends ChangeNotifier {
-  OfficialDevices({AccountService? account, http.Client? client, ServerStore? store})
-    : _account = account ?? AccountService.instance,
-      _client = client ?? http.Client(),
-      _store = store ?? ServerStore.instance;
+  OfficialDevices({
+    AccountService? account,
+    http.Client? client,
+    ServerStore? store,
+  }) : _account = account ?? AccountService.instance,
+       _client = client ?? http.Client(),
+       _store = store ?? ServerStore.instance;
 
   static final OfficialDevices instance = OfficialDevices();
 
@@ -39,7 +42,8 @@ class OfficialDevices extends ChangeNotifier {
   String? error;
 
   /// Whether the account says the computer is reachable. Unknown means not online.
-  bool isOnline(SavedServer server) => _online[server.officialDeviceId] ?? false;
+  bool isOnline(SavedServer server) =>
+      _online[server.officialDeviceId] ?? false;
 
   int _generation = 0;
 
@@ -58,7 +62,10 @@ class OfficialDevices extends ChangeNotifier {
       final response = await _client
           .get(
             Uri.parse('${_account.origin}/api/devices'),
-            headers: <String, String>{'accept': 'application/json', 'authorization': 'Bearer $token'},
+            headers: <String, String>{
+              'accept': 'application/json',
+              'authorization': 'Bearer $token',
+            },
           )
           .timeout(const Duration(seconds: 15));
       if (generation != _generation) return;
@@ -66,7 +73,9 @@ class OfficialDevices extends ChangeNotifier {
         await _account.tokenRejected(token);
         return;
       }
-      if (response.statusCode != 200) throw StateError('devices ${response.statusCode}');
+      if (response.statusCode != 200) {
+        throw StateError('devices ${response.statusCode}');
+      }
       final body = jsonDecode(response.body);
       final list = body is Map ? body['devices'] : null;
       if (list is! List) throw StateError('devices: unexpected reply');
@@ -88,13 +97,17 @@ class OfficialDevices extends ChangeNotifier {
             host: platform is String && platform.isNotEmpty ? platform : name,
             kind: AddressKind.official,
             createdAt: now,
+            nativeProtocol:
+                platform is String && platform.startsWith('native-'),
           ),
         );
       }
       await _store.syncOfficial(devices);
       if (generation != _generation) return;
       // A computer in the list is about to be tapped: have what its connection needs first.
-      if (devices.isNotEmpty) RtcDialer.warm(origin: _account.origin, token: token, client: _client);
+      if (devices.isNotEmpty) {
+        RtcDialer.warm(origin: _account.origin, token: token, client: _client);
+      }
       _online
         ..clear()
         ..addAll(online);

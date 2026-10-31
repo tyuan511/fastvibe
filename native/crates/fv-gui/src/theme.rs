@@ -57,7 +57,7 @@ impl Palette {
     }
 
     /// The fill of a floating glass surface: Electron's `--glass-overlay`, 84% dark / 90% light.
-    /// A surface that paints it must also blur the page behind itself (`ui::backdrop`):
+    /// A surface that paints it must also blur the page behind itself (`ui::overlay_surface`):
     /// without the blur, the unblurred page shows through at 16/10%.
     /// Solid themes are Electron's `bg-popover/95`.
     pub fn overlay(&self) -> Hsla {
@@ -95,7 +95,7 @@ pub fn apply(palette: &Palette, cx: &mut App) {
     // it with the user's choice; this is the default until settings arrive.
     theme.font_size = gpui_kit::px(fv_theme::DEFAULT_UI_FONT_SIZE);
     theme.mono_font_family = crate::assets::MONO_FONT.into();
-    theme.radius = gpui_kit::px(8.0);
+    theme.radius = gpui_kit::px(10.0);
     let c = |t| palette.c(t);
     let k = &mut theme.colors;
     k.background = c(Token::Background);

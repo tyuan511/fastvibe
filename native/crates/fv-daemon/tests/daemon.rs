@@ -18,7 +18,11 @@ fn server_bin() -> PathBuf {
                 .status()
                 .expect("run cargo");
             assert!(status.success(), "could not build the server");
-            root.join("target/debug/fastvibe-server")
+            let target = std::env::var_os("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root.join("target"));
+            root.join(target)
+                .join("debug/fastvibe-server")
                 .canonicalize()
                 .expect("built server")
         })
@@ -62,7 +66,6 @@ async fn it_starts_a_server_and_connects_to_it() {
         .unwrap();
     assert!(threads.threads.is_empty());
     assert!(conn.version_mismatch, "test version 0 is not the server's");
-    assert!(conn.build_fingerprint.is_some());
     assert_eq!(conn.has_running_turns, Some(false));
     let pid = pid_of(dir.path());
     daemon.stop().unwrap();
@@ -224,8 +227,7 @@ fn the_server_binary_is_found_where_it_is_told() {
     unsafe { std::env::remove_var("FASTVIBE_SERVER_BIN") };
 }
 
-/// A resident process from before sidebar settings existed. It reproduces the old bug:
-/// its reported fingerprint matches the new binary on disk, but its feature list is absent.
+/// A resident process with configurable compatibility and activity reports.
 #[test]
 #[ignore = "subprocess fixture for direct desktop startup tests"]
 fn legacy_resident_fixture() {
@@ -236,11 +238,18 @@ fn legacy_resident_fixture() {
     let listener =
         std::os::unix::net::UnixListener::bind(std::path::Path::new(&dir).join("server.sock"))
             .unwrap();
-    let fingerprint = std::env::var("FV_DAEMON_FIXTURE_FINGERPRINT").unwrap();
+    let version = std::env::var("FV_DAEMON_FIXTURE_VERSION").unwrap();
+    let features: Vec<String> =
+        serde_json::from_str(&std::env::var("FV_DAEMON_FIXTURE_FEATURES").unwrap()).unwrap();
     let activity = std::env::var("FV_DAEMON_FIXTURE_ACTIVITY").unwrap();
     for stream in listener.incoming() {
         let mut stream = stream.unwrap();
-        let (dir, fingerprint, activity) = (dir.clone(), fingerprint.clone(), activity.clone());
+        let (dir, version, features, activity) = (
+            dir.clone(),
+            version.clone(),
+            features.clone(),
+            activity.clone(),
+        );
         std::thread::spawn(move || {
             let reader = std::io::BufReader::new(stream.try_clone().unwrap());
             for line in reader.lines() {
@@ -251,8 +260,8 @@ fn legacy_resident_fixture() {
                     continue;
                 };
                 let mut result = serde_json::json!({
-                    "serverVersion": "0.1.0", "protocolVersion": 1, "dataDir": dir,
-                    "buildFingerprint": fingerprint,
+                    "serverVersion": version, "protocolVersion": 1, "dataDir": dir,
+                    "features": features,
                 });
                 match activity.as_str() {
                     "idle" => result["hasRunningTurns"] = false.into(),
@@ -275,10 +284,12 @@ impl Drop for LegacyResident {
         let _ = self.0.wait();
     }
 }
-async fn legacy_resident(dir: &std::path::Path, activity: &str) -> LegacyResident {
-    use sha2::{Digest, Sha256};
-    // Build before starting the fixture: its dishonest fingerprint must match the current file.
-    let fingerprint = format!("{:x}", Sha256::digest(std::fs::read(server_bin()).unwrap()));
+async fn legacy_resident(
+    dir: &std::path::Path,
+    activity: &str,
+    version: &str,
+    features: &[&str],
+) -> LegacyResident {
     let child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -287,7 +298,11 @@ async fn legacy_resident(dir: &std::path::Path, activity: &str) -> LegacyResiden
             "--nocapture",
         ])
         .env("FV_DAEMON_FIXTURE_DIR", dir)
-        .env("FV_DAEMON_FIXTURE_FINGERPRINT", fingerprint)
+        .env("FV_DAEMON_FIXTURE_VERSION", version)
+        .env(
+            "FV_DAEMON_FIXTURE_FEATURES",
+            serde_json::to_string(features).unwrap(),
+        )
         .env("FV_DAEMON_FIXTURE_ACTIVITY", activity)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -308,13 +323,72 @@ async fn legacy_resident(dir: &std::path::Path, activity: &str) -> LegacyResiden
 }
 
 #[tokio::test]
-async fn direct_startup_replaces_an_idle_legacy_server_even_when_it_reports_the_new_fingerprint() {
+async fn compatible_resident_servers_are_reused_without_reading_the_binary() {
+    for activity in ["idle", "busy", "unknown"] {
+        let dir = tempfile::tempdir().unwrap();
+        let _resident = legacy_resident(
+            dir.path(),
+            activity,
+            env!("CARGO_PKG_VERSION"),
+            fv_protocol::DESKTOP_REQUIRED_FEATURES,
+        )
+        .await;
+        let pid = pid_of(dir.path());
+        let daemon = Daemon::new(dir.path().to_path_buf(), dir.path().join("missing-binary"));
+        for _ in 0..2 {
+            let connection = daemon
+                .connect_current(
+                    "desktop",
+                    env!("CARGO_PKG_VERSION"),
+                    fv_protocol::DESKTOP_REQUIRED_FEATURES,
+                )
+                .await
+                .unwrap();
+            assert!(!connection.version_mismatch);
+            assert_eq!(pid_of(dir.path()), pid);
+            assert!(alive(pid));
+        }
+    }
+}
+
+#[tokio::test]
+async fn direct_startup_replaces_an_idle_server_with_a_different_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let binary = server_bin();
+    let _old = legacy_resident(
+        dir.path(),
+        "idle",
+        "0.0.9",
+        fv_protocol::DESKTOP_REQUIRED_FEATURES,
+    )
+    .await;
+    let old_pid = pid_of(dir.path());
+    let daemon = Daemon::new(dir.path().to_path_buf(), binary);
+    let connection = daemon
+        .connect_current(
+            "desktop",
+            env!("CARGO_PKG_VERSION"),
+            fv_protocol::DESKTOP_REQUIRED_FEATURES,
+        )
+        .await
+        .unwrap();
+    let pid = pid_of(dir.path());
+    assert_ne!(pid, old_pid);
+    assert!(!connection.version_mismatch);
+    drop(connection);
+    daemon.stop().unwrap();
+    wait_gone(pid).await;
+}
+
+#[tokio::test]
+async fn direct_startup_replaces_an_idle_server_missing_required_features() {
     use fv_protocol::methods::{SettingsGet, SettingsSet};
     use fv_protocol::types::{AppSettingsPatch, Empty, SidebarSettingsPatch};
     let dir = tempfile::tempdir().unwrap();
-    let _old = legacy_resident(dir.path(), "idle").await;
+    let binary = server_bin();
+    let _old = legacy_resident(dir.path(), "idle", "0.1.0", &[]).await;
     let old_pid = pid_of(dir.path());
-    let daemon = Daemon::new(dir.path().to_path_buf(), server_bin());
+    let daemon = Daemon::new(dir.path().to_path_buf(), binary);
     let conn = daemon
         .connect_current("desktop", "0.1.0", &["sidebarSettings"])
         .await
@@ -365,22 +439,24 @@ async fn direct_startup_replaces_an_idle_legacy_server_even_when_it_reports_the_
 #[tokio::test]
 async fn direct_startup_keeps_busy_or_unknown_legacy_servers_running() {
     for activity in ["busy", "unknown"] {
-        let dir = tempfile::tempdir().unwrap();
-        let _old = legacy_resident(dir.path(), activity).await;
-        let old_pid = pid_of(dir.path());
-        let daemon = Daemon::new(dir.path().to_path_buf(), server_bin());
-        let conn = daemon
-            .connect_current("desktop", "0.1.0", &["sidebarSettings"])
-            .await
-            .unwrap();
-        assert_eq!(pid_of(dir.path()), old_pid);
-        assert!(
-            alive(old_pid),
-            "work is never interrupted to update the sidebar"
-        );
-        assert!(
-            conn.version_mismatch,
-            "the UI must explain why new features are unavailable"
-        );
+        for (version, features) in [("0.1.0", &[][..]), ("0.0.9", &["sidebarSettings"][..])] {
+            let dir = tempfile::tempdir().unwrap();
+            let _old = legacy_resident(dir.path(), activity, version, features).await;
+            let old_pid = pid_of(dir.path());
+            let daemon = Daemon::new(dir.path().to_path_buf(), dir.path().join("missing-binary"));
+            let conn = daemon
+                .connect_current("desktop", "0.1.0", &["sidebarSettings"])
+                .await
+                .unwrap();
+            assert_eq!(pid_of(dir.path()), old_pid);
+            assert!(
+                alive(old_pid),
+                "work is never interrupted to replace the server"
+            );
+            assert!(
+                conn.version_mismatch,
+                "the UI must explain why the server is incompatible"
+            );
+        }
     }
 }

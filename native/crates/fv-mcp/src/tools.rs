@@ -31,20 +31,27 @@ pub(crate) fn tool_name(server: &str, name: &str) -> String {
 pub(crate) struct McpTool {
     pub connection: Arc<Connection>,
     pub tool: rmcp::model::Tool,
+    // `spec()` runs for every MCP tool on every model request; the name's hash fallback, the
+    // formatted description and the schema conversion are all functions of the two fields
+    // above, which never change on a registered tool.
+    pub(crate) spec: std::sync::OnceLock<ToolSpec>,
 }
 
 impl Tool for McpTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: tool_name(&self.connection.config.id, &self.tool.name),
-            description: format!(
-                "{} / {}: {}",
-                self.connection.config.name,
-                self.tool.name,
-                self.tool.description.as_deref().unwrap_or("MCP tool")
-            ),
-            schema: serde_json::to_value(&self.tool.input_schema).expect("MCP schema serializes"),
-        }
+        self.spec
+            .get_or_init(|| ToolSpec {
+                name: tool_name(&self.connection.config.id, &self.tool.name),
+                description: format!(
+                    "{} / {}: {}",
+                    self.connection.config.name,
+                    self.tool.name,
+                    self.tool.description.as_deref().unwrap_or("MCP tool")
+                ),
+                schema: serde_json::to_value(&self.tool.input_schema)
+                    .expect("MCP schema serializes"),
+            })
+            .clone()
     }
 
     fn deferred(&self) -> bool {

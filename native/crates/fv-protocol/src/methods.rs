@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Rpc;
 use crate::jsonrpc::RequestId;
+use crate::migration::*;
 use crate::office::*;
 use crate::types::*;
 
@@ -44,6 +45,26 @@ macro_rules! client_requests {
 
         /// Every client-callable method name, for tests and the policy-coverage check.
         pub const CLIENT_METHODS: &[&str] = &[$($name,)*];
+
+        /// JSON Schemas for every typed client call, keyed by its wire method name.
+        ///
+        /// Keeping this generated beside `ClientRequest` means a method cannot be added to the
+        /// protocol without also appearing in the schema consumed by non-Rust clients.
+        pub fn method_schemas() -> ::std::collections::BTreeMap<&'static str, serde_json::Value> {
+            [
+                $(
+                    (
+                        $name,
+                        serde_json::json!({
+                            "params": schemars::schema_for!($params),
+                            "response": schemars::schema_for!($response),
+                        }),
+                    ),
+                )*
+            ]
+            .into_iter()
+            .collect()
+        }
     };
 }
 
@@ -65,6 +86,17 @@ macro_rules! notifications {
 
 client_requests! {
     Initialize => "initialize": InitializeParams => InitializeResponse,
+    AccountStatus => "account/status": Empty => crate::account::AccountState,
+    AccountLogin => "account/login": Empty => crate::account::AccountLoginResponse,
+    AccountCancelLogin => "account/cancelLogin": Empty => crate::account::AccountState,
+    AccountLogout => "account/logout": Empty => crate::account::AccountState,
+    OfficialStatusGet => "official/status": Empty => crate::official::OfficialState,
+    OfficialConfigure => "official/configure": crate::official::OfficialConfigureParams => crate::official::OfficialState,
+    RemoteStatusGet => "remote/status": Empty => crate::remote::RemoteStatus,
+    RemoteConfigure => "remote/configure": crate::remote::RemoteConfigureParams => crate::remote::RemoteStatus,
+    RemoteSetPassword => "remote/setPassword": crate::remote::RemotePasswordParams => crate::remote::RemoteStatus,
+    RemoteRevoke => "remote/revoke": crate::remote::RemoteRevokeParams => crate::remote::RemoteStatus,
+    WorkspaceReadFile => "workspace/readFile": crate::remote::ReadFileParams => crate::remote::FileChunk,
     ThreadList => "thread/list": ThreadListParams => ThreadListResponse,
     ThreadSearch => "thread/search": ThreadSearchParams => ThreadSearchResponse,
     ThreadStart => "thread/start": ThreadStartParams => ThreadStartResponse,
@@ -87,7 +119,7 @@ client_requests! {
     ThreadModeSet => "thread/mode/set": ThreadModeParams => Empty,
     ThreadReviewStart => "thread/review/start": ThreadReviewParams => Empty,
     ThreadUpdate => "thread/update": ThreadUpdateParams => ThreadStartResponse,
-    ThreadFork => "thread/fork": ThreadIdParams => ThreadStartResponse,
+    ThreadFork => "thread/fork": ThreadForkParams => ThreadStartResponse,
     ThreadDelete => "thread/delete": ThreadIdParams => Empty,
     ThreadWorktreeCreate => "thread/worktree/create": ThreadWorktreeCreateParams => ThreadStartResponse,
     ThreadWorktreeBind => "thread/worktree/bind": ThreadWorktreeBindParams => ThreadStartResponse,
@@ -105,9 +137,13 @@ client_requests! {
     ProviderModelTest => "provider/model/test": crate::provider_test::ProviderTestParams => crate::provider_test::ProviderTestResult,
     ProviderModelGet => "provider/model/get": crate::models::ProviderModelParams => crate::models::ModelDetail,
     ProviderModelUpdate => "provider/model/update": crate::models::ProviderModelUpdateParams => crate::models::ModelDetail,
+    ProviderCcSwitchScan => "provider/import/ccSwitch/scan": Empty => ProviderImportScan,
+    ProviderCcSwitchImport => "provider/import/ccSwitch": ProviderCcSwitchImportParams => ProviderListResponse,
     ModelList => "model/list": Empty => ModelListResponse,
     ModelDefaultsGet => "model/defaults/get": Empty => ModelDefaults,
     ModelDefaultsSet => "model/defaults/set": ModelDefaults => ModelDefaults,
+    ProjectModelDefaultsGet => "project/modelDefaults/get": ProjectPathParams => ModelDefaults,
+    ProjectModelDefaultsSet => "project/modelDefaults/set": ProjectModelDefaultsSetParams => ModelDefaults,
     ProjectList => "project/list": Empty => ProjectListResponse,
     ProjectCreate => "project/create": ProjectCreateParams => ProjectInfo,
     ProjectUpdate => "project/update": ProjectUpdateParams => ProjectInfo,
@@ -120,7 +156,7 @@ client_requests! {
     OfficeSelectionGet => "office/selection": OfficeLeaseParams => OfficeSelection,
     WorkspacePreview => "workspace/preview": PreviewParams => FilePreview,
     WorkspaceSearchFiles => "workspace/searchFiles": SearchFilesParams => SearchFilesResponse,
-    WorkspaceWriteFile => "workspace/writeFile": WriteFileParams => Empty,
+    WorkspaceWriteFile => "workspace/writeFile": WriteFileParams => WriteFileResponse,
     WorkspaceCreateEntry => "workspace/createEntry": CreateEntryParams => DirEntry,
     WorkspaceRenameEntry => "workspace/renameEntry": RenameEntryParams => DirEntry,
     WorkspaceDeleteEntry => "workspace/deleteEntry": DeleteEntryParams => Empty,
@@ -152,6 +188,8 @@ client_requests! {
     ImportScan => "import/scan": ImportScanParams => ImportScanResponse,
     ImportRead => "import/read": ImportReadParams => ImportReadResponse,
     ImportCommit => "import/commit": ImportCommitParams => ThreadStartResponse,
+    ElectronMigrationScan => "migration/electron/scan": ElectronMigrationScanParams => ElectronMigrationScanResponse,
+    ElectronMigrationCommit => "migration/electron/commit": ElectronMigrationCommitParams => ElectronMigrationResult,
     StatsUsage => "stats/usage": crate::usage::UsageParams => crate::usage::UsageStats,
     SettingsSet => "settings/set": AppSettingsPatch => AppSettings,
     SkillList => "skill/list": SkillListParams => SkillListResponse,
@@ -193,6 +231,7 @@ client_requests! {
 
 notifications!(ClientNotification {
     Initialized => "initialized": Empty,
+    RequestCancel => "request/cancel": CancelRequestParams,
 });
 
 notifications!(ServerNotification {

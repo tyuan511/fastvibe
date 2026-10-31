@@ -12,7 +12,6 @@ use fv_protocol::jsonrpc::code;
 use fv_protocol::types::{Thread, ThreadId};
 use fv_protocol::{Message, ServerNotification};
 use fv_store::{Store, StoreError};
-use tokio::sync::mpsc;
 
 use crate::runtime::ThreadRuntime;
 
@@ -60,7 +59,7 @@ pub struct ServerState {
     /// prices. Readers retain an immutable snapshot while refresh atomically replaces it.
     pub catalog: Arc<fv_provider::CatalogService>,
     pub(crate) catalog_applied: tokio::sync::Mutex<(u64, Option<String>)>,
-    connections: Mutex<HashMap<ConnId, mpsc::Sender<Message>>>,
+    connections: Mutex<HashMap<ConnId, crate::outbound::Sender>>,
     runtimes: Mutex<HashMap<ThreadId, Arc<ThreadRuntime>>>,
     prompts: Mutex<HashMap<fv_protocol::RequestId, PendingPrompt>>,
     pub(crate) subagents_lock: Mutex<()>,
@@ -74,6 +73,7 @@ pub struct ServerState {
     /// the next input boundary — they never start a turn of their own.
     pub(crate) agent_mailbox: Mutex<HashMap<String, Vec<String>>>,
     pub(crate) settings_lock: Mutex<()>,
+    pub(crate) settings_cache: Mutex<Option<fv_protocol::types::AppSettings>>,
     pub(crate) providers_lock: Mutex<()>,
     pub(crate) model_checks: std::sync::Arc<tokio::sync::Semaphore>,
     pub(crate) workspace_entries_lock: Mutex<()>,
@@ -106,27 +106,6 @@ impl ServerState {
         self.memory.start_timer(self);
         crate::catalog::start(self);
         crate::schedules::Schedules::start(self);
-        let history_weak = Arc::downgrade(self);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-            loop {
-                interval.tick().await;
-                let Some(state) = history_weak.upgrade() else {
-                    break;
-                };
-                let runtimes = state.loaded_runtimes();
-                drop(state);
-                // Compression is CPU work and may wait for an allocator; it must
-                // not hold the runtime map or occupy a tokio reactor worker.
-                let _ = tokio::task::spawn_blocking(move || {
-                    let now = std::time::Instant::now();
-                    for runtime in runtimes {
-                        runtime.cool_history(now);
-                    }
-                })
-                .await;
-            }
-        });
         let weak = Arc::downgrade(self);
         let archive_weak = Arc::downgrade(self);
         tokio::spawn(async move {
@@ -181,6 +160,7 @@ impl ServerState {
             subagent_delivered: Mutex::default(),
             agent_mailbox: Mutex::default(),
             settings_lock: Mutex::new(()),
+            settings_cache: Mutex::new(None),
             providers_lock: Mutex::new(()),
             model_checks: std::sync::Arc::new(tokio::sync::Semaphore::new(
                 crate::provider_test::CHECK_LIMIT,
@@ -205,23 +185,25 @@ impl ServerState {
         crate::providers::model_for(self, thread)
     }
 
-    pub(crate) fn register(&self, tx: mpsc::Sender<Message>) -> ConnId {
+    pub(crate) fn register(&self, tx: impl Into<crate::outbound::Sender>) -> ConnId {
         let id = self.next_conn.fetch_add(1, Ordering::Relaxed);
-        self.connections.lock().unwrap().insert(id, tx);
+        self.connections.lock().unwrap().insert(id, tx.into());
         id
     }
 
     pub(crate) fn unregister(&self, id: ConnId) {
         self.office.disconnected(id);
         self.mcp.auth_disconnected(id);
-        self.connections.lock().unwrap().remove(&id);
+        if let Some(sender) = self.connections.lock().unwrap().remove(&id) {
+            sender.close();
+        }
         let runtimes: Vec<_> = self.runtimes.lock().unwrap().values().cloned().collect();
         for rt in runtimes {
             rt.unsubscribe(id);
         }
     }
 
-    pub(crate) fn sender(&self, id: ConnId) -> Option<mpsc::Sender<Message>> {
+    pub(crate) fn sender(&self, id: ConnId) -> Option<crate::outbound::Sender> {
         self.connections.lock().unwrap().get(&id).cloned()
     }
 
@@ -353,7 +335,7 @@ impl ServerState {
     }
 
     /// Fork completed history, including independent picture files, before publishing it.
-    pub fn fork_thread(&self, id: &str) -> Result<Thread, ErrorObject> {
+    pub fn fork_thread(&self, id: &str, turn_id: Option<&str>) -> Result<Thread, ErrorObject> {
         let original = self
             .thread(id)?
             .ok_or_else(|| ErrorObject::new(code::INVALID_PARAMS, "no such thread"))?;
@@ -370,9 +352,20 @@ impl ServerState {
                 "Cannot fork a damaged transcript",
             ));
         }
+        let loaded = match turn_id {
+            Some(turn_id) => loaded.through_turn(turn_id).ok_or_else(|| {
+                ErrorObject::new(code::INVALID_PARAMS, "no such turn in this thread")
+            })?,
+            None => loaded,
+        };
         let now = now_ms();
+        let cwd = match &original.worktree {
+            Some(_) => original.project.clone(),
+            None => original.cwd.clone(),
+        };
         let thread = Thread {
             id: uuid::Uuid::new_v4().to_string(),
+            cwd,
             title: format!("{}（分支）", original.title),
             created_at: now,
             updated_at: now,
@@ -527,6 +520,8 @@ impl ServerState {
         model: Option<String>,
         thinking: Option<fv_protocol::types::ThinkingLevel>,
     ) -> Result<Thread, ErrorObject> {
+        let defaults =
+            crate::providers::new_thread_defaults(self, project.as_deref(), model, thinking)?;
         let now = now_ms();
         let thread = Thread {
             id: uuid::Uuid::new_v4().to_string(),
@@ -538,8 +533,8 @@ impl ServerState {
             updated_at: now,
             archived: false,
             unread: false,
-            model,
-            thinking,
+            model: defaults.model,
+            thinking: defaults.thinking,
             pinned: false,
             worktree: None,
         };
@@ -611,13 +606,20 @@ impl ServerState {
     /// so it is delayed rather than lost. That can reorder two notices to one client, which is
     /// fine for catalog notices (they mean "re-read"); per-thread events will need strict order.
     pub fn broadcast(&self, note: ServerNotification) {
-        let frame = notification_frame(&note);
-        let targets: Vec<_> = self.connections.lock().unwrap().values().cloned().collect();
-        for tx in targets {
-            if let Err(mpsc::error::TrySendError::Full(frame)) = tx.try_send(frame.clone()) {
-                tokio::spawn(async move {
-                    let _ = tx.send(frame).await;
-                });
+        let frame = crate::outbound::PreparedFrame::from_message(notification_frame(&note))
+            .expect("notifications serialize");
+        let targets: Vec<_> = self
+            .connections
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, tx)| (*id, tx.clone()))
+            .collect();
+        for (id, tx) in targets {
+            if tx.try_send_prepared(frame.clone()).is_err() {
+                // A client that cannot accept an authoritative catalog notice must reconnect;
+                // spawning another waiter per notice defeats every queue bound.
+                self.unregister(id);
             }
         }
     }

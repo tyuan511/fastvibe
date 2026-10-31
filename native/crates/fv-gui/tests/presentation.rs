@@ -70,31 +70,22 @@ fn nothing_folds_while_running_after_a_failure_or_without_an_answer() {
 fn a_patch_is_counted_per_file_and_a_new_file_has_no_removals() {
     let patch = "*** Begin Patch\n*** Add File: a.txt\n+one\n+two\n*** Update File: src/b.rs\n@@ fn x\n-old\n+new\n context\n*** Update File: c.rs\n*** Move to: d.rs\n@@\n-gone\n*** End Patch\n";
     assert_eq!(
-        patch_changes(patch)
-            .into_iter()
-            .map(|mut file| {
-                file.diff.clear();
-                file
-            })
-            .collect::<Vec<_>>(),
+        patch_changes(patch),
         vec![
             FileChange {
                 path: "a.txt".into(),
                 added: 2,
                 removed: 0,
-                diff: String::new()
             },
             FileChange {
                 path: "src/b.rs".into(),
                 added: 1,
                 removed: 1,
-                diff: String::new()
             },
             FileChange {
                 path: "d.rs".into(),
                 added: 0,
                 removed: 1,
-                diff: String::new()
             },
         ]
     );
@@ -435,15 +426,4 @@ fn summary_paths_keep_the_directory_and_rename_target() {
     assert!(run_summary(&[&item], false).contains(&Piece::Path("lib/new.rs".into())));
     let many = json!({"input": "*** Begin Patch\n*** Add File: a\n+a\n*** Add File: b\n+b\n*** End Patch"});
     assert_eq!(tool_path("apply_patch", &many), None);
-}
-
-#[test]
-fn patch_previews_keep_each_files_own_content() {
-    let patch = "*** Begin Patch\n*** Update File: a.rs\n@@ fn a\n--- old\n+++ new\n*** Add File: b.rs\n+second\n*** End Patch\n";
-    let files = patch_changes(patch);
-    assert_eq!(
-        files[0].diff,
-        "*** Update File: a.rs\n@@ fn a\n--- old\n+++ new\n"
-    );
-    assert_eq!(files[1].diff, "*** Add File: b.rs\n+second\n");
 }

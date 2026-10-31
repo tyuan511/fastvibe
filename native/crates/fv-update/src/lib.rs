@@ -540,6 +540,131 @@ mod tests {
     }
     #[test]
     #[cfg(target_os = "macos")]
+    fn installer_rolls_back_failed_launches_but_preserves_clean_gui_exit() {
+        use std::os::unix::fs::PermissionsExt;
+        for (body, fails) in [
+            ("#!/bin/sh\nexit 0\n", false),
+            ("#!/bin/sh\nsleep 3.4\nexit 0\n", false),
+            ("#!/bin/sh\nexit 17\n", true),
+            ("#!/no/such/interpreter\n", true),
+            ("#!/bin/sh\nsleep 0.4\nexit 23\n", true),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let app = temp.path().join("Installed Native.app");
+            let work = temp.path().join("work");
+            for path in [
+                app.join("Contents/MacOS"),
+                work.join(BUNDLE_NAME).join("Contents/MacOS"),
+            ] {
+                std::fs::create_dir_all(path).unwrap();
+            }
+            let old = app.join("Contents/MacOS/fastvibe");
+            let marker = temp.path().join("old-relaunched");
+            std::fs::write(
+                &old,
+                format!("#!/bin/sh\nprintf old > '{}'\n", marker.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let new = work.join(BUNDLE_NAME).join("Contents/MacOS/fastvibe");
+            std::fs::write(&new, body).unwrap();
+            std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let output = std::process::Command::new("/bin/bash")
+                .arg("-c")
+                .arg(INSTALL_SCRIPT)
+                .arg("test-install")
+                .arg("999999999")
+                .arg(&app)
+                .arg(&work)
+                .arg(temp.path())
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.success(),
+                !fails,
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let installed = std::fs::read_to_string(app.join("Contents/MacOS/fastvibe")).unwrap();
+            assert_eq!(installed == body, !fails, "{installed}");
+            if fails {
+                for _ in 0..50 {
+                    if marker.exists() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                assert!(marker.exists(), "the previous fixture is relaunched");
+            } else {
+                assert!(
+                    !marker.exists(),
+                    "a clean exit must not relaunch the old app"
+                );
+            }
+            assert!(!work.exists());
+            assert!(!std::fs::read_dir(temp.path()).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".fastvibe-native-")
+            }));
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn installer_waits_for_normal_parent_exit_before_swapping() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("Installed Native.app");
+        let work = temp.path().join("work");
+        let archive = temp.path().join("input.zip");
+        std::fs::write(&archive, app_archive()).unwrap();
+        unpack(&archive, &work).unwrap();
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join("old"), "old").unwrap();
+        // A real parent fixture remains live until its stdin closes. The helper must wait;
+        // no signal or forced quit is used to make the application leave.
+        let mut parent = std::process::Command::new("/bin/sh")
+            .args(["-c", "read line"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let helper = std::process::Command::new("/bin/bash")
+            .arg("-c")
+            .arg(INSTALL_SCRIPT)
+            .arg("test-install")
+            .arg(parent.id().to_string())
+            .arg(&app)
+            .arg(&work)
+            .arg(temp.path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(350));
+        assert!(
+            app.join("old").exists(),
+            "a running GUI keeps its app intact"
+        );
+        assert!(
+            parent.try_wait().unwrap().is_none(),
+            "installer must not terminate the parent"
+        );
+        drop(parent.stdin.take());
+        parent.wait().unwrap();
+        let output = helper.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!app.join("old").exists());
+        assert!(app.join("Contents/MacOS/fastvibe").exists());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
     fn installer_swaps_only_the_fixture_app_and_rolls_back_a_failed_rename() {
         use std::os::unix::fs::PermissionsExt;
         for fail in [false, true] {

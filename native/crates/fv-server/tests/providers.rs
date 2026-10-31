@@ -445,8 +445,22 @@ async fn a_conversation_with_no_model_uses_the_default_one() {
     })
     .await
     .unwrap();
+    let new_thread = c
+        .call::<ThreadStart>(ThreadStartParams::default())
+        .await
+        .unwrap()
+        .thread;
+    // Changing defaults does not rewrite the chat that was already created.
+    assert_eq!(
+        c.call::<ThreadResume>(ThreadIdParams { thread_id: thread })
+            .await
+            .unwrap()
+            .thread
+            .model,
+        None
+    );
     c.call::<TurnStart>(TurnStartParams {
-        thread_id: thread,
+        thread_id: new_thread.id,
         text: "again".into(),
     })
     .await
@@ -820,4 +834,145 @@ async fn catalog_metadata_reaches_the_model_list_and_prices_the_turn() {
         })],
     );
     assert_eq!(unpriced, None);
+}
+
+#[tokio::test]
+async fn project_defaults_apply_only_to_new_threads_and_follow_the_primary_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let primary = dir.path().join("one");
+    let secondary = dir.path().join("two");
+    std::fs::create_dir(&primary).unwrap();
+    std::fs::create_dir(&secondary).unwrap();
+    let primary = primary.display().to_string();
+    let secondary = secondary.display().to_string();
+    let (_, sock) = run(dir.path(), "project").await;
+    let (c, _n) = connect(&sock).await;
+    c.call::<ProviderUpsert>(upsert(
+        "Relay",
+        "https://example.com/v1",
+        Some(KEY),
+        vec![model("global"), model("project"), model("explicit")],
+    ))
+    .await
+    .unwrap();
+    c.call::<ProjectCreate>(ProjectCreateParams {
+        name: None,
+        folders: vec![primary.clone(), secondary.clone()],
+    })
+    .await
+    .unwrap();
+    c.call::<ModelDefaultsSet>(ModelDefaults {
+        model: Some("relay/global".into()),
+        thinking: Some(ThinkingLevel::Low),
+    })
+    .await
+    .unwrap();
+    let defaults = ModelDefaults {
+        model: Some("relay/project".into()),
+        thinking: Some(ThinkingLevel::High),
+    };
+    c.call::<ProjectModelDefaultsSet>(ProjectModelDefaultsSetParams {
+        path: primary.clone(),
+        defaults: defaults.clone(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        c.call::<ProjectModelDefaultsGet>(ProjectPathParams {
+            path: primary.clone()
+        })
+        .await
+        .unwrap(),
+        defaults
+    );
+    let thread = c
+        .call::<ThreadStart>(ThreadStartParams {
+            cwd: Some(primary.clone()),
+            project: Some(primary.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(thread.model.as_deref(), Some("relay/project"));
+    assert_eq!(thread.thinking, Some(ThinkingLevel::High));
+    let explicit = c
+        .call::<ThreadStart>(ThreadStartParams {
+            project: Some(primary.clone()),
+            model: Some("relay/explicit".into()),
+            thinking: Some(ThinkingLevel::Minimal),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(explicit.model.as_deref(), Some("relay/explicit"));
+    assert_eq!(explicit.thinking, Some(ThinkingLevel::Minimal));
+    let model_only = c
+        .call::<ThreadStart>(ThreadStartParams {
+            project: Some(primary.clone()),
+            model: Some("relay/explicit".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(model_only.thinking, Some(ThinkingLevel::High));
+
+    c.call::<ProjectUpdate>(ProjectUpdateParams {
+        path: primary.clone(),
+        name: None,
+        folders: vec![secondary.clone(), primary.clone()],
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        c.call::<ProjectModelDefaultsGet>(ProjectPathParams {
+            path: secondary.clone()
+        })
+        .await
+        .unwrap(),
+        defaults
+    );
+    c.call::<ProjectModelDefaultsSet>(ProjectModelDefaultsSetParams {
+        path: secondary.clone(),
+        defaults: ModelDefaults::default(),
+    })
+    .await
+    .unwrap();
+    let original = c
+        .call::<ThreadResume>(ThreadIdParams {
+            thread_id: thread.id,
+        })
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(original.model.as_deref(), Some("relay/project"));
+    assert_eq!(original.cwd.as_deref(), Some(primary.as_str()));
+    assert_eq!(original.project.as_deref(), Some(secondary.as_str()));
+    let inherited = c
+        .call::<ThreadStart>(ThreadStartParams {
+            project: Some(secondary.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .thread;
+    assert_eq!(inherited.model.as_deref(), Some("relay/global"));
+    assert_eq!(inherited.thinking, Some(ThinkingLevel::Low));
+    c.call::<ProjectRemove>(ProjectPathParams { path: secondary })
+        .await
+        .unwrap();
+    c.call::<ProjectCreate>(ProjectCreateParams {
+        name: None,
+        folders: vec![primary.clone()],
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        c.call::<ProjectModelDefaultsGet>(ProjectPathParams { path: primary })
+            .await
+            .unwrap(),
+        ModelDefaults::default()
+    );
 }

@@ -19,6 +19,7 @@ import 'package:fastvibe_mobile/protocol/diagnostics.dart';
 import 'package:fastvibe_mobile/screens/add_device.dart';
 import 'package:fastvibe_mobile/screens/connection_diagnostics.dart';
 import 'package:fastvibe_mobile/screens/devices.dart';
+import 'package:fastvibe_mobile/screens/native_server.dart';
 import 'package:fastvibe_mobile/screens/scan.dart';
 import 'package:fastvibe_mobile/screens/settings.dart';
 import 'package:fastvibe_mobile/screens/transcript.dart';
@@ -104,6 +105,15 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text(t('nav.addDevice')), findsWidgets);
   });
+
+  for (final palette in <Palette>[light, dark]) {
+    testWidgets('native device route renders missing-device state ${palette.dark}', (tester) async {
+      await pump(tester, const NativeServerScreen(serverId: 'missing'), palette: palette);
+      expect(tester.takeException(), isNull);
+      expect(find.text(t('native.title')), findsWidgets);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
 
   testWidgets('settings renders every section', (tester) async {
     await pump(tester, const SettingsScreen());

@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use fv_protocol::ErrorObject;
 use fv_protocol::jsonrpc::code;
 use fv_protocol::types::*;
+use sha2::{Digest, Sha256};
 
 /// The heaviest directories the tree never shows, even though the agent can touch them.
 const HIDDEN: [&str; 2] = [".git", "node_modules"];
@@ -30,8 +31,6 @@ pub const MAX_TEXT_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_PREVIEW_BYTES: u64 = 4 * 1024 * 1024;
 /// Rows a delimited file is cut to, so a 200 MB export cannot freeze the pane.
 const MAX_CSV_ROWS: usize = 5000;
-/// Lines a diff preview keeps.
-const MAX_DIFF_LINES: usize = 4000;
 
 fn invalid(message: impl Into<String>) -> ErrorObject {
     ErrorObject::new(code::INVALID_PARAMS, message)
@@ -150,6 +149,10 @@ fn file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+fn revision(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 fn extension(path: &Path) -> String {
     path.extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -227,7 +230,17 @@ pub fn preview(path: &str) -> FilePreview {
             size,
         };
     }
-    let text = String::from_utf8_lossy(&bytes).to_string();
+    let text = match String::from_utf8(bytes.clone()) {
+        Ok(text) => text,
+        Err(_) => {
+            return FilePreview::Binary {
+                path: path.to_string(),
+                name,
+                size,
+            };
+        }
+    };
+    let file_revision = revision(&bytes);
     match ext.as_str() {
         ".md" | ".markdown" => FilePreview::Text {
             kind: FilePreviewKind::Markdown,
@@ -235,6 +248,7 @@ pub fn preview(path: &str) -> FilePreview {
             name,
             language: None,
             text,
+            revision: Some(file_revision.clone()),
         },
         ".html" | ".htm" => FilePreview::Text {
             kind: FilePreviewKind::Html,
@@ -242,6 +256,7 @@ pub fn preview(path: &str) -> FilePreview {
             name,
             language: None,
             text,
+            revision: Some(file_revision.clone()),
         },
         ".csv" | ".tsv" => {
             let rows = parse_delimited(&text, ext == ".tsv");
@@ -255,27 +270,21 @@ pub fn preview(path: &str) -> FilePreview {
                 total_rows: total as u64,
             }
         }
-        ".diff" | ".patch" => {
-            let lines: Vec<&str> = text.lines().collect();
-            let text = lines
-                .into_iter()
-                .take(MAX_DIFF_LINES)
-                .collect::<Vec<_>>()
-                .join("\n");
-            FilePreview::Text {
-                kind: FilePreviewKind::Diff,
-                path: path.to_string(),
-                name,
-                language: None,
-                text,
-            }
-        }
+        ".diff" | ".patch" => FilePreview::Text {
+            kind: FilePreviewKind::Diff,
+            path: path.to_string(),
+            name,
+            language: None,
+            text,
+            revision: Some(file_revision.clone()),
+        },
         _ => FilePreview::Text {
             kind: FilePreviewKind::Code,
             language: Some(code_language(&name, &ext)),
             path: path.to_string(),
             name,
             text,
+            revision: Some(file_revision),
         },
     }
 }
@@ -397,7 +406,7 @@ fn code_language(name: &str, ext: &str) -> String {
 /// The bytes land in a temp file in the same directory and are renamed over the original, so a
 /// crash cannot leave a half-written source. A symlink is refused: the tree only lists real
 /// files, and following a link would write somewhere other than the path on screen.
-pub fn write_file(path: &str, text: &str) -> Result<(), ErrorObject> {
+pub fn write_file(path: &str, text: &str, baseline: Option<&str>) -> Result<String, ErrorObject> {
     if path.is_empty() || path.contains('\0') {
         return Err(invalid("路径无效"));
     }
@@ -418,7 +427,15 @@ pub fn write_file(path: &str, text: &str) -> Result<(), ErrorObject> {
         return Err(invalid("文件过大，无法编辑"));
     }
     let original = std::fs::read(file).map_err(|e| failed(e.to_string()))?;
-    if original.contains(&0) {
+    let current_revision = revision(&original);
+    if let Some(expected) = baseline
+        && expected != current_revision
+    {
+        return Err(invalid(format!(
+            "文件已被修改，请重新读取后再保存（当前版本：{current_revision}）"
+        )));
+    }
+    if original.contains(&0) || std::str::from_utf8(&original).is_err() {
         return Err(invalid("不能覆盖二进制文件"));
     }
     // The editor only holds `\n`, so a file that was CRLF gets that ending back — otherwise one
@@ -450,7 +467,7 @@ pub fn write_file(path: &str, text: &str) -> Result<(), ErrorObject> {
         let _ = std::fs::remove_file(&temporary);
         return Err(failed(e.to_string()));
     }
-    Ok(())
+    Ok(revision(output.as_bytes()))
 }
 
 /// Resolve a path a client sent against a conversation's working directory.
@@ -514,7 +531,7 @@ mod tests {
             !listed.entries.iter().any(|e| e.name == "link.txt"),
             "the tree previews what is on the path it shows"
         );
-        assert!(write_file(&link.display().to_string(), "changed\n").is_err());
+        assert!(write_file(&link.display().to_string(), "changed\n", None).is_err());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "real\n");
     }
 
@@ -596,6 +613,69 @@ mod tests {
     }
 
     #[test]
+    fn a_large_crlf_diff_keeps_all_bytes_and_revision() {
+        let dir = temp_dir();
+        let file = dir.path().join("large.diff");
+        let expected = (0..4501)
+            .map(|i| format!("@@ hunk {i} @@\r\n+line {i}\r\n"))
+            .collect::<String>();
+        std::fs::write(&file, expected.as_bytes()).unwrap();
+        let FilePreview::Text {
+            kind,
+            text,
+            revision: actual_revision,
+            ..
+        } = preview(&file.display().to_string())
+        else {
+            panic!("expected diff text");
+        };
+        assert_eq!(kind, FilePreviewKind::Diff);
+        assert_eq!(text, expected);
+        assert_eq!(
+            actual_revision.as_deref(),
+            Some(revision(expected.as_bytes()).as_str())
+        );
+    }
+
+    #[test]
+    fn invalid_utf8_is_binary_and_cannot_be_written_lossily() {
+        let dir = temp_dir();
+        let file = dir.path().join("broken.rs");
+        let bytes = b"valid\n\xff\n";
+        std::fs::write(&file, bytes).unwrap();
+        assert!(matches!(
+            preview(&file.display().to_string()),
+            FilePreview::Binary { .. }
+        ));
+        assert!(write_file(&file.display().to_string(), "replacement", None).is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_baseline_conflict_preserves_external_bytes() {
+        let dir = temp_dir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, b"original\n").unwrap();
+        let expected = revision(b"original\n");
+        std::fs::write(&file, b"external\n").unwrap();
+        let error =
+            write_file(&file.display().to_string(), "draft\n", Some(&expected)).unwrap_err();
+        assert!(error.message.contains("文件已被修改"));
+        assert_eq!(std::fs::read(&file).unwrap(), b"external\n");
+    }
+
+    #[test]
+    fn a_successful_write_returns_the_new_revision() {
+        let dir = temp_dir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, b"original\n").unwrap();
+        let baseline = revision(b"original\n");
+        let next = write_file(&file.display().to_string(), "new\n", Some(&baseline)).unwrap();
+        assert_eq!(next, revision(b"new\n"));
+        assert_eq!(std::fs::read(&file).unwrap(), b"new\n");
+    }
+
+    #[test]
     fn code_markdown_and_delimited_files_get_their_own_kind() {
         let dir = temp_dir();
         let ts = dir.path().join("app.ts");
@@ -636,7 +716,7 @@ mod tests {
         let dir = temp_dir();
         let file = dir.path().join("script.sh");
         std::fs::write(&file, "line one\r\nline two\r\n").unwrap();
-        write_file(&file.display().to_string(), "new one\nnew two\n").unwrap();
+        write_file(&file.display().to_string(), "new one\nnew two\n", None).unwrap();
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             "new one\r\nnew two\r\n",
@@ -645,7 +725,7 @@ mod tests {
 
         let binary = dir.path().join("blob.bin");
         std::fs::write(&binary, b"\x00\x01").unwrap();
-        assert!(write_file(&binary.display().to_string(), "text").is_err());
+        assert!(write_file(&binary.display().to_string(), "text", None).is_err());
     }
 
     #[test]

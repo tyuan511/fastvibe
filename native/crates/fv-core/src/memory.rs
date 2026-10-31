@@ -1,5 +1,13 @@
+use std::borrow::Cow;
+
 const OPEN: &str = "<oai-mem-citation>";
 const CLOSE: &str = "</oai-mem-citation>";
+
+/// Whether `text` ends with a proper prefix of [`OPEN`]: a citation block that is still
+/// streaming in. Checked without allocating so the common no-citation path stays borrowed.
+fn ends_with_partial_open(text: &str) -> bool {
+    (1..OPEN.len()).any(|length| text.ends_with(&OPEN[..length]))
+}
 
 pub fn memory_citation_ids(text: &str) -> Vec<String> {
     let mut ids = Vec::new();
@@ -76,7 +84,12 @@ fn wrapper(text: &str, at: usize) -> Option<(usize, char, usize)> {
 
 /// Hide complete and streaming citation blocks, including a code fence wrapping only the
 /// machine block. A code fence containing real prose or code keeps its own delimiters.
-pub fn strip_memory_citation(text: &str) -> String {
+pub fn strip_memory_citation(text: &str) -> Cow<'_, str> {
+    // Almost every text has no citation in it; copying it here would put one full heap copy
+    // behind every streamed text block, every search-scanned message and every rendered frame.
+    if !text.contains(OPEN) && !ends_with_partial_open(text) {
+        return Cow::Borrowed(text);
+    }
     let mut out = text.to_string();
     let mut changed = false;
     while let Some(at) = out.find(OPEN) {
@@ -110,7 +123,7 @@ pub fn strip_memory_citation(text: &str) -> String {
     if changed {
         out.truncate(out.trim_end().len());
     }
-    out
+    Cow::Owned(out)
 }
 
 #[cfg(test)]

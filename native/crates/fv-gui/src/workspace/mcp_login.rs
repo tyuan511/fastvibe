@@ -3,7 +3,7 @@
 use crate::ui::px;
 use fv_protocol::methods::McpAuthForget;
 use fv_protocol::types::*;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 
 use super::super::Workspace;
@@ -227,9 +227,9 @@ impl Workspace {
             .flex_col()
             .gap(px(12.0))
             .child(trs!(english, "mcp_login.oauth_sign_in"))
-            .child(Input::new(&form.client_id))
-            .child(Input::new(&form.client_secret).mask_toggle())
-            .child(Input::new(&form.scopes));
+            .child(crate::ui::input(&form.client_id))
+            .child(crate::ui::input(&form.client_secret).mask_toggle())
+            .child(crate::ui::input(&form.scopes));
         if let Some(login) = &s.mcp.login {
             body = body.child(if login.url.is_some() {
                 trs!(english, "mcp_login.complete_authorization_in_your_browser")

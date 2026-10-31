@@ -6,6 +6,7 @@ import 'screens/chat.dart';
 import 'screens/devices.dart';
 import 'screens/scan.dart';
 import 'screens/server.dart';
+import 'screens/native_server.dart';
 import 'screens/settings.dart';
 import 'session/connection.dart';
 import 'storage/servers.dart';
@@ -31,6 +32,11 @@ final GoRouter appRouter = GoRouter(
         GoRoute(
           path: 'settings',
           builder: (context, state) => const SettingsScreen(),
+        ),
+        GoRoute(
+          path: 'native/:id',
+          builder: (context, state) =>
+              NativeServerScreen(serverId: state.pathParameters['id']!),
         ),
         GoRoute(
           path: 'server/:id',

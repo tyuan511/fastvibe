@@ -224,3 +224,79 @@ fn imported_usage_is_deduplicated_by_source_entry_across_target_threads() {
     assert_eq!(store.db.usage_records().unwrap().len(), 1);
     assert_eq!(store.db.usage_records().unwrap()[0].usage.input_tokens, 12);
 }
+
+#[test]
+fn fork_boundary_keeps_complete_turns_and_original_usage() {
+    use fv_protocol::types::TurnStatus;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    for turn in ["one", "two", "three"] {
+        store.transcripts.start_turn("parent", turn).unwrap();
+        store
+            .transcripts
+            .append(
+                "parent",
+                &[Message::User { text: turn.into() }, reply(turn, 10)],
+            )
+            .unwrap();
+        store
+            .transcripts
+            .finish_turn("parent", turn, TurnStatus::Completed, None)
+            .unwrap();
+    }
+    let before = store.db.usage_records().unwrap();
+    let selected = store
+        .transcripts
+        .read("parent")
+        .unwrap()
+        .through_turn("two")
+        .unwrap();
+    assert_eq!(selected.messages.len(), 4);
+    assert_eq!(
+        selected
+            .turns()
+            .iter()
+            .map(|t| t.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["one", "two"]
+    );
+    store
+        .transcripts
+        .copy_loaded("child", &selected, &selected.messages)
+        .unwrap();
+    store.transcripts.capture_usage().unwrap();
+    assert_eq!(before, store.db.usage_records().unwrap());
+    // A partially installed unpublished file is replaced atomically on crash recovery.
+    store
+        .transcripts
+        .append(
+            "staged",
+            &[Message::User {
+                text: "partial".into(),
+            }],
+        )
+        .unwrap();
+    store
+        .transcripts
+        .install_loaded("staged", &selected, &selected.messages)
+        .unwrap();
+    let installed = store.transcripts.read("staged").unwrap();
+    assert_eq!(installed.messages, selected.messages);
+    assert_eq!(installed.turns(), selected.turns());
+    store
+        .transcripts
+        .install_loaded("staged", &selected, &selected.messages)
+        .unwrap();
+    assert_eq!(
+        store.transcripts.read("staged").unwrap().messages,
+        selected.messages
+    );
+    assert!(
+        store
+            .transcripts
+            .read("parent")
+            .unwrap()
+            .through_turn("missing")
+            .is_none()
+    );
+}

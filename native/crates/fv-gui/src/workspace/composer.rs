@@ -220,7 +220,11 @@ impl Workspace {
             .child(div().flex_none().text_color(p.c(Token::Border)).child("·"))
             .child(div().flex_none().child(thinking_text))
             .child(icon("arrow-down01", 12.0, p.c(Token::MutedForeground)))
-            .on_click(cx.listener(|this, _, _, cx| {
+            .on_click(cx.listener(|this, _, window, cx| {
+                if this.models.is_empty() {
+                    this.open_settings(super::settings::Section::Providers, window, cx);
+                    return;
+                }
                 let open = !this.model_menu;
                 this.close_menus(cx);
                 this.model_menu = open;
@@ -477,7 +481,7 @@ impl Workspace {
     fn model_menu(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = &self.palette;
         let hover = p.c(Token::Accent);
-        let mut list = div()
+        let mut list = super::settings::popover(p)
             .id("composer-model-list")
             .max_h(px(440.0))
             .overflow_y_scroll()
@@ -485,19 +489,7 @@ impl Workspace {
             .bottom(px(44.0))
             .right(px(10.0))
             .w(px(280.0))
-            .p(px(4.0))
-            .rounded(px(12.0))
-            .border_1()
-            .border_color(p.c(Token::Border))
-            .bg(p.overlay())
-            .text_color(p.c(Token::PopoverForeground))
-            .shadow_md()
-            .flex()
-            .flex_col()
-            .text_size(px(TEXT_SM))
-            // Electron's overlay-surface blur; the fill above it is the real
-            // 84/90% --glass-overlay, legible only over a blurred backdrop.
-            .child(crate::ui::backdrop(12.0, 28.0, 1.8));
+            .text_size(px(TEXT_SM));
         if self.models.is_empty() {
             list = list.child(
                 div()
@@ -518,6 +510,7 @@ impl Workspace {
             list = list.child(
                 provider_row(
                     SharedString::from(format!("model-provider-{id}")),
+                    group.id,
                     group.name,
                     holds_current,
                     open,
@@ -697,25 +690,13 @@ impl Workspace {
             ),
         ];
 
-        let mut list = div()
+        let mut list = super::settings::popover(p)
             .id("composer-thinking-submenu")
             .absolute()
             .bottom(px(44.0))
             .right(px(296.0))
             .w(px(160.0))
-            .p(px(4.0))
-            .rounded(px(12.0))
-            .border_1()
-            .border_color(p.c(Token::Border))
-            .bg(p.overlay())
-            .text_color(p.c(Token::PopoverForeground))
-            .shadow_md()
-            .flex()
-            .flex_col()
-            .text_size(px(TEXT_SM))
-            // Electron's overlay-surface blur; the fill above it is the real
-            // 84/90% --glass-overlay, legible only over a blurred backdrop.
-            .child(crate::ui::backdrop(12.0, 28.0, 1.8));
+            .text_size(px(TEXT_SM));
 
         for (level, label) in options {
             if level.is_some_and(|l| allowed.as_ref().is_some_and(|v| !v.contains(&l))) {
@@ -757,7 +738,7 @@ impl Workspace {
     fn provider_menu(&self, provider_id: &str, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = &self.palette;
         let current = self.current_model_label();
-        let mut list = div()
+        let mut list = super::settings::popover(p)
             .id("composer-model-submenu")
             .max_h(px(440.0))
             .overflow_y_scroll()
@@ -765,19 +746,7 @@ impl Workspace {
             .bottom(px(44.0))
             .right(px(296.0))
             .w(px(208.0))
-            .p(px(4.0))
-            .rounded(px(12.0))
-            .border_1()
-            .border_color(p.c(Token::Border))
-            .bg(p.overlay())
-            .text_color(p.c(Token::PopoverForeground))
-            .shadow_md()
-            .flex()
-            .flex_col()
-            .text_size(px(TEXT_SM))
-            // Electron's overlay-surface blur; the fill above it is the real
-            // 84/90% --glass-overlay, legible only over a blurred backdrop.
-            .child(crate::ui::backdrop(12.0, 28.0, 1.8));
+            .text_size(px(TEXT_SM));
         for m in self.models.iter().filter(|m| m.provider_id == provider_id) {
             let label = m.label.clone();
             let selected = Some(label.as_str()) == current.as_deref();
@@ -1022,22 +991,11 @@ impl Workspace {
             .map(|p| p.path.clone())
             .collect();
         let menu = self.project_menu.then(|| {
-            let mut list = div()
+            let mut list = super::settings::popover(p)
                 .absolute()
                 .bottom(px(36.0))
                 .left(px(0.0))
-                .w(px(280.0))
-                .p(px(4.0))
-                .rounded(px(12.0))
-                .border_1()
-                .border_color(p.c(Token::Border))
-                .bg(p.overlay())
-                .text_color(p.c(Token::PopoverForeground))
-                .shadow_lg()
-                .flex()
-                .flex_col()
-                .text_size(px(TEXT_SM))
-                .child(crate::ui::backdrop(12.0, 28.0, 1.8));
+                .w(px(280.0));
             list = list.child(
                 div()
                     .px(px(2.0))
@@ -1053,7 +1011,9 @@ impl Workspace {
                     )))
                     .child(
                         div().flex_1().child(
-                            gpui_kit::component::input::Input::new(&self.project_search)
+                            crate::ui::input(&self.project_search)
+                                .h_7()
+                                .py_0()
                                 .appearance(false)
                                 .bordered(false),
                         ),

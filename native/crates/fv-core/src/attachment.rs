@@ -48,8 +48,9 @@ pub fn strip_attachment_block(text: &str) -> &str {
         let Some(at) = head.rfind(&open(tag)) else {
             break;
         };
-        // A block that is not set off by a blank line is part of the sentence, not metadata.
-        if !head[..at].ends_with("\n\n") {
+        // A block at the beginning is metadata too; otherwise an attachment-only prompt keeps
+        // its manifest even though there are no user words around it.
+        if at != 0 && !head[..at].ends_with("\n\n") {
             break;
         }
         end = at;

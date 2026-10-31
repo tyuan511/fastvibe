@@ -430,7 +430,7 @@ pub fn settled(
     id: &str,
     status: TurnStatus,
     error: Option<String>,
-    turns: &[fv_protocol::types::Turn],
+    turn: Option<fv_protocol::types::Turn>,
 ) {
     let _gate = state.subagents_lock.lock().unwrap();
     if state.loaded_runtime(id).is_some_and(|rt| rt.is_running()) {
@@ -441,7 +441,7 @@ pub fn settled(
         // `notify_parent_of_terminal_turn`. Computed after the row below takes its terminal
         // status; interrupted turns say nothing, and the answer text rides the normal
         // queue/steer path so it reaches the parent outside this tool-time lock.
-        if let Some(turn) = turns.last() {
+        if let Some(turn) = turn.as_ref() {
             if agent.status != SubagentStatus::Closed {
                 agent.status = match status {
                     TurnStatus::Completed => SubagentStatus::Completed,

@@ -9,10 +9,23 @@ use fv_protocol::methods::*;
 use fv_protocol::types::Empty;
 use fv_protocol::types::*;
 use fv_theme::Token;
-use gpui_kit::component::Sizable as _;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::InputState;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+
+#[path = "settings_account.rs"]
+mod account_configuration;
+#[path = "settings_configuration.rs"]
+mod configuration;
+#[path = "onboarding.rs"]
+mod onboarding;
+#[cfg(test)]
+#[path = "settings_onboarding_tests.rs"]
+mod onboarding_tests;
+#[path = "settings_remote.rs"]
+mod remote_configuration;
+#[path = "settings_ssh.rs"]
+mod ssh_configuration;
 
 use super::composer::thinking_label_in;
 use super::model_menu::{
@@ -21,6 +34,7 @@ use super::model_menu::{
 use super::sidebar::INSET;
 use super::{Workspace, text};
 use crate::ui::{self, Muted as _, TEXT_SM, TEXT_XS, icon, icon_button_xs};
+use onboarding::protocol_example;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -219,10 +233,14 @@ pub struct AddProvider {
     pub name: Entity<InputState>,
     pub base_url: Entity<InputState>,
     pub key: Entity<InputState>,
+    /// Optional escape hatch when a provider does not expose a model listing endpoint.
+    pub manual_model: Entity<InputState>,
     pub protocol: ApiProtocol,
     pub protocol_menu: bool,
     pub busy: bool,
     pub error: Option<String>,
+    /// Last request used to populate the picker, so a failed fetch can be retried in place.
+    pub fetch_params: Option<FetchModelsParams>,
     pub picker: Option<Picker>,
 }
 
@@ -231,6 +249,7 @@ pub struct AddModels {
     pub busy: bool,
     pub provider_id: String,
     pub picker: Picker,
+    pub manual_model: Entity<InputState>,
 }
 
 pub struct BrowserSettings {
@@ -280,6 +299,12 @@ pub struct ImportSettings {
     /// Session ids ticked in that picker.
     pub selected: HashSet<String>,
     pub importing: bool,
+    /// Electron migration is a read-only preflight followed by an explicit commit.
+    pub migration: Option<fv_protocol::migration::ElectronMigrationScanResponse>,
+    pub migration_busy: bool,
+    pub migration_include_api_keys: bool,
+    pub migration_overwrite_settings: bool,
+    pub migration_notice: Option<String>,
 }
 
 impl ImportSettings {
@@ -434,6 +459,17 @@ pub struct SettingsState {
     pub add: Option<AddProvider>,
     pub add_models: Option<AddModels>,
     pub notice: Option<String>,
+    pub cc_switch: Option<fv_protocol::types::ProviderImportScan>,
+    pub cc_switch_selected: HashSet<String>,
+    pub cc_switch_busy: bool,
+    pub project_defaults: Option<(String, ModelDefaults)>,
+    account: account_configuration::AccountSettings,
+    remote: remote_configuration::RemoteSettings,
+    ssh: ssh_configuration::SshSettings,
+    pub project_defaults_request: u64,
+    pub project_defaults_busy: bool,
+    pub success: Option<String>,
+    pub default_saving: bool,
 }
 
 fn input(window: &mut Window, cx: &mut App, placeholder: &str, masked: bool) -> Entity<InputState> {
@@ -509,6 +545,17 @@ impl Workspace {
                 add: None,
                 add_models: None,
                 notice: None,
+                cc_switch: None,
+                cc_switch_selected: HashSet::new(),
+                cc_switch_busy: false,
+                project_defaults: None,
+                account: account_configuration::AccountSettings::new(window, cx),
+                remote: remote_configuration::RemoteSettings::new(window, cx),
+                ssh: ssh_configuration::SshSettings::new(window, cx),
+                project_defaults_request: 0,
+                project_defaults_busy: false,
+                success: None,
+                default_saving: false,
             });
             self.subscribe_personalization(window, cx);
             self.subscribe_shortcuts(window, cx);
@@ -528,6 +575,7 @@ impl Workspace {
             if s.section != section {
                 s.shortcuts.cancel();
                 s.model_checks.invalidate();
+                s.account.pause();
             }
             s.section = section;
         }
@@ -543,6 +591,17 @@ impl Workspace {
         self.refresh_import(cx);
         self.refresh_about(cx);
         self.refresh_subagents(cx);
+        if section == Section::Browser {
+            self.refresh_browser_profiles(cx);
+        }
+        if section == Section::Remote {
+            self.refresh_remote_settings(cx);
+            self.refresh_account_settings(window, cx);
+            self.start_account_status_poll(window, cx);
+        }
+        if section == Section::Ssh {
+            self.refresh_ssh_settings(cx);
+        }
         self.refresh_roles(cx);
         cx.notify();
     }
@@ -769,6 +828,8 @@ impl Workspace {
                 {
                     match result {
                         Ok(_) => {
+                            s.notice = None;
+                            s.success = Some(trs!(english, "settings.saved").into());
                             if let Some((key_owner, raw)) = key_draft
                                 && let Some(edit) =
                                     s.edit.as_mut().filter(|e| e.key.entity_id() == key_owner)
@@ -807,28 +868,62 @@ impl Workspace {
     }
 
     fn set_default(&mut self, defaults: ModelDefaults, cx: &mut Context<Self>) {
-        self.defaults = defaults.clone();
+        if self.settings.as_ref().is_some_and(|s| s.default_saving) {
+            return;
+        }
+        let Some(b) = self.backend.clone() else {
+            return;
+        };
         if let Some(s) = &mut self.settings {
+            s.default_saving = true;
+            s.notice = None;
+            s.success = Some(
+                trs!(
+                    self.app_settings.language == UiLanguage::English,
+                    "settings.saving"
+                )
+                .into(),
+            );
             s.default_menu = false;
             s.default_provider_menu = None;
             s.default_thinking_menu = false;
             self.hover_submenus.entered();
         }
-        cx.notify();
-        let Some(b) = self.backend.clone() else {
-            return;
-        };
+        let owner = self.settings.as_ref().map(|s| s.search.entity_id());
         let call = b.call::<ModelDefaultsSet>(defaults);
         cx.spawn(async move |this, cx| {
-            if let Ok(d) = call.await {
-                this.update(cx, |this, cx| {
-                    this.defaults = d;
-                    cx.notify();
-                })
-                .ok();
-            }
+            let result = call.await;
+            let _ = this.update(cx, |this, cx| {
+                let english = this.english();
+                match result {
+                    Ok(d) => {
+                        this.defaults = d;
+                        if let Some(s) = this
+                            .settings
+                            .as_mut()
+                            .filter(|s| Some(s.search.entity_id()) == owner)
+                        {
+                            s.default_saving = false;
+                            s.success = Some(trs!(english, "settings.saved").into());
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(s) = this
+                            .settings
+                            .as_mut()
+                            .filter(|s| Some(s.search.entity_id()) == owner)
+                        {
+                            s.default_saving = false;
+                            s.success = None;
+                            s.notice = Some(tr!(english, "settings.save_failed_e", e = e));
+                        }
+                    }
+                }
+                cx.notify();
+            });
         })
         .detach();
+        cx.notify();
     }
 
     /// Close a hover submenu shortly after the pointer leaves its trigger. The short grace
@@ -913,6 +1008,23 @@ impl Workspace {
             cx.notify();
             return;
         };
+        if let Some(a) = self
+            .settings
+            .as_mut()
+            .and_then(|s| s.add.as_mut())
+            .filter(|a| {
+                a.picker
+                    .as_ref()
+                    .is_some_and(|p| p.search.entity_id() == owner)
+            })
+        {
+            a.fetch_params = Some(params.clone());
+            a.busy = true;
+            a.error = None;
+            if let Some(picker) = &mut a.picker {
+                picker.error = None;
+            }
+        }
         let call = b.call::<ProviderFetchModels>(params);
         cx.spawn(async move |this, cx| {
             let result = call.await;
@@ -926,11 +1038,20 @@ impl Workspace {
                         .is_some_and(|p| p.search.entity_id() == owner);
                     if let Some(picker) = target(s).filter(|p| p.search.entity_id() == owner) {
                         match result {
-                            Ok(r) => picker.models = Some(r.models),
+                            Ok(r) => {
+                                picker.models = Some(r.models);
+                                picker.error = None;
+                            }
                             Err(e) => {
-                                picker.models = Some(Vec::new());
-                                picker.error =
-                                    Some(tr!(english, "settings.could_not_fetch_the_model", e = e));
+                                if picker.models.is_none() {
+                                    picker.models = Some(Vec::new());
+                                }
+                                let message =
+                                    tr!(english, "settings.could_not_fetch_the_model", e = e);
+                                picker.error = Some(message.clone());
+                                if is_add && let Some(a) = &mut s.add {
+                                    a.error = Some(message);
+                                }
                             }
                         }
                     } else {
@@ -963,18 +1084,26 @@ impl Workspace {
             },
             false,
         );
+        let manual_model = input(
+            window,
+            cx,
+            trs!(self.english(), "settings.manual_model_id"),
+            false,
+        );
         let Some(s) = &mut self.settings else { return };
-        let chosen = s
+        let existing = s
             .providers
             .as_ref()
-            .and_then(|l| l.iter().find(|p| p.id == provider_id))
-            .map(|p| p.models.iter().map(|m| m.id.clone()).collect())
+            .and_then(|list| list.iter().find(|p| p.id == provider_id))
+            .map(|p| p.models.clone())
             .unwrap_or_default();
+        let chosen = existing.iter().map(|m| m.id.clone()).collect();
         s.add_models = Some(AddModels {
             busy: false,
             provider_id: provider_id.clone(),
+            manual_model,
             picker: Picker {
-                models: None,
+                models: Some(existing),
                 chosen,
                 error: None,
                 search,
@@ -1004,10 +1133,12 @@ impl Workspace {
                 trs!(english, "settings.paste_this_provider_s_api"),
                 true,
             ),
+            manual_model: input(window, cx, trs!(english, "settings.manual_model_id"), false),
             protocol: ApiProtocol::Chat,
             protocol_menu: false,
             busy: false,
             error: None,
+            fetch_params: None,
             picker: None,
         };
         if let Some(s) = &mut self.settings {
@@ -1024,7 +1155,7 @@ impl Workspace {
         let key = value(&a.key, cx);
         let (protocol, base_url) = (a.protocol, value(&a.base_url, cx));
         if value(&a.name, cx).is_empty() || base_url.is_empty() || key.is_empty() {
-            self.add_error("请填写名称、Base URL 与 API 密钥", cx);
+            self.add_error(trs!(self.english(), "settings.enter_name_url_key"), cx);
             return;
         }
         let search = input(
@@ -1048,6 +1179,21 @@ impl Workspace {
             });
         }
         cx.notify();
+        if self
+            .settings
+            .as_ref()
+            .and_then(|s| s.add.as_ref())
+            .is_some_and(|a| !value(&a.manual_model, cx).is_empty())
+        {
+            if let Some(a) = self.settings.as_mut().and_then(|s| s.add.as_mut()) {
+                a.busy = false;
+                if let Some(picker) = &mut a.picker {
+                    picker.models = Some(Vec::new());
+                }
+            }
+            self.finish_add_provider(cx);
+            return;
+        }
         self.fetch_into(
             FetchModelsParams {
                 provider_id: None,
@@ -1084,13 +1230,18 @@ impl Workspace {
         }
         let owner = a.name.entity_id();
         let Some(picker) = &a.picker else { return };
-        let models: Vec<ModelInfo> = picker
+        let mut models: Vec<ModelInfo> = picker
             .models
             .iter()
             .flatten()
             .filter(|m| picker.chosen.contains(&m.id))
             .cloned()
             .collect();
+        if let Some(model) = onboarding::manual_model(&value(&a.manual_model, cx))
+            && !models.iter().any(|existing| existing.id == model.id)
+        {
+            models.push(model);
+        }
         if models.is_empty() {
             self.add_error(
                 trs!(self.english(), "settings.select_at_least_one_model"),
@@ -1178,8 +1329,14 @@ impl Workspace {
             return;
         };
         let owner = am.picker.search.entity_id();
-        let chosen = am.picker.chosen.clone();
-        let fetched = am.picker.models.clone().unwrap_or_default();
+        let mut chosen = am.picker.chosen.clone();
+        let mut fetched = am.picker.models.clone().unwrap_or_default();
+        if let Some(model) = onboarding::manual_model(&value(&am.manual_model, cx)) {
+            chosen.insert(model.id.clone());
+            if !fetched.iter().any(|existing| existing.id == model.id) {
+                fetched.push(model);
+            }
+        }
         let call = b.call::<ProviderUpsert>(ProviderUpsertParams {
             id: Some(provider.id.clone()),
             name: provider.name.clone(),
@@ -1205,9 +1362,10 @@ impl Workspace {
                     am.busy = false;
                     match result {
                         Ok(_) => {
-                            if am.picker.chosen == chosen {
+                            if am.picker.chosen.iter().all(|id| chosen.contains(id)) {
                                 s.add_models = None;
                             }
+                            s.success = Some(trs!(english, "settings.saved").into());
                         }
                         Err(error) => {
                             am.picker.error = Some(tr!(
@@ -1291,7 +1449,8 @@ impl Workspace {
                                 Section::Browser => self.browser_pane(s, cx),
                                 Section::Computer => self.computer_pane(cx),
                                 Section::Proxy => self.proxy_pane(s, cx),
-                                _ => self.not_yet().into_any_element(),
+                                Section::Remote => self.remote_settings_pane(s, cx),
+                                Section::Ssh => self.render_settings_ssh(s, cx),
                             }),
                     ),
             )
@@ -1607,7 +1766,13 @@ impl Workspace {
             }
             body = body.child(list);
         }
-        card(p).p(px(16.0)).child(body).into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(20.0))
+            .child(self.electron_migration_pane(s, cx))
+            .child(card(p).p(px(16.0)).child(body))
+            .into_any_element()
     }
 
     /// The sessions of one source, ticked for import.
@@ -1757,17 +1922,20 @@ impl Workspace {
             )
     }
 
-    fn not_yet(&self) -> impl IntoElement {
-        let p = &self.palette;
-        let english = self.app_settings.language == UiLanguage::English;
-        card(p).child(
-            div()
-                .px(px(16.0))
-                .py(px(24.0))
-                .text_size(px(TEXT_SM))
-                .muted(p)
-                .child(trs!(english, "settings.this_page_is_being_ported")),
-        )
+    fn retry_provider_fetch(&mut self, cx: &mut Context<Self>) {
+        let Some(params) = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.add.as_ref())
+            .and_then(|a| a.fetch_params.clone())
+        else {
+            return;
+        };
+        self.fetch_into(
+            params,
+            |s| s.add.as_mut().and_then(|a| a.picker.as_mut()),
+            cx,
+        );
     }
 
     fn save_browser(&mut self, cx: &mut Context<Self>) {
@@ -1789,8 +1957,8 @@ impl Workspace {
     fn browser_pane(&self, s: &SettingsState, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.palette;
         let english = self.app_settings.language == UiLanguage::English;
-        let field =
-            |state: &Entity<InputState>| div().w(px(288.0)).child(Input::new(state).small());
+        let field = |state: &Entity<InputState>| div().w(px(288.0)).child(ui::input(state));
+        let controls = self.browser_control_settings(cx);
         let changed = value(&s.browser.homepage, cx) != self.app_settings.browser_homepage
             || value(&s.browser.search_engine, cx) != self.app_settings.browser_search_engine
             || value(&s.browser.download_dir, cx) != self.app_settings.browser_download_dir;
@@ -1805,6 +1973,7 @@ impl Workspace {
                     .font_weight(FontWeight::MEDIUM)
                     .child(trs!(english, "settings.browser_control")),
             )
+            .child(controls)
             .child(
                 card(p)
                     .child(setting_row(
@@ -1952,14 +2121,14 @@ impl Workspace {
                     host_hint,
                     true,
                     p,
-                    div().w(px(144.0)).child(Input::new(&proxy.host).small()),
+                    div().w(px(144.0)).child(ui::input(&proxy.host)),
                 ))
                 .child(setting_row(
                     trs!(english, "settings.proxy_port"),
                     port_hint,
                     true,
                     p,
-                    div().w(px(144.0)).child(Input::new(&proxy.port).small()),
+                    div().w(px(144.0)).child(ui::input(&proxy.port)),
                 ));
         }
         card = card.child(setting_row(
@@ -2144,6 +2313,12 @@ impl Workspace {
                             div()
                                 .text_size(px(TEXT_XS))
                                 .muted(p)
+                                .child(trs!(english, "settings.onboarding_provider_hint")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(TEXT_XS))
+                                .muted(p)
                                 .child(trs!(english, "settings.connect_an_api_key_and")),
                         ),
                 )
@@ -2164,27 +2339,46 @@ impl Workspace {
         }
 
         let mut col = div().flex().flex_col().gap(px(20.0));
+        if let Some(message) = &s.success {
+            col = col.child(div().text_size(px(TEXT_SM)).muted(p).child(message.clone()));
+        }
         if let Some(n) = &s.notice {
             col = col.child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
                     .text_size(px(TEXT_SM))
                     .text_color(p.c(Token::Destructive))
-                    .child(SharedString::from(n.clone())),
+                    .child(SharedString::from(n.clone()))
+                    .child(
+                        outline_button("retry-provider-list", p)
+                            .h(px(28.0))
+                            .child(trs!(english, "settings.retry"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(s) = &mut this.settings {
+                                    s.notice = None;
+                                }
+                                this.refresh_providers(cx);
+                            })),
+                    ),
             );
         }
-        col.child(card(p).child(default_row)).child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(header)
-                .child(Input::new(&s.search).prefix(icon(
-                    "search01",
-                    14.0,
-                    p.c(Token::MutedForeground),
-                )))
-                .child(list),
-        )
+        let provider_setup = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(header)
+            .child(ui::input(&s.search).prefix(icon("search01", 14.0, p.c(Token::MutedForeground))))
+            .child(list);
+        if self.models.is_empty() {
+            col.child(provider_setup).child(self.cc_switch_pane(s, cx))
+        } else {
+            col.child(card(p).child(default_row))
+                .child(provider_setup)
+                .child(self.project_defaults_pane(s, cx))
+                .child(self.cc_switch_pane(s, cx))
+        }
     }
 
     /// 偏好设置 → 外观: mode, the two themes, and the translucent window.
@@ -3149,6 +3343,7 @@ impl Workspace {
             menu = menu.child(
                 provider_row(
                     SharedString::from(format!("dm-{id}")),
+                    group.id,
                     group.name,
                     holds_current,
                     open,
@@ -3659,7 +3854,7 @@ impl Workspace {
                     div()
                         .flex()
                         .gap(px(6.0))
-                        .child(div().flex_1().child(Input::new(&edit.base_url)))
+                        .child(div().flex_1().child(ui::input(&edit.base_url)))
                         .child(
                             outline_button(SharedString::from(format!("save-url-{id}")), p)
                                 .child(trs!(english, "settings.save"))
@@ -3704,7 +3899,7 @@ impl Workspace {
                     div()
                         .flex()
                         .gap(px(6.0))
-                        .child(div().flex_1().child(Input::new(&edit.key).mask_toggle()))
+                        .child(div().flex_1().child(ui::input(&edit.key).mask_toggle()))
                         .child(
                             outline_button(SharedString::from(format!("save-key-{id}")), p)
                                 .child(trs!(english, "settings.save"))
@@ -3859,11 +4054,23 @@ impl Workspace {
                     trs!(english, "settings.select_the_models_to_use"),
                     &self.palette,
                 ))
-                .child(div().px(px(20.0)).pb(px(16.0)).child(self.picker(
-                    &am.picker,
-                    |s| s.add_models.as_mut().map(|a| &mut a.picker),
-                    cx,
-                )))
+                .child(
+                    div()
+                        .px(px(20.0))
+                        .pb(px(16.0))
+                        .child(
+                            div()
+                                .text_size(px(TEXT_XS))
+                                .muted(&self.palette)
+                                .child(trs!(english, "settings.manual_model_id_desc")),
+                        )
+                        .child(ui::input(&am.manual_model))
+                        .child(self.picker(
+                            &am.picker,
+                            |s| s.add_models.as_mut().map(|a| &mut a.picker),
+                            cx,
+                        )),
+                )
                 .child(dialog_foot(
                     &self.palette,
                     cx,
@@ -3897,6 +4104,11 @@ impl Workspace {
         let hover = p.c(Token::Accent);
         if let Some(picker) = &a.picker {
             let n = picker.chosen.len();
+            let add_label = if n > 0 {
+                tr!(english, "settings.add_n_models", n = n)
+            } else {
+                trs!(english, "settings.add_manual_model").to_string()
+            };
             return dialog_card(p, 672.0)
                 .child(dialog_head(
                     trs!(english, "settings.choose_models"),
@@ -3919,6 +4131,16 @@ impl Workspace {
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
+                        .child(
+                            div()
+                                .child(
+                                    div()
+                                        .text_size(px(TEXT_XS))
+                                        .muted(p)
+                                        .child(trs!(english, "settings.manual_model_id_desc")),
+                                )
+                                .child(ui::input(&a.manual_model)),
+                        )
                         .child(self.picker(
                             picker,
                             |s| s.add.as_mut().and_then(|a| a.picker.as_mut()),
@@ -3927,9 +4149,20 @@ impl Workspace {
                         .when_some(a.error.clone(), |d, e| {
                             d.child(
                                 div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
                                     .text_size(px(TEXT_XS))
                                     .text_color(p.c(Token::Destructive))
-                                    .child(SharedString::from(e)),
+                                    .child(SharedString::from(e))
+                                    .child(
+                                        outline_button("retry-provider-fetch", p)
+                                            .h(px(26.0))
+                                            .child(trs!(english, "settings.retry"))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.retry_provider_fetch(cx)
+                                            })),
+                                    ),
                             )
                         }),
                 )
@@ -3943,9 +4176,9 @@ impl Workspace {
                         }
                         cx.notify();
                     },
-                    &tr!(english, "settings.add_n_models", n = n),
+                    &add_label,
                     |this, _, cx| this.finish_add_provider(cx),
-                    n == 0 || a.busy,
+                    a.busy,
                     self.english(),
                 ));
         }
@@ -3986,13 +4219,9 @@ impl Workspace {
                 .child(
                     div()
                         .child(label(trs!(english, "settings.name")))
-                        .child(Input::new(&a.name)),
+                        .child(ui::input(&a.name)),
                 )
-                .child(
-                    div()
-                        .child(label("Base URL"))
-                        .child(Input::new(&a.base_url)),
-                )
+                .child(div().child(label("Base URL")).child(ui::input(&a.base_url)))
                 .child(
                     div()
                         .child(label(trs!(english, "settings.api_format")))
@@ -4028,7 +4257,28 @@ impl Workspace {
             .child(
                 div()
                     .child(label(trs!(english, "settings.api_key")))
-                    .child(Input::new(&a.key).mask_toggle()),
+                    .child(ui::input(&a.key).mask_toggle()),
+            )
+            .child(
+                div()
+                    .child(label(trs!(english, "settings.manual_model_id")))
+                    .child(ui::input(&a.manual_model))
+                    .child(
+                        div()
+                            .mt(px(4.0))
+                            .text_size(px(TEXT_XS))
+                            .muted(p)
+                            .child(trs!(english, "settings.manual_model_id_desc")),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(TEXT_XS))
+                    .muted(p)
+                    .child(SharedString::from(protocol_example(
+                        a.protocol,
+                        self.app_settings.language,
+                    ))),
             )
             .when_some(a.error.clone(), |d, e| {
                 d.child(
@@ -4170,7 +4420,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(div().flex_1().child(Input::new(&picker.search).prefix(icon(
+                    .child(div().flex_1().child(ui::input(&picker.search).prefix(icon(
                         "search01",
                         14.0,
                         p.c(Token::MutedForeground),
@@ -4367,43 +4617,13 @@ pub(super) fn outline_button(id: impl Into<ElementId>, p: &crate::theme::Palette
         .hover(move |d| d.bg(hover))
 }
 
-/// `.overlay-surface` under glass: rounder, no border, a hairline edge, the long soft shadow,
-/// the specular rim — and the `backdrop-filter` that Electron's overlays carry
-/// (`blur(28px) saturate(1.8)`), which is what lets the fill stay at the real 84/90%
-/// `--glass-overlay` alpha. The blur's input includes this element's own fill (a div
-/// paints its background before its children), which is equivalent: blur is linear, so
-/// `blur(fill + page) = fill + blur(page)`. Solid themes keep the card.
+/// `.overlay-surface` shared by menus, popovers and dialogs.
 fn overlay_surface(d: Div, radius: f32, p: &crate::theme::Palette) -> Div {
-    match (p.get(Token::GlassEdge), p.get(Token::GlassShade)) {
-        (Some(edge), Some(shade)) => {
-            let shadow = |color: Hsla, y: f32, blur: f32, spread: f32| BoxShadow {
-                color,
-                offset: point(gpui_kit::px(0.0), gpui_kit::px(y)),
-                blur_radius: gpui_kit::px(blur),
-                spread_radius: gpui_kit::px(spread),
-                inset: false,
-            };
-            d.rounded(px(14.0))
-                .relative()
-                .shadow(vec![
-                    shadow(edge, 0.0, 0.0, 0.5),
-                    shadow(shade, 18.0, 40.0, -14.0),
-                    shadow(shade, 2.0, 8.0, -2.0),
-                ])
-                .child(crate::ui::backdrop(14.0, 28.0, 1.8))
-                .child(crate::ui::glass_rim(14.0, p).unwrap_or_else(div))
-        }
-        _ => d
-            .rounded(px(radius))
-            .border_1()
-            .border_color(p.c(Token::Border))
-            .shadow_lg(),
-    }
+    crate::ui::overlay_surface(d, radius, p)
 }
 
 pub(super) fn popover(p: &crate::theme::Palette) -> Div {
     overlay_surface(div().p(px(4.0)), 10.0, p)
-        .bg(p.overlay())
         .text_color(p.c(Token::PopoverForeground))
         .flex()
         .flex_col()
@@ -4480,8 +4700,7 @@ pub(super) fn checkbox(on: bool, p: &crate::theme::Palette) -> Div {
 }
 
 pub(super) fn dialog_card(p: &crate::theme::Palette, width: f32) -> Div {
-    overlay_surface(div().w(px(width)).max_w(relative(0.92)), 16.0, p)
-        .bg(p.overlay())
+    overlay_surface(div().w(px(width)).max_w(relative(0.92)), 10.0, p)
         .text_color(p.c(Token::PopoverForeground))
         .flex()
         .flex_col()
@@ -4549,7 +4768,8 @@ pub(super) fn dialog_foot_with_cancel(
         .border_t_1()
         .border_color(p.c(Token::Border))
         .bg(p.c(Token::Muted).opacity(0.5))
-        .rounded_b(px(16.0))
+        .when(p.glass(), |d| d.rounded_b(gpui_kit::px(14.0)))
+        .when(!p.glass(), |d| d.rounded_b(px(10.0)))
         .child(
             outline_button("dialog-cancel", p)
                 .child(SharedString::from(cancel_label.to_string()))

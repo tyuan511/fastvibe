@@ -26,6 +26,6 @@ pub use pricing::{history_cost, message_cost, price_message, select_price};
 pub use config::{ModelConfig, Protocol, ThinkingLevel};
 pub use error::classify;
 pub use model::GenaiModel;
-pub use models_list::{FetchedModel, fetch_models};
+pub use models_list::{FetchModelsError, FetchedModel, fetch_models, fetch_models_with_proxy};
 pub use probe::{ProbeBudget, ProbeError, ProbeReport, ProbeStatus, ProbeTools};
 pub use url::{engine_base_url, infer_protocol};

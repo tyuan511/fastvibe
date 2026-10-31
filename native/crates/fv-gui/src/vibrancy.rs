@@ -181,7 +181,7 @@ mod mac {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Palette, appearance_name};
     use fv_theme::{Preferences, ThemeKind, ThemeMode};
 
     #[test]

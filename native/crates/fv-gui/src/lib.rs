@@ -41,6 +41,7 @@ mod conversation_resources;
 pub mod dock;
 pub mod file_icons;
 pub mod fixture;
+#[cfg(test)]
 mod history_cache;
 pub mod markdown;
 pub mod notify;
@@ -57,9 +58,9 @@ pub mod view_model;
 pub mod web_content;
 pub mod webview;
 #[cfg(target_os = "macos")]
-mod webview_shortcuts;
-#[cfg(target_os = "macos")]
 mod webview_container;
 #[cfg(target_os = "macos")]
 mod webview_downloads;
+#[cfg(target_os = "macos")]
+mod webview_shortcuts;
 pub mod workspace;

@@ -224,14 +224,14 @@ pub(crate) fn project(turns: &[Turn], english: bool) -> HashMap<String, Item> {
                 .unwrap_or_default();
             commands[index].continued = true;
             let _ = commands[index].collect(output.as_deref(), *is_error, input);
-            if let Item::ToolCall { id: owner, .. } = &commands[index].item {
-                if owner != id {
-                    let mut hidden = item.clone();
-                    if let Item::ToolCall { arguments, .. } = &mut hidden {
-                        arguments[META] = json!({"hidden": true});
-                    }
-                    projected.insert(id.clone(), hidden);
+            if let Item::ToolCall { id: owner, .. } = &commands[index].item
+                && owner != id
+            {
+                let mut hidden = item.clone();
+                if let Item::ToolCall { arguments, .. } = &mut hidden {
+                    arguments[META] = json!({"hidden": true});
                 }
+                projected.insert(id.clone(), hidden);
             }
         } else if presentation::family_of(name) == presentation::Family::Terminal {
             let index = commands.len();
@@ -242,10 +242,10 @@ pub(crate) fn project(turns: &[Turn], english: bool) -> HashMap<String, Item> {
                 failed: false,
                 continued: false,
             };
-            if output.is_some() {
-                if let Some(session) = command.collect(output.as_deref(), *is_error, "") {
-                    sessions.insert(session, index);
-                }
+            if output.is_some()
+                && let Some(session) = command.collect(output.as_deref(), *is_error, "")
+            {
+                sessions.insert(session, index);
             }
             commands.push(command);
         }

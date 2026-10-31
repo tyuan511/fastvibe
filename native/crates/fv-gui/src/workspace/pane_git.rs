@@ -18,10 +18,12 @@
 //! - **History's refs are drawn from git's own topology.** A merge has two parent lines; the graph
 //!   does not invent a straight line through it.
 
+use crate::backend::Backend;
 use crate::ui::px;
 use fv_protocol::methods::*;
 use fv_protocol::types::*;
 use fv_theme::Token;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -39,6 +41,57 @@ pub use state::GitView;
 struct GitTarget {
     conversation: String,
     cwd: String,
+}
+
+/// The shared commit operation used by the pane and the header.
+///
+/// Staging happens before message generation, and a push error is returned separately after the
+/// commit succeeds so both surfaces can preserve the committed state and explain the failed push.
+pub(super) async fn run_git_commit(
+    backend: Backend,
+    cwd: String,
+    conversation: Option<String>,
+    draft: String,
+    push: bool,
+) -> Result<(GitStatus, Option<String>), String> {
+    backend
+        .call::<WorkspaceGitStage>(GitPathsParams {
+            cwd: cwd.clone(),
+            paths: Vec::new(),
+            all: true,
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    let message = if draft.trim().is_empty() {
+        let conversation = conversation
+            .ok_or_else(|| "A conversation is required to generate a commit message".to_string())?;
+        backend
+            .call::<WorkspaceGitGenerateCommitMessage>(GitGenerateCommitMessageParams {
+                cwd: cwd.clone(),
+                conversation_id: conversation,
+                include_unstaged: false,
+            })
+            .await
+            .map_err(|error| error.to_string())?
+            .message
+    } else {
+        draft
+    };
+    let committed = backend
+        .call::<WorkspaceGitCommit>(GitCommitParams {
+            cwd: cwd.clone(),
+            message,
+            amend: false,
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    if !push {
+        return Ok((committed, None));
+    }
+    match backend.call::<WorkspaceGitPush>(CwdParams { cwd }).await {
+        Ok(status) => Ok((status, None)),
+        Err(error) => Ok((committed, Some(error.to_string()))),
+    }
 }
 
 /// Reading git for the capture fixture, which runs without a server.
@@ -554,8 +607,22 @@ impl Workspace {
     }
 
     /// A later turn may have staged, committed or reverted the transcript's file.
+    #[cfg(test)]
     pub(super) fn review_transcript_file(
         &mut self,
+        absolute: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(owner) = self.selected.clone() else {
+            return;
+        };
+        self.review_transcript_file_for(&owner, absolute, window, cx);
+    }
+
+    pub(super) fn review_transcript_file_for(
+        &mut self,
+        owner: &str,
         absolute: String,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -563,7 +630,7 @@ impl Workspace {
         let Some(id) = self.selected.clone() else {
             return;
         };
-        let roots = self.project_roots_for(&id);
+        let roots = self.project_roots_for(owner);
         let root = roots
             .iter()
             .filter(|root| std::path::Path::new(&absolute).starts_with(root))
@@ -571,7 +638,9 @@ impl Workspace {
             .or_else(|| roots.first())
             .cloned();
         let Some(root) = root else { return };
-        self.git_views.entry(id).or_default().select(&root);
+        let view = self.git_views.entry(id.clone()).or_default();
+        view.set_transcript_owner((owner != id).then(|| owner.to_string()));
+        view.select(&root);
         self.open_git_tab(window, cx);
         let (Some(target), Some(backend)) = (self.git_target(), self.backend.clone()) else {
             return;
@@ -621,9 +690,18 @@ impl Workspace {
         .detach();
     }
 
-    fn git_cwd(&self) -> Option<String> {
+    fn git_roots(&self, conversation: &str) -> Vec<String> {
+        let owner = self
+            .git_views
+            .get(conversation)
+            .and_then(|view| view.transcript_owner.as_deref())
+            .unwrap_or(conversation);
+        self.project_roots_for(owner)
+    }
+
+    pub(super) fn git_cwd(&self) -> Option<String> {
         let id = self.selected.as_ref()?;
-        let roots = self.project_roots_for(id);
+        let roots = self.git_roots(id);
         self.git_views
             .get(id)
             .map(|view| view.repository())
@@ -975,49 +1053,13 @@ impl Workspace {
         let target = target.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result: Result<(GitStatus, Option<String>), String> = async {
-                backend
-                    .call::<WorkspaceGitStage>(GitPathsParams {
-                        cwd: target.cwd.clone(),
-                        paths: Vec::new(),
-                        all: true,
-                    })
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let message = if message.is_empty() {
-                    backend
-                        .call::<WorkspaceGitGenerateCommitMessage>(GitGenerateCommitMessageParams {
-                            cwd: target.cwd.clone(),
-                            conversation_id: conversation,
-                            include_unstaged: false,
-                        })
-                        .await
-                        .map_err(|e| e.to_string())?
-                        .message
-                } else {
-                    message
-                };
-                let committed = backend
-                    .call::<WorkspaceGitCommit>(GitCommitParams {
-                        cwd: target.cwd.clone(),
-                        message,
-                        amend: false,
-                    })
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if !push {
-                    return Ok((committed, None));
-                }
-                match backend
-                    .call::<WorkspaceGitPush>(CwdParams {
-                        cwd: target.cwd.clone(),
-                    })
-                    .await
-                {
-                    Ok(status) => Ok((status, None)),
-                    Err(error) => Ok((committed, Some(error.to_string()))),
-                }
-            }
+            let result = run_git_commit(
+                backend,
+                target.cwd.clone(),
+                Some(conversation),
+                message,
+                push,
+            )
             .await;
             this.update(cx, |this, cx| {
                 let english = this.english();
@@ -1208,7 +1250,7 @@ impl Workspace {
         let Some(conversation) = self.selected.clone() else {
             return div().into_any_element();
         };
-        let roots = self.project_roots_for(&conversation);
+        let roots = self.git_roots(&conversation);
         let Some(root) = self.git_cwd() else {
             return div()
                 .child(trs!(english, "pane_git.this_chat_has_no_working"))
@@ -1671,6 +1713,8 @@ impl Workspace {
             .h_full()
             .flex_none()
             .relative()
+            .border_r_1()
+            .border_color(p.c(Token::Border))
             .flex()
             .flex_col()
             .child(commit)
@@ -2661,9 +2705,10 @@ impl Workspace {
             div()
                 .relative()
                 .min_h(px(32.0))
-                .pl(px(10.0))
-                .pr(px(36.0))
-                .py(px(1.0))
+                .max_h(px(160.0))
+                .pl(px(6.0))
+                .pr(px(32.0))
+                .py(px(6.0))
                 .flex()
                 .flex_col()
                 .justify_center()
@@ -2673,9 +2718,12 @@ impl Workspace {
                 .text_size(px(TEXT_XS))
                 .child(
                     Textarea::new(&editor)
+                        .xsmall()
                         .appearance(false)
                         .bordered(false)
-                        .text_size(px(TEXT_XS)),
+                        .disabled(busy || generating)
+                        .text_size(px(TEXT_XS))
+                        .line_height(px(16.0)),
                 )
                 .children(hint.map(|hint| {
                     div()
@@ -2814,20 +2862,11 @@ impl Workspace {
                         }))
                 };
                 d.child(ui::float(
-                    div()
+                    super::settings::popover(&p)
                         .absolute()
                         .top(px(37.0))
                         .right_0()
                         .min_w(px(176.0))
-                        .p(px(4.0))
-                        .rounded(px(10.0))
-                        .bg(p.overlay())
-                        .border_1()
-                        .border_color(p.c(Token::Border))
-                        .shadow_md()
-                        .flex()
-                        .flex_col()
-                        .child(crate::ui::backdrop(10.0, 28.0, 1.8))
                         .child(item(
                             "git-menu-commit",
                             if english { "Commit" } else { "提交" },
@@ -3221,17 +3260,9 @@ impl Workspace {
             .items_center()
             .justify_center()
             .child(
-                div()
-                    .w(px(300.0))
+                super::settings::dialog_card(p, 300.0)
                     .p(px(16.0))
-                    .rounded(px(14.0))
-                    .bg(p.overlay())
-                    .border_1()
-                    .border_color(p.c(Token::Border))
-                    .flex()
-                    .flex_col()
                     .gap(px(8.0))
-                    .child(crate::ui::backdrop(14.0, 28.0, 1.8))
                     .child(
                         div()
                             .text_size(px(TEXT_SM))
@@ -3301,6 +3332,123 @@ impl Workspace {
                     ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod input_layout_tests {
+    use super::*;
+    use std::{cell::Cell, rc::Rc};
+
+    struct Fixture {
+        workspace: Entity<Workspace>,
+        input: Entity<gpui_kit::component::input::InputState>,
+        heights: Rc<Cell<[f32; 2]>>,
+        scale: f32,
+    }
+
+    impl Render for Fixture {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            window.set_rem_size(gpui_kit::px(self.scale));
+            let commit = self.workspace.update(cx, |this, cx| {
+                let id = this.selected.clone().unwrap();
+                this.git_commit_box(&id, "", true, cx)
+            });
+            let measure = |index| {
+                let heights = self.heights.clone();
+                div().absolute().inset_0().child(
+                    canvas(
+                        move |bounds, _, _| {
+                            let mut values = heights.get();
+                            values[index] = f32::from(bounds.size.height);
+                            heights.set(values);
+                        },
+                        |_, _, _, _| (),
+                    )
+                    .size_full(),
+                )
+            };
+            div()
+                .w(px(300.0))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .relative()
+                        .child(ui::input(&self.input))
+                        .child(measure(0)),
+                )
+                .child(div().relative().child(commit).child(measure(1)))
+        }
+    }
+
+    #[gpui_kit::gpui::test]
+    fn fields_match_electron_and_commit_drafts_grow_then_shrink(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        for scale in [16.0, 20.0] {
+            let heights = Rc::new(Cell::new([0.0; 2]));
+            let window = cx.add_window({
+                let heights = heights.clone();
+                move |window, cx| {
+                    let workspace = cx.new(|cx| {
+                        Workspace::fixture(
+                            crate::theme::Palette::new(
+                                fv_theme::Preferences::default().resolve(false, false),
+                            ),
+                            crate::fixture::theme_conversation(),
+                            window,
+                            cx,
+                        )
+                    });
+                    workspace.update(cx, |this, cx| this.open_git_tab(window, cx));
+                    let input =
+                        cx.new(|cx| gpui_kit::component::input::InputState::new(window, cx));
+                    Fixture {
+                        workspace,
+                        input,
+                        heights,
+                        scale,
+                    }
+                }
+            });
+            window
+                .update(cx, |_, window, cx| window.draw(cx).clear(cx))
+                .unwrap();
+            assert_eq!(
+                heights.get(),
+                [36.0 * scale / 16.0, 88.0 * scale / 16.0 + 1.0]
+            );
+            for (value, grows) in [("subject\n\nbody of the commit", true), ("", false)] {
+                window
+                    .update(cx, |this, window, cx| {
+                        this.workspace.update(cx, |this, cx| {
+                            let id = this.selected.clone().unwrap();
+                            let editor = this.git_views[&id].editor.clone().unwrap();
+                            editor.update(cx, |state, cx| state.set_value(value, window, cx));
+                        });
+                        window.refresh();
+                    })
+                    .unwrap();
+                for _ in 0..3 {
+                    window
+                        .update(cx, |_, window, cx| window.draw(cx).clear(cx))
+                        .unwrap();
+                }
+                let height = heights.get()[1];
+                if grows {
+                    assert!(
+                        height > 88.0 * scale / 16.0 + 1.0,
+                        "a multiline draft must grow"
+                    );
+                } else {
+                    assert_eq!(
+                        height,
+                        88.0 * scale / 16.0 + 1.0,
+                        "clearing returns to one line"
+                    );
+                }
+            }
+        }
     }
 }
 

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use fv_protocol::ServerNotification;
 use fv_protocol::types::*;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThreadView {
@@ -40,6 +41,8 @@ pub struct ThreadView {
     pub reasoning_durations: HashMap<String, u64>,
     /// Thinking item id -> start timestamp (ms) while running.
     pub reasoning_starts: HashMap<String, i64>,
+    /// A prompt drawn before the server's first turn event arrives.
+    pub optimistic_turn: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -58,7 +61,7 @@ impl ThreadView {
         let reasoning_durations = turns
             .iter()
             .flat_map(|turn| turn.reasoning_durations.iter())
-            .map(|(id, duration_ms)| (id.clone(), ((*duration_ms + 999) / 1000).max(1)))
+            .map(|(id, duration_ms)| (id.clone(), duration_ms.div_ceil(1000).max(1)))
             .collect();
         Self {
             thread: snapshot.thread,
@@ -78,6 +81,7 @@ impl ThreadView {
             approvals: Vec::new(),
             reasoning_durations,
             reasoning_starts: HashMap::new(),
+            optimistic_turn: None,
         }
     }
 
@@ -135,6 +139,14 @@ impl ThreadView {
             N::TurnStarted(e) => {
                 let mut turn = Turn::new(e.body.turn_id.clone(), Vec::new());
                 turn.started_at = e.body.at;
+                if let Some(optimistic_id) = self.optimistic_turn.take()
+                    && let Some(existing) = self.turn_mut(&optimistic_id)
+                {
+                    existing.id = e.body.turn_id.clone();
+                    existing.started_at = e.body.at;
+                    self.active_turn = Some(e.body.turn_id.clone());
+                    return Applied::Changed;
+                }
                 self.turns.push(turn);
                 self.active_turn = Some(e.body.turn_id.clone());
             }
@@ -176,6 +188,19 @@ impl ThreadView {
                         .find(|i| item_id(i) == item_id(&e.body.item))
                     {
                         Some(slot) => *slot = e.body.item.clone(),
+                        None if matches!(e.body.item, Item::UserMessage { .. }) => {
+                            // The composer may have drawn this user row before the server sent
+                            // its authoritative item id. Replace that projection in place.
+                            if let Some(slot) = t
+                                .items
+                                .iter_mut()
+                                .find(|i| matches!(i, Item::UserMessage { .. }))
+                            {
+                                *slot = e.body.item.clone();
+                            } else {
+                                t.items.push(e.body.item.clone());
+                            }
+                        }
                         None => t.items.push(e.body.item.clone()),
                     }
                 }
@@ -187,7 +212,7 @@ impl ThreadView {
                         .duration_ms
                         .or_else(|| start.map(|start| (end - start).max(0) as u64));
                     if let Some(duration_ms) = duration_ms {
-                        let secs = ((duration_ms + 999) / 1000).max(1);
+                        let secs = duration_ms.div_ceil(1000).max(1);
                         self.reasoning_durations.insert(id.clone(), secs);
                         if let Some(t) = self.turn_mut(&e.body.turn_id) {
                             t.reasoning_durations.insert(id.clone(), duration_ms);
@@ -244,7 +269,47 @@ impl ThreadView {
     /// The run a steer should name. A run that has not started yet (a thread that is running
     /// because a queued prompt is about to begin) has no id, so a steer is simply queueable.
     pub fn running_turn(&self) -> Option<TurnId> {
-        self.running.then(|| self.active_turn.clone()).flatten()
+        self.running
+            .then(|| self.active_turn.clone())
+            .flatten()
+            .filter(|id| self.optimistic_turn.as_deref() != Some(id.as_str()))
+    }
+
+    /// Draw a prompt before the server's first turn event arrives.
+    pub fn add_optimistic_prompt(&mut self, text: String) -> bool {
+        if self.optimistic_turn.is_some() || text.trim().is_empty() {
+            return false;
+        }
+        let id = format!("optimistic:{}", Uuid::new_v4());
+        self.turns.push(Turn::new(
+            id.clone(),
+            vec![Item::UserMessage {
+                id: format!("optimistic-message:{}", Uuid::new_v4()),
+                text,
+            }],
+        ));
+        self.optimistic_turn = Some(id.clone());
+        self.active_turn = Some(id);
+        self.running = true;
+        true
+    }
+
+    /// Remove a prompt whose start request was rejected before the server accepted it.
+    pub fn rollback_optimistic_prompt(&mut self) -> bool {
+        let Some(id) = self.optimistic_turn.take() else {
+            return false;
+        };
+        self.turns.retain(|turn| turn.id != id);
+        if self.active_turn.as_deref() == Some(id.as_str()) {
+            self.active_turn = None;
+        }
+        self.running = false;
+        true
+    }
+
+    /// Whether this view is waiting for the server to acknowledge its optimistic turn.
+    pub fn has_optimistic_prompt(&self) -> bool {
+        self.optimistic_turn.is_some()
     }
 
     pub fn turn(&self, turn_id: &str) -> Option<&Turn> {

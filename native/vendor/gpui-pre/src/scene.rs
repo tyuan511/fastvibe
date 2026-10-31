@@ -596,13 +596,19 @@ impl From<Quad> for Primitive {
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct Backdrop {
+    /// Draw order (z-order) relative to the other primitives in the scene.
     pub order: DrawOrder,
+    /// The region to snapshot and blur, in device pixels.
     pub bounds: Bounds<ScaledPixels>,
+    /// Clip region limiting where the backdrop is drawn.
     pub content_mask: ContentMask<ScaledPixels>,
+    /// Corner radii shaping the backdrop's rounded rectangle.
     pub corner_radii: Corners<ScaledPixels>,
     /// The CSS `blur()` radius, already scaled to device pixels.
     pub blur_radius: ScaledPixels,
+    /// Mix toward grayscale before compositing: 1.0 keeps colors unchanged, 0.0 fully desaturates.
     pub saturation: f32,
+    /// Reserved padding to keep the C-layout size and alignment stable.
     pub pad: [u32; 2],
 }
 

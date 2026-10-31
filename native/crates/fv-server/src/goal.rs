@@ -216,7 +216,7 @@ pub async fn after_turn(
         TurnStatus::Failed => Some(GoalStatus::Paused),
         TurnStatus::Interrupted if sending_now => return None,
         TurnStatus::Interrupted => Some(GoalStatus::Paused),
-        _ if declared_done(&rt.history()) => Some(GoalStatus::Complete),
+        _ if rt.with_history(declared_done) => Some(GoalStatus::Complete),
         _ if stored.autonomous >= ROUND_CAP => Some(GoalStatus::Paused),
         _ => None,
     };

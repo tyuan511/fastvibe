@@ -2,7 +2,9 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use fv_protocol::types::{Item, PlanStatus, PlanStep, Turn};
+use fv_protocol::types::{Item, Turn};
+#[cfg(test)]
+use fv_protocol::types::{PlanStatus, PlanStep};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Output {
@@ -13,6 +15,7 @@ pub struct Output {
 
 /// A new user turn retires the old checklist. Successful calls survive reconnects;
 /// the live notification may be newer than the completed tool item.
+#[cfg(test)]
 pub fn plan(turns: &[Turn], live: Option<&fv_protocol::types::PlanUpdated>) -> Vec<PlanStep> {
     let Some(turn) = turns.last() else {
         return Vec::new();
@@ -41,6 +44,7 @@ pub fn plan(turns: &[Turn], live: Option<&fv_protocol::types::PlanUpdated>) -> V
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub fn active_step(steps: &[PlanStep]) -> Option<&PlanStep> {
     steps
         .iter()

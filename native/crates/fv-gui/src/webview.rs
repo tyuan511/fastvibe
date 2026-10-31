@@ -268,7 +268,7 @@ impl Surface {
                     written += 1;
                 }
             }
-            return Ok(written);
+            Ok(written)
         }
         #[cfg(not(target_os = "macos"))]
         {

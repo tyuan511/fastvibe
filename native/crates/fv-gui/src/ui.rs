@@ -3,12 +3,86 @@
 //! is 14/20, `text-xs` 12/16, `size-3.5` 14px, `h-8` 32px, `rounded-md` 8px.
 
 use fv_theme::Token;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::shimmer::ShimmerText;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::assets;
 use crate::theme::Palette;
+
+pub fn input(state: &Entity<InputState>) -> Input {
+    Input::new(state)
+        .h_9()
+        .py(px(4.0))
+        .rounded(px(10.0))
+        .text_size(px(TEXT_SM))
+        .line_height(px(20.0))
+}
+
+/// Paint the backdrop before the surface's own shadow and fill. Blurring after a div's
+/// background also blurs its rounded edge and pulls its shadow into the glass corners.
+pub fn overlay_surface(d: Div, radius: f32, p: &Palette) -> Div {
+    let glass = p.glass();
+    let fill = p.overlay();
+    let border = p.c(Token::Foreground).opacity(0.12);
+    let edge = p.get(Token::GlassEdge);
+    let shade = p.get(Token::GlassShade);
+    d.relative()
+        .when(glass, |d| d.rounded(gpui_kit::px(14.0)))
+        .when(!glass, |d| d.rounded(px(radius)))
+        .child(
+            div().absolute().inset_0().child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        let radius = if glass {
+                            gpui_kit::px(14.0)
+                        } else {
+                            window.rem_size() * (radius / 16.0)
+                        };
+                        let corners = Corners::all(radius).clamp_radii_for_quad_size(bounds.size);
+                        let shadow = |color, y, blur, spread| BoxShadow {
+                            color,
+                            offset: point(gpui_kit::px(0.0), gpui_kit::px(y)),
+                            // GPUI's shadow shader takes Gaussian sigma; CSS blur is twice that.
+                            blur_radius: gpui_kit::px(blur * 0.5),
+                            spread_radius: gpui_kit::px(spread),
+                            inset: false,
+                        };
+                        let shadows = match (edge, shade) {
+                            (Some(edge), Some(shade)) => vec![
+                                shadow(edge, 0.0, 0.0, 0.5),
+                                shadow(shade, 18.0, 40.0, -14.0),
+                                shadow(shade, 2.0, 8.0, -2.0),
+                            ],
+                            _ => vec![
+                                shadow(hsla(0.0, 0.0, 0.0, 0.14), 10.0, 24.0, -18.0),
+                                shadow(hsla(0.0, 0.0, 0.0, 0.05), 2.0, 6.0, 0.0),
+                            ],
+                        };
+                        window.paint_backdrop(
+                            bounds,
+                            corners,
+                            gpui_kit::px(if glass { 28.0 } else { 18.0 }),
+                            if glass { 1.8 } else { 1.08 },
+                        );
+                        window.paint_drop_shadows(bounds, corners, &shadows);
+                        window.paint_quad(quad(
+                            bounds,
+                            corners,
+                            fill,
+                            Edges::all(gpui_kit::px(if glass { 0.0 } else { 1.0 })),
+                            border,
+                            BorderStyle::default(),
+                        ));
+                    },
+                )
+                .size_full(),
+            ),
+        )
+        .children(glass_rim(14.0, p))
+}
 
 /// A length in the design's 16px-root units. Every size in the UI goes through this, so the
 /// window's `rem_size` (界面字号) scales the whole interface the way the root font size does in
@@ -87,6 +161,8 @@ fn ghost_square(id: impl Into<ElementId>, size: f32, radius: f32, p: &Palette) -
         .justify_center()
         .rounded(px(radius))
         .role(Role::Button)
+        .focusable()
+        .tab_index(0)
         .cursor_pointer()
         .hover(move |d| d.bg(hover))
 }
@@ -171,35 +247,6 @@ pub fn ring(fraction: f32, size: f32, track: Hsla, color: Hsla) -> impl IntoElem
                 }
             },
         )
-        .size_full(),
-    )
-}
-
-/// The `backdrop-filter` half of `.overlay-surface` under glass (`index.css`):
-/// `blur(28px) saturate(1.8)` on whatever is already painted behind this element, so the
-/// 84/90% fill on top of it stays legible — the blurred copy replaces the page underneath,
-/// exactly as a CSS backdrop-filter presents the filtered backdrop in place of the original.
-///
-/// Blur is linear, so snapshotting *after* the fill is equivalent to snapshotting before it:
-/// `blur(fill + page) = fill + blur(page)` for a uniform fill. Add this as the element's
-/// first child (a div paints its background before its children) and keep the fill at
-/// Electron's `--glass-overlay` alpha — without the blur, the unblurred page shows through.
-pub fn backdrop(radius: f32, blur: f32, saturation: f32) -> Div {
-    // The painter takes pixels, not the rems this module's `px` returns.
-    let corners = Corners {
-        top_left: gpui_kit::px(radius),
-        top_right: gpui_kit::px(radius),
-        bottom_right: gpui_kit::px(radius),
-        bottom_left: gpui_kit::px(radius),
-    };
-    div().absolute().inset_0().child(
-        canvas(
-            |_, _, _| (),
-            move |bounds, _, window, _| {
-                window.paint_backdrop(bounds, corners, gpui_kit::px(blur), saturation);
-            },
-        )
-        // A canvas without a size paints nothing: zero bounds, zero backdrop.
         .size_full(),
     )
 }

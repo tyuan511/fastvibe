@@ -48,6 +48,7 @@ Future<void> showOutputFile(
   required FileTransfer transfer,
   DownloadDirectory downloadDirectory = defaultDownloadDirectory,
   FileOpener opener = defaultFileOpener,
+  bool downloadOnOpen = false,
 }) {
   return showAppSheet<void>(
     context: context,
@@ -57,6 +58,7 @@ Future<void> showOutputFile(
       transfer: transfer,
       downloadDirectory: downloadDirectory,
       opener: opener,
+      downloadOnOpen: downloadOnOpen,
     ),
   );
 }
@@ -72,7 +74,11 @@ class _ImagePreview extends _Preview {
 }
 
 class _TextPreview extends _Preview {
-  const _TextPreview(this.text, {required this.markdown, required this.truncatedAt});
+  const _TextPreview(
+    this.text, {
+    required this.markdown,
+    required this.truncatedAt,
+  });
 
   final String text;
   final bool markdown;
@@ -104,12 +110,14 @@ class FileViewer extends StatefulWidget {
     required this.transfer,
     this.downloadDirectory = defaultDownloadDirectory,
     this.opener = defaultFileOpener,
+    this.downloadOnOpen = false,
   });
 
   final OutputFile file;
   final FileTransfer transfer;
   final DownloadDirectory downloadDirectory;
   final FileOpener opener;
+  final bool downloadOnOpen;
 
   @override
   State<FileViewer> createState() => _FileViewerState();
@@ -128,6 +136,11 @@ class _FileViewerState extends State<FileViewer> {
   void initState() {
     super.initState();
     _load();
+    if (widget.downloadOnOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _download();
+      });
+    }
   }
 
   @override
@@ -150,7 +163,9 @@ class _FileViewerState extends State<FileViewer> {
       if (mounted) setState(() => _preview = preview);
     } catch (error) {
       if (!mounted) return;
-      setState(() => _preview = _NoPreview(describeFileError(error), failed: true));
+      setState(
+        () => _preview = _NoPreview(describeFileError(error), failed: true),
+      );
     }
   }
 
@@ -166,7 +181,10 @@ class _FileViewerState extends State<FileViewer> {
   }
 
   Future<_Preview> _loadOffice() async {
-    final rendered = await widget.transfer.renderOffice(widget.file.path, cancel: _cancel);
+    final rendered = await widget.transfer.renderOffice(
+      widget.file.path,
+      cancel: _cancel,
+    );
     final read = await widget.transfer.read(
       rendered,
       maxBytes: 8 * 1024 * 1024,
@@ -224,7 +242,9 @@ class _FileViewerState extends State<FileViewer> {
         name: widget.file.name,
         cancel: _downloadCancel,
         onProgress: (received, total) {
-          if (mounted) setState(() => _progress = total <= 0 ? null : received / total);
+          if (mounted) {
+            setState(() => _progress = total <= 0 ? null : received / total);
+          }
         },
       );
       if (!mounted) return;
@@ -237,7 +257,10 @@ class _FileViewerState extends State<FileViewer> {
       toastSuccess(
         !kIsWeb && Platform.isIOS
             ? t('file.savedIn')
-            : t('file.saved', vars: <String, Object?>{'name': widget.file.name}),
+            : t(
+                'file.saved',
+                vars: <String, Object?>{'name': widget.file.name},
+              ),
       );
       await _open(file);
     } catch (error) {
@@ -246,7 +269,10 @@ class _FileViewerState extends State<FileViewer> {
         _downloading = false;
         _progress = null;
       });
-      setState(() => _resumeAvailable = error is FileTransferError && error.code == 'interrupted');
+      setState(
+        () => _resumeAvailable =
+            error is FileTransferError && error.code == 'interrupted',
+      );
       if (error is FileTransferError && error.code == 'cancelled') return;
       toastError(describeFileError(error));
     }
@@ -284,9 +310,15 @@ class _FileViewerState extends State<FileViewer> {
             label: _downloading
                 ? t(
                     'file.downloading',
-                    vars: <String, Object?>{'percent': ((_progress ?? 0) * 100).floor()},
+                    vars: <String, Object?>{
+                      'percent': ((_progress ?? 0) * 100).floor(),
+                    },
                   )
-                : t(_saved == null ? (_resumeAvailable ? 'file.resume' : 'file.download') : 'file.open'),
+                : t(
+                    _saved == null
+                        ? (_resumeAvailable ? 'file.resume' : 'file.download')
+                        : 'file.open',
+                  ),
             icon: _saved == null ? AppIcons.download : AppIcons.fileText,
             enabled: !_downloading,
             onPressed: _download,
@@ -303,14 +335,23 @@ class _FileViewerState extends State<FileViewer> {
     }
     return switch (preview) {
       _ImagePreview(:final bytes) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: InteractiveViewer(
-            maxScale: 6,
-            child: Center(child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true)),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: InteractiveViewer(
+          maxScale: 6,
+          child: Center(
+            child: Image.memory(
+              bytes,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+            ),
           ),
         ),
-      _OfficePreview(:final controller) => WebViewWidget(controller: controller),
-      _TextPreview(:final text, :final markdown, :final truncatedAt) => ListView(
+      ),
+      _OfficePreview(:final controller) => WebViewWidget(
+        controller: controller,
+      ),
+      _TextPreview(:final text, :final markdown, :final truncatedAt) =>
+        ListView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
           children: <Widget>[
             if (markdown)
@@ -329,17 +370,20 @@ class _FileViewerState extends State<FileViewer> {
             if (truncatedAt != null) ...<Widget>[
               const SizedBox(height: 12),
               Text(
-                t('file.truncated', vars: <String, Object?>{'size': formatFileSize(truncatedAt)}),
+                t(
+                  'file.truncated',
+                  vars: <String, Object?>{'size': formatFileSize(truncatedAt)},
+                ),
                 style: TextStyle(color: palette.subtle, fontSize: 12),
               ),
             ],
           ],
         ),
       _NoPreview(:final message, :final failed) => EmptyState(
-          icon: failed ? AppIcons.alert : AppIcons.fileText,
-          title: failed ? t('file.loadFailed') : t(message),
-          body: failed ? message : null,
-        ),
+        icon: failed ? AppIcons.alert : AppIcons.fileText,
+        title: failed ? t('file.loadFailed') : t(message),
+        body: failed ? message : null,
+      ),
     };
   }
 }
@@ -371,7 +415,10 @@ class _FileGlyph extends StatelessWidget {
     return Container(
       width: 40,
       height: 40,
-      decoration: BoxDecoration(color: palette.accentSoft, borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(
+        color: palette.accentSoft,
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Center(
         child: HugeIcon(
           icon: fileGlyph(kind),
@@ -385,7 +432,9 @@ class _FileGlyph extends StatelessWidget {
 }
 
 List<List<dynamic>> fileGlyph(OutputFileKind kind) => switch (kind) {
-      OutputFileKind.image => AppIcons.imageAdd,
-      OutputFileKind.markdown || OutputFileKind.text || OutputFileKind.office => AppIcons.fileText,
-      OutputFileKind.other => AppIcons.fileDownload,
-    };
+  OutputFileKind.image => AppIcons.imageAdd,
+  OutputFileKind.markdown ||
+  OutputFileKind.text ||
+  OutputFileKind.office => AppIcons.fileText,
+  OutputFileKind.other => AppIcons.fileDownload,
+};

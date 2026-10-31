@@ -1,0 +1,116 @@
+_version: 2
+
+ssh.description:
+  zh: 通过 SSH 密钥或 SSH Agent 连接 Linux 和 macOS 主机，在独立窗口中使用远程项目与对话。
+  en: Connect to Linux and macOS with an SSH key or agent. Open remote projects and chats in a separate window.
+ssh.hostkey_hint:
+  zh: 使用 OpenSSH 已信任的主机密钥。首次连接请先在终端中核对主机指纹；此处不会接受未知指纹。
+  en: Uses trusted OpenSSH host keys. Verify a new host’s fingerprint in your terminal before connecting here.
+ssh.local_only:
+  zh: 请在本机窗口管理 SSH 主机。
+  en: Manage SSH hosts from the local window.
+ssh.read_failed:
+  zh: 无法读取 SSH 主机配置，原文件已保留：%{error}
+  en: Could not read SSH hosts. The existing file was preserved. %{error}
+ssh.invalid_port:
+  zh: SSH 端口必须在 1–65535 之间。
+  en: SSH port must be between 1 and 65535.
+ssh.saved:
+  zh: 已保存主机。
+  en: Host saved.
+ssh.choose_binary:
+  zh: 选择目标主机的原生 fastvibe-server 二进制文件
+  en: Choose a native fastvibe-server binary for the target host
+ssh.testing:
+  zh: 正在连接并检查目标系统；安装时将核对架构、上传并校验 SHA256，然后验证服务器连接…
+  en: Connecting and checking the target. Installation verifies the architecture, uploads and checks SHA256, then verifies the server…
+ssh.uploading:
+  zh: 正在上传服务器并校验 SHA256…
+  en: Uploading the server and verifying SHA256…
+ssh.verifying:
+  zh: 正在验证原生服务器连接…
+  en: Verifying the native server connection…
+ssh.operation_ok:
+  zh: "%{action} · %{os} %{arch}"
+  en: "%{action} · %{os} %{arch}"
+ssh.installed:
+  zh: 已安装并验证服务器
+  en: Server installed and verified
+ssh.installed_resident_older:
+  zh: 已安装文件。正在运行的服务器版本不同，现有对话保持运行；请在任务完成后重启远程服务器。
+  en: Binary installed. The resident server has a different version and existing chats are still running. Restart the remote server after its tasks finish.
+ssh.media_loading:
+  zh: 正在从 SSH 主机读取预览…
+  en: Loading preview from the SSH host…
+ssh.remote_office:
+  zh: SSH 工作区暂不支持 Office 实时预览。文件仍保存在远程主机。
+  en: Live Office preview is unavailable in SSH workspaces. The file remains on the remote host.
+ssh.reachable:
+  zh: SSH 连接成功
+  en: SSH connection succeeded
+ssh.operation_failed:
+  zh: "操作失败：%{error}"
+  en: "Operation failed: %{error}"
+ssh.opened:
+  zh: 已打开 SSH 主机窗口。连接状态将在该窗口显示。
+  en: SSH host window opened. Connection status appears in that window.
+ssh.name:
+  zh: 显示名称
+  en: Display name
+ssh.host:
+  zh: 主机名或 SSH 配置别名
+  en: Hostname or SSH config alias
+ssh.user:
+  zh: 用户名（留空使用 SSH 配置）
+  en: Username (leave empty to use SSH config)
+ssh.port:
+  zh: 端口（留空使用 SSH 配置）
+  en: Port (leave empty to use SSH config)
+ssh.identity:
+  zh: 本地私钥路径（留空使用 SSH Agent 或配置）
+  en: Local identity file (leave empty to use SSH agent or config)
+ssh.server_path:
+  zh: 远程服务器二进制路径（绝对路径）
+  en: Remote server binary (absolute path)
+ssh.data_path:
+  zh: 远程数据目录（绝对路径）
+  en: Remote data directory (absolute path)
+ssh.add:
+  zh: 添加 SSH 主机
+  en: Add SSH host
+ssh.empty:
+  zh: 尚未添加 SSH 主机。
+  en: No SSH hosts yet.
+ssh.connect:
+  zh: 连接
+  en: Connect
+ssh.test:
+  zh: 测试
+  en: Test
+ssh.install:
+  zh: 选择并安装服务器
+  en: Choose & install server
+ssh.edit:
+  zh: 编辑
+  en: Edit
+ssh.delete:
+  zh: 删除
+  en: Delete
+ssh.confirm_delete:
+  zh: 确认删除配置
+  en: Confirm removal
+ssh.remote_folder:
+  zh: 远程文件夹绝对路径
+  en: Absolute remote folder path
+ssh.add_folder:
+  zh: 添加远程文件夹
+  en: Add remote folder
+ssh.invalid_folder:
+  zh: 请输入远程主机上的绝对路径。
+  en: Enter an absolute path on the remote host.
+ssh.remote_attachment:
+  zh: SSH 对话请使用 @ 选择远程文件。暂不支持上传本地附件。
+  en: Use @ to select a remote file in SSH chats. Local attachment upload is not supported yet.
+ssh.remote_skills:
+  zh: 请在远程主机安装技能；此窗口无法上传本地技能。
+  en: Install skills on the remote host. Local skill uploads are unavailable in this window.

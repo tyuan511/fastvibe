@@ -37,8 +37,14 @@ impl Backend {
     ) {
         let (cancel, mut canceled) = watch::channel(false);
         let (send_url, url) = oneshot::channel();
-        let client = self.client.clone();
+        let connection = self.connection();
         let task = self.runtime.spawn(async move {
+            let connection = connection.ok_or_else(|| "connection closed".to_string())?;
+            let client = connection.client.clone();
+            tokio::select! {
+                biased;
+                _ = connection.closed() => Err("connection closed".to_string()),
+                result = async move {
             let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| format!("无法接收登录回调：{e}"))?;
             let origin = format!("http://{}", listener.local_addr().map_err(|e| e.to_string())?);
             let redirect_uri = format!("{origin}/mcp/oauth/callback");
@@ -69,6 +75,8 @@ impl Backend {
             }.await;
             let _ = tokio::time::timeout(Duration::from_secs(5), client.call::<McpAuthCancel>(McpAuthCancelParams { flow_id })).await;
             work
+                } => result,
+            }
         });
         (OAuthCancellation(cancel), url, async move {
             task.await.map_err(|_| "登录已结束".to_string())?
@@ -269,7 +277,12 @@ mod tests {
         let (read, write) = tokio::io::split(local);
         let (client, _) = Client::from_io(read, write);
         let backend = Backend {
-            client: Arc::new(client),
+            state: Arc::new(super::super::BackendState {
+                current: std::sync::Mutex::new(Some(Arc::new(super::super::LiveConnection::new(
+                    client,
+                )))),
+                shutdown: None,
+            }),
             runtime: tokio::runtime::Handle::current(),
         };
         let (send_redirect, redirect) = oneshot::channel();

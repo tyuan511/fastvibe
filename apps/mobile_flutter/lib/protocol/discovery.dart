@@ -1,18 +1,41 @@
 /// Finding FastVibe machines on the local network (mDNS / Bonjour).
 ///
-/// The desktop announces `_fastvibe._tcp` while 允许局域网访问 is on (`src/main/server/mdns.ts`).
-/// The instance name is the computer's host name, which is what the row shows and what the
-/// saved connection is called — nobody has to type `192.168.x.x:7777` on the same Wi-Fi.
+/// Native desktops announce `_fastvibe-native._tcp` only while their authenticated
+/// LAN listener is running. TXT metadata identifies the native protocol and install;
+/// legacy Electron advertisements belong to a different service family.
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:nsd/nsd.dart' as nsd;
 
-const String fastvibeServiceType = '_fastvibe._tcp';
+const String fastvibeServiceType = '_fastvibe-native._tcp';
+
+/// Reject foreign/future advertisements rather than trying another wire protocol.
+bool isNativeService(nsd.Service service) {
+  String? text(String key) {
+    final bytes = service.txt?[key];
+    if (bytes == null) return null;
+    try {
+      return utf8.decode(bytes);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  final id = text('id');
+  return service.type?.replaceFirst(RegExp(r'\.local\.?$'), '') ==
+          fastvibeServiceType &&
+      text('v') == '1' &&
+      text('transport') == 'fv-protocol' &&
+      text('protocolVersion') == '1' &&
+      id != null &&
+      RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(id);
+}
 
 /// One computer found on the network.
 @immutable
@@ -120,8 +143,14 @@ Future<String?> firstReachable(
 Future<bool> _answers(String origin, Duration timeout) async {
   final client = http.Client();
   try {
-    await client.get(Uri.parse(origin)).timeout(timeout);
-    return true;
+    final response = await client
+        .get(Uri.parse('$origin/api/hello'))
+        .timeout(timeout);
+    if (response.statusCode != 200) return false;
+    final hello = jsonDecode(response.body);
+    return hello is Map &&
+        hello['transport'] == 'fv-protocol' &&
+        hello['protocolVersion'] == 1;
   } on Object {
     return false;
   } finally {
@@ -170,7 +199,11 @@ class NearbyDiscovery extends ChangeNotifier {
     final found = _discovery?.services ?? const <nsd.Service>[];
     final next = <NearbyMachine>[
       for (final service in found)
-        if (service.name != null && service.port != null)
+        if (isNativeService(service) &&
+            service.name != null &&
+            service.port != null &&
+            service.port! > 0 &&
+            service.port! <= 65535)
           if (originsFor(
                 service.addresses ?? const <InternetAddress>[],
                 service.port!,

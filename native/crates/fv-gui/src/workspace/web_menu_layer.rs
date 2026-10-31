@@ -27,7 +27,7 @@ impl Workspace {
             return;
         }
         let workspace = cx.entity();
-        let parent: AnyWindowHandle = window.window_handle().into();
+        let parent: AnyWindowHandle = window.window_handle();
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(window.bounds())),
             titlebar: None,

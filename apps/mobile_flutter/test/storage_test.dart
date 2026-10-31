@@ -54,6 +54,27 @@ void main() {
     },
   );
 
+  test(
+    'official native protocol identity survives sync and settings writes',
+    () async {
+      final native = SavedServer(
+        id: 'native',
+        alias: 'Native Mac',
+        origin: 'fastvibe-official://machine',
+        host: 'native-macos',
+        kind: AddressKind.official,
+        createdAt: 1,
+        nativeProtocol: true,
+      );
+      await ServerStore.instance.syncOfficial(<SavedServer>[native]);
+      await ServerStore.instance.patch('native', favorite: true);
+      await ServerStore.instance.syncOfficial(<SavedServer>[native]);
+      final saved = (await ServerStore.instance.load()).single;
+      expect(saved.nativeProtocol, isTrue);
+      expect(SavedServer.fromJson(saved.toJson()).nativeProtocol, isTrue);
+    },
+  );
+
   test('favorites precede more recently connected devices', () async {
     await ServerStore.instance.upsert(device('one'));
     await ServerStore.instance.upsert(device('two'));

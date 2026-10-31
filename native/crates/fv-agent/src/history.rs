@@ -11,6 +11,12 @@ const MISSING_RESULT: &str = "The tool call did not finish (no result was record
 /// transcript was cut), and providers reject a call with no result. Rather than refuse the
 /// conversation, the gap is filled with an error result; stray results are dropped.
 pub fn normalize(history: &[Message]) -> Vec<Message> {
+    normalize_owned(history.to_vec())
+}
+
+/// The same repair pass as [`normalize`], taking ownership of its input: a caller that just
+/// built a projected `Vec` pays one copy of the history, not two.
+pub fn normalize_owned(history: Vec<Message>) -> Vec<Message> {
     let mut out = Vec::with_capacity(history.len());
     // Calls from the last assistant message still waiting for their result: (id, name).
     let mut pending: HashMap<String, String> = HashMap::new();
@@ -36,15 +42,15 @@ pub fn normalize(history: &[Message]) -> Vec<Message> {
 
     for message in history {
         match message {
-            Message::ToolResult { call_id, .. } => {
+            Message::ToolResult { ref call_id, .. } => {
                 if pending.remove(call_id).is_some() {
-                    out.push(message.clone());
+                    out.push(message);
                 }
                 // else: orphan, dropped
             }
             other => {
                 close(&mut out, &mut pending, &mut pending_order);
-                if let Message::Assistant(a) = other {
+                if let Message::Assistant(a) = &other {
                     let mut seen = HashSet::new();
                     pending_order.clear();
                     for b in &a.content {
@@ -58,7 +64,7 @@ pub fn normalize(history: &[Message]) -> Vec<Message> {
                 }
                 match other {
                     Message::MemoryContext { summary } => out.push(Message::User {
-                        text: Message::memory_context_text(summary),
+                        text: Message::memory_context_text(&summary),
                     }),
                     // What a compaction replaced is shown to the model as one user message.
                     Message::Compaction {
@@ -66,9 +72,9 @@ pub fn normalize(history: &[Message]) -> Vec<Message> {
                         summary,
                         ..
                     } => out.push(Message::User {
-                        text: Message::compaction_text(user_messages, summary),
+                        text: Message::compaction_text(&user_messages, &summary),
                     }),
-                    _ => out.push(other.clone()),
+                    _ => out.push(other),
                 }
             }
         }

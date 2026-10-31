@@ -32,7 +32,7 @@
 		<string>Connect to FastVibe on your local network.</string>
 		<key>NSBonjourServices</key>
 		<array>
-			<string>_fastvibe._tcp</string>
+			<string>_fastvibe-native._tcp</string>
 		</array>
 		<key>NSCameraUsageDescription</key>
 		<string>Scan the QR code on your computer to connect to FastVibe.</string>

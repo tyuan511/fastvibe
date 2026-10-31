@@ -88,6 +88,9 @@ pub struct ThreadLog {
     /// 回复推荐's standing answer, so `thread/resume` can offer it after a reconnect.
     pub suggestion: Option<String>,
     pub turns: Vec<Turn>,
+    /// Turn ids are unique for a thread. Keeping their positions makes streamed deltas and
+    /// completion updates constant time instead of scanning the whole conversation per event.
+    turn_positions: HashMap<TurnId, usize>,
     pub seq: u64,
     pub running: bool,
     pub stats: SessionStats,
@@ -117,6 +120,7 @@ impl ThreadLog {
             thread_id,
             suggestion: None,
             turns: Vec::new(),
+            turn_positions: HashMap::new(),
             seq: 0,
             running: false,
             stats: SessionStats::default(),
@@ -127,10 +131,16 @@ impl ThreadLog {
     }
 
     pub fn with_turns(thread_id: ThreadId, turns: Vec<Turn>) -> Self {
+        let turn_positions = turns
+            .iter()
+            .enumerate()
+            .map(|(index, turn)| (turn.id.clone(), index))
+            .collect();
         Self {
             thread_id,
             suggestion: None,
             turns,
+            turn_positions,
             seq: 0,
             running: false,
             stats: SessionStats::default(),
@@ -141,7 +151,13 @@ impl ThreadLog {
     }
 
     fn turn_mut(&mut self, turn_id: &str) -> Option<&mut Turn> {
-        self.turns.iter_mut().find(|t| t.id == turn_id)
+        let index = self.turn_positions.get(turn_id).copied()?;
+        self.turns.get_mut(index)
+    }
+
+    pub(crate) fn turn(&self, turn_id: &str) -> Option<Turn> {
+        let index = self.turn_positions.get(turn_id).copied()?;
+        self.turns.get(index).cloned()
     }
 
     /// Record the event, give it the next sequence number, and return the notification to send.
@@ -187,6 +203,8 @@ impl ThreadLog {
                 let at = Some(now_ms());
                 let mut turn = Turn::new(turn_id.clone(), Vec::new());
                 turn.started_at = at;
+                let index = self.turns.len();
+                self.turn_positions.insert(turn_id.clone(), index);
                 self.turns.push(turn);
                 ServerNotification::TurnStarted(ev!(TurnRef { turn_id, at }))
             }
@@ -229,12 +247,11 @@ impl ThreadLog {
                         None => t.items.push(item.clone()),
                     }
                 }
-                if let Item::Reasoning { id, .. } = &item {
-                    if let Some(duration_ms) = duration_ms {
-                        if let Some(t) = self.turn_mut(&turn_id) {
-                            t.reasoning_durations.insert(id.clone(), duration_ms);
-                        }
-                    }
+                if let Item::Reasoning { id, .. } = &item
+                    && let Some(duration_ms) = duration_ms
+                    && let Some(t) = self.turn_mut(&turn_id)
+                {
+                    t.reasoning_durations.insert(id.clone(), duration_ms);
                 }
                 ServerNotification::ItemCompleted(ev!(ItemRef {
                     turn_id,
@@ -316,8 +333,9 @@ impl ThreadLog {
             }
             LogEvent::Rewound { turn_id } => {
                 self.token_usage = None;
-                if let Some(index) = self.turns.iter().position(|t| t.id == turn_id) {
+                if let Some(index) = self.turn_positions.get(&turn_id).copied() {
                     self.turns.truncate(index);
+                    self.turn_positions.retain(|_, position| *position < index);
                 }
                 ServerNotification::TurnRewound(ev!(Rewound { turn_id }))
             }

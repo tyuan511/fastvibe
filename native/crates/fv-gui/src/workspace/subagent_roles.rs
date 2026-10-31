@@ -17,7 +17,7 @@ use fv_protocol::{
 use fv_theme::Token;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    component::input::{Input, InputState, Textarea, TextareaState},
+    component::input::{InputState, Textarea, TextareaState},
     *,
 };
 use std::collections::HashSet;
@@ -694,7 +694,7 @@ impl Workspace {
                         .child(e.id.read(cx).value().to_string())
                         .into_any_element()
                 } else {
-                    Input::new(&e.id).into_any_element()
+                    crate::ui::input(&e.id).into_any_element()
                 },
                 hint(trs!(english, "subagent_roles.role_id_hint").into()).into_any_element(),
             ]),
@@ -702,11 +702,11 @@ impl Workspace {
         body = body
             .child(field(vec![
                 label(trs!(english, "subagent_roles.display_name")).into_any_element(),
-                Input::new(&e.name).into_any_element(),
+                crate::ui::input(&e.name).into_any_element(),
             ]))
             .child(field(vec![
                 label(trs!(english, "subagent_roles.description")).into_any_element(),
-                Input::new(&e.description).into_any_element(),
+                crate::ui::input(&e.description).into_any_element(),
             ]));
 
         // 可用工具: one checkbox for "everything this host offers", then each tool.

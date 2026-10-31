@@ -37,9 +37,18 @@ fn reads_as_answer(item: &Item) -> bool {
 }
 
 pub fn layout(items: &[Item], running: bool) -> TurnLayout<'_> {
-    let user = items.iter().find(|i| matches!(i, Item::UserMessage { .. }));
+    layout_refs(&items.iter().collect::<Vec<_>>(), running)
+}
+
+/// Borrow projected tool items alongside the original prose/media without copying payloads.
+pub fn layout_refs<'a>(items: &[&'a Item], running: bool) -> TurnLayout<'a> {
+    let user = items
+        .iter()
+        .copied()
+        .find(|i| matches!(i, Item::UserMessage { .. }));
     let rest: Vec<&Item> = items
         .iter()
+        .copied()
         .filter(|i| !matches!(i, Item::UserMessage { .. }))
         .collect();
     let cut = rest.iter().rposition(|i| is_process(i)).map(|i| i + 1);
@@ -50,7 +59,7 @@ pub fn layout(items: &[Item], running: bool) -> TurnLayout<'_> {
     };
     let folded =
         !running && !failed && !process.is_empty() && answer.iter().any(|i| reads_as_answer(i));
-    let changes = changed_files(items);
+    let changes = changed_files_iter(items.iter().copied());
     if folded {
         TurnLayout {
             user,
@@ -75,6 +84,10 @@ pub fn layout(items: &[Item], running: bool) -> TurnLayout<'_> {
 /// The files the turn's `apply_patch` calls changed, in first-touched order, with the lines
 /// each added and removed. A failed call changed nothing.
 pub fn changed_files(items: &[Item]) -> Vec<FileChange> {
+    changed_files_iter(items.iter())
+}
+
+fn changed_files_iter<'a>(items: impl Iterator<Item = &'a Item>) -> Vec<FileChange> {
     let mut out: Vec<FileChange> = Vec::new();
     for item in items {
         let Item::ToolCall {
@@ -125,6 +138,10 @@ pub fn patch_changes(patch: &str) -> Vec<FileChange> {
             adding_whole_file = kind == "*** Add File: ";
             continue;
         }
+        if line == "*** End Patch" {
+            current = None;
+            continue;
+        }
         if let Some(to) = line.strip_prefix("*** Move to: ")
             && let Some(i) = current
         {
@@ -161,6 +178,8 @@ pub enum Family {
     Terminal,
     Search,
     Web,
+    Browser,
+    Computer,
     Skill,
     Agent,
     Todo,
@@ -174,20 +193,35 @@ pub fn family_of(name: &str) -> Family {
     let key = name.trim().to_lowercase();
     match key.as_str() {
         "present" => Family::Present,
+        "browser" => Family::Browser,
+        "computer" => Family::Computer,
         "view_image" | "read" | "read_file" => Family::Read,
-        "apply_patch" | "edit" | "write" => Family::Edit,
+        "apply_patch" | "edit" | "write" | "write_file" | "edit_file" | "create_file" => {
+            Family::Edit
+        }
         "exec_command" | "write_stdin" | "bash" | "shell" => Family::Terminal,
         "web_search" => Family::Web,
-        "tool_search" | "conversation_search" | "grep" | "search" => Family::Search,
+        "tool_search" | "conversation_search" | "grep" | "grep_files" | "search" => Family::Search,
         "update_plan" => Family::Todo,
         "request_user_input" | "request_user_input_async" | "send_message_to_user_async" => {
             Family::Question
         }
-        _ if key.starts_with("mcp") || key.contains("__") => Family::Mcp,
+        _ if key.starts_with("mcp")
+            || key.contains("__")
+            || [
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+            ]
+            .contains(&key.as_str()) =>
+        {
+            Family::Mcp
+        }
         _ if key.contains("skill") => Family::Skill,
         _ if key.starts_with("spawn_agent")
             || key.starts_with("followup_task")
-            || key == "send_message"
+            || ["send_message", "send_input", "wait_agent", "close_agent"]
+                .contains(&key.as_str())
             || key.starts_with("interrupt_agent")
             || key.starts_with("wait_agent")
             || key.starts_with("list_agents")
@@ -207,6 +241,8 @@ pub fn family_icon(f: Family, edits_file: bool) -> &'static str {
         Family::Edit => "file-edit",
         Family::Terminal => "square-terminal",
         Family::Search | Family::Web => "search01",
+        Family::Browser => "globe02",
+        Family::Computer => "computer",
         Family::Skill => "sparkles",
         Family::Agent => "bot",
         Family::Todo => "list-checks",
@@ -215,6 +251,32 @@ pub fn family_icon(f: Family, edits_file: bool) -> &'static str {
         Family::Present => "image01",
         Family::Other => "wrench01",
     }
+}
+
+/// A tool's actual file target, never a session id, URL, or search query.
+pub fn tool_path(name: &str, args: &serde_json::Value) -> Option<String> {
+    if name == "apply_patch" {
+        let files = patch_changes(args.get("input")?.as_str()?);
+        return (files.len() == 1).then(|| files[0].path.clone());
+    }
+    if !matches!(family_of(name), Family::Read | Family::Edit) {
+        return None;
+    }
+    [
+        "path",
+        "file_path",
+        "filePath",
+        "filepath",
+        "filename",
+        "file",
+        "target_file",
+        "target",
+    ]
+    .into_iter()
+    .filter_map(|key| args.get(key).and_then(|v| v.as_str()))
+    .map(str::trim)
+    .find(|path| !path.is_empty())
+    .map(str::to_string)
 }
 
 /// A call's row, as `describeTool` makes it: a category label, what it acted on, and a muted
@@ -266,34 +328,33 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool, english: bo
     let (label, subject, context) = match family {
         Family::Terminal => (
             label("terminal"),
-            field("cmd").lines().next().unwrap_or(name).to_string(),
+            terminal_command(name, args).to_string(),
             String::new(),
         ),
-        Family::Edit => {
-            let files = patch_changes(field("input"));
-            let (subject, context) = match files.as_slice() {
-                [one] => {
-                    let (n, d) = split_path(&one.path);
-                    (n.to_string(), d.to_string())
-                }
-                [] => (name.to_string(), String::new()),
-                many => (
-                    tr!(english, "presentation.files", count = many.len()),
-                    String::new(),
-                ),
-            };
-            (label("edit"), subject, context)
-        }
-        Family::Read => {
-            let (n, d) = split_path(field("path"));
-            (
-                label("read"),
-                if n.is_empty() {
-                    name.to_string()
+        Family::Edit | Family::Read => {
+            let path = tool_path(name, args);
+            let (subject, context) = if let Some(path) = &path {
+                let (name, directory) = split_path(path);
+                (name.to_string(), directory.to_string())
+            } else {
+                let files = patch_changes(field("input"));
+                if files.is_empty() {
+                    (name.to_string(), String::new())
                 } else {
-                    n.to_string()
-                },
-                d.to_string(),
+                    (
+                        tr!(english, "presentation.files", count = files.len()),
+                        String::new(),
+                    )
+                }
+            };
+            (
+                label(if family == Family::Read {
+                    "read"
+                } else {
+                    "edit"
+                }),
+                subject,
+                context,
             )
         }
         Family::Search => (
@@ -306,18 +367,40 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool, english: bo
                 .to_string(),
             String::new(),
         ),
-        Family::Web => (
-            label("web"),
-            if field("query").is_empty() {
-                name.to_string()
+        Family::Web => {
+            let action = args.get("action").filter(|v| v.is_object()).unwrap_or(args);
+            let subject = action
+                .get("query")
+                .or_else(|| action.get("url"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .or_else(|| {
+                    action.get("queries").and_then(|v| v.as_array()).map(|v| {
+                        v.iter()
+                            .filter_map(|v| v.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                })
+                .unwrap_or_else(|| name.to_string());
+            (label("web"), subject, String::new())
+        }
+        Family::Browser | Family::Computer => (
+            label(if family == Family::Browser {
+                "browser"
             } else {
-                field("query").to_string()
-            },
-            String::new(),
+                "computer"
+            }),
+            field("action").to_string(),
+            field("url").to_string(),
         ),
         Family::Todo => (label("todo"), String::new(), String::new()),
         Family::Question => (label("question"), String::new(), String::new()),
-        Family::Agent => (label("agent"), name.to_string(), String::new()),
+        Family::Agent => (
+            label("agent"),
+            name.to_string(),
+            field("target").to_string(),
+        ),
         Family::Skill => (label("skill"), name.to_string(), String::new()),
         Family::Present => (label("present"), name.to_string(), String::new()),
         Family::Mcp => (label("mcp"), name.to_string(), String::new()),
@@ -328,6 +411,63 @@ pub fn describe(name: &str, args: &serde_json::Value, running: bool, english: bo
         label,
         subject,
         context,
+    }
+}
+
+/// The command argument as sent by native and compatibility terminal tools.
+pub fn terminal_command<'a>(name: &'a str, args: &'a serde_json::Value) -> &'a str {
+    args.as_str()
+        .into_iter()
+        .chain(
+            ["command", "cmd", "script", "parsed_cmd"]
+                .into_iter()
+                .filter_map(|key| args.get(key).and_then(|v| v.as_str())),
+        )
+        .map(str::trim)
+        .find(|text| !text.is_empty())
+        .unwrap_or(name)
+}
+
+/// Remove only the shell's display wrapper; the inner script remains literal.
+pub fn unwrap_shell_command(command: &str) -> &str {
+    let command = command.trim();
+    let Some(shell_end) = command.find(char::is_whitespace) else {
+        return command;
+    };
+    let shell = command[..shell_end].to_ascii_lowercase();
+    if !["sh", "bash", "zsh", "/bin/sh", "/bin/bash", "/bin/zsh"].contains(&shell.as_str()) {
+        return command;
+    }
+    let rest = command[shell_end..].trim_start();
+    let Some(script) = rest
+        .strip_prefix("-lc")
+        .filter(|s| s.starts_with(char::is_whitespace))
+    else {
+        return command;
+    };
+    let script = script.trim();
+    if script.is_empty() {
+        return command;
+    }
+    script
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+        .or_else(|| script.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
+        .unwrap_or(script)
+        .trim()
+}
+
+/// Match the transcript's 4,000 UTF-16-unit output cap without cutting a character.
+pub fn terminal_output(output: &str) -> String {
+    let output = output.trim();
+    let mut units = 0;
+    let end = output.char_indices().find_map(|(index, ch)| {
+        units += ch.len_utf16();
+        (units > 4000).then_some(index)
+    });
+    match end {
+        Some(end) => format!("{}\n…", &output[..end]),
+        None => output.to_string(),
     }
 }
 
@@ -378,7 +518,11 @@ pub fn fold_runs<'a>(
         match item {
             Item::Reasoning { text, .. } if text.trim().is_empty() && !live => continue,
             Item::AgentMessage { text, .. } if text.trim().is_empty() && !live => continue,
-            Item::ToolCall { name, output, .. } if output.is_some() && folds_into_run(name) => {
+            Item::ToolCall { name, output, .. }
+                if output.is_some()
+                    && !crate::terminal_transcript::active(item)
+                    && folds_into_run(name) =>
+            {
                 pending.push(item);
             }
             Item::Reasoning { .. } if collapse_thinking && !live => pending.push(item),
@@ -492,12 +636,22 @@ pub fn run_summary(items: &[&Item], english: bool) -> Vec<Piece> {
             }
             (Category::Read, Some(s)) => {
                 pieces.push(Piece::Text(word("read_named").into()));
-                pieces.push(Piece::Path(s));
+                pieces.push(Piece::Path(match batch.first() {
+                    Some(Item::ToolCall {
+                        name, arguments, ..
+                    }) => tool_path(name, arguments).unwrap_or(s),
+                    _ => s,
+                }));
             }
             (Category::Read, None) => pieces.push(Piece::Text(counted("read"))),
             (Category::Write, Some(s)) => {
                 pieces.push(Piece::Text(word("write_named").into()));
-                pieces.push(Piece::Path(s));
+                pieces.push(Piece::Path(match batch.first() {
+                    Some(Item::ToolCall {
+                        name, arguments, ..
+                    }) => tool_path(name, arguments).unwrap_or(s),
+                    _ => s,
+                }));
             }
             (Category::Write, None) => pieces.push(Piece::Text(counted("write"))),
             (Category::Search, Some(s)) => {

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,6 +19,9 @@ use crate::url::engine_base_url;
 pub struct GenaiModel {
     config: ModelConfig,
     client: Client,
+    // Every budget operation keys on this identity; hashing the config on each call put a
+    // fresh String behind each of the several calls one agent-loop iteration makes.
+    context_key: std::sync::OnceLock<String>,
 }
 
 fn adapter(protocol: Protocol) -> AdapterKind {
@@ -74,7 +77,11 @@ impl GenaiModel {
             .with_service_target_resolver(resolver)
             .build()
             .map_err(|e| ModelError::fatal(format!("Could not set up the model client: {e}")))?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            context_key: std::sync::OnceLock::new(),
+        })
     }
 
     fn options(&self) -> ChatOptions {
@@ -99,11 +106,15 @@ impl GenaiModel {
 impl Model for GenaiModel {
     fn context_key(&self) -> String {
         use std::hash::{Hash, Hasher};
-        let mut key = std::hash::DefaultHasher::new();
-        engine_base_url(self.config.protocol, &self.config.base_url).hash(&mut key);
-        format!("{:?}", self.config.protocol).hash(&mut key);
-        self.config.model_id.hash(&mut key);
-        format!("route:{:x}", key.finish())
+        self.context_key
+            .get_or_init(|| {
+                let mut key = std::hash::DefaultHasher::new();
+                engine_base_url(self.config.protocol, &self.config.base_url).hash(&mut key);
+                format!("{:?}", self.config.protocol).hash(&mut key);
+                self.config.model_id.hash(&mut key);
+                format!("route:{:x}", key.finish())
+            })
+            .clone()
     }
 
     fn max_output_tokens(&self) -> Option<u32> {
@@ -242,7 +253,8 @@ fn backoff(attempt: u32, provider_hint: Option<Duration>) -> Duration {
 }
 
 struct TranslateState {
-    started_calls: HashSet<String>,
+    /// genai reports accumulated argument snapshots; our agent and wire protocol append deltas.
+    call_arguments: HashMap<String, String>,
     streamed: Streamed,
 }
 
@@ -251,7 +263,7 @@ fn translate(
     label: String,
 ) -> impl Stream<Item = Result<ModelEvent, ModelError>> {
     let state = TranslateState {
-        started_calls: HashSet::new(),
+        call_arguments: HashMap::new(),
         streamed: Streamed::default(),
     };
     chat_stream
@@ -268,14 +280,38 @@ fn translate(
                 }
                 Ok(ChatStreamEvent::ToolCallChunk(c)) => {
                     let call = c.tool_call;
-                    if state.started_calls.insert(call.call_id.clone()) {
-                        vec![Ok(ModelEvent::ToolCallStart {
-                            id: call.call_id,
-                            name: call.fn_name,
-                        })]
+                    let mut events = Vec::new();
+                    let previous = state
+                        .call_arguments
+                        .entry(call.call_id.clone())
+                        .or_insert_with(|| {
+                            events.push(Ok(ModelEvent::ToolCallStart {
+                                id: call.call_id.clone(),
+                                name: call.fn_name,
+                            }));
+                            String::new()
+                        });
+                    // Chat, Responses and Anthropic carry a cumulative raw JSON string.
+                    // Gemini supplies one complete JSON value instead. Never serialize a
+                    // raw string again (that would quote/escape it), or append a snapshot
+                    // wholesale (which would duplicate every earlier chunk).
+                    let arguments = match call.fn_arguments {
+                        serde_json::Value::String(arguments) => arguments,
+                        serde_json::Value::Null => String::new(),
+                        arguments => arguments.to_string(),
+                    };
+                    if let Some(delta) = arguments.strip_prefix(previous.as_str()) {
+                        if !delta.is_empty() {
+                            events.push(Ok(ModelEvent::ToolCallArgs {
+                                id: call.call_id,
+                                delta: delta.to_string(),
+                            }));
+                            *previous = arguments;
+                        }
                     } else {
-                        Vec::new()
+                        events.push(Err(ModelError::fatal("The provider rewrote streamed tool arguments instead of appending them.")));
                     }
+                    events
                 }
                 Ok(ChatStreamEvent::End(end)) => {
                     let streamed = std::mem::take(&mut state.streamed);
@@ -321,4 +357,88 @@ fn hosted_events(
             }
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use genai::chat::{ToolCall, ToolChunk};
+
+    fn chunk(id: &str, arguments: serde_json::Value) -> genai::Result<ChatStreamEvent> {
+        Ok(ChatStreamEvent::ToolCallChunk(ToolChunk {
+            tool_call: ToolCall {
+                call_id: id.into(),
+                fn_name: "write".into(),
+                fn_arguments: arguments,
+                thought_signatures: None,
+            },
+        }))
+    }
+
+    #[tokio::test]
+    async fn cumulative_snapshots_emit_only_new_bytes_per_call_and_skip_repeats() {
+        let snapshots = vec![
+            chunk("one", serde_json::json!("")),
+            chunk("two", serde_json::json!("{\"n\":")),
+            chunk("one", serde_json::json!("{\"text\":\"界")),
+            chunk("one", serde_json::json!("{\"text\":\"界")),
+            chunk("two", serde_json::json!("{\"n\":1}")),
+            chunk("one", serde_json::json!("{\"text\":\"界🌍\"}")),
+        ];
+        let result: Vec<_> = translate(stream::iter(snapshots), "test/model".into())
+            .collect()
+            .await;
+        let actual = result.into_iter().map(Result::unwrap).collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                ModelEvent::ToolCallStart {
+                    id: "one".into(),
+                    name: "write".into()
+                },
+                ModelEvent::ToolCallStart {
+                    id: "two".into(),
+                    name: "write".into()
+                },
+                ModelEvent::ToolCallArgs {
+                    id: "two".into(),
+                    delta: "{\"n\":".into()
+                },
+                ModelEvent::ToolCallArgs {
+                    id: "one".into(),
+                    delta: "{\"text\":\"界".into()
+                },
+                ModelEvent::ToolCallArgs {
+                    id: "two".into(),
+                    delta: "1}".into()
+                },
+                ModelEvent::ToolCallArgs {
+                    id: "one".into(),
+                    delta: "🌍\"}".into()
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rewritten_snapshot_is_an_error_instead_of_corrupting_appended_arguments() {
+        let result: Vec<_> = translate(
+            stream::iter(vec![
+                chunk("one", serde_json::json!("{\"a\":")),
+                chunk("one", serde_json::json!("{\"b\":")),
+            ]),
+            "test/model".into(),
+        )
+        .collect()
+        .await;
+        assert!(
+            result
+                .last()
+                .unwrap()
+                .as_ref()
+                .unwrap_err()
+                .message
+                .contains("rewrote")
+        );
+    }
 }

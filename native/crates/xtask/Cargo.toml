@@ -7,7 +7,6 @@ publish = false
 
 [dependencies]
 fv-daemon = { path = "../fv-daemon" }
-sha2 = "0.10"
 tokio.workspace = true
 
 [lints]

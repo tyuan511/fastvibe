@@ -20,15 +20,14 @@ use crate::ui::icon;
 
 /// The same hover intent is used by the composer and Settings. Leaving a crossed row or
 /// entering its flyout cancels the pending switch, so diagonal travel cannot replace the menu.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SubmenuTarget {
     ComposerProvider(String),
     ComposerThinking,
-    ComposerClosed,
-    DefaultProvider(String),
-    DefaultThinking,
 }
 
+#[cfg(test)]
 impl super::Workspace {
     pub(super) fn hover_submenu(
         &mut self,
@@ -50,15 +49,6 @@ impl super::Workspace {
         let already_open = match &target {
             SubmenuTarget::ComposerProvider(id) => self.model_submenu.as_ref() == Some(id),
             SubmenuTarget::ComposerThinking => self.thinking_menu,
-            SubmenuTarget::ComposerClosed => self.model_submenu.is_none() && !self.thinking_menu,
-            SubmenuTarget::DefaultProvider(id) => self
-                .settings
-                .as_ref()
-                .is_some_and(|s| s.default_provider_menu.as_ref() == Some(id)),
-            SubmenuTarget::DefaultThinking => self
-                .settings
-                .as_ref()
-                .is_some_and(|s| s.default_thinking_menu),
         };
         if already_open {
             return;
@@ -92,26 +82,6 @@ impl super::Workspace {
                 self.model_submenu = None;
                 self.thinking_menu = true;
             }
-            SubmenuTarget::ComposerClosed if self.model_menu => {
-                self.model_submenu = None;
-                self.thinking_menu = false;
-            }
-            SubmenuTarget::DefaultProvider(id) => {
-                if let Some(s) = &mut self.settings
-                    && s.default_menu
-                {
-                    s.default_provider_menu = Some(id);
-                    s.default_thinking_menu = false;
-                }
-            }
-            SubmenuTarget::DefaultThinking => {
-                if let Some(s) = &mut self.settings
-                    && s.default_menu
-                {
-                    s.default_provider_menu = None;
-                    s.default_thinking_menu = true;
-                }
-            }
             _ => {}
         }
         cx.notify();
@@ -122,6 +92,7 @@ impl super::Workspace {
 /// parent's clipping; its position is resolved in prepaint, after this frame's row is measured.
 /// Electron's submenu uses sideOffset=0 and alignOffset=-3. The row is inset from the card,
 /// so placing at its edge naturally overlaps the card's padding and leaves no dead strip.
+#[cfg(test)]
 pub(super) fn with_submenu(row: Stateful<Div>, menu: Option<Stateful<Div>>) -> Stateful<Div> {
     let Some(menu) = menu else {
         return row;
@@ -146,12 +117,14 @@ pub(super) fn with_submenu(row: Stateful<Div>, menu: Option<Stateful<Div>>) -> S
         )
 }
 
+#[cfg(test)]
 struct RowSubmenu {
     row: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     child: AnyElement,
 }
 
 /// Prefer the right edge, flip to the left if needed, then shift vertically into the viewport.
+#[cfg(test)]
 fn submenu_origin(
     row: Bounds<Pixels>,
     menu: Size<Pixels>,
@@ -173,6 +146,7 @@ fn submenu_origin(
     )
 }
 
+#[cfg(test)]
 impl Element for RowSubmenu {
     type RequestLayoutState = LayoutId;
     type PrepaintState = ();
@@ -233,6 +207,7 @@ impl Element for RowSubmenu {
     }
 }
 
+#[cfg(test)]
 impl IntoElement for RowSubmenu {
     type Element = Self;
     fn into_element(self) -> Self {

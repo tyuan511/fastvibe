@@ -68,7 +68,7 @@ pub fn turns_from_timed_history(messages: &[Message], times: &[i64]) -> Vec<Turn
                         ContentBlock::Text { text } if !text.is_empty() => {
                             turn.items.push(Item::AgentMessage {
                                 id,
-                                text: fv_core::strip_memory_citation(text),
+                                text: fv_core::strip_memory_citation(text).into_owned(),
                             })
                         }
                         ContentBlock::Thinking { text, .. } if !text.trim().is_empty() => {

@@ -8,19 +8,16 @@ use super::gpui::{
     AnyElement, ClickEvent, Context, Entity, FontWeight, IntoElement, Pixels, Point, Window, div,
     point,
 };
-use super::{settings, sidebar_actions};
+use super::{pane_git::run_git_commit, settings, sidebar_actions};
 use crate::ui::px;
 use crate::ui::{self, TEXT_SM, TEXT_XS, icon, icon_button_xs};
 use fv_protocol::methods::{
-    WorkspaceGitCommit, WorkspaceGitGenerateCommitMessage, WorkspaceGitPull, WorkspaceGitPush,
-    WorkspaceGitStage, WorkspaceGitStatus,
+    WorkspaceGitGenerateCommitMessage, WorkspaceGitPull, WorkspaceGitPush, WorkspaceGitStatus,
 };
-use fv_protocol::types::{
-    CwdParams, GitCommitParams, GitGenerateCommitMessageParams, GitPathsParams, GitStatus,
-    UiLanguage,
-};
+use fv_protocol::types::{CwdParams, GitGenerateCommitMessageParams, GitStatus, UiLanguage};
 use fv_theme::Token;
-use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::component::input::{InputEvent, InputState};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// How often the chip re-reads the repository while its conversation is on screen. The agent
@@ -42,11 +39,14 @@ pub(super) enum Busy {
 pub(super) struct HeaderGit {
     /// Where the popover is open, if it is.
     pub(super) menu_at: Option<Point<Pixels>>,
-    input: Option<Entity<TextareaState>>,
+    /// One editor per repository. Switching repositories must retain each draft independently.
+    inputs: HashMap<String, Entity<InputState>>,
     /// Set once a commit went through; `render` empties the field (it needs the window).
-    clear_input: bool,
-    /// A subject the model wrote, waiting for `render` to put it in the field.
-    pending_message: Option<String>,
+    clear_input: Option<(String, String)>,
+    /// A subject the model wrote, waiting for `render` to put it in the matching field.
+    pending_message: Option<(String, String, u64)>,
+    /// The draft snapshot used by the in-flight generation, keyed by repository and ticket.
+    generation: Option<(String, String, u64)>,
     busy: Option<Busy>,
     error: Option<String>,
     /// The repository the status below belongs to.
@@ -55,6 +55,7 @@ pub(super) struct HeaderGit {
     loaded_at: Option<Instant>,
     /// Bumped by every request so an answer for a repository left behind is ignored.
     epoch: u64,
+    generation_epoch: u64,
     polling: bool,
 }
 
@@ -74,6 +75,9 @@ impl Workspace {
             self.header_git.cwd = cwd.clone();
             self.header_git.status = None;
             self.header_git.loaded_at = None;
+            self.header_git.generation_epoch = self.header_git.generation_epoch.wrapping_add(1);
+            self.header_git.busy = None;
+            self.header_git.pending_message = None;
             if cwd.is_some() {
                 self.load_header_git(cx);
             }
@@ -133,13 +137,39 @@ impl Workspace {
 
     /// Called from `render`, which has the window the field needs.
     pub(super) fn sync_header_git_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(input) = self.header_git.input.clone() else {
+        let Some(cwd) = self.header_git.cwd.clone() else {
             return;
         };
-        if let Some(message) = self.header_git.pending_message.take() {
-            self.header_git.clear_input = false;
-            input.update(cx, |state, cx| state.set_value(message, window, cx));
-        } else if std::mem::take(&mut self.header_git.clear_input) {
+        let Some(input) = self.header_git.inputs.get(&cwd).cloned() else {
+            return;
+        };
+        if let Some((message_cwd, message, ticket)) = self.header_git.pending_message.take() {
+            if message_cwd == cwd
+                && self
+                    .header_git
+                    .generation
+                    .as_ref()
+                    .is_some_and(|generation| generation.2 == ticket)
+                && input.read(cx).value().as_ref()
+                    == self
+                        .header_git
+                        .generation
+                        .as_ref()
+                        .map(|g| g.1.as_str())
+                        .unwrap_or_default()
+            {
+                self.header_git.clear_input = None;
+                input.update(cx, |state, cx| state.set_value(message, window, cx));
+            }
+        } else if self
+            .header_git
+            .clear_input
+            .as_ref()
+            .is_some_and(|(clear_cwd, expected)| {
+                clear_cwd == &cwd && input.read(cx).value().as_ref() == expected
+            })
+        {
+            self.header_git.clear_input = None;
             input.update(cx, |state, cx| state.set_value("", window, cx));
         }
     }
@@ -157,13 +187,49 @@ impl Workspace {
         self.close_menus(cx);
         self.header_git.menu_at = Some(at);
         self.header_git.error = None;
-        if self.header_git.input.is_none() {
+        let Some(cwd) = self.header_git.cwd.clone() else {
+            return;
+        };
+        if !self.header_git.inputs.contains_key(&cwd) {
             let english = self.app_settings.language == UiLanguage::English;
-            self.header_git.input = Some(cx.new(|cx| {
-                TextareaState::new(window, cx)
-                    .auto_grow(1, 4)
-                    .placeholder(trs!(english, "header_git.commit_message"))
-            }));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(trs!(english, "header_git.commit_message"))
+            });
+            self.header_git.inputs.insert(cwd.clone(), input.clone());
+            let owner = cwd.clone();
+            cx.subscribe_in(
+                &input,
+                window,
+                move |this, source, event: &InputEvent, _, cx| {
+                    let current = this.header_git.cwd.as_deref() == Some(owner.as_str())
+                        && this
+                            .header_git
+                            .inputs
+                            .get(&owner)
+                            .is_some_and(|editor| editor.entity_id() == source.entity_id());
+                    if !current {
+                        return;
+                    }
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        if this
+                            .header_git
+                            .status
+                            .as_ref()
+                            .is_some_and(|s| s.changed > 0)
+                        {
+                            this.run_header_git(Busy::Commit, cx);
+                        }
+                        return;
+                    }
+                    if matches!(event, InputEvent::Change) {
+                        this.header_git.pending_message = None;
+                        this.header_git.generation_epoch =
+                            this.header_git.generation_epoch.wrapping_add(1);
+                        cx.notify();
+                    }
+                },
+            )
+            .detach();
         }
         // The agent may have changed files since the last tick.
         self.load_header_git(cx);
@@ -182,6 +248,14 @@ impl Workspace {
         ) else {
             return;
         };
+        let input = self.header_git.inputs.get(&cwd).cloned();
+        let original = input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        self.header_git.generation_epoch = self.header_git.generation_epoch.wrapping_add(1);
+        let ticket = self.header_git.generation_epoch;
+        self.header_git.generation = Some((cwd.clone(), original.clone(), ticket));
         self.header_git.busy = Some(Busy::Generate);
         self.header_git.error = None;
         cx.notify();
@@ -194,12 +268,25 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                this.header_git.busy = None;
-                if this.header_git.cwd.as_deref() != Some(&cwd) {
+                let current = this.header_git.cwd.as_deref() == Some(&cwd)
+                    && this
+                        .header_git
+                        .generation
+                        .as_ref()
+                        .is_some_and(|generation| {
+                            generation.0 == cwd
+                                && generation.1 == original
+                                && generation.2 == ticket
+                        });
+                if !current {
                     return;
                 }
+                this.header_git.busy = None;
                 match result {
-                    Ok(reply) => this.header_git.pending_message = Some(reply.message),
+                    Ok(reply) => {
+                        this.header_git.pending_message =
+                            Some((cwd.clone(), reply.message, ticket));
+                    }
                     Err(error) => this.header_git.error = Some(error.to_string()),
                 }
                 cx.notify();
@@ -221,9 +308,9 @@ impl Workspace {
         let english = self.app_settings.language == UiLanguage::English;
         let message = self
             .header_git
-            .input
-            .as_ref()
-            .map(|input| input.read(cx).value().trim().to_string())
+            .inputs
+            .get(&cwd)
+            .map(|input| input.read(cx).value().to_string())
             .unwrap_or_default();
         let commits = matches!(action, Busy::Commit | Busy::CommitPush);
         let conversation = self.selected.clone();
@@ -231,67 +318,29 @@ impl Workspace {
         self.header_git.error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let call_cwd = || CwdParams { cwd: cwd.clone() };
-            // The second half is a push that failed after the commit had already gone in.
-            let result: Result<(GitStatus, Option<String>), String> = async {
-                match action {
-                    Busy::Pull => backend
-                        .call::<WorkspaceGitPull>(call_cwd())
-                        .await
-                        .map(|status| (status, None))
-                        .map_err(|e| e.to_string()),
-                    Busy::Push => backend
-                        .call::<WorkspaceGitPush>(call_cwd())
-                        .await
-                        .map(|status| (status, None))
-                        .map_err(|e| e.to_string()),
-                    Busy::Generate => unreachable!("generation has its own path"),
-                    Busy::Commit | Busy::CommitPush => {
-                        backend
-                            .call::<WorkspaceGitStage>(GitPathsParams {
-                                cwd: cwd.clone(),
-                                paths: Vec::new(),
-                                all: true,
-                            })
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        let message = if message.is_empty() {
-                            let conversation = conversation.ok_or_else(|| {
-                                trs!(english, "header_git.write_a_message").to_string()
-                            })?;
-                            backend
-                                .call::<WorkspaceGitGenerateCommitMessage>(
-                                    GitGenerateCommitMessageParams {
-                                        cwd: cwd.clone(),
-                                        conversation_id: conversation,
-                                        include_unstaged: false,
-                                    },
-                                )
-                                .await
-                                .map_err(|e| e.to_string())?
-                                .message
-                        } else {
-                            message
-                        };
-                        let committed = backend
-                            .call::<WorkspaceGitCommit>(GitCommitParams {
-                                cwd: cwd.clone(),
-                                message,
-                                amend: false,
-                            })
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        if action == Busy::Commit {
-                            return Ok((committed, None));
-                        }
-                        match backend.call::<WorkspaceGitPush>(call_cwd()).await {
-                            Ok(status) => Ok((status, None)),
-                            Err(error) => Ok((committed, Some(error.to_string()))),
-                        }
-                    }
+            let result = match action {
+                Busy::Pull => backend
+                    .call::<WorkspaceGitPull>(CwdParams { cwd: cwd.clone() })
+                    .await
+                    .map(|status| (status, None))
+                    .map_err(|error| error.to_string()),
+                Busy::Push => backend
+                    .call::<WorkspaceGitPush>(CwdParams { cwd: cwd.clone() })
+                    .await
+                    .map(|status| (status, None))
+                    .map_err(|error| error.to_string()),
+                Busy::Generate => unreachable!("generation has its own path"),
+                Busy::Commit | Busy::CommitPush => {
+                    run_git_commit(
+                        backend,
+                        cwd.clone(),
+                        conversation,
+                        message.clone(),
+                        action == Busy::CommitPush,
+                    )
+                    .await
                 }
-            }
-            .await;
+            };
             this.update(cx, |this, cx| {
                 this.header_git.busy = None;
                 if this.header_git.cwd.as_deref() != Some(&cwd) {
@@ -302,7 +351,7 @@ impl Workspace {
                         this.header_git.status = Some(status);
                         this.header_git.loaded_at = Some(Instant::now());
                         if commits {
-                            this.header_git.clear_input = true;
+                            this.header_git.clear_input = Some((cwd.clone(), message.clone()));
                         }
                         match push_error {
                             Some(error) => {
@@ -480,37 +529,34 @@ impl Workspace {
                 }))
         };
         let generating = busy == Some(Busy::Generate);
-        let field = self.header_git.input.as_ref().map(|input| {
-            div()
-                .min_h(px(32.0))
-                .pl(px(8.0))
-                .pr(px(4.0))
-                .py(px(4.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(p.c(Token::Border))
-                .text_size(px(TEXT_XS))
-                .flex()
-                .items_start()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .py(px(2.0))
-                        .child(Textarea::new(input).appearance(false).bordered(false)),
-                )
-                .child(
-                    if generating {
-                        icon_button_xs("header-git-generate", "loading03", p)
-                    } else {
-                        icon_button_xs("header-git-generate", "sparkles", p)
-                    }
-                    .aria_label(trs!(english, "header_git.generate"))
-                    .when(busy.is_some() && !generating, |d| d.opacity(0.4))
-                    .on_click(cx.listener(|this, _, _, cx| this.generate_header_git(cx))),
-                )
-        });
+        let field = self
+            .header_git
+            .inputs
+            .get(&self.header_git.cwd.clone()?)
+            .map(|input| {
+                div()
+                    .relative()
+                    .min_w_0()
+                    .child(
+                        ui::input(input)
+                            .h_8()
+                            .pr(px(32.0))
+                            .bg(p.c(Token::Background))
+                            .disabled(busy.is_some()),
+                    )
+                    .child(
+                        div().absolute().right(px(4.0)).top(px(4.0)).child(
+                            if generating {
+                                icon_button_xs("header-git-generate", "loading03", p)
+                            } else {
+                                icon_button_xs("header-git-generate", "sparkles", p)
+                            }
+                            .aria_label(trs!(english, "header_git.generate"))
+                            .when(busy.is_some() && !generating, |d| d.opacity(0.4))
+                            .on_click(cx.listener(|this, _, _, cx| this.generate_header_git(cx))),
+                        ),
+                    )
+            });
         // Electron's popover ends with the isolated checkout the conversation runs in, and a way
         // back to the project folder.
         let worktree_row = self

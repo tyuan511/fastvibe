@@ -8,18 +8,32 @@ use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 
 pub struct GitView {
+    /// A side-chat file can use a different worktree while the parent pane stays selected.
+    pub transcript_owner: Option<String>,
     repository: String,
     repositories: HashMap<String, GitRepoView>,
 }
 impl Default for GitView {
     fn default() -> Self {
         Self {
+            transcript_owner: None,
             repository: String::new(),
             repositories: HashMap::from([(String::new(), GitRepoView::default())]),
         }
     }
 }
 impl GitView {
+    pub fn set_transcript_owner(&mut self, owner: Option<String>) {
+        if self.transcript_owner == owner {
+            return;
+        }
+        self.transcript_owner = owner;
+        for repository in self.repositories.values_mut() {
+            repository.invalidate_reads();
+            repository.invalidate_history();
+        }
+    }
+
     pub fn repository(&self) -> &str {
         &self.repository
     }
@@ -382,6 +396,25 @@ pub fn layout_graph(commits: &[(String, Vec<String>)]) -> (Vec<GraphRow>, usize)
 #[cfg(test)]
 mod tests {
     use super::{DiffNavigation, EdgeKind, GitRepoView, GitView, layout_graph};
+
+    #[test]
+    fn changing_transcript_owner_invalidates_reads_even_for_the_same_repository() {
+        let mut view = GitView::default();
+        view.select("/shared/repository");
+        let status = view.begin_status();
+        let patch = view.begin_patch("file.rs", fv_protocol::types::DiffSource::Unstaged, None);
+        view.set_transcript_owner(Some("child".into()));
+        assert_eq!(view.repository(), "/shared/repository");
+        assert!(!view.accepts_status(status));
+        assert_ne!(view.patch_epoch, patch);
+        assert!(!view.status_loading && !view.patch_loading);
+        let current = view.begin_status();
+        view.set_transcript_owner(Some("child".into()));
+        assert!(
+            view.accepts_status(current),
+            "unchanged owner keeps current reads"
+        );
+    }
 
     #[test]
     fn a_merge_opens_a_second_lane_and_a_root_draws_nothing_below() {
