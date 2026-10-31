@@ -146,7 +146,7 @@ test("Main stops the selected chat's preparation before waiting for queue cleanu
   const cleanup = deferred();
   const cancelled: Array<string | undefined> = [];
   Object.assign(host, {
-    activeId: "active", promptPreparations: { cancel: (id?: string) => cancelled.push(id) }, dagScheduler: { cancel() {} },
+    activeId: "active", promptPreparations: { cancel: (id?: string) => cancelled.push(id) },
     bumpQueueEpoch() {}, withQueue: async () => cleanup.promise, resolvePendingUi() {},
     isLive: () => false, interruptedRuns: new Map(),
     sessionFor: async () => ({ session: { abort: async () => {} } }),

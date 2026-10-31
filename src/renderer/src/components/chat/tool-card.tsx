@@ -19,7 +19,6 @@ import { CodeBlock, MarkdownView } from "./markdown-view";
 import { QuestionAnswers } from "./question-answers";
 import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
-import { DagInline, useDagBatch } from "@/components/dag/dag-inline";
 import { useTranscriptConversation } from "./conversation-context";
 import { cn } from "@/lib/utils";
 
@@ -444,8 +443,6 @@ export const ToolCard = memo(function ToolCard({
   const cwd = useWorkspacePath();
   const view = describeTool(tool, cwd);
   const running = tool.status === "running";
-  // Every finished 「创建子任务」 call is drawn as the graph of the tasks it created.
-  const dagBatch = useDagBatch(tool, useTranscriptConversation());
   // read / search / list are single-line rows in zcode: the subject opens the file
   // viewer instead of expanding an inline body.
   const inline = INLINE_FAMILIES.has(familyOf(tool.name));
@@ -479,7 +476,6 @@ export const ToolCard = memo(function ToolCard({
       Boolean(tool.result?.length) ||
       Boolean(diffText(tool)) ||
       (tool.args !== undefined && !inline);
-  if (dagBatch) return <DagInline conversationId={dagBatch.conversationId} nodes={dagBatch.nodes} />;
   // A subagent tool row expands into its runs; each row in that panel is itself
   // the doorway to that run's tab (see SubagentPanel).
   return (

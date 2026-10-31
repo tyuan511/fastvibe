@@ -2,7 +2,6 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase, openDatabaseConnection, type Db } from "../src/main/engine/db.ts";
-import { DagStore } from "../src/main/engine/dag-store.ts";
 
 /**
  * The fixture every migrated store test shares.
@@ -29,7 +28,6 @@ export function openTestDb(dir: string): Db {
 export function openSecondTestDb(dir: string): Db {
   return openDatabaseConnection(join(dir, "fastvibe.db"));
 }
-
 /**
  * A `Db` that records the `run()` statements it was asked to execute, and can be told to
  * fail them.
@@ -70,15 +68,4 @@ export function spyDb(db: Db): {
       close: () => db.close(),
     },
   };
-}
-
-/**
- * A DAG store over `<dir>/fastvibe.db`, with its node outputs in `<dir>/dag.json.results`.
- *
- * The results directory is not in the database on purpose (§5.6): a run's full output can be
- * megabytes, and the order that matters is «write the artifact, then publish the completion».
- * Tests read and write real files there, so the path stays a parameter.
- */
-export function openDagStore(dir: string): DagStore {
-  return new DagStore(openTestDb(dir), { resultsDir: join(dir, "dag.json.results") });
 }

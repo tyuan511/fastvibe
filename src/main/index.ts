@@ -47,7 +47,6 @@ import { applyAppIcon, createDesktopWindow } from "./desktop-window";
 import { installApplicationMenu } from "./app-menu";
 import { watchUnreadBadge } from "./dock-badge";
 import { registerDesktopIpc } from "./ipc/desktop-handlers";
-import { registerDagIpc } from "./ipc/dag-handlers";
 import { registerScheduleIpc } from "./ipc/schedule-handlers";
 import { MemoryManager, removeLegacyMemory } from "./engine/memory";
 import { TerminalSessions } from "./engine/terminal-sessions";
@@ -535,7 +534,6 @@ app.whenReady().then(async () => {
     queueSettingsWrite,
     refreshModelsDev,
   });
-  registerDagIpc(engine);
   registerScheduleIpc(engine);
   registerUpdater(
     () => windows,

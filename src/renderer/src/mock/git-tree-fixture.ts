@@ -138,11 +138,6 @@ const files: GitStatus["files"] = [
     "worktree": "M"
   },
   {
-    "path": "resources/extensions/dag.ts",
-    "index": " ",
-    "worktree": "M"
-  },
-  {
     "path": "resources/extensions/schedules.ts",
     "index": " ",
     "worktree": "M"
@@ -169,11 +164,6 @@ const files: GitStatus["files"] = [
   },
   {
     "path": "src/main/app-server/app-server.ts",
-    "index": " ",
-    "worktree": "M"
-  },
-  {
-    "path": "src/main/dag-tools.ts",
     "index": " ",
     "worktree": "M"
   },
@@ -449,16 +439,6 @@ const files: GitStatus["files"] = [
   },
   {
     "path": "test/check-release-note.test.ts",
-    "index": " ",
-    "worktree": "M"
-  },
-  {
-    "path": "test/dag-sdk-tools.test.ts",
-    "index": " ",
-    "worktree": "M"
-  },
-  {
-    "path": "test/dag-tools.test.ts",
     "index": " ",
     "worktree": "M"
   },

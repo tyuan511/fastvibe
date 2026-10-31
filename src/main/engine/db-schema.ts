@@ -7,7 +7,7 @@
  *
  * Every table follows the same shape (§4.3 of `docs/sqlite-storage.md`): the key, the few
  * columns that exist to be queried, ordered by, or cascaded from, and a `data TEXT`
- * holding the whole object as JSON. Adding a field to `Conversation`, `DagNode` or
+ * holding the whole object as JSON. Adding a field to `Conversation` or `ScheduledTask`
  * `ScheduledTask` therefore costs no migration — the columns only earn their place when
  * something reads them. Times are epoch milliseconds in an INTEGER; JS doubles hold every
  * real timestamp, and reading them back as `number` beats unwrapping BigInt everywhere.
@@ -191,47 +191,39 @@ function v7(db: Db): void {
 }
 
 /**
- * Step 8: the sub-agent task graphs (§5.6).
- *
- * `dag_meta.seq` is the node-number counter, and it is the row that makes the table more
- * than a store: deriving the next number from the nodes that happen to exist would hand out
- * a number that a deleted node already used, and that number is a sub-agent run id too. So it
- * is bumped in the same transaction that inserts the nodes it names.
- *
- * A node's `position` is its place in the graph's own array — the order the panel draws.
+ * Step 8 is reserved for the removed task graph migration. Existing databases may still have
+ * those legacy tables, but new databases no longer create them.
  */
-function v8(db: Db): void {
+function v8(_db: Db): void {}
+
+/** Step 9 remains reserved for databases that already ran the removed draft migration. */
+function v9(_db: Db): void {}
+
+function v10(db: Db): void {
   db.exec(`
-    CREATE TABLE dag_graphs (
-      conversation_id TEXT PRIMARY KEY,
-      revision        INTEGER NOT NULL,
-      paused          INTEGER NOT NULL,
-      created_at      INTEGER NOT NULL,
-      updated_at      INTEGER NOT NULL,
-      data            TEXT NOT NULL
+    CREATE TABLE IF NOT EXISTS agent_threads (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      parent_id TEXT,
+      root_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      data TEXT NOT NULL
     );
-    CREATE TABLE dag_nodes (
-      conversation_id TEXT NOT NULL REFERENCES dag_graphs(conversation_id) ON DELETE CASCADE,
-      id              TEXT NOT NULL,
-      position        INTEGER NOT NULL,
-      data            TEXT NOT NULL,
-      PRIMARY KEY (conversation_id, id)
+    CREATE INDEX IF NOT EXISTS agent_threads_conversation ON agent_threads(conversation_id, updated_at);
+    CREATE INDEX IF NOT EXISTS agent_threads_parent ON agent_threads(parent_id);
+    CREATE TABLE IF NOT EXISTS agent_thread_messages (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      delivered_at INTEGER,
+      data TEXT NOT NULL
     );
-    CREATE TABLE dag_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)
+    CREATE INDEX IF NOT EXISTS agent_thread_messages_thread ON agent_thread_messages(thread_id, created_at);
   `);
 }
 
-/**
- * Step 9: intentionally empty.
- *
- * A development build created `drafts` / `drafts_meta` here for a feature that was then
- * removed. Databases that already ran the step are at version 9 and a build that does not
- * know it refuses to open them, so the number stays taken. Those tables are unused and may be
- * left where they are.
- */
-function v9(_db: Db): void {}
-
 /** The whole schema, in order. Its length is the version this build of the app knows. */
-export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8, v9];
+export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

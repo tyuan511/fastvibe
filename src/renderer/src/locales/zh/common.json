@@ -130,51 +130,7 @@
     "todoUpdating": "正在更新待办",
     "todoUpdated": "已更新待办",
     "agentFallback": "子 Agent",
-    "agentMore": "{{shown}} 等 {{count}} 个",
-    "dag": {
-      "add": {
-        "running": "正在创建子任务",
-        "done": "创建子任务"
-      },
-      "status": {
-        "running": "正在查看子任务",
-        "done": "查看子任务"
-      },
-      "result": {
-        "running": "正在读取子任务结果",
-        "done": "读取子任务结果"
-      },
-      "wait": {
-        "running": "等待子任务完成",
-        "done": "等待子任务"
-      },
-      "cancel": {
-        "running": "正在取消子任务",
-        "done": "取消子任务"
-      },
-      "resume": {
-        "running": "正在恢复子任务",
-        "done": "恢复子任务"
-      },
-      "retry": {
-        "running": "正在重试子任务",
-        "done": "重试子任务"
-      },
-      "all": "全部",
-      "more": "{{shown}} 等 {{count}} 个",
-      "update": {
-        "running": "正在调整子任务",
-        "done": "已调整子任务"
-      },
-      "send": {
-        "running": "正在补充信息",
-        "done": "已补充信息"
-      },
-      "report": {
-        "running": "正在汇报结果",
-        "done": "已汇报结果"
-      }
-    }
+    "agentMore": "{{shown}} 等 {{count}} 个"
   },
   "group": {
     "separator": "，",

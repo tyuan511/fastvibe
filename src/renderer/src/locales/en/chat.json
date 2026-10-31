@@ -293,14 +293,5 @@
   },
   "model": {
     "switched": "Model switched to"
-  },
-  "dag": {
-    "settled": "Sub-tasks finished",
-    "completed": "{{count}} completed",
-    "failed": "{{count}} failed",
-    "skipped": "{{count}} skipped",
-    "cancelled": "{{count}} cancelled",
-    "updated": "Sub-task update",
-    "blocked": "{{count}} blocked"
   }
 }

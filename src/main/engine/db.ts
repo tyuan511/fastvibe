@@ -239,7 +239,7 @@ function prepare(db: Connection): Db {
   db.exec("PRAGMA synchronous = NORMAL");
   // Another process writing while we start: wait rather than throw SQLITE_BUSY.
   db.exec("PRAGMA busy_timeout = 5000");
-  // The checkpoint and DAG child tables hang off `ON DELETE CASCADE`.
+  // Checkpoint child tables hang off `ON DELETE CASCADE`.
   db.exec("PRAGMA foreign_keys = ON");
   // Checkpoints hold workspace source, so the file is private from the first byte. The
   // `-wal` / `-shm` sidecars take the main file's mode, which is why this runs before

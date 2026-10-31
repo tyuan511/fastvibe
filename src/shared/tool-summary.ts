@@ -25,11 +25,11 @@ export const SUMMARY_RESULT_INLINE = 240;
 export const SUMMARY_STRING_HEAD = 200;
 
 /**
- * Calls whose arguments and details *are* what is drawn — a checklist, a question card, a
- * task graph, the roles of a delegation — rather than a line plus a body behind a tap.
+ * Calls whose arguments and details *are* what is drawn — a checklist, a question card or
+ * the roles of a delegation — rather than a line plus a body behind a tap.
  * They are small, and cutting them would cut the card.
  */
-const STRUCTURED = /^(todo|question|subagent|dag_)/;
+const STRUCTURED = /^(todo|question|subagent)/;
 
 /** What a summary left out of a block; absent when the block is whole. */
 export type ToolOmission = {

@@ -66,9 +66,6 @@ import type { DeleteConversationsResult } from "@/components/settings/archived-s
 import { useConversationWorking, useSessionStore, visibleQueue } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useTranscriptNavigation } from "@/stores/transcript-navigation";
-import { useDagStore, useDagSync } from "@/stores/dag";
-import type { DagNode } from "@shared/dag";
-import { DagDialog } from "@/components/dag/dag-dialog";
 import { useThemeSync } from "@/lib/use-theme";
 import { useLanguageSync } from "@/lib/use-language";
 import { useTranslation } from "react-i18next";
@@ -118,8 +115,6 @@ const { refreshStats, reloadActiveState, reloadActiveMessages } =
 export function App(): JSX.Element {
   // Applies light/dark theme selection (and reacts to OS changes in system mode).
   useThemeSync();
-  // Each conversation's DAG of sub-agent tasks, and its 任务图 tab in the side pane.
-  useDagSync();
   useLanguageSync();
   // Another window's preference write. Every window keeps its own copy of
   // `settings.json`, so without this they drifted (two themes, two font sizes) and
@@ -1711,21 +1706,6 @@ export function App(): JSX.Element {
   const onSidebarOpenMarket = useStable(() => navigate("/plugins"));
   const onSidebarOpenTasks = useStable(() => navigate(TASKS_PATH));
   const onSidebarSearch = useStable(() => setCommandOpen(true));
-  const onSidebarOpenSubTask = useStable((conversationId: string, node: DagNode) => {
-    void (async () => {
-      // The pane belongs to the chat that owns the task, so that chat has to be
-      // the one on screen. The task itself opens there, not over the thread.
-      // A narrow layout has no side pane, so the graph dialog is the only place
-      // the same node can be shown.
-      if (useSessionStore.getState().activeId !== conversationId) await handleOpen(conversationId);
-      if (isNarrowViewport()) {
-        useDagStore.getState().openViewer(conversationId, node.id, node.runId ? "run" : "detail");
-        return;
-      }
-      useDagStore.getState().closeViewer();
-      useSidePaneStore.getState().openDagNode(conversationId, node);
-    })();
-  });
   const onSidePaneNewChat = useStable(() => void handleNewChat());
 
   const composer = (
@@ -1867,7 +1847,6 @@ export function App(): JSX.Element {
             pluginsActive={pluginsOpen}
             onOpenTasks={onSidebarOpenTasks}
             tasksActive={tasksOpen}
-            onOpenSubTask={onSidebarOpenSubTask}
             onSearch={onSidebarSearch}
           />
           {narrow || sidebarCollapsed ? null : <ResizableHandle data-pane-edge="sidebar" />}
@@ -2075,8 +2054,6 @@ export function App(): JSX.Element {
           />
         </Suspense>
       ) : null}
-      {/* A conversation's sub-agent task graph, maximised (opened from the inline graph or the sidebar). */}
-      <DagDialog />
       <CommandPalette
         open={commandOpen}
         conversations={conversations}

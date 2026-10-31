@@ -1,5 +1,4 @@
 import type { ChatMessage, SubagentInfo } from "../../../shared/types.ts";
-import type { DagNode } from "../../../shared/dag.ts";
 import { subagentEntries, subagentResultStatus } from "../../../shared/subagent-state.ts";
 import { familyOf } from "./tool-family.ts";
 
@@ -9,42 +8,25 @@ export type ResourceAgent = {
   brief?: string;
   status: string;
   info?: SubagentInfo;
-  node?: DagNode;
+  parentId?: string;
 };
 
-/** Snapshot fallbacks survive a restart; the scoped live registry wins over them.
- * DAG nodes already represent their own runs, so do not list those runs twice. */
-export function conversationAgents(
-  conversationId: string,
-  messages: readonly ChatMessage[],
-  registry: readonly SubagentInfo[],
-  nodes: readonly DagNode[],
-): ResourceAgent[] {
+/** Agents that belong to one conversation, with live state overriding transcript fallback. */
+export function conversationAgents(conversationId: string, messages: readonly ChatMessage[], registry: readonly SubagentInfo[]): ResourceAgent[] {
   const runs = new Map<string, ResourceAgent>();
-  for (const message of messages) {
-    for (const tool of message.tools) {
-      if (familyOf(tool.name) !== "agent") continue;
-      subagentEntries(tool.args).forEach((entry, index) => {
-        const id = tool.id + ":" + index;
-        runs.set(id, { id, name: entry.agent, brief: entry.task, status: subagentResultStatus(tool, index) });
-      });
-    }
+  for (const message of messages) for (const tool of message.tools) {
+    if (familyOf(tool.name) !== "agent") continue;
+    subagentEntries(tool.args).forEach((entry, index) => {
+      const id = tool.id + ":" + index;
+      runs.set(id, { id, name: entry.agent, brief: entry.task, status: subagentResultStatus(tool, index) });
+    });
   }
   for (const info of registry) {
     if (info.conversationId !== conversationId) continue;
     const previous = runs.get(info.id);
-    runs.set(info.id, {
-      id: info.id, name: info.name ?? info.agent ?? previous?.name ?? info.id,
-      brief: info.detail ?? previous?.brief, status: info.status ?? "unknown", info,
-    });
+    runs.set(info.id, { id: info.id, name: info.name ?? info.agent ?? previous?.name ?? info.id, brief: info.detail ?? previous?.brief, status: info.status ?? "unknown", info });
   }
-  const dagRuns = new Set(nodes.flatMap((node) => node.runId ? [node.runId] : []));
-  const result: ResourceAgent[] = nodes.map((node) => ({
-    id: "dag:" + node.id, name: node.profile.name, brief: node.title,
-    status: node.status, info: node.runId ? runs.get(node.runId)?.info : undefined, node,
-  }));
-  result.push(...[...runs.values()].filter((run) => !dagRuns.has(run.id)));
-  return result.sort((a, b) => resourceAgentPriority(a) - resourceAgentPriority(b));
+  return [...runs.values()].sort((a, b) => resourceAgentPriority(a) - resourceAgentPriority(b));
 }
 
 export function resourceAgentFinished(agent: ResourceAgent): boolean {

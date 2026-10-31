@@ -45,7 +45,6 @@ import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
 import { SidePaneFiles } from "./side-pane-files";
 import { SidePaneGit } from "./side-pane-git";
-import { SidePaneDagNode } from "./side-pane-dag-node";
 import { SidePaneSubagent } from "./side-pane-subagent";
 import { releaseTerminal } from "./side-pane-terminal-registry";
 
@@ -157,7 +156,7 @@ function MaximizeButton(): JSX.Element {
 }
 
 function tabIcon(type: SidePaneTab["type"]) {
-  if (type === "subagent" || type === "dag-node") return BotIcon;
+  if (type === "subagent") return BotIcon;
   if (type === "git") return GitCompareIcon;
   if (type === "terminal") return TerminalIcon;
   if (type === "browser") return ChromeIcon;
@@ -254,7 +253,7 @@ export const SidePane = memo(function SidePane({
         // Aux chats and delegated runs belong to the chat on screen: a parent's
         // tab bar must not list another conversation's subagents.
         if (item.type === "selection-side-chat") return Boolean(parentId && item.parentSessionId === parentId);
-        if (item.type === "subagent" || item.type === "dag-node") return !parentId || item.subagentConversationId === parentId;
+        if (item.type === "subagent") return !parentId || item.subagentConversationId === parentId;
         return true;
       }),
     [parentId, tabs],
@@ -540,7 +539,7 @@ export const SidePane = memo(function SidePane({
             <SidePaneChat tab={active} project={project} parentId={parentId} />
           ) : null}
           {visibleTabs.map((tab) =>
-            tab.type === "terminal" || tab.type === "browser" || tab.type === "files" || tab.type === "subagent" || tab.type === "dag-node" ? (
+            tab.type === "terminal" || tab.type === "browser" || tab.type === "files" || tab.type === "subagent" ? (
               <div key={tab.id} hidden={tab.id !== activeTabId} className="flex min-h-0 flex-1 flex-col">
                 {tab.type === "terminal" ? (
                   <Suspense fallback={<div className="min-h-0 flex-1" />}>
@@ -550,8 +549,6 @@ export const SidePane = memo(function SidePane({
                   <SidePaneBrowser tabId={tab.id} url={tab.url ?? ""} visible={tab.id === activeTabId} />
                 ) : tab.type === "files" ? (
                   <SidePaneFiles tab={tab} cwd={cwd} roots={folders} remote={isRemoteProject(workspace)} onError={onError} />
-                ) : tab.type === "dag-node" ? (
-                  <SidePaneDagNode tab={tab} />
                 ) : (
                   <SidePaneSubagent tab={tab} />
                 )}

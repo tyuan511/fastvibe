@@ -20,14 +20,14 @@ export type ThinkingPart = Extract<MessagePart, { kind: "thinking" }>;
  *
  * A few calls stay on their own line and break the run, because the row is the
  * thing to see: a question waits on the reader, and a todo / sub-agent / presented
- * file / task graph is its own card. Reads and writes stay in the
- * batch — the summary names them, it does not hide them behind 「已运行」.
+ * file is its own card. Reads and writes stay in the batch — the summary names them, it
+ * does not hide them behind 「已运行」.
  */
 const STANDALONE_FAMILIES = new Set<ToolFamily>(["question", "todo", "agent", "present"]);
 
 export function foldsIntoRun(name: string): boolean {
   const key = name.trim().toLowerCase();
-  if (!key || key.startsWith("dag_")) return false;
+  if (!key) return false;
   return !STANDALONE_FAMILIES.has(familyOf(key));
 }
 

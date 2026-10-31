@@ -7,7 +7,7 @@ import { tabTitleIsData } from "../src/renderer/src/lib/pane-tab-title.ts";
  *
  * A tab label is either the pane's own chrome — looked up from the type every render,
  * so it follows the language — or data the user reads as a name (a file, a run's role,
- * a DAG node, a side conversation), which must not be re-translated. Getting this
+ * a side conversation), which must not be re-translated. Getting this
  * wrong is how the 文件 tab used to stick: the old code asked
  * `tab.title !== t("tabs.files")`, and a tab opened under 中文 failed that check for
  * the *right* reason and the *wrong* conclusion — its stored chrome won, so the tab
@@ -43,15 +43,14 @@ test("a chrome label stored under another language is still chrome", () => {
 
 test("a tab whose title is real data keeps it", () => {
   assert.equal(tabTitleIsData({ type: "subagent", title: "explorer" }), true);
-  assert.equal(tabTitleIsData({ type: "dag-node", title: "审计中间件" }), true);
   assert.equal(tabTitleIsData({ type: "selection-side-chat", title: "辅助对话 2" }), true);
 });
 
 test("a tab that has stored nothing is not data, so its label is read live", () => {
-  // A run registered before its role arrived, a DAG node with a blank title: the tab
+  // A run registered before its role arrived, or a side chat with a blank title: the tab
   // falls back to the pane's own label at render time rather than freezing whatever
   // language was active when the tab was minted.
-  for (const type of ["subagent", "dag-node", "selection-side-chat", "files"]) {
+  for (const type of ["subagent", "selection-side-chat", "files"]) {
     assert.equal(tabTitleIsData({ type, title: "" }), false, type);
     assert.equal(tabTitleIsData({ type, title: "   " }), false, `${type} (blank)`);
   }

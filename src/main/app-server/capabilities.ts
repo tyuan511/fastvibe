@@ -5,8 +5,6 @@ function capabilityOf(method: string): AppCapability | null {
   if (method.startsWith("engine:")) return "engine";
   if (method.startsWith("conversations:")) return "conversations";
   if (method.startsWith("projects:")) return "conversations";
-  // 图属于会话，同一个能力。
-  if (method.startsWith("dag:")) return "engine";
   if (method.startsWith("schedule:")) return "engine";
   if (method.startsWith("workspace:terminal")) return "terminal";
   if (method.startsWith("workspace:git")) return "git";

@@ -4,7 +4,7 @@
  * The distinction is what makes 切换界面语言 work without closing anything: a chrome
  * label (文件 / 终端 / 浏览器 / 审查) is looked up from the type every render, so it
  * follows the language the moment it changes. A stored `title` is only shown where it
- * really is data — a role name, a DAG node's title, a side conversation's title, the
+ * really is data — a role name, a side conversation's title, the
  * name of the file being previewed — because data does not get re-translated: the
  * chat it names was created under whichever language was active then, exactly like a
  * conversation title in the sidebar.
@@ -30,8 +30,8 @@ export type PaneTabTitleInput = {
   path?: string;
 };
 
-/** Tabs whose `title` is always data: a run's role, a DAG node, a side conversation. */
-const DATA_TITLE_TYPES = new Set(["subagent", "dag-node", "selection-side-chat"]);
+/** Tabs whose `title` is always data: a run's role or a side conversation. */
+const DATA_TITLE_TYPES = new Set(["subagent", "selection-side-chat"]);
 
 /**
  * Whether a tab's stored `title` is what it should display.

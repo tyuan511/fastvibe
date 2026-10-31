@@ -8,7 +8,7 @@ const event = (seq: number, extra: Record<string, unknown> = {}) => ({
 });
 const start = () => reduceSubagent(undefined, event(1), 100)!;
 
-test("same DAG run ids on local and remote engines retain independent lifecycle and snapshot state", () => {
+test("same run ids on local and remote engines retain independent lifecycle and snapshot state", () => {
   const local = "chat-a";
   const remote = "remote:server-a:chat-a";
   const remoteB = "remote:server-b:chat-a";

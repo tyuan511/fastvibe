@@ -258,7 +258,7 @@ export type ChatMessage = {
    * 已处理 clock must not count the failure and the wait before the user came back.
    */
   runStartedAt?: number;
-  kind?: "message" | "notice" | "compact" | "custom" | "dag";
+  kind?: "message" | "notice" | "compact" | "custom";
   /** Extension custom message (`pi.sendMessage`): the plugin's own type id. */
   customType?: string;
   /** Structured spans of the extension's registered message renderer. */
@@ -294,21 +294,6 @@ export type ChatMessage = {
   };
   /** Present when `kind` is `"compact"`: running / finished / cancelled compaction. */
   compact?: CompactInfo;
-  /**
-   * Present when `kind` is `"dag"`: the graph-settled notice, drawn as a system
-   * event rather than the prompt that was sent to the model.
-   */
-  dag?: DagSettledInfo;
-};
-
-/** Outcome counts for a finished sub-task graph. Zeros are omitted on screen. */
-export type DagSettledInfo = {
-  settled?: boolean;
-  blocked?: number;
-  completed: number;
-  failed: number;
-  skipped: number;
-  cancelled: number;
 };
 
 export type CompactReason = "manual" | "threshold" | "overflow";

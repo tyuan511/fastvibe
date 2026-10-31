@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
 import { SubagentControl } from "../src/main/pi/subagent-control.ts";
-import { DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagInputAllowance, estimateDagTokens } from "../src/main/pi/dag-node-runtime.ts";
 import { reduceSubagent } from "../src/shared/subagent-state.ts";
 import { ToolDeltaThrottle } from "../src/main/pi/tool-delta-throttle.ts";
 
@@ -51,7 +50,7 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
     dispose: () => { disposed++; },
   };
   const deps = {
-    SubagentControl, DAG_WORKER_TOOLS, DAG_COORDINATOR_TOOLS, dagReportExtension, dagInputAllowance, estimateDagTokens,
+    SubagentControl,
     SettingsManager: { create: () => ({}) },
     builtinExtensionFile: () => undefined,
     currentAiLanguageDirective: () => "", currentCustomSystemPrompt: () => "",
@@ -102,11 +101,10 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
   });
   return {
     host, phases, cleared, release,
-    report: (input: any) => tools.get("dag_report").execute("report", input),
     event: (event: any) => listener(event),
     get activeTools() { return activeTools; },
     get prompts() { return prompts; }, get disposed() { return disposed; }, get unsubscribed() { return unsubscribed; },
-    run: (signal?: AbortSignal, dag?: any) => host.runSubagent("parent", { subagentId: "call:0", agent: "fake", task: "test", systemPrompt: "", signal, dag }),
+    run: (signal?: AbortSignal) => host.runSubagent("parent", { subagentId: "call:0", agent: "fake", task: "test", systemPrompt: "", cwd: "/fake", signal }),
   };
 }
 
@@ -207,42 +205,4 @@ test("transcript mapping failure cannot strand the run or leave a waiting parent
   assert.equal(f.disposed, 1);
   assert.equal(f.host.subagentControls.size, 0);
   assert.equal(f.host.subagentSessions.size, 0);
-});
-
-const dagRequest = (extra: Record<string, unknown> = {}) => ({ prepareTask: () => "bounded task", childrenReady: () => true, ...extra });
-
-test("DAG execution cannot silently complete without an explicit outcome", async () => {
-  const f = fixture(); const result = await f.run(undefined, dagRequest());
-  assert.equal(result.exitCode, 1);
-  assert.match(result.errorMessage, /dag_report/);
-  assert.ok(f.activeTools.includes("dag_report"));
-  assert.ok(!f.activeTools.includes("dag_add_tasks"));
-});
-
-test("DAG reports survive the runner and a blocked result remains non-successful", async () => {
-  const f = fixture({ prompt: async () => { await f.report({ outcome: "blocked", summary: "missing file" }); } });
-  const result = await f.run(undefined, dagRequest({ coordinator: true }));
-  assert.equal(result.exitCode, 1); assert.equal(result.report.outcome, "blocked");
-  assert.ok(f.activeTools.includes("dag_add_tasks"));
-  assert.ok(!f.activeTools.includes("dag_resume"));
-});
-
-test("DAG input preflight preserves project rules and refuses an oversized context before prompting", async () => {
-  const f = fixture({ systemPrompt: "x".repeat(600000) });
-  const result = await f.run(undefined, dagRequest());
-  assert.equal(f.prompts, 0); assert.equal(result.exitCode, 1);
-  assert.match(result.errorMessage, /上下文预算/);
-});
-
-test("DAG checkpoints and cumulative metering run at SDK event boundaries", async () => {
-  let checkpoints = 0; const usage: any[] = [];
-  const f = fixture({ prompt: async () => {
-    const event = { type: "message_end", message: { role: "assistant" } };
-    f.event(event); f.event(event);
-    f.event({ type: "turn_end" });
-    await f.report({ outcome: "completed", summary: "done", evidence: ["checked"] });
-  } });
-  const result = await f.run(undefined, dagRequest({ onUsage: (value: unknown) => usage.push(value), onCheckpoint: () => { checkpoints++; } }));
-  assert.equal(result.exitCode, 0); assert.equal(checkpoints, 1);
-  assert.deepEqual(usage, [{ turns: 1, tokens: 2 }]);
 });

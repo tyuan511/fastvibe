@@ -42,7 +42,7 @@ test("details are cut the same way", () => {
 
 test("a call that is drawn from its arguments keeps them whole", () => {
   const long = "z".repeat(2000);
-  for (const name of ["todo", "question", "subagent", "dag_add_tasks"]) {
+  for (const name of ["todo", "question", "subagent"]) {
     const block = tool({ name, args: { items: [{ text: long }] }, details: { note: long }, result: long });
     const slim = summarizeToolBlock(block);
     assert.deepEqual(slim.args, block.args, name);

@@ -15,7 +15,6 @@ import type { RemoteConnectionStatus } from "../../shared/remote-connection.ts";
 import {
   namespaceCatalogSnapshot,
   namespaceConversationRecord,
-  namespaceDagGraph,
   namespaceIdList,
   namespaceQueueState,
   namespaceScheduleTask,
@@ -208,7 +207,6 @@ export class RemoteGateway {
     if (method === Ipc.conversationsList) return this.aggregate(this.#deps.localSnapshot());
     if (method === Ipc.engineGetRunning) return this.#allRunningConversations(ctx);
     if (method === Ipc.engineGetPendingUi) return this.#allPendingUi(ctx);
-    if (method === Ipc.dagList) return this.#allDagGraphs(ctx);
     if (method === Ipc.scheduleList) return this.#allSchedules(ctx);
 
     const scope = resolveServerScope(payload);
@@ -530,28 +528,6 @@ export class RemoteGateway {
       }
     }));
     return running.concat(remote.flatMap((ids) => Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []));
-  }
-
-  /**
-   * Every graph this window can show: this machine's, and each bound server's with its
-   * conversation ids rewritten — the same ids the server's `dag_changed` events arrive under.
-   */
-  async #allDagGraphs(ctx: unknown): Promise<unknown[]> {
-    const local = await this.#deps.localDispatch(Ipc.dagList, undefined, ctx);
-    const graphs = Array.isArray(local) ? local : [];
-    const remote = await Promise.all(this.#boundReadyServers().map(async (server) => {
-      try {
-        const list = await this.#deps.connections.call(server, Ipc.dagList, undefined);
-        return (Array.isArray(list) ? list : []).flatMap((graph) =>
-          isRecord(graph) && typeof graph.conversationId === "string"
-            ? [namespaceDagGraph(graph, server.serverInstanceId)]
-            : [],
-        );
-      } catch {
-        return [];
-      }
-    }));
-    return graphs.concat(remote.flat());
   }
 
   /** A local mutation must not replace the page's remote rows with a local-only snapshot. */

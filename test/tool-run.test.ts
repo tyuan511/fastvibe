@@ -124,8 +124,8 @@ test("a file change stays in the batch so the summary can name it", () => {
   if (folded[0]?.kind === "run") assert.deepEqual(folded[0].tools.map((item) => item.id), ["b1", "e1", "b2"]);
 });
 
-test("questions, todos, sub-agents and task graphs stay out", () => {
-  for (const name of ["question", "todo", "subagent", "present", "dag_add_tasks"]) {
+test("questions, todos and sub-agents stay out", () => {
+  for (const name of ["question", "todo", "subagent", "present"]) {
     assert.equal(foldsIntoRun(name), false, name);
   }
   assert.equal(foldsIntoRun("bash"), true);
@@ -359,7 +359,7 @@ test("a thought with no call around it keeps its own row", () => {
   const folded = collapse([thought("one"), thought("two")], { collapseThinking: true });
   assert.deepEqual(folded.map((part) => part.kind), ["thinking", "thinking"]);
 
-  // A question or a task graph is its own card, so the thought before it stays alone too.
+  // A question or a collaboration call is its own card, so the thought before it stays alone too.
   const before = collapse([thought("one"), tool("q1", "question")], { collapseThinking: true });
   assert.deepEqual(before.map((part) => part.kind), ["thinking", "tool"]);
 });

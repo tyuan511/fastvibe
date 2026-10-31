@@ -1,4 +1,4 @@
-import type { ChatAttachment, ChatMessage, DagSettledInfo, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
+import type { ChatAttachment, ChatMessage, MessagePart, ThinkingTiming, ToolCallBlock, TuiRun } from "@shared/types";
 import { assistantStopVerdict, isRepetitionStop } from "../../shared/abort.ts";
 import { extractPromptAttachments, imagePromptText } from "../../shared/attachment-metadata.ts";
 import { stripMemoryCitation } from "../../shared/memory-citation.ts";
@@ -58,23 +58,7 @@ export function mapEngineMessages(
     // Extension custom messages carry a `customType` and a plugin renderer. Hidden
     // ones (`display: false`) are context injections and never belong in the thread.
     if (message.role === "custom") {
-      // The settled notice is a prompt for the model (the task list and the
-      // dag_result instruction). The thread draws one system event instead — the
-      // same weight as a model switch — whether or not an older copy was visible.
-      if (message.customType === "dag-settled") {
-        const createdAt = typeof message.timestamp === "number" ? message.timestamp : Date.now();
-        output.push({
-          id: idOf?.(entry) ?? String(message.id ?? `dag:${createdAt}`),
-          role: "system",
-          text: "",
-          tools: [],
-          parts: [],
-          createdAt,
-          kind: "dag",
-          dag: dagSettledInfo(message.details),
-        });
-        continue;
-      }
+      // The model-facing custom entries that have a renderer are handled below.
       // Same rule for a scheduled run's outcome: the model reads the full note, the thread
       // draws its one-line `notice` as an ordinary system bubble.
       if (message.customType === "schedule-result") {
@@ -408,20 +392,4 @@ function rawToolText(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-/** Counts from the notice's `details.nodes`. Anything still running is not an outcome. */
-function dagSettledInfo(details: unknown): DagSettledInfo {
-  const info: DagSettledInfo = { completed: 0, failed: 0, skipped: 0, cancelled: 0 };
-  if (isRecord(details) && typeof details.settled === "boolean") info.settled = details.settled;
-  const nodes = isRecord(details) && Array.isArray(details.nodes) ? details.nodes : [];
-  for (const node of nodes) {
-    if (!isRecord(node)) continue;
-    const status = node.status;
-    if (status === "blocked") info.blocked = (info.blocked ?? 0) + 1;
-    if (status === "completed" || status === "failed" || status === "skipped" || status === "cancelled") {
-      info[status] += 1;
-    }
-  }
-  return info;
 }

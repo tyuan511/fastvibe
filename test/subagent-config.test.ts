@@ -60,7 +60,7 @@ test("the next delegation reads updated custom reasoning even with a stale decla
   assert.equal(manager.thinkingLevelFor(config.name, "low", "user"), "xhigh");
 });
 
-test("project and DAG profiles keep their declared reasoning despite a matching saved role", (t) => {
+test("project profiles keep their declared reasoning despite a matching saved role", (t) => {
   const manager = fixture(t);
   const worker = manager.list().find((agent) => agent.id === "worker")!;
   manager.save({ ...worker, thinkingLevel: "max" });

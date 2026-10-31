@@ -14,8 +14,7 @@ export type SidePaneTabType =
   | "browser"
   | "selection-side-chat"
   | "files"
-  | "subagent"
-  | "dag-node";
+  | "subagent";
 
 /** Everything needed to mint/re-title a subagent run's tab. */
 export type SubagentTabInit = {
@@ -79,8 +78,6 @@ export type SidePaneTab = {
   subagentStatus?: string;
   /** The delegated brief; the pane renders it as the run's opening user message. */
   subagentBrief?: string;
-  /** The DAG node this tab shows (`type: "dag-node"`), e.g. `T-0001`. */
-  dagNodeId?: string;
   /**
    * A file the 审查 tab should select on open, and which diff source to select it in.
    *
@@ -276,16 +273,6 @@ type SidePaneStore = {
    */
   openSubagent: (subagentId: string, init?: SubagentTabInit) => void;
   /**
-   * Open (or focus) one DAG node's own tab in that conversation's pane.
-   *
-   * The sidebar's sub-task row uses this instead of the graph dialog: a run is
-   * drawn as its execution, and a node that has not started yet as its details.
-   * `conversationId` is stored on `subagentConversationId`, not `conversationId` —
-   * the latter is how a side chat's own stream is matched, and a parent id there
-   * would pour the main transcript into this tab.
-   */
-  openDagNode: (conversationId: string, node: { id: string; title: string }) => void;
-  /**
    * Ensure a run has its own tab, without focusing it or un-collapsing the pane.
    * Called as each delegated run starts, so every run gets a distinct view; the
    * tool card re-focuses it on demand.
@@ -360,8 +347,8 @@ export function subagentTabLabel(tab: SidePaneTab): string {
  *
  * Singleton tabs (`git` / `terminal` / `browser` / `files`) are named by
  * their *type* at render time, so switching 界面语言 renames them without closing
- * anything. A tab whose stored `title` is data — a run's role, a DAG node, a side
- * conversation, the file being previewed — keeps it, because data is not re-translated
+ * anything. A tab whose stored `title` is data — a run's role, a side
+ * conversation, or the file being previewed — keeps it, because data is not re-translated
  * (`tabTitleIsData`, which is what replaced comparing `title` against a translated
  * string: a tab opened in the previous language always looked like data, and stayed in
  * that language until it was reopened).
@@ -842,25 +829,6 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       const key = init?.conversationId ?? scopeKeyOf(state);
       const scope = state.scopes[key] ?? EMPTY_SCOPE;
       const tab = { ...upsertSubagentTab(scope.tabs, subagentId, stampScope(key, init)), quiet: undefined };
-      return writeScope(
-        state,
-        key,
-        { ...scope, tabs: upsert(scope.tabs, tab), activeTabId: tab.id },
-        key === scopeKeyOf(state) ? { collapsed: false } : undefined,
-      );
-    }),
-  openDagNode: (conversationId, node) =>
-    set((state) => {
-      const key = conversationId;
-      const scope = state.scopes[key] ?? EMPTY_SCOPE;
-      const id = `dag-node:${node.id}`;
-      const existing = scope.tabs.find((item) => item.id === id);
-      const tab: SidePaneTab = {
-        ...(existing ?? { id, type: "dag-node" as const, openedAt: Date.now() }),
-        title: node.title.trim() || node.id,
-        dagNodeId: node.id,
-        subagentConversationId: conversationId,
-      };
       return writeScope(
         state,
         key,

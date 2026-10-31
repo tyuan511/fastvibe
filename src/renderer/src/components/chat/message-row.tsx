@@ -36,7 +36,6 @@ import { ToolGroupRow } from "./tool-group";
 import { ToolRow } from "./tool-row";
 import { CompactNotice } from "./compact-notice";
 import { AssistantErrorNotice } from "./error-notice";
-import { DagSettledNotice } from "./dag-settled-notice";
 import { ModelChangeNotice } from "./model-change-notice";
 import { RunCollapse, RunProgress } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
@@ -516,9 +515,6 @@ function ProcessOverflow({
 }
 
 /** A finished 「创建子任务」 call, which `ToolCard` draws as the graph of the tasks it created. */
-function isDagGraphPart(part: RenderPart): boolean {
-  return part.kind === "tool" && part.tool.name === "dag_add_tasks" && part.tool.status !== "running";
-}
 
 function ChatMessageRowImpl({
   messages,
@@ -723,13 +719,6 @@ function ChatMessageRowImpl({
     if (message.kind === "compact") {
       return <CompactNotice message={message} />;
     }
-    if (message.kind === "dag") {
-      return (
-        <div className="flex w-full flex-col py-1">
-          <DagSettledNotice dag={message.dag} />
-        </div>
-      );
-    }
     // An extension custom message: the plugin's own renderer produced these runs.
     if (message.kind === "custom" && message.runs && message.runs.length > 0) {
       return (
@@ -877,13 +866,13 @@ function ChatMessageRowImpl({
           >
             {parts
               .slice(foldHead, fold.cut)
-              .map((part, index) => (isDagGraphPart(part) ? null : renderPart(part, foldHead + index, false)))}
+              .map((part, index) => renderPart(part, foldHead + index, false))}
           </RunCollapse>
         ) : null}
         {/* The graph of sub-tasks a run created is what the run set going, not how it got there:
             it stays on screen when the rest of the process folds away. */}
         {fold && foldHead < fold.cut
-          ? parts.slice(foldHead, fold.cut).map((part, index) => (isDagGraphPart(part) ? renderPart(part, foldHead + index) : null))
+          ? parts.slice(foldHead, fold.cut).map((part, index) => renderPart(part, foldHead + index, false))
           : null}
 
         {fold

@@ -1,7 +1,6 @@
 import type { ChatMessage, ToolCallBlock } from "@shared/types";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
-import { useDagStore } from "@/stores/dag";
 
 /** Read-only renderer fixture: no provider or command execution. */
 export function previewResources(mode: string, attempt = 0): void {
@@ -34,6 +33,5 @@ export function previewResources(mode: string, attempt = 0): void {
       { id: "other-conversation", conversationId: "other", name: "must-not-appear", status: "running" },
     ],
   });
-  useDagStore.getState().apply(id, mode === "empty" ? null : { conversationId: id, nodes: [{ id: "T-resource", runId: "T-resource", title: "检查多仓库审查跳转", instruction: "检查多仓库审查跳转", status: "running", createdAt: Date.now(), dependsOn: [], profile: { name: "tester", instructions: "检查跳转" } }], revision: 1, createdAt: Date.now(), updatedAt: Date.now() });
   useSidePaneStore.getState().setCollapsed(true);
 }
