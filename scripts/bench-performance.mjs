@@ -110,7 +110,18 @@ function max(values) {
   return ordered.length === 0 ? null : Math.max(...ordered);
 }
 
-async function measure(name, fn, rounds = 5) {
+/** Nearest-rank percentile; with few samples p95/p99 degrade to the max, which is the honest answer. */
+function percentile(values, p) {
+  const ordered = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (ordered.length === 0) return null;
+  const rank = Math.min(ordered.length - 1, Math.max(0, Math.ceil((p / 100) * ordered.length) - 1));
+  return ordered[rank];
+}
+
+const ROUNDS_SCALE = Math.max(1, Number(args.get("rounds-scale") ?? 1) || 1);
+
+async function measure(name, fn, baseRounds = 5) {
+  const rounds = Math.max(1, Math.round(baseRounds * ROUNDS_SCALE));
   const samples = [];
   let result;
   for (let index = 0; index < rounds; index += 1) {
@@ -155,7 +166,11 @@ async function measure(name, fn, rounds = 5) {
     medianRssAfter: median(samples.map((item) => item.rssAfter)),
     medianEventLoopDelayMs: median(samples.map((item) => item.eventLoopDelayMs)),
     minMs: min(samples.map((item) => item.elapsedMs)),
+    p95Ms: percentile(samples.map((item) => item.elapsedMs), 95),
+    p99Ms: percentile(samples.map((item) => item.elapsedMs), 99),
     maxMs: max(samples.map((item) => item.elapsedMs)),
+    p95CpuMs: percentile(samples.map((item) => item.cpuMs), 95),
+    p95EventLoopDelayMs: percentile(samples.map((item) => item.eventLoopDelayMs), 95),
     samples,
     ...(result && typeof result === "object" ? result : {}),
   };
@@ -278,6 +293,36 @@ async function benchmarkTranscriptOpen() {
   }
 }
 
+/**
+ * A long, real-sized history: 4000 turns with ~2 KB replies (≈ 9 MB on disk), above
+ * the streaming threshold. Cold open and the first paged window, the two things a
+ * reopened chat pays before it can draw anything.
+ */
+async function benchmarkLargeTranscript() {
+  const work = mkdtempSync(join(tmpdir(), "fastvibe-perf-large-transcript-"));
+  try {
+    const file = join(work, "session.jsonl");
+    const raw = transcriptJsonl(4000, 2048);
+    writeFileSync(file, raw);
+    const projectSessionMessages = await loadProjection();
+    const open = await measure("transcript-large-4000-turns-cold-open", async () => {
+      const reader = new TranscriptReader();
+      const branch = await reader.read(file, work);
+      return { bytes: Buffer.byteLength(raw), entries: branch.length };
+    }, 5);
+    const reader = new TranscriptReader();
+    const branch = await reader.read(file, work);
+    const deps = { branch, conversationId: "bench", reasoning: { get: () => undefined }, widgetWidth: 80, running: new Map(), compacting: new Map() };
+    const page = await measure("transcript-large-4000-turns-first-page", () => {
+      const projected = projectSessionMessages({ ...deps, page: { turnLimit: 12 } });
+      return { entries: branch.length, messages: projected.messages.length };
+    }, 10);
+    return [open, page];
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
 async function loadProjection() {
   const ts = require("typescript");
   const source = require("node:fs").readFileSync(join(root, "src/main/pi/process-manager-transcript.ts"), "utf8");
@@ -358,7 +403,11 @@ async function loadRendererProjection() {
   const ts = require("typescript");
   let source = readFileSync(join(root, "src/renderer/src/lib/group-parts.tsx"), "utf8");
   source = source.replace(/import \{ i18n \} from "@\/lib\/i18n";\n/, 'const i18n = { language: "en" };\n');
-  source = source.replace(/^import .* from "\.\/tool-run";\n/m, "const collapseToolRuns = (parts) => parts; const runSummary = () => \"\";\n");
+  const toolRun = pathToFileURL(join(root, "src/renderer/src/lib/tool-run.ts")).href;
+  source = source.replace(/^import \{([^}]*)\} from "\.\/tool-run";\n/m, (_, names) => {
+    const values = names.split(",").map((name) => name.trim()).filter((name) => name && !name.startsWith("type "));
+    return `import { ${values.join(", ")} } from ${JSON.stringify(toolRun)};\n`;
+  });
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
@@ -402,6 +451,129 @@ async function benchmarkRendererProjection() {
     return { turns: 300, updates: 120, rows: projection.rows.length, turnsProjected: projection.turns.length, mode: "incremental" };
   }, 5);
   return [full, incremental];
+}
+
+/**
+ * The per-flush cost of the *streaming row itself*: a reply made of 40 tool
+ * round-trips, the last of which is receiving text. Each flush hands the row a new
+ * trailing message, so the merge and part grouping run again for that one row.
+ */
+async function benchmarkStreamingRowMerge() {
+  const { mergeAssistantRun, groupParts } = await loadRendererProjection();
+  const roundTrips = [];
+  for (let index = 0; index < 240; index += 1) {
+    const toolId = `tool-${index}`;
+    roundTrips.push({
+      id: `a-${index}`, role: "assistant", text: `step ${index} ${"prose ".repeat(40)}`, createdAt: index,
+      tools: [{ id: toolId, name: index % 2 ? "read" : "bash", args: { path: `src/file-${index}.ts`, command: "ls" }, result: "ok\n".repeat(50), status: "done" }],
+      parts: [{ kind: "text", text: `step ${index} ${"prose ".repeat(40)}` }, { kind: "tool", toolId }],
+    });
+  }
+  const run = (count) => measure(`renderer-streaming-row-merge-${count}-roundtrips-120`, () => {
+    const prefix = roundTrips.slice(0, count);
+    let tail = { id: "a-live", role: "assistant", text: "", tools: [], parts: [], createdAt: count };
+    let parts = 0;
+    for (let flush = 0; flush < 120; flush += 1) {
+      const text = `${tail.text}tok${flush} `;
+      tail = { ...tail, text, parts: [{ kind: "text", text }] };
+      const merged = mergeAssistantRun([...prefix, tail]);
+      parts = groupParts(merged, "en", { streaming: true }).length;
+    }
+    return { roundTrips: count, flushes: 120, renderParts: parts };
+  }, 10);
+  return [await run(40), await run(240)];
+}
+
+async function loadApplyEngineEvent() {
+  const ts = require("typescript");
+  const source = readFileSync(join(root, "src/renderer/src/lib/apply-engine-event.ts"), "utf8");
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const deps = {
+    "@shared/abort": await import(pathToFileURL(join(root, "src/shared/abort.ts")).href),
+    "@shared/attachment-metadata": await import(pathToFileURL(join(root, "src/shared/attachment-metadata.ts")).href),
+    "@shared/skill-invocation": await import(pathToFileURL(join(root, "src/shared/skill-invocation.ts")).href),
+    "@shared/tool-result": await import(pathToFileURL(join(root, "src/shared/tool-result.ts")).href),
+    "@/lib/i18n": { i18n: { t: (key) => key } },
+  };
+  const { randomUUID } = await import("node:crypto");
+  const moduleExports = {};
+  new Function("require", "exports", compiled)((name) => {
+    if (name in deps) return deps[name];
+    if (name.endsWith("random.ts")) return { randomUUID };
+    throw new Error(`Unexpected apply-engine-event dependency: ${name}`);
+  }, moduleExports);
+  return moduleExports.applyEngineEvent;
+}
+
+/**
+ * One 32 ms flush of a fast stream against a long transcript: the batch the
+ * session store hands `applyEngineEvent` one event at a time.
+ */
+async function benchmarkStreamApply() {
+  const applyEngineEvent = await loadApplyEngineEvent();
+  const results = [];
+  for (const turns of [300, 2000]) {
+    const baseline = rendererMessages(turns);
+    baseline.push({ id: "live", role: "assistant", text: "", tools: [], parts: [], createdAt: turns });
+    const delta = (index) => ({
+      type: "message_update",
+      conversationId: "bench",
+      assistantMessageEvent: { type: "text_delta", delta: `tok${index} ` },
+    });
+    results.push(await measure(`renderer-stream-apply-${turns}-turns-60x100`, () => {
+      let messages = baseline;
+      let streaming = true;
+      // 100 flushes of 60 deltas each ≈ 3.2 s of a fast model at the 32 ms cadence.
+      for (let flush = 0; flush < 100; flush += 1) {
+        for (let index = 0; index < 60; index += 1) {
+          const applied = applyEngineEvent(messages, delta(flush * 60 + index), streaming);
+          messages = applied.messages;
+          streaming = applied.streaming;
+        }
+      }
+      return { turns, flushes: 100, eventsPerFlush: 60, textBytes: messages.at(-1).text.length };
+    }, 10));
+  }
+  return results;
+}
+
+/**
+ * A 48 KB paragraph streamed at the 32 ms flush cadence, parsed by the real markdown
+ * pipeline: every flush (the old behaviour) against the bounded live cadence. Wall time is
+ * the parse work a renderer would do over the same ~4.8 s of stream.
+ */
+async function benchmarkLiveMarkdown() {
+  const { unified } = await import("unified");
+  const remarkParse = (await import("remark-parse")).default;
+  const remarkRehype = (await import("remark-rehype")).default;
+  const { REMARK_PLUGINS, REHYPE_PLUGINS } = await import(pathToFileURL(join(root, "src/renderer/src/lib/markdown-pipeline.ts")).href);
+  const { mayShowLive } = await import(pathToFileURL(join(root, "src/renderer/src/lib/markdown-live.ts")).href);
+  const processor = unified().use(remarkParse).use(REMARK_PLUGINS).use(remarkRehype, { allowDangerousHtml: true }).use(REHYPE_PLUGINS);
+  const sentence = "A sentence with **bold**, `code` and a [link](https://example.com). ";
+  const flushes = 150;
+  const finalText = sentence.repeat(Math.ceil((48 * 1024) / sentence.length));
+  const step = Math.ceil(finalText.length / flushes);
+  const replay = (throttled) => {
+    let parses = 0;
+    let shownAt = -Infinity;
+    let shown = "";
+    for (let flush = 1; flush <= flushes; flush += 1) {
+      const text = finalText.slice(0, flush * step);
+      const now = flush * 32;
+      if (!throttled || mayShowLive(text.length, shownAt, now) || flush === flushes) {
+        processor.runSync(processor.parse(text));
+        parses += 1;
+        shown = text;
+        shownAt = now;
+      }
+    }
+    return { flushes, parses, finalBytes: shown.length };
+  };
+  const every = await measure("renderer-live-markdown-48kb-every-flush", () => ({ ...replay(false), mode: "every-flush" }), 3);
+  const bounded = await measure("renderer-live-markdown-48kb-bounded", () => ({ ...replay(true), mode: "bounded-cadence" }), 3);
+  return [every, bounded];
 }
 
 async function benchmarkRendererPureIncremental() {
@@ -505,7 +677,11 @@ const results = [
   await benchmarkTranscriptOpen(),
   ...(await benchmarkTranscriptAppend()),
   await benchmarkTranscriptProjection(),
+  ...(await benchmarkLargeTranscript()),
   ...(await benchmarkRendererProjection()),
+  ...(await benchmarkStreamApply()),
+  ...(await benchmarkStreamingRowMerge()),
+  ...(await benchmarkLiveMarkdown()),
   await benchmarkRendererPureIncremental(),
   await benchmarkLatestOnlyQueue(),
   ...(await benchmarkShikiQueue()),

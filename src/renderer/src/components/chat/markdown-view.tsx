@@ -12,6 +12,7 @@ import { codeFenceIconName } from "@/lib/code-fence-icon";
 import { PathLink } from "@/components/path-menu";
 import { useHighlightedCode } from "@/lib/highlight";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
+import { liveParseInterval, mayShowLive } from "@/lib/markdown-live";
 import { collapseBlankRuns } from "@/lib/blank-output";
 import { useSessionStore } from "@/stores/session";
 import { resolvePath } from "@/lib/workspace-path";
@@ -247,10 +248,43 @@ const MARKDOWN_COMPONENTS: Components = {
  * affordable is that a settled block's text never changes again: this component then
  * skips the render entirely, and only the block being streamed into is re-parsed.
  */
+/**
+ * The text a block shows while it streams: every version for a small block, a bounded
+ * cadence for a large one (`liveParseInterval`). Only a block growing at its end is held
+ * back — a replacement (an edit, a different message in the same slot) shows at once — and a
+ * trailing timer always promotes the newest text, so a stream that stops is never left short.
+ */
+function useLiveText(text: string): string {
+  const [shown, setShown] = useState(text);
+  const shownAt = useRef(0);
+  const latest = useRef(text);
+  latest.current = text;
+  const growing = text.length > shown.length && text.startsWith(shown);
+  const immediate = text === shown || !growing || mayShowLive(text.length, shownAt.current, Date.now());
+
+  useEffect(() => {
+    if (text === shown) return;
+    if (immediate) {
+      shownAt.current = Date.now();
+      setShown(text);
+      return;
+    }
+    const wait = Math.max(0, liveParseInterval(text.length) - (Date.now() - shownAt.current));
+    const timer = window.setTimeout(() => {
+      shownAt.current = Date.now();
+      setShown(latest.current);
+    }, wait);
+    return () => window.clearTimeout(timer);
+  }, [text, shown, immediate]);
+
+  return immediate ? text : shown;
+}
+
 const MarkdownBlock = memo(function MarkdownBlock({ text, headingIds }: { text: string; headingIds?: boolean }): JSX.Element {
-  // The block in flight still re-parses on each flush; keep the urgent UI (caret,
-  // scroll) ahead of it and let React apply the markdown at lower priority.
-  const deferred = useDeferredValue(text);
+  // A large block in flight re-parses on a bounded cadence rather than every flush, and what
+  // does parse is still deferred so the urgent UI (caret, scroll) stays ahead of it.
+  const live = useLiveText(text);
+  const deferred = useDeferredValue(live);
   const cwd = useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId)?.cwd);
   const validPaths = useValidatedMarkdownPaths(deferred, cwd);
   return (

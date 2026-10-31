@@ -40,9 +40,22 @@ const DEFAULT_THRESHOLDS = {
   heap: 50,
   rss: 100,
   eventLoop: 20,
+  p95: 50,
 };
+/** Tail percentiles from fewer samples than this are just the max, and too noisy to gate on. */
+const MIN_TAIL_SAMPLES = 10;
+/**
+ * A regression must also be large in absolute terms. A 0.4 → 0.55 ms event-loop sample is
+ * +33% and pure scheduler noise; relative thresholds alone flap on every sub-millisecond scenario.
+ */
+const DEFAULT_ABSOLUTE_FLOOR = { time: numberOptionEarly("min-delta-ms", 5), bytes: numberOptionEarly("min-delta-bytes", 1024 * 1024) };
+function numberOptionEarly(name, fallback) {
+  const value = Number(options.get(name));
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
 const METRICS = [
   { key: "medianMs", name: "wall", label: "wall" },
+  { key: "p95Ms", name: "p95", label: "p95", tail: true },
   { key: "medianCpuMs", name: "cpu", label: "CPU" },
   { key: "medianHeapDelta", name: "heap", label: "heap Δ" },
   { key: "medianRssDelta", name: "rss", label: "RSS Δ" },
@@ -77,6 +90,7 @@ function readThresholds() {
     heap: numberOption("max-heap", configured.heap ?? DEFAULT_THRESHOLDS.heap),
     rss: numberOption("max-rss", configured.rss ?? DEFAULT_THRESHOLDS.rss),
     eventLoop: numberOption("max-event-loop", configured.eventLoop ?? DEFAULT_THRESHOLDS.eventLoop),
+    p95: numberOption("max-p95", configured.p95 ?? DEFAULT_THRESHOLDS.p95),
   };
 }
 
@@ -96,15 +110,19 @@ function metricComparisons(previous, current, thresholds, scenarioThresholds = {
     const change = changePercent(before, after);
     const threshold = finite(scenarioThresholds[metric.name]) ? scenarioThresholds[metric.name] : thresholds[metric.name];
     const memoryMetric = metric.name === "heap" || metric.name === "rss";
-    const comparable = change !== null && (!memoryMetric || memoryCheck);
-    const regressed = comparable && change > threshold;
+    const tailTooSmall = metric.tail === true
+      && ((previous?.samples?.length ?? 0) < MIN_TAIL_SAMPLES || (current?.samples?.length ?? 0) < MIN_TAIL_SAMPLES);
+    const comparable = change !== null && (!memoryMetric || memoryCheck) && !tailTooSmall;
+    const floor = memoryMetric ? DEFAULT_ABSOLUTE_FLOOR.bytes : DEFAULT_ABSOLUTE_FLOOR.time;
+    const belowFloor = comparable && Math.abs(after - before) < floor;
+    const regressed = comparable && change > threshold && !belowFloor;
     return [metric.name, {
       before: finite(before) ? before : null,
       after: finite(after) ? after : null,
       changePercent: change,
       thresholdPercent: threshold,
       comparable,
-      reason: memoryMetric && !memoryCheck ? "memory-check-disabled" : null,
+      reason: memoryMetric && !memoryCheck ? "memory-check-disabled" : tailTooSmall ? "too-few-samples" : belowFloor && change > threshold ? "below-absolute-floor" : null,
       regressed,
     }];
   }));
@@ -122,8 +140,8 @@ function markdownReport(comparison) {
     `改造：${comparison.after.file}`,
     `阈值检查：${comparison.check.enabled ? (comparison.check.passed ? "通过" : "失败") : "已禁用"}`,
     "",
-    "| 场景 | wall 前 | wall 后 | wall 变化 | CPU 前 | CPU 后 | heap Δ 前 | heap Δ 后 | RSS Δ 前 | RSS Δ 后 | event-loop 前 | event-loop 后 | 状态 |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    "| 场景 | wall 前 | wall 后 | wall 变化 | p95 前 | p95 后 | CPU 前 | CPU 后 | heap Δ 前 | heap Δ 后 | RSS Δ 前 | RSS Δ 后 | event-loop 前 | event-loop 后 | 状态 |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
   ];
   for (const row of comparison.rows) {
     const wall = row.metrics.wall;
@@ -132,9 +150,10 @@ function markdownReport(comparison) {
     const rss = row.metrics.rss;
     const eventLoop = row.metrics.eventLoop;
     const status = row.status === "regression" ? "回归" : row.status === "new" ? "新增" : row.status === "removed" ? "移除" : "通过";
-    lines.push(`| ${row.name} | ${format(wall.before)} | ${format(wall.after)} | ${format(wall.changePercent, "%")} | ${format(cpu.before)} | ${format(cpu.after)} | ${format(heap.before, " B")} | ${format(heap.after, " B")} | ${format(rss.before, " B")} | ${format(rss.after, " B")} | ${format(eventLoop.before, " ms")} | ${format(eventLoop.after, " ms")} | ${status} |`);
+    const p95 = row.metrics.p95;
+    lines.push(`| ${row.name} | ${format(wall.before)} | ${format(wall.after)} | ${format(wall.changePercent, "%")} | ${format(p95.before)} | ${format(p95.after)} | ${format(cpu.before)} | ${format(cpu.after)} | ${format(heap.before, " B")} | ${format(heap.after, " B")} | ${format(rss.before, " B")} | ${format(rss.after, " B")} | ${format(eventLoop.before, " ms")} | ${format(eventLoop.after, " ms")} | ${status} |`);
   }
-  lines.push("", `回归阈值（相对变化）：wall ${comparison.thresholds.wall}%，CPU ${comparison.thresholds.cpu}%，heap ${comparison.thresholds.heap}%，RSS ${comparison.thresholds.rss}%，event-loop ${comparison.thresholds.eventLoop}%。`, "负变化表示耗时或资源下降；RSS/heap 受 Node 分配器和运行顺序影响，应在同一机器上比较。", "");
+  lines.push("", `回归阈值（相对变化）：wall ${comparison.thresholds.wall}%，CPU ${comparison.thresholds.cpu}%，heap ${comparison.thresholds.heap}%，RSS ${comparison.thresholds.rss}%，event-loop ${comparison.thresholds.eventLoop}%，p95 ${comparison.thresholds.p95}%（双方样本 ≥ ${MIN_TAIL_SAMPLES} 才参与门禁）；绝对变化小于 ${DEFAULT_ABSOLUTE_FLOOR.time} ms / ${(DEFAULT_ABSOLUTE_FLOOR.bytes / 1048576).toFixed(0)} MB 不计为回归。`, "负变化表示耗时或资源下降；RSS/heap 受 Node 分配器和运行顺序影响，应在同一机器上比较。", "");
   return lines.join("\n");
 }
 

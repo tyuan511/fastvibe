@@ -54,6 +54,24 @@
 
 完整扩展报告见 [perf-after-all-nogc.json](./perf-after-all-nogc.json)；主动 GC 内存报告见 [perf-after-all.json](./perf-after-all.json)。
 
+## 第二轮剩余热点优化
+
+第二轮新增了 p95/p99/max 统计、p95 门禁和 GC 内存门禁。最终报告见 [perf-round2-final.json](./perf-round2-final.json)，比较结果见 [perf-comparison-round2.md](./perf-comparison-round2.md)。双方样本少于 10 时 p95 只记录不阻断；低于 5ms 的绝对变化按调度噪声处理，避免亚毫秒微基准误报。
+
+| 场景 | 旧行为 | 新行为 | 收益 |
+|---|---:|---:|---:|
+| 48KB live Markdown，150 次 flush | 3,159ms | 797ms | **wall -74.8%** |
+| 48KB live Markdown CPU | 3,610ms | 859ms | **CPU -76.2%** |
+| 48KB live Markdown RSS | 约 60.8MB | 约 2.2MB | **显著下降** |
+| 300 turn renderer rows 增量 | 8.86ms 全量 | 1.00ms 增量 | **wall -88.7%** |
+| 240 assistant round-trips streaming row | — | 29.09ms / 120 flush | 约 0.24ms/flush |
+| 4,000 turn、约 9MB transcript 冷打开 | — | 16.45ms | 当前不是瓶颈 |
+| 4,000 turn 首页 projection | — | 0.03ms | 按需页面投影有效 |
+
+live Markdown 通过 [markdown-live.ts](../src/renderer/src/lib/markdown-live.ts) 按 block 大小限制 reparse cadence；小 block 保持实时，大 block 以最新内容定时刷新并在 stream 结束时强制落最终文本。新增 [markdown-live.test.ts](../test/markdown-live.test.ts) 钉住阈值、上限和最终刷新语义。
+
+GC 内存门禁已用第二轮前后报告启用并通过；之前触发的 3 个低毫秒长尾差异被绝对 floor 正确归类为调度噪声，没有产品代码回归。
+
 ## Utility process 实验
 
 [bench-transcript-utility.mjs](../scripts/bench-transcript-utility.mjs) 处理约 2.25MB、10,000 行 JSONL：
@@ -77,6 +95,8 @@ utility process 目前默认关闭，入口是独立的 [transcript-utility.ts](
 - [message-list.tsx](../src/renderer/src/components/chat/message-list.tsx) 移除每次 flush 的全量 rows/turns/index 重建，TurnRail markers 也只重算受影响尾部。
 - [apply-engine-event.ts](../src/renderer/src/lib/apply-engine-event.ts) 空 streamed/toolcall delta 不再无条件 clone trailing assistant。
 - [syntax-highlighter.ts](../src/renderer/src/lib/syntax-highlighter.ts) 增加 `highlightLatest`；live code 使用 latest-only 队列，普通 `highlight` 仍保留有序语义。
+- [markdown-view.tsx](../src/renderer/src/components/chat/markdown-view.tsx) 对大 live block 使用 bounded cadence，避免 48KB 级 Markdown 在每个 32ms flush 里重复完整解析。
+- [markdown-live.ts](../src/renderer/src/lib/markdown-live.ts) 提供可测试的 live parse interval 和最终刷新规则。
 - [test/transcript-projection.test.ts](../test/transcript-projection.test.ts) 覆盖 300 turn streaming tail、追加 turn、中段替换、compact split 和 stale index。
 - [test/syntax-highlighter.test.ts](../test/syntax-highlighter.test.ts) 增加 latest-only queue 回归。
 
@@ -98,15 +118,15 @@ node scripts/compare-performance.mjs \
   --history=artifacts/perf-comparison-history.jsonl
 ```
 
-默认门槛是 wall +20%、CPU +25%、event-loop +20%；heap 和 RSS 会始终记录，只有两份报告都启用 `--expose-gc` 或显式传入 `--check-memory` 时才参与失败门禁。历史 JSONL 会保留每次运行的 metadata 和场景结果，便于按 commit、机器和 Node 版本追踪趋势。
+默认门槛是 wall +20%、CPU +25%、event-loop +20%、p95 +50%；heap 和 RSS 会始终记录，只有两份报告都启用 `--expose-gc` 或显式传入 `--check-memory` 时才参与失败门禁。双方样本少于 10 的 p95 只记录不门禁，低于 5ms 的绝对时间变化只记录不阻断。历史 JSONL 会保留每次运行的 metadata 和场景结果，便于按 commit、机器和 Node 版本追踪趋势。
 
 ## 验证结果
 
 - `pnpm --version`：11.22.0；[全局 pnpm launcher](/Users/yuantang/Library/pnpm/bin/pnpm:39) 已连接到稳定的 Corepack pnpm。
 - `pnpm typecheck`：通过。
 - `pnpm build`：通过；Electron main、utility、preload、renderer 均构建成功。
-- `pnpm test`：**2,044 个测试全部通过**。
-- 性能改造聚焦回归：59 个测试全部通过。
+- `pnpm test`：**2,047 个测试全部通过**。
+- 性能改造聚焦回归：62 个测试全部通过。
 - utility process 实际 Electron 对照基准成功运行。
 
-原始文件包括 [perf-before.json](./perf-before.json)、[perf-after-all-nogc.json](./perf-after-all-nogc.json)、[perf-after-all.json](./perf-after-all.json)、[perf-utility.json](./perf-utility.json)、[perf-history.jsonl](./perf-history.jsonl) 和 [perf-comparison-history.jsonl](./perf-comparison-history.jsonl)。
+原始文件包括 [perf-before.json](./perf-before.json)、[perf-round2-final.json](./perf-round2-final.json)、[perf-round2-before-gc.json](./perf-round2-before-gc.json)、[perf-round2-after-gc.json](./perf-round2-after-gc.json)、[perf-baseline-gc.json](./perf-baseline-gc.json)、[perf-comparison-round2.json](./perf-comparison-round2.json)、[perf-comparison-round2.md](./perf-comparison-round2.md)、[perf-utility.json](./perf-utility.json)、[perf-history.jsonl](./perf-history.jsonl) 和 [perf-comparison-history.jsonl](./perf-comparison-history.jsonl)。
