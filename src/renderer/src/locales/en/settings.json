@@ -110,6 +110,8 @@
   "title": "Chat",
   "replySuggestions": "Reply suggestions",
   "replySuggestionsDesc": "After a reply, guess your next message and show it in the input; press Tab to use it",
+  "backgroundCompaction": "Background context compaction",
+  "backgroundCompactionDesc": "Prepare a shorter context while the conversation is idle so the next turn can use it directly",
   "codemode": "Code mode",
   "codemodeDesc": "Let the model write one script that calls many tools and gets only its output back",
   "toolSearch": "Tool search",

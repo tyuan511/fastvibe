@@ -170,6 +170,19 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
         // timeout when the SDK eventually settles on its own.
         if (event.running !== true) abortInFlight.current.delete(conversationId);
       }
+      if (event.type === "background_compaction" && conversationId) {
+        const id = `background-compaction:${conversationId}`;
+        const title = useSessionStore.getState().conversations.find((item) => item.id === conversationId)?.title;
+        const label = title || i18n.t("app:workspace.newChat");
+        if (event.status === "start") {
+          toast.loading(i18n.t("chat:compact.backgroundStarted"), { id, description: label });
+        } else if (event.status === "done") {
+          toast.success(i18n.t("chat:compact.backgroundDone"), { id, description: label });
+        } else if (event.status === "failed") {
+          toast.error(i18n.t("chat:compact.backgroundFailed"), { id, description: label });
+        }
+        return;
+      }
       // A chat whose run ended abnormally — failed, cut off at the output limit, or
       // stopped by anything but the user — while another one is on screen. Main's
       // system notification only fires when no window is focused, so this used to be

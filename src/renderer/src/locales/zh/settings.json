@@ -110,6 +110,8 @@
   "title": "对话",
   "replySuggestions": "回复推荐",
   "replySuggestionsDesc": "回复完成后，猜你下一句想说的话，显示在输入框里，按 Tab 填入",
+  "backgroundCompaction": "后台压缩上下文",
+  "backgroundCompactionDesc": "在会话空闲时提前整理上下文，下一轮直接使用整理后的内容",
   "codemode": "代码模式",
   "codemodeDesc": "让模型写一段脚本，一次调用多个工具，只把结果交回给它",
   "toolSearch": "工具搜索",

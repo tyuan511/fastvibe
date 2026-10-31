@@ -391,6 +391,16 @@ export function SettingsDialog({
                   }
                 />
                 <Row
+                  title={t("chat.backgroundCompaction")}
+                  description={t("chat.backgroundCompactionDesc")}
+                  control={
+                    <Switch
+                      checked={settings.backgroundCompaction}
+                      onCheckedChange={(checked) => update({ backgroundCompaction: checked })}
+                    />
+                  }
+                />
+                <Row
                   title={t("chat.codemode")}
                   description={t("chat.codemodeDesc")}
                   control={

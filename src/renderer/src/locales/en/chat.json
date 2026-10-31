@@ -96,7 +96,10 @@
     "running": "Compacting context",
     "cancelled": "Context compact cancelled",
     "failed": "Compact failed",
-    "done": "Compacted context"
+    "done": "Compacted context",
+    "backgroundStarted": "Preparing context in the background",
+    "backgroundDone": "Background context is ready",
+    "backgroundFailed": "Background context preparation failed; the next turn will compact if needed"
   },
   "thinking": {
     "running": "Thinking",

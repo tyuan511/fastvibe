@@ -25,6 +25,8 @@ export type AppSettings = ProxySettings & {
   keepAwake: boolean;
   /** 回复推荐: after a reply, guess the next message and offer it as the composer's placeholder. */
   replySuggestions: boolean;
+  /** When true, settle idle conversations by preparing a background context compaction before the hard threshold. */
+  backgroundCompaction: boolean;
   /** Offer the model `codemode`: one script that calls many tools and returns only its output. */
   codemode: boolean;
   /** Offer the model `tool_search`, which finds and loads tools that are not declared up front. */
@@ -182,6 +184,7 @@ const DEFAULTS: AppSettings = {
   thinkingLevel: "auto",
   keepAwake: true,
   replySuggestions: true,
+  backgroundCompaction: false,
   codemode: true,
   toolSearch: true,
   collapseThinking: false,
@@ -266,6 +269,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (typeof next.keepAwake !== "boolean") delete next.keepAwake;
   if (typeof next.glass !== "boolean") delete next.glass;
   if (typeof next.replySuggestions !== "boolean") delete next.replySuggestions;
+  if (typeof next.backgroundCompaction !== "boolean") delete next.backgroundCompaction;
   if (typeof next.codemode !== "boolean") delete next.codemode;
   if (typeof next.toolSearch !== "boolean") delete next.toolSearch;
   if (typeof next.collapseThinking !== "boolean") delete next.collapseThinking;

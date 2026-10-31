@@ -3479,6 +3479,8 @@ Pi 因“没有可裁剪历史”直接返回的路径也要发出可见错误�
 这是对 SDK 实例内部方法的适配，`test/native-compaction.test.ts` 用真实 SDK 验证窗口不一致、多次缩窗、尾部重切、手动重试、取消、截断和恢复任务；
 升级 Pi 必须保留这项测试。它不加载已放弃的自定义摘要、遮蔽、入口限长或回放方案。
 
+**后台压缩上下文**是独立的用户开关，默认关闭。打开后，一轮在空闲状态结束且上下文达到 75% 时，Main 启动后台 compaction；原始转写不变，下一轮从新增 checkpoint 的 summary 与 retained tail 重建 projection。后台压缩通过通知显示开始、完成或失败；下一轮发送会等待正在进行的后台任务。90% 的 threshold 保护在发现后台任务时先等待，再重新检查 projection，只有仍然超限才执行强制压缩。后台任务失败不阻塞发送，由 90% 保护兜底。
+
 ## 上下文用量（composer 的上下文环）
 
 The composer's context ring and its popover read `session.contextUsage`, which only a state
