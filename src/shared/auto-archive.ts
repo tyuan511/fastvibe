@@ -22,7 +22,7 @@ export const AUTO_ARCHIVE_OFF = 0;
  * cannot switch off is worse than one they can, so the off state is a choice here
  * rather than the absence of the feature.
  */
-export const AUTO_ARCHIVE_DAY_OPTIONS = [AUTO_ARCHIVE_OFF, 7, 14, 30, 90, 180, 365] as const;
+export const AUTO_ARCHIVE_DAY_OPTIONS = [AUTO_ARCHIVE_OFF, 3, 7, 14, 30, 90, 180, 365] as const;
 
 /** Ten years is well past any real choice; a value beyond it is a corrupt file. */
 const MAX_AUTO_ARCHIVE_DAYS = 3650;

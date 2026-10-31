@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  AUTO_ARCHIVE_DAY_OPTIONS,
   AUTO_ARCHIVE_OFF,
   DEFAULT_AUTO_ARCHIVE_DAYS,
   readAutoArchiveDays,
@@ -115,4 +116,13 @@ test("a stored day value is read back, and anything else falls to the default", 
   assert.equal(readAutoArchiveDays(1.5), DEFAULT_AUTO_ARCHIVE_DAYS);
   assert.equal(readAutoArchiveDays(undefined), DEFAULT_AUTO_ARCHIVE_DAYS);
   assert.equal(DEFAULT_AUTO_ARCHIVE_DAYS, 30);
+});
+
+test("the 3-day option archives only conversations older than 3 days", () => {
+  assert.ok((AUTO_ARCHIVE_DAY_OPTIONS as readonly number[]).includes(3));
+  const ids = staleConversationIds(
+    [conversation("old", daysAgo(4)), conversation("edge", daysAgo(3)), conversation("fresh", daysAgo(2))],
+    { now: NOW, days: 3 },
+  );
+  assert.deepEqual(ids, ["old"]);
 });
