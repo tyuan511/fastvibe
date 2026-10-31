@@ -1,0 +1,935 @@
+{
+  "schema": 2,
+  "kind": "fastvibe-performance-comparison",
+  "generatedAt": "2026-10-31T09:55:14.217Z",
+  "before": {
+    "file": "/Users/yuantang/code/fastvibe/artifacts/perf-before.json",
+    "label": "before",
+    "schema": 1,
+    "commit": null,
+    "node": "v24.19.0"
+  },
+  "after": {
+    "file": "/Users/yuantang/code/fastvibe/artifacts/perf-after-all-nogc.json",
+    "label": "after-final",
+    "schema": 2,
+    "commit": "33b03950bd9111a4607535e6c7040ccc8e7486a3",
+    "node": "v24.19.0"
+  },
+  "thresholds": {
+    "wall": 20,
+    "cpu": 25,
+    "heap": 50,
+    "rss": 100,
+    "eventLoop": 20
+  },
+  "rows": [
+    {
+      "name": "eventbus-single-scope-10k",
+      "status": "pass",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": 62.135042,
+          "after": 14.536292000000003,
+          "changePercent": -76.60532361111142,
+          "thresholdPercent": 20,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": 56.62200000000007,
+          "after": 15.663000000000011,
+          "changePercent": -72.33760729045248,
+          "thresholdPercent": 25,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": 3454328,
+          "after": -10809992,
+          "changePercent": -412.9405198348275,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": 163840,
+          "after": 4751360,
+          "changePercent": 2800,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 14.573042000000044,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": {
+        "rounds": 7,
+        "samples": 7
+      },
+      "after": {
+        "rounds": 7,
+        "samples": 7
+      }
+    },
+    {
+      "name": "eventbus-512-scopes-hot-10k",
+      "status": "pass",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": 203.11616600000002,
+          "after": 14.50987500000008,
+          "changePercent": -92.85636624314773,
+          "thresholdPercent": 20,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": 204.01999999999998,
+          "after": 15.009999999999991,
+          "changePercent": -92.64287814920105,
+          "thresholdPercent": 25,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": 13224296,
+          "after": 17614560,
+          "changePercent": 33.19847045165958,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": -49152,
+          "after": 425984,
+          "changePercent": 966.6666666666666,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 14.546666999999957,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": {
+        "rounds": 5,
+        "samples": 5
+      },
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "eventbus-4kb-payload-5k",
+      "status": "pass",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": 28.234624999999596,
+          "after": 16.95733400000006,
+          "changePercent": -39.941352151833776,
+          "thresholdPercent": 20,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": 33.71900000000005,
+          "after": 18.495000000000005,
+          "changePercent": -45.14961890922039,
+          "thresholdPercent": 25,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": 13520320,
+          "after": -7421464,
+          "changePercent": -154.89118600743177,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": 0,
+          "after": 163840,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 16.984458000000018,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": {
+        "rounds": 5,
+        "samples": 5
+      },
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "checkpoint-capture-32-incremental",
+      "status": "pass",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": 5524.097833,
+          "after": 1.7404579999999896,
+          "changePercent": -99.96849335307563,
+          "thresholdPercent": 20,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": 701.6439999999998,
+          "after": 2.2000000000000455,
+          "changePercent": -99.68645067869176,
+          "thresholdPercent": 25,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": 11280856,
+          "after": 722112,
+          "changePercent": -93.59878363840475,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": 81920,
+          "after": 16384,
+          "changePercent": -80,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 1.7116249999999127,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": {
+        "rounds": 3,
+        "samples": 3
+      },
+      "after": {
+        "rounds": 3,
+        "samples": 3
+      }
+    },
+    {
+      "name": "transcript-jsonl-500-turns",
+      "status": "pass",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": 0.7124579999981506,
+          "after": 0.6280420000000504,
+          "changePercent": -11.84855809020593,
+          "thresholdPercent": 20,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": 1.4140000000006694,
+          "after": 0.6789999999999736,
+          "changePercent": -51.980198019826574,
+          "thresholdPercent": 25,
+          "comparable": true,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": 450824,
+          "after": 428376,
+          "changePercent": -4.979326743917803,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": 0,
+          "after": 0,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 1.785833000000025,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": {
+        "rounds": 7,
+        "samples": 7
+      },
+      "after": {
+        "rounds": 7,
+        "samples": 7
+      }
+    },
+    {
+      "name": "transcript-jsonl-500-turns-open",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 1.2619580000000497,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 2.160000000000082,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": 1293200,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 606208,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 0.8279170000000704,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "transcript-reader-append-incremental-32",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 1.6600419999999758,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 1.9490000000000691,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": 2060344,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 655360,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 0.8530000000000655,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "transcript-reader-append-cold-reparse-32",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 2.240542000000005,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 2.2930000000000064,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": 2673224,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 1245184,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 0.8882499999999709,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "transcript-projection-300-turns",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 0.5955000000000155,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 1.6459999999999582,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": 1124600,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 1048576,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 1.5648339999999052,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "renderer-rows-full-300-turns-120",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 8.693208000000027,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 8.938000000000102,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": -15071464,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 442368,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 8.734083000000055,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "renderer-rows-incremental-300-turns-120",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 0.6478749999999991,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 2.091000000000122,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": 7021232,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 32768,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 0.8645420000000286,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "renderer-markdown-blocks-incremental-120",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 2.55504099999996,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 3.94600000000014,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": 8764200,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 16384,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 2.5752499999999827,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "latest-only-tool-delta-5k",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 5.270874999999933,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 15.169999999999845,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": 7781128,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 376832,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 5.312832999999955,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 5,
+        "samples": 5
+      }
+    },
+    {
+      "name": "markdown-shiki-stream-queue-64",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 36.53795800000012,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 73.721,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": 10092152,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 8404992,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 36.565624999999955,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 3,
+        "samples": 3
+      }
+    },
+    {
+      "name": "markdown-shiki-latest-only-64",
+      "status": "new",
+      "beforeStatus": null,
+      "afterStatus": "ok",
+      "regressions": [],
+      "metrics": {
+        "wall": {
+          "before": null,
+          "after": 32.88824999999997,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "cpu": {
+          "before": null,
+          "after": 59.47399999999993,
+          "changePercent": null,
+          "thresholdPercent": 25,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        },
+        "heap": {
+          "before": null,
+          "after": 10031520,
+          "changePercent": null,
+          "thresholdPercent": 50,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "rss": {
+          "before": null,
+          "after": 7454720,
+          "changePercent": null,
+          "thresholdPercent": 100,
+          "comparable": false,
+          "reason": "memory-check-disabled",
+          "regressed": false
+        },
+        "eventLoop": {
+          "before": null,
+          "after": 32.9222920000002,
+          "changePercent": null,
+          "thresholdPercent": 20,
+          "comparable": false,
+          "reason": null,
+          "regressed": false
+        }
+      },
+      "before": null,
+      "after": {
+        "rounds": 3,
+        "samples": 3
+      }
+    }
+  ],
+  "regressions": [],
+  "check": {
+    "enabled": true,
+    "memory": false,
+    "passed": true,
+    "exitCode": 0
+  }
+}

@@ -1,0 +1,8 @@
+round 1: reload 45 ms  extensions=18 errors=0
+round 2: reload 11 ms  extensions=18 errors=0
+round 3: reload 12 ms  extensions=18 errors=0
+round 4: reload 13 ms  extensions=18 errors=0
+round 5: reload 9 ms  extensions=18 errors=0
+round 6: reload 10 ms  extensions=18 errors=0
+round 7: reload 21 ms  extensions=18 errors=0
+round 8: reload 12 ms  extensions=18 errors=0
