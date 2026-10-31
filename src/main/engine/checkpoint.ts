@@ -146,8 +146,14 @@ export class CheckpointStore {
   /** The checkpoint for a conversation, dropping whatever it had before. */
   async capture(conversationId: string, cwd: string, files: CheckpointFile[]): Promise<TurnCheckpoint> {
     const trimmed = trimCheckpointFiles(files);
-    const head = await gitRevision(cwd);
-    const repos = await checkpointRepos(trimmed);
+    const previous = this.#checkpoints.get(conversationId);
+    const appendFrom = previous && previous.cwd === cwd && hasStablePrefix(previous.files, trimmed)
+      ? previous.files.length
+      : 0;
+    const head = appendFrom > 0 ? previous?.head : await gitRevision(cwd);
+    const repos = appendFrom > 0
+      ? await checkpointRepos(trimmed.slice(appendFrom), previous?.repos)
+      : await checkpointRepos(trimmed);
     const checkpoint: TurnCheckpoint = {
       conversationId,
       cwd,
@@ -157,7 +163,7 @@ export class CheckpointStore {
       files: trimmed,
     };
     this.#checkpoints.set(conversationId, checkpoint);
-    this.#persist(checkpoint);
+    this.#persist(checkpoint, appendFrom);
     return checkpoint;
   }
 
@@ -174,11 +180,36 @@ export class CheckpointStore {
 
   /**
    * Persist now — this is the change from the JSON store, where nothing was written until
-   * `stop()`. One transaction: 删旧 + 写新, so no half checkpoint is ever readable.
+   * `stop()`. One transaction keeps the parent and file rows consistent. Appending is safe
+   * here because the process manager holds the same CheckpointFile object for a path during
+   * one turn; a new turn clears the in-memory checkpoint before its first capture.
    */
-  #persist(checkpoint: TurnCheckpoint): void {
+  #persist(checkpoint: TurnCheckpoint, appendFrom = 0): void {
     try {
-      this.#db.transaction(() => this.#writeRows(checkpoint));
+      this.#db.transaction(() => {
+        if (appendFrom <= 0 || appendFrom > checkpoint.files.length) {
+          this.#writeRows(checkpoint);
+          return;
+        }
+        this.#db.run(
+          "UPDATE checkpoints SET cwd = ?, created_at = ?, head = ?, repos = ? WHERE conversation_id = ?",
+          checkpoint.cwd,
+          checkpoint.createdAt,
+          checkpoint.head,
+          checkpoint.repos ? JSON.stringify(checkpoint.repos) : undefined,
+          checkpoint.conversationId,
+        );
+        for (const [index, file] of checkpoint.files.entries()) {
+          if (index < appendFrom) continue;
+          this.#db.run(
+            "INSERT INTO checkpoint_files (conversation_id, seq, path, data) VALUES (?, ?, ?, ?)",
+            checkpoint.conversationId,
+            index,
+            file.path,
+            JSON.stringify(file),
+          );
+        }
+      });
     } catch (error) {
       // A checkpoint is best-effort: losing it only means the retry prompt is not offered.
       console.warn("[checkpoint] could not save", message(error));
@@ -256,6 +287,24 @@ function isCheckpoint(item: unknown): item is TurnCheckpoint {
   // The old loader's rule, plus one: it refused an entry with no id of type string, and an
   // id that is empty can never be read back by any conversation, so it is not a checkpoint.
   return typeof checkpoint?.conversationId === "string" && checkpoint.conversationId !== "" && Array.isArray(checkpoint.files);
+}
+
+function hasStablePrefix(previous: CheckpointFile[], next: CheckpointFile[]): boolean {
+  if (previous.length === 0 || previous.length > next.length) return false;
+  for (let index = 0; index < previous.length; index += 1) {
+    const left = previous[index];
+    const right = next[index];
+    if (left === right) continue;
+    if (
+      left.path !== right.path ||
+      left.content !== right.content ||
+      left.binary !== right.binary ||
+      left.created !== right.created ||
+      left.opaque !== right.opaque ||
+      left.bytes !== right.bytes
+    ) return false;
+  }
+  return true;
 }
 
 function message(error: unknown): string {
@@ -372,31 +421,51 @@ async function gitRevision(dir: string): Promise<string | undefined> {
   return head;
 }
 
+const repoRootCache = new Map<string, { root: string | undefined; at: number }>();
+
 async function gitTopLevel(dir: string): Promise<string | undefined> {
+  const cached = repoRootCache.get(dir);
+  if (cached && Date.now() - cached.at < HEAD_TTL_MS) return cached.root;
+  let root: string | undefined;
   try {
     const { stdout } = await execFileAsync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { timeout: 5000 });
-    return stdout.trim() || undefined;
+    root = stdout.trim() || undefined;
   } catch {
-    return undefined;
+    // Not a repo, or the directory is not readable.
   }
+  repoRootCache.set(dir, { root, at: Date.now() });
+  return root;
 }
 
 /** Group captured files by the repository that owns them. */
-async function checkpointRepos(files: CheckpointFile[]): Promise<CheckpointRepo[]> {
+async function checkpointRepos(files: CheckpointFile[], existing: CheckpointRepo[] = []): Promise<CheckpointRepo[]> {
   const groups = new Map<string, string[]>();
+  const rootsByDir = new Map<string, string | undefined>();
   for (const file of files) {
-    const root = await gitTopLevel(dirname(file.path));
+    const dir = dirname(file.path);
+    let root = rootsByDir.get(dir);
+    if (!rootsByDir.has(dir)) {
+      root = await gitTopLevel(dir);
+      rootsByDir.set(dir, root);
+    }
     if (!root) continue;
     const paths = groups.get(root) ?? [];
     paths.push(file.path);
     groups.set(root, paths);
   }
-  const repos: CheckpointRepo[] = [];
+  const merged = new Map<string, CheckpointRepo>();
+  for (const repo of existing) merged.set(repo.root, { ...repo, paths: [...repo.paths] });
   for (const [root, paths] of groups) {
+    const previous = merged.get(root);
+    const known = new Set(previous?.paths ?? []);
+    const nextPaths = [...(previous?.paths ?? [])];
+    for (const path of paths) {
+      if (!known.has(path)) nextPaths.push(path);
+    }
     const head = await gitRevision(root);
-    repos.push({ root, ...(head ? { head } : {}), paths });
+    merged.set(root, { root, ...(head ? { head } : previous?.head ? { head: previous.head } : {}), paths: nextPaths });
   }
-  return repos;
+  return [...merged.values()];
 }
 
 function storedBytes(file: CheckpointFile): number {

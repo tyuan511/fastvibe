@@ -138,6 +138,9 @@ export type MessageRow = {
  * divider. Older snapshots and a live card that landed inside the assistant row
  * would otherwise show 「正在压缩上下文」 under that turn's footer.
  */
+const compactNoticeCache = new WeakMap<object, ChatMessage>();
+const singleRowCache = new WeakMap<ChatMessage, MessageRow>();
+
 function splitCompacts(message: ChatMessage): ChatMessage[] {
   if (message.kind === "compact" || message.role !== "assistant" || !message.parts?.some((part) => part.kind === "compact")) {
     return [message];
@@ -152,36 +155,235 @@ function splitCompacts(message: ChatMessage): ChatMessage[] {
   let index = 0;
   for (const part of message.parts) {
     if (part.kind !== "compact") continue;
-    notices.push({
+    const cached = compactNoticeCache.get(part);
+    const notice = cached ?? {
       id: index === 0 ? `${message.id}:compact` : `${message.id}:compact:${index}`,
-      role: "system",
+      role: "system" as const,
       text: part.text,
       tools: [],
       parts: [part],
       createdAt: message.createdAt,
-      kind: "compact",
+      kind: "compact" as const,
       compact: part.compact,
-    });
+    };
+    if (!cached) compactNoticeCache.set(part, notice);
+    notices.push(notice);
     index += 1;
   }
   return hasBody ? [body, ...notices] : notices;
 }
 
-export function groupMessageRows(messages: ChatMessage[]): MessageRow[] {
-  const rows: MessageRow[] = [];
-  for (const source of messages) {
-    for (const message of splitCompacts(source)) {
+const splitCompactCache = new WeakMap<ChatMessage, ChatMessage[]>;
+
+function splitCompactsCached(message: ChatMessage): ChatMessage[] {
+  const cached = splitCompactCache.get(message);
+  if (cached) return cached;
+  const split = splitCompacts(message);
+  splitCompactCache.set(message, split);
+  return split;
+}
+
+/**
+ * The row's source range in the transcript. A row can span several consecutive
+ * assistant messages, while a compact message can produce more than one row.
+ */
+type RowSpan = { start: number; end: number };
+type TurnSpan = { start: number; end: number };
+
+export type Turn = { id: string; rows: MessageRow[] };
+
+/**
+ * The complete chat projection used by MessageList. `source` is kept so the next
+ * flush can find the first changed message by identity; everything before that
+ * point is the settled prefix and is reused by reference.
+ */
+export type MessageRowsProjection = {
+  source: readonly ChatMessage[];
+  rows: MessageRow[];
+  rowSpans: RowSpan[];
+  turns: Turn[];
+  turnSpans: TurnSpan[];
+  rowIndex: Map<string, number>;
+  rowIndexByMessage: Map<string, number>;
+};
+
+function commonPrefix<T>(left: readonly T[], right: readonly T[]): number {
+  const count = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < count && left[index] === right[index]) index += 1;
+  return index;
+}
+
+function buildRowsFrom(
+  messages: readonly ChatMessage[],
+  start: number,
+  rows: MessageRow[],
+  spans: RowSpan[],
+): void {
+  for (let sourceIndex = start; sourceIndex < messages.length; sourceIndex += 1) {
+    for (const message of splitCompactsCached(messages[sourceIndex])) {
       const last = rows.at(-1);
-      // A compaction is a divider between turns, not part of the reply it followed.
-      // Folding it into that row is what put 「正在压缩上下文」 inside the previous turn.
-      if (message.role === "assistant" && last && last.messages[0].role === "assistant") {
-        last.messages.push(message);
-        continue;
+      const lastSpan = spans.at(-1);
+      if (message.role === "assistant" && last && last.messages[0].role === "assistant" && lastSpan) {
+        // The previous row may belong to the settled prefix. Clone only its
+        // tail-facing shell before adding a streamed assistant message.
+        rows[rows.length - 1] = { id: last.id, messages: [...last.messages, message] };
+        spans[spans.length - 1] = { start: lastSpan.start, end: sourceIndex + 1 };
+      } else {
+        const cached = singleRowCache.get(message);
+        const row = cached ?? { id: message.id, messages: [message] };
+        if (!cached) singleRowCache.set(message, row);
+        rows.push(row);
+        spans.push({ start: sourceIndex, end: sourceIndex + 1 });
       }
-      rows.push({ id: message.id, messages: [message] });
     }
   }
-  return rows;
+}
+
+function buildTurnsFrom(
+  rows: readonly MessageRow[],
+  start: number,
+  turns: Turn[],
+  spans: TurnSpan[],
+): void {
+  for (let rowIndex = start; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const current = turns.at(-1);
+    const currentSpan = spans.at(-1);
+    if (row.messages[0].role !== "user" && current && currentSpan) {
+      // As with rows, a changed streaming row must not mutate a settled turn.
+      turns[turns.length - 1] = { id: current.id, rows: [...current.rows, row] };
+      spans[spans.length - 1] = { start: currentSpan.start, end: rowIndex + 1 };
+    } else {
+      turns.push({ id: row.id, rows: [row] });
+      spans.push({ start: rowIndex, end: rowIndex + 1 });
+    }
+  }
+}
+
+function rowIndexFor(rows: readonly MessageRow[]): Map<string, number> {
+  return new Map(rows.map((row, index) => [row.id, index]));
+}
+
+function rowIndexByMessageFor(turns: readonly Turn[]): Map<string, number> {
+  const index = new Map<string, number>();
+  turns.forEach((turn, turnIndex) => {
+    for (const row of turn.rows) {
+      index.set(row.id, turnIndex);
+      for (const message of row.messages) index.set(message.id, turnIndex);
+    }
+  });
+  return index;
+}
+
+function sameRowIndexStructure(left: readonly MessageRow[], right: readonly MessageRow[], start: number): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = start; index < right.length; index += 1) {
+    if (left[index]?.id !== right[index]?.id) return false;
+  }
+  return true;
+}
+
+function sameTurnIndexStructure(left: readonly Turn[], right: readonly Turn[], start: number): boolean {
+  if (left.length !== right.length) return false;
+  for (let turnIndex = start; turnIndex < right.length; turnIndex += 1) {
+    const oldTurn = left[turnIndex];
+    const nextTurn = right[turnIndex];
+    if (!oldTurn || !nextTurn || oldTurn.id !== nextTurn.id || oldTurn.rows.length !== nextTurn.rows.length) return false;
+    for (let rowIndex = 0; rowIndex < nextTurn.rows.length; rowIndex += 1) {
+      const oldRow = oldTurn.rows[rowIndex];
+      const nextRow = nextTurn.rows[rowIndex];
+      if (!oldRow || oldRow.id !== nextRow.id || oldRow.messages[0]?.role !== nextRow.messages[0]?.role) return false;
+      if (oldRow.messages.length !== nextRow.messages.length) return false;
+      for (let messageIndex = 0; messageIndex < nextRow.messages.length; messageIndex += 1) {
+        if (oldRow.messages[messageIndex]?.id !== nextRow.messages[messageIndex]?.id) return false;
+      }
+    }
+  }
+  return true;
+}
+
+function incrementalRowIndex(
+  previous: MessageRowsProjection,
+  rows: readonly MessageRow[],
+  changedRow: number,
+): Map<string, number> {
+  if (sameRowIndexStructure(previous.rows, rows, changedRow)) return previous.rowIndex;
+  const index = new Map(previous.rowIndex);
+  for (let rowIndex = changedRow; rowIndex < previous.rows.length; rowIndex += 1) index.delete(previous.rows[rowIndex]!.id);
+  for (let rowIndex = changedRow; rowIndex < rows.length; rowIndex += 1) index.set(rows[rowIndex]!.id, rowIndex);
+  return index;
+}
+
+function deleteTurnKeys(index: Map<string, number>, turn: Turn): void {
+  for (const row of turn.rows) {
+    index.delete(row.id);
+    for (const message of row.messages) index.delete(message.id);
+  }
+}
+
+function addTurnKeys(index: Map<string, number>, turn: Turn, turnIndex: number): void {
+  for (const row of turn.rows) {
+    index.set(row.id, turnIndex);
+    for (const message of row.messages) index.set(message.id, turnIndex);
+  }
+}
+
+function incrementalMessageIndex(
+  previous: MessageRowsProjection,
+  turns: readonly Turn[],
+  firstTurn: number,
+): Map<string, number> {
+  if (sameTurnIndexStructure(previous.turns, turns, firstTurn)) return previous.rowIndexByMessage;
+  const index = new Map(previous.rowIndexByMessage);
+  for (let turnIndex = firstTurn; turnIndex < previous.turns.length; turnIndex += 1) deleteTurnKeys(index, previous.turns[turnIndex]!);
+  for (let turnIndex = firstTurn; turnIndex < turns.length; turnIndex += 1) addTurnKeys(index, turns[turnIndex]!, turnIndex);
+  return index;
+}
+
+
+/**
+ * Group and index a transcript with settled-prefix + streaming-tail reuse.
+ *
+ * A live event clones only the assistant message it writes into. We use that
+ * identity boundary to retain every complete row/turn before the changed tail,
+ * then rebuild from the first affected row. Full replacement or a mid-transcript
+ * edit still falls back to the same canonical grouping rules, so this is safe for
+ * reloads as well as streams.
+ */
+export function groupMessageRowsIncremental(
+  messages: ChatMessage[],
+  previous?: MessageRowsProjection,
+): MessageRowsProjection {
+  if (previous?.source === messages) return previous;
+
+  const changedSource = previous ? commonPrefix(previous.source, messages) : 0;
+  let firstRow = 0;
+  if (previous) {
+    while (firstRow < previous.rowSpans.length && previous.rowSpans[firstRow]!.end <= changedSource) firstRow += 1;
+  }
+  const rows = previous ? previous.rows.slice(0, firstRow) : [];
+  const rowSpans = previous ? previous.rowSpans.slice(0, firstRow) : [];
+  const startSource = rowSpans.at(-1)?.end ?? 0;
+  buildRowsFrom(messages, startSource, rows, rowSpans);
+
+  const changedRow = previous ? commonPrefix(previous.rows, rows) : 0;
+  let firstTurn = 0;
+  if (previous) {
+    while (firstTurn < previous.turnSpans.length && previous.turnSpans[firstTurn]!.end <= changedRow) firstTurn += 1;
+  }
+  const turns = previous ? previous.turns.slice(0, firstTurn) : [];
+  const turnSpans = previous ? previous.turnSpans.slice(0, firstTurn) : [];
+  const startRow = turnSpans.at(-1)?.end ?? 0;
+  buildTurnsFrom(rows, startRow, turns, turnSpans);
+
+  const rowIndex = previous ? incrementalRowIndex(previous, rows, changedRow) : rowIndexFor(rows);
+  const rowIndexByMessage = previous ? incrementalMessageIndex(previous, turns, firstTurn) : rowIndexByMessageFor(turns);
+  return { source: messages, rows, rowSpans, turns, turnSpans, rowIndex, rowIndexByMessage };
+}
+
+export function groupMessageRows(messages: ChatMessage[]): MessageRow[] {
+  return groupMessageRowsIncremental(messages).rows;
 }
 
 /**

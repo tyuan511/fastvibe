@@ -41,6 +41,21 @@ test("a capture is readable from a new connection without any flush", async () =
   assert.equal(openTestDb(dir).countRows("checkpoints"), 0);
 });
 
+test("a turn appends newly seen files without replacing earlier rows", async () => {
+  const dir = testDir("fastvibe-checkpoint-store-");
+  const store = new CheckpointStore(openTestDb(dir));
+  const turnFiles = files(dir, ["a.ts"]);
+  await store.capture("c1", dir, turnFiles);
+  turnFiles.push(...files(dir, ["b.ts"]));
+  await store.capture("c1", dir, turnFiles);
+  const db = openTestDb(dir);
+  assert.equal(db.countRows("checkpoint_files"), 2);
+  assert.deepEqual(
+    new CheckpointStore(db).get("c1")?.files.map((file) => file.path.split("/").pop()),
+    ["a.ts", "b.ts"],
+  );
+});
+
 test("a conversation keeps one checkpoint, and replacing it leaves no file rows behind", async () => {
   const dir = testDir("fastvibe-checkpoint-store-");
   const store = new CheckpointStore(openTestDb(dir));

@@ -98,7 +98,8 @@ test("what the stopped run still says lands above the turn 立即 drew, not in i
   ]);
   const [, old, prompt, reply] = stopping.messages;
   assert.equal(old.text, "half an answer", "the last delta belongs to the reply that was cut");
-  assert.equal(old.stop, "aborted");
+  assert.equal(old.stop, undefined, "the replaced run's cancellation is intentionally hidden");
+  assert.equal(old.stopCause, undefined);
   assert.equal(prompt.id, "queue:q1");
   assert.equal(reply.text, "", "the new turn has not said anything yet");
   assert.equal(reply.stop, undefined, "and it was not interrupted");

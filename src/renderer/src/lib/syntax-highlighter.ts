@@ -347,6 +347,8 @@ export class StreamingHighlighter {
   #code = "";
   #stableHtml = "";
   #pending: Promise<unknown> = Promise.resolve();
+  #latestRequest = 0;
+  #latestResult = wrap("");
 
   constructor(language?: string) {
     this.#language = language;
@@ -355,6 +357,19 @@ export class StreamingHighlighter {
   highlight(code: string): Promise<string> {
     // enqueue mutates grammar state: serialize even across asynchronous grammar loading.
     const result = this.#pending.then(() => this.#highlight(code));
+    this.#pending = result.catch(() => undefined);
+    return result;
+  }
+
+  /** Queue only the newest live snapshot; older queued snapshots resolve to the last result. */
+  highlightLatest(code: string): Promise<string> {
+    const request = ++this.#latestRequest;
+    const result = this.#pending.then(async () => {
+      if (request !== this.#latestRequest) return this.#latestResult;
+      const highlighted = await this.#highlight(code);
+      this.#latestResult = highlighted;
+      return highlighted;
+    });
     this.#pending = result.catch(() => undefined);
     return result;
   }

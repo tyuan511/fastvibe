@@ -677,7 +677,7 @@ function applyEvent(
     // A reply that ended early without failing — cut off at the output limit, or
     // stopped. Neither is a red bubble, but neither may be silent: both used to end
     // the run with nothing on screen, which read as the agent quitting on its own.
-    const stop: ChatMessage["stop"] = event.willRetry === true || error ? undefined : verdict;
+    const stop: ChatMessage["stop"] = event.replaced === true || event.willRetry === true || error ? undefined : verdict;
     if (stop) {
       const last = next.at(-1);
       if (last?.role === "assistant") {
@@ -823,8 +823,11 @@ function applyEvent(
     // so the banner that announced the wait for it goes now rather than riding the
     // streamed reply (see `clearTrailingAssistantRetry`).
     if (innerType !== undefined && STREAMED_CONTENT.has(innerType)) {
-      const target = ensureAssistant();
-      if (target.retry) target.retry = undefined;
+      const current = trailingAssistant(next);
+      if (current?.retry) {
+        const target = ensureAssistant();
+        target.retry = undefined;
+      }
     }
 
     if (innerType === "text_delta") {
@@ -859,10 +862,10 @@ function applyEvent(
     if (innerType === "toolcall_delta" || innerType === "tool_call_delta") {
       // The delta is partial argument JSON, not output; take the parsed args back
       // off the partial message so the card can show the command as it forms.
-      const target = ensureAssistant();
       const block = toolCallFromPartial(inner);
-      const id = resolveToolId(target, asString(block?.id) ?? asString(inner.id));
       if (block?.arguments !== undefined || block?.name !== undefined) {
+        const target = ensureAssistant();
+        const id = resolveToolId(target, asString(block?.id) ?? asString(inner.id));
         upsertTool(target, { id, name: asString(block?.name), args: block?.arguments });
       }
     }

@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/message-scroller";
 import { FLoader } from "@/components/f-loader";
 import { stripAttachmentBlock } from "@/lib/attachments";
-import { groupMessageRows, type MessageRow } from "@/lib/group-parts";
+import { groupMessageRowsIncremental, type MessageRowsProjection, type MessageRow } from "@/lib/group-parts";
 import { ChatMessageRow } from "./message-row";
 import { TranscriptConversationContext } from "./conversation-context";
 import { cn } from "@/lib/utils";
@@ -86,21 +86,34 @@ function replyPreview(row: MessageRow | undefined): string {
   return clip(text, REPLY_LIMIT);
 }
 
-/** One mark per turn: a user prompt plus the reply it produced. */
-function turnMarkers(rows: MessageRow[]): { markers: TurnMarker[] } {
-  const markers: TurnMarker[] = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
+type TurnMarkerProjection = { rows: MessageRow[]; markers: TurnMarker[] };
+
+function turnMarkersIncremental(rows: MessageRow[], previous?: TurnMarkerProjection): TurnMarkerProjection {
+  if (previous?.rows === rows) return previous;
+  let changedRow = 0;
+  if (previous) {
+    const count = Math.min(previous.rows.length, rows.length);
+    while (changedRow < count && previous.rows[changedRow] === rows[changedRow]) changedRow += 1;
+  }
+  const affectedRow = Math.max(0, changedRow - 1);
+  let firstMarker = 0;
+  if (previous) {
+    while (firstMarker < previous.markers.length && previous.markers[firstMarker]!.rowIndex < affectedRow) firstMarker += 1;
+  }
+  const markers = previous ? previous.markers.slice(0, firstMarker) : [];
+  for (let rowIndex = affectedRow; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
     if (row.messages[0].role !== "user") continue;
     markers.push({
       id: row.id,
-      rowIndex: index,
+      rowIndex,
       prompt: promptPreview(row.messages[0]),
-      reply: replyPreview(rows[index + 1]),
+      reply: replyPreview(rows[rowIndex + 1]),
     });
   }
-  return { markers };
+  return { rows, markers };
 }
+
 
 /**
  * Jump back to the live edge whenever the reader sends a new prompt. `autoScroll`
@@ -131,18 +144,6 @@ function FollowLatest({ messages }: { messages: ChatMessage[] }): null {
  * down while its own turn is on screen, so the next turn's prompt pushes it away
  * instead of the first prompt in the thread staying pinned forever.
  */
-type Turn = { id: string; rows: MessageRow[] };
-
-function groupTurns(rows: MessageRow[]): Turn[] {
-  const turns: Turn[] = [];
-  for (const row of rows) {
-    const current = turns.at(-1);
-    if (row.messages[0].role !== "user" && current) current.rows.push(row);
-    else turns.push({ id: row.id, rows: [row] });
-  }
-  return turns;
-}
-
 /**
  * The scroller reads *any* wheel as "the reader took over" and drops out of
  * `following-bottom`; it only re-arms on a scroll event that lands within its 8px
@@ -492,8 +493,15 @@ export function MessageList({
   const navigated = useRef<object | null>(null);
   const [highlightedTurn, setHighlightedTurn] = useState<string | null>(null);
   const selectionRootRef = useRef<HTMLDivElement>(null);
-  // One row per user prompt and per assistant reply, not per engine message.
-  const rows = useMemo(() => groupMessageRows(messages), [messages]);
+  // The stream clones only its trailing message. Keep the complete settled prefix by
+  // identity and rebuild the smallest affected tail on each flush.
+  const projectionRef = useRef<MessageRowsProjection | undefined>(undefined);
+  const projection = useMemo(() => {
+    const next = groupMessageRowsIncremental(messages, projectionRef.current);
+    projectionRef.current = next;
+    return next;
+  }, [messages]);
+  const { rows, turns, rowIndex, rowIndexByMessage } = projection;
   // Retry/edit rewind the conversation, so they are only offered on the newest
   // prompt: an older turn's actions would silently discard everything after it.
   const lastUserRowId = useMemo(() => {
@@ -502,10 +510,12 @@ export function MessageList({
     }
     return null;
   }, [rows]);
-  const { markers } = useMemo(() => turnMarkers(rows), [rows]);
-  // Turns scope the sticky prompt; the flat index still decides which row streams.
-  const turns = useMemo(() => groupTurns(rows), [rows]);
-  const rowIndex = useMemo(() => new Map(rows.map((row, index) => [row.id, index])), [rows]);
+  const markerProjectionRef = useRef<TurnMarkerProjection | undefined>(undefined);
+  const markers = useMemo(() => {
+    const next = turnMarkersIncremental(rows, markerProjectionRef.current);
+    markerProjectionRef.current = next;
+    return next.markers;
+  }, [rows]);
   // A ref callback, not a ref object: the scroller only mounts once the thread has
   // rows, which is long after an effect keyed on a ref object would have run.
   const guardViewport = useNoOpWheelGuard();
@@ -518,16 +528,6 @@ export function MessageList({
   const threadId = conversationId ?? rows[0]?.id ?? "";
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
-  const rowIndexByMessage = useMemo(() => {
-    const index = new Map<string, number>();
-    turns.forEach((turn, turnIndex) => {
-      for (const row of turn.rows) {
-        index.set(row.id, turnIndex);
-        for (const message of row.messages) index.set(message.id, turnIndex);
-      }
-    });
-    return index;
-  }, [turns]);
   const [scrollState, setScrollState] = useState({ start: false, end: true });
   const followingRef = useRef(true);
   const programmaticScrollRef = useRef(false);

@@ -35,6 +35,7 @@ const EVENT_BATCH_DELAY_MS = 25;
 const EVENT_BATCH_MAX_EVENTS = 32;
 const EVENT_BATCH_MAX_BYTES = 16 * 1024;
 const BATCHABLE_CHANNELS = new Set(["engine:event", "workspace:terminal-data"]);
+const EVENT_SIZE_CACHE = new WeakMap<object, number>();
 /** How long consecutive thinking deltas for one conversation wait to be folded into one. */
 const THINKING_COALESCE_MS = 250;
 const THINKING_COALESCE_MAX_CHARS = 8 * 1024;
@@ -360,8 +361,13 @@ export class ClientSession {
   }
 
   #eventSize(event: AppEventMessage): number {
+    const cached = EVENT_SIZE_CACHE.get(event);
+    if (cached !== undefined) return cached;
     try {
-      return JSON.stringify(event).length;
+      const encoded = JSON.stringify(event);
+      const bytes = Buffer.byteLength(encoded ?? "", "utf8");
+      EVENT_SIZE_CACHE.set(event, bytes);
+      return bytes;
     } catch {
       return 0;
     }

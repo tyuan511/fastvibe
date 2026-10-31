@@ -99,6 +99,15 @@ export function retractOptimisticTurn(messages: ChatMessage[]): ChatMessage[] {
   return [...base, ...rest.filter((message) => !message.id.startsWith(QUEUED_REPLY))];
 }
 
+/** Hide the stop marker produced by the run that 立即 is replacing. */
+function clearTrailingStop(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages.at(-1);
+  if (last?.role !== "assistant" || (last.stop === undefined && last.stopCause === undefined)) return messages;
+  const next = messages.slice();
+  next[next.length - 1] = { ...last, stop: undefined, stopCause: undefined };
+  return next;
+}
+
 type TranscriptStep = {
   messages: ChatMessage[];
   streaming: boolean;
@@ -163,12 +172,22 @@ export function applyAroundSentNow(
   if (sentNow.over) {
     const { base, tail } = splitOptimisticTail(messages);
     applied = apply(base, event, view.streaming, view.boundary);
+    if (sentNow.over === "run" && type === "agent_end") {
+      applied = { ...applied, messages: clearTrailingStop(applied.messages) };
+    }
     applied = { ...applied, messages: tail.length > 0 ? [...applied.messages, ...tail] : applied.messages };
     const ended = sentNow.over === "run"
       ? type === "agent_settled"
       : type === "compaction_end" || type === "auto_compaction_end";
     // The stop of the run being replaced is the click's own doing, not a verdict.
-    if (sentNow.over === "run") applied = { ...applied, interrupted: undefined };
+    // `agent_end` arrives before Main can attach `replaced` to `agent_settled`, so clear
+    // the old reply's visible stop marker here as well.
+    if (sentNow.over === "run") {
+      applied = {
+        ...applied,
+        interrupted: undefined,
+      };
+    }
     if (ended) sentNow = { ...sentNow, over: null };
   } else {
     applied = apply(messages, event, view.streaming, view.boundary);

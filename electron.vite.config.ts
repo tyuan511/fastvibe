@@ -52,6 +52,7 @@ export default defineConfig({
         input: {
           index: resolve("src/main/index.ts"),
           agent: resolve("src/agent/main.ts"),
+          "transcript-utility": resolve("src/main/utility/transcript-utility.ts"),
         },
       },
     },

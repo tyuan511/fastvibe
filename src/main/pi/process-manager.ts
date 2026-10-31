@@ -549,6 +549,28 @@ export class PiProcessManager {
   #reasoningRun = new Map<string, ReasoningRun>();
   /** Bounds of finished blocks, so a reloaded transcript keeps showing them. */
   #reasoning: ReasoningStore;
+  /** Persisted SDK messages are stable object identities for the life of a session. */
+  #entryIds = new WeakMap<object, string>();
+  /**
+   * Resolve an entry id from the tail first, then cache it. SDK appends the entry immediately
+   * after the listener returns, so the new message is normally the last few entries; unlike
+   * `[...entries].reverse()` this allocates no array, and later bookkeeping is O(1).
+   */
+  #entryIdForMessage(session: AgentSession, message: unknown): string | undefined {
+    if (typeof message !== "object" || message === null) return undefined;
+    const object = message as object;
+    const cached = this.#entryIds.get(object);
+    if (cached) return cached;
+    const entries = session.sessionManager.getEntries();
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry.type !== "message" || entry.message !== message) continue;
+      this.#entryIds.set(object, entry.id);
+      return entry.id;
+    }
+    return undefined;
+  }
+
   /** A turn's pre-write file state, so 重试 is honest. Written at capture, not at quit. */
   #checkpoints: CheckpointStore;
   /** Append-only record of finalized turns, so 使用统计 survives session deletion. */
@@ -2706,9 +2728,15 @@ export class PiProcessManager {
       let projected = project();
       const maxBytes = typeof options?.maxBytes === "number" && Number.isFinite(options.maxBytes)
         ? Math.max(16 * 1024, Math.min(512 * 1024, options.maxBytes)) : undefined;
-      // A complete user/tool/result unit always survives, even above the soft budget.
-      while (deps.page && deps.page.turnLimit > 1 && maxBytes && Buffer.byteLength(JSON.stringify(projected.messages)) > maxBytes) {
-        deps.page = { ...deps.page, turnLimit: Math.max(1, Math.floor(deps.page.turnLimit / 2)) };
+      // A complete user/tool/result unit always survives, even above the soft budget. Adjust
+      // by the observed ratio so a large page normally needs one extra projection, not log2(N).
+      while (deps.page && deps.page.turnLimit > 1 && maxBytes) {
+        const serializedBytes = Buffer.byteLength(JSON.stringify(projected.messages));
+        if (serializedBytes <= maxBytes) break;
+        const currentLimit = deps.page.turnLimit;
+        const ratio = maxBytes / Math.max(serializedBytes, 1);
+        const nextLimit = Math.max(1, Math.min(currentLimit - 1, Math.floor(currentLimit * ratio)));
+        deps.page = { ...deps.page, turnLimit: nextLimit };
         projected = project();
       }
       return { projected, timing: { readMs, projectMs: performance.now() - projectStarted } };
@@ -4348,9 +4376,7 @@ export class PiProcessManager {
         // The prompt's row in the sidebar, for a prompt the renderer did not send.
         this.#adoptPromptPreview(conversation.id, messageText(userMessage));
         queueMicrotask(() => {
-          const entry = [...result.session.sessionManager.getEntries()]
-            .reverse()
-            .find((item) => item.type === "message" && item.message === userMessage);
+          const entryId = this.#entryIdForMessage(result.session, userMessage);
           // Flush the user turn now: the SDK holds the first write until an assistant
           // message exists, so without this a restart mid-run (the dev server reloads
           // constantly) drops the prompt that was just sent.
@@ -4358,9 +4384,9 @@ export class PiProcessManager {
           // A claim is not delivery. Remove its durable queue row only after the exact
           // object reached message_end and its transcript entry exists and was flushed.
           // A crash between those writes leaves a paused uncertainty, never silent loss.
-          if (entry && persisted) this.#queuedMessageDelivered(conversation.id, userMessage as object);
-          if (!entry) return;
-          const persistedEvent = { type: "user_message_persisted", conversationId: conversation.id, entryId: entry.id };
+          if (entryId && persisted) this.#queuedMessageDelivered(conversation.id, userMessage as object);
+          if (!entryId) return;
+          const persistedEvent = { type: "user_message_persisted", conversationId: conversation.id, entryId };
           if (this.#activeId !== conversation.id && conversation.kind !== "side-chat") {
             this.#publishWatched(conversation.id, persistedEvent);
             return;
@@ -5233,10 +5259,8 @@ export class PiProcessManager {
     // synchronously once its listeners return), so the id only exists a microtask
     // later — same dance as `user_message_persisted` below.
     queueMicrotask(() => {
-      const entry = [...session.sessionManager.getEntries()]
-        .reverse()
-        .find((item) => item.type === "message" && item.message === message);
-      if (entry) file(entry.id, blocks);
+      const entryId = this.#entryIdForMessage(session, message);
+      if (entryId) file(entryId, blocks);
     });
   }
 
@@ -5369,9 +5393,6 @@ export class PiProcessManager {
     now: number,
   ): void {
     if (!isAssistantEngineMessage(message)) return;
-    // Keep an untyped handle for the identity comparison: `message` narrows to a record
-    // above, while the stored entry's `message` stays an `AgentMessage`.
-    const messageRef: unknown = message;
     const sessionId = session.sessionId;
     if (!sessionId) return;
     const usage = isRecord(message.usage) ? message.usage : undefined;
@@ -5391,14 +5412,12 @@ export class PiProcessManager {
       }
     }
     queueMicrotask(() => {
-      const entry = [...session.sessionManager.getEntries()]
-        .reverse()
-        .find((item) => item.type === "message" && item.message === messageRef);
-      if (!entry) return;
+      const entryId = this.#entryIdForMessage(session, message);
+      if (!entryId) return;
       this.#usage.record([
         {
           sessionId,
-          entryId: entry.id,
+          entryId,
           provider,
           model,
           at,

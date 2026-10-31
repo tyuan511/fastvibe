@@ -97,7 +97,7 @@ export class EventBus {
     this.#bytes += bytes;
     state.records.push(record);
     this.#trim(state);
-    this.#enforceBounds();
+    this.#enforceBounds(state);
     return {
       kind: "event",
       scope,
@@ -105,7 +105,9 @@ export class EventBus {
       epoch: record.epoch,
       eventId,
       channel,
-      payload: clonePayload(payload),
+      // Event payloads are immutable after publication. Client-side thinking folding clones
+      // before changing a payload, so retention and live delivery can share this copy.
+      payload: record.payload,
     };
   }
 
@@ -184,8 +186,9 @@ export class EventBus {
     }
   }
 
-  #enforceBounds(): void {
-    for (const state of this.#scopes.values()) this.#trim(state);
+  #enforceBounds(active?: ScopeState): void {
+    if (active) this.#trim(active);
+    else for (const state of this.#scopes.values()) this.#trim(state);
     // Drop oldest records globally until the byte budget is real, not merely
     // checked when a scope happens to receive another event.
     while (this.#bytes > this.#maxBytes) {

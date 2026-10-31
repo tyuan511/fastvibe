@@ -75,7 +75,7 @@ export function useHighlightedCode(code: string, language?: string): string | nu
       return;
     }
     let active = true;
-    highlighter.highlight(code).then((html) => {
+    highlighter.highlightLatest(code).then((html) => {
       if (!active) return;
       remember(key, html);
       supersede();

@@ -67,6 +67,13 @@ test("queued updates stay ordered while the grammar loads", async () => {
   assert.deepEqual(results.map(textOf), codes);
 });
 
+test("latest-only live highlighting skips stale queued snapshots", async () => {
+  const stream = new StreamingHighlighter("python");
+  const codes = ["def", "def f():\n", "def f():\n    return 1", "x = 2"];
+  const results = await Promise.all(codes.map((code) => stream.highlightLatest(code)));
+  assert.equal(textOf(results.at(-1) ?? ""), codes.at(-1));
+});
+
 test("unknown languages and oversized snippets safely fall back to plain text", async () => {
   const code = '<script>alert("x")</script> & <img src=x onerror="bad()">';
   for (const language of [undefined, "not-a-language", "__proto__", "constructor"]) {
