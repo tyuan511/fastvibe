@@ -10,6 +10,7 @@ import { automaticModelApi } from "./model-api";
 import { isGatewayKind, probeGateway, readGatewayCredentials, type GatewayKind } from "./gateway-probe";
 import { deleteOAuthCredential, readOAuthProviderIds } from "./oauth-store";
 import type { FastVibePaths } from "./paths";
+import { readGlobalPiProviders, updateGlobalPiProvider, setGlobalPiKey, removeGlobalPiProvider, globalPiCredentialKinds } from "./global-pi-providers";
 import { orderProviderModels, orderProviders } from "@shared/model-order";
 
 /**
@@ -84,6 +85,7 @@ function readProvidersFile(paths: FastVibePaths): ProvidersFile | undefined {
 }
 
 export function readProviders(paths: FastVibePaths): StoredProvider[] {
+  if (paths.engineMode === "global") return readGlobalPiProviders(paths);
   try {
     const parsed = readProvidersFile(paths);
     // No providers.json yet: a fresh install has no provider, and the empty model list
@@ -140,6 +142,7 @@ function writeProviders(
   paths: FastVibePaths,
   providers: StoredProvider[],
 ): void {
+  if (paths.engineMode === "global") throw new Error("Global pi configuration requires field-level updates");
   const payload: ProvidersFile = {
     version: PROVIDERS_VERSION,
     providers: providers.map((provider) => ({ ...provider, models: hydrateModels(provider.models) })),
@@ -148,6 +151,7 @@ function writeProviders(
 }
 
 export async function loadProviderKeys(paths: FastVibePaths): Promise<Record<string, string>> {
+  if (paths.engineMode === "global") return {};
   const keys: Record<string, string> = {};
   try {
     const text = await readFile(paths.agentEnv, "utf8");
@@ -177,6 +181,7 @@ export async function setProviderKey(
   apiKeyEnv: string,
   apiKey: string,
 ): Promise<void> {
+  if (paths.engineMode === "global") return setGlobalPiKey(paths, apiKeyEnv, apiKey);
   const keys = await loadProviderKeys(paths);
   if (apiKey.trim()) keys[apiKeyEnv] = apiKey.trim();
   else delete keys[apiKeyEnv];
@@ -187,6 +192,7 @@ export function listProviderConfigs(
   paths: FastVibePaths,
   keys: Record<string, string>,
 ): ProviderConfig[] {
+  const globalKinds = paths.engineMode === "global" ? globalPiCredentialKinds(paths) : undefined;
   const oauth = readOAuthProviderIds(paths.oauthFile);
   const credentials = readGatewayCredentials(paths.gatewayCredentialsFile);
   return readProviders(paths).map((provider) => {
@@ -198,8 +204,8 @@ export function listProviderConfigs(
       baseUrl: provider.baseUrl,
       api: provider.api,
       apiKeyEnv: provider.apiKeyEnv,
-      hasKey: Boolean(keys[provider.apiKeyEnv]),
-      hasOAuth: oauth.has(provider.id),
+      hasKey: globalKinds ? globalKinds.get(provider.id) === "api_key" : Boolean(keys[provider.apiKeyEnv]),
+      hasOAuth: globalKinds ? globalKinds.get(provider.id) === "oauth" : oauth.has(provider.id),
       // Only the SDK can say a built-in has no key login; a user-typed endpoint always does.
       supportsKey: native ? native.supportsKey : true,
       // Only an endpoint this app talks to directly has an identifiable gateway behind
@@ -385,6 +391,7 @@ function extractModelList(payload: unknown): unknown[] {
  * catalog while keeping the provider's auth and streaming implementation intact.
  */
 export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
+  if (paths.engineMode === "global") return []; // Global models belong to pi.
   const providers = readProviders(paths);
   const keys = readProviderKeysSync(paths);
   const connected = connectedProviderIds(paths, keys);
@@ -457,6 +464,7 @@ export function usableProviders(paths: FastVibePaths, keys: Record<string, strin
 }
 
 function readProviderKeysSync(paths: FastVibePaths): Record<string, string> {
+  if (paths.engineMode === "global") return {};
   try {
     const text = readFileSync(paths.agentEnv, "utf8");
     const keys: Record<string, string> = {};
@@ -479,6 +487,12 @@ export async function addProvider(
 ): Promise<string> {
   const providers = readProviders(paths);
   const id = uniqueProviderId(providers, draft.name, draft.baseUrl);
+  if (paths.engineMode === "global") {
+    const provider = { id, kind: "custom" as const, name: draft.name.trim() || id, baseUrl: draft.baseUrl.trim().replace(/\/+$/, ""), api: draft.api ?? "openai-completions", apiKeyEnv: id, enabled: true, models };
+    updateGlobalPiProvider(paths, provider, ["name", "baseUrl", "api", "models"]);
+    await setGlobalPiKey(paths, id, draft.apiKey);
+    return id;
+  }
   const apiKeyEnv = nativeKeyEnv(id);
   providers.push({
     id,
@@ -518,6 +532,11 @@ export async function addNativeProvider(
   const providers = readProviders(paths);
   if (providers.some((provider) => provider.id === id)) throw new Error("该内置供应商已添加");
 
+  if (paths.engineMode === "global") {
+    updateGlobalPiProvider(paths, { id, kind: "native", name: native.name, baseUrl: native.baseUrl, api: native.api, apiKeyEnv: id, enabled: true, models }, ["models"]);
+    if (apiKey.trim()) await setGlobalPiKey(paths, id, apiKey);
+    return id;
+  }
   const key = apiKey.trim();
   // A stored token is a credential like any other, so the entry may be created with
   // no key — but only when one of the two actually exists. Letting an empty entry
@@ -549,6 +568,7 @@ export async function addNativeProvider(
 
 /** Only the array order changes; credentials and model selections stay in place. */
 export function reorderProviders(paths: FastVibePaths, ids: string[]): void {
+  if (paths.engineMode === "global") return;
   writeProviders(paths, orderProviders(readProviders(paths), ids));
 }
 
@@ -584,11 +604,16 @@ export function updateProvider(
     next.api = current.api;
     next.models = mergeNativeModels(id, patch.models ?? current.models);
   }
+  if (paths.engineMode === "global") {
+    updateGlobalPiProvider(paths, next, Object.keys(patch).filter((key) => patch[key as keyof typeof patch] !== undefined));
+    return;
+  }
   providers[index] = next;
   writeProviders(paths, providers);
 }
 
 export async function removeProvider(paths: FastVibePaths, id: string): Promise<void> {
+  if (paths.engineMode === "global") return removeGlobalPiProvider(paths, id);
   const providers = readProviders(paths);
   const removed = providers.find((provider) => provider.id === id);
   if (!removed) return;
@@ -645,6 +670,7 @@ function hostLabel(baseUrl: string): string {
 }
 
 export function providerKeyEnv(paths: FastVibePaths, id: string): string | undefined {
+  if (paths.engineMode === "global") return id;
   return readProviders(paths).find((provider) => provider.id === id)?.apiKeyEnv;
 }
 
@@ -662,6 +688,7 @@ export async function refreshProviderModels(
 ): Promise<ProviderModel[]> {
   const provider = readProviders(paths).find((item) => item.id === id);
   if (!provider) throw new Error("供应商不存在");
+  if (paths.engineMode === "global") return provider.models;
   if (provider.kind === "native") return findNativeProvider(id)?.models ?? [];
   const keys = await loadProviderKeys(paths);
   const models = await fetchProviderModels(provider.baseUrl, keys[provider.apiKeyEnv] ?? "", provider.api);

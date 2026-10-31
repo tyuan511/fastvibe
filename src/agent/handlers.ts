@@ -6,7 +6,6 @@ import { VERSION as piVersion } from "@earendil-works/pi-coding-agent";
 import { Ipc } from "@shared/ipc";
 import type { AgentConfigSyncPayload } from "@shared/agent-config";
 import { broadcast } from "../main/ipc/broadcast";
-import { registerDagIpc } from "../main/ipc/dag-handlers";
 import { registerScheduleIpc } from "../main/ipc/schedule-handlers";
 import { handle, handlerChannels } from "../main/ipc/registry";
 import type { PiProcessManager } from "../main/pi/process-manager";
@@ -150,8 +149,6 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineSetFollowUp, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setFollowUpMode(payload.mode, payload.conversationId));
   handle(Ipc.enginePromptConversation, (payload: { id: string; message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => engine.promptConversation(payload.id, payload.message, payload.images));
   handle(Ipc.engineGetConversationMessages, (payload: { id: string }) => engine.getConversationMessages(payload.id));
-  // The sub-agent task graph runs inside this engine; the desktop reads and steers it through these.
-  registerDagIpc(engine);
   registerScheduleIpc(engine);
   handle(Ipc.conversationsList, () => engine.listWorkspace());
   handle(Ipc.conversationsCreate, (payload?: { project?: string; activate?: boolean; reuseEmpty?: boolean }) => engine.createConversation(payload?.project, {

@@ -45,7 +45,6 @@ import type {
   ImportCandidate,
   ImportRunResult,
   ImportSourceId,
-  PiConfigSyncReport,
   ImportSourceStatus,
   McpServerConfig,
   McpServerStatus,
@@ -79,6 +78,7 @@ import type {
   WindowChromeState,
   TerminalSessionInfo,
 } from "@shared/ipc";
+import type { PiEngineMode, PiEngineState, PiEngineSwitchResult } from "./pi-engine.ts";
 
 /**
  * `window.fastvibe`, defined once for every transport that can carry it.
@@ -132,6 +132,8 @@ export function createFastVibeApi(t: ApiTransport) {
       submitPrompt: (payload: SubmitPromptRequest): Promise<ConversationQueueState | null> =>
         t.invoke(Ipc.engineSubmitPrompt, payload),
       getStatus: (): Promise<EngineStatus> => t.invoke(Ipc.engineGetStatus),
+      getPiEngine: (): Promise<PiEngineState> => t.invoke(Ipc.engineGetPiEngine),
+      switchPiEngine: (mode: PiEngineMode): Promise<PiEngineSwitchResult> => t.invoke(Ipc.engineSwitchPiEngine, { mode }),
       start: (cwd?: string): Promise<EngineStatus> => t.invoke(Ipc.engineStart, { cwd }),
       stop: (): Promise<EngineStatus> => t.invoke(Ipc.engineStop),
       prompt: (
@@ -296,9 +298,6 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineImportCandidates, { source }),
       importSessions: (source: ImportSourceId, ids: string[]): Promise<ImportRunResult> =>
         t.invoke(Ipc.engineImportSessions, { source, ids }),
-      /** 设置 → 关于: write the connected config into the global pi agent directory. */
-      syncPiConfig: (mode: "merge" | "replace"): Promise<PiConfigSyncReport> =>
-        t.invoke(Ipc.engineSyncPiConfig, { mode }),
       promptConversation: (id: string, message: string, images?: PromptImage[]): Promise<void> =>
         t.invoke(Ipc.enginePromptConversation, { id, message, images }),
       getConversationMessages: (id: string): Promise<ChatMessage[]> =>
@@ -423,24 +422,6 @@ export function createFastVibeApi(t: ApiTransport) {
        */
       onChanged: (listener: (snapshot: WorkspaceSnapshot) => void): (() => void) =>
         t.subscribe(Ipc.workspaceChanged, listener),
-    },
-    dag: {
-      list: (): Promise<DagGraph[]> => t.invoke(Ipc.dagList),
-      output: (conversationId: string, id: string, offset = 0): Promise<DagOutputPage> => t.invoke(Ipc.dagOutput, { conversationId, id, offset }),
-      cancel: (conversationId: string, ids?: string[]): Promise<string[]> => t.invoke(Ipc.dagCancel, { conversationId, ids }),
-      retry: (conversationId: string, id: string): Promise<string[]> => t.invoke(Ipc.dagRetry, { conversationId, id }),
-      resume: (conversationId: string): Promise<string[]> => t.invoke(Ipc.dagResume, { conversationId }),
-      /**
-       * A conversation's graph changed (null once it is dropped). Carried as the engine event
-       * `dag_changed`, not a channel of its own: engine events from an SSH Agent are already relayed
-       * with their conversation ids rewritten, so a remote chat's graph arrives here the same way.
-       */
-      onChanged: (listener: (payload: { conversationId: string; graph: DagGraph | null }) => void): (() => void) =>
-        t.subscribe(Ipc.event, (event: unknown) => {
-          const record = event as { type?: unknown; conversationId?: unknown; graph?: unknown } | null;
-          if (!record || record.type !== "dag_changed" || typeof record.conversationId !== "string") return;
-          listener({ conversationId: record.conversationId, graph: (record.graph as DagGraph | null) ?? null });
-        }),
     },
     schedules: {
       list: (): Promise<ScheduledTaskSnapshot> => t.invoke(Ipc.scheduleList),

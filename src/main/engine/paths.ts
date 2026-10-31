@@ -1,10 +1,13 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { readPiEngineState } from "./pi-engine-mode.ts";
+import { recoverPiEngineMigration } from "./pi-engine-migration.ts";
+import type { PiEngineMode } from "../../shared/pi-engine.ts";
 
 /**
  * 数据目录里的路径。
  *
- * 除了 `databaseFile`，那些「状态」类文件名（`conversationsFile`、`dagFile`、`reasoningFile`……）
+ * 除了 `databaseFile`，那些「状态」类文件名（`conversationsFile`、`reasoningFile`……）
  * 现在只是**旧文件的地址**：对应的 store 第一次打开时把它们导入数据库，然后改名成
  * `<名字>.migrated-<时间戳>` 留在那里，之后不再读写。留着这些键是为了导入，而不是还有谁在写文件。
  * 配置类（`settingsFile`、`providersFile`、`mcpFile`、`memoryFile`…）与凭据文件仍然是各自独立的
@@ -15,6 +18,9 @@ export type FastVibePaths = {
   logs: string;
   runtimeRoot: string;
   agentDir: string;
+  engineMode: PiEngineMode;
+  isolatedAgentDir: string;
+  globalAgentDir: string;
   skillsDir: string;
   sessionsDir: string;
   worktreesDir: string;
@@ -35,12 +41,6 @@ export type FastVibePaths = {
    */
   databaseFile: string;
   conversationsFile: string;
-  /** 每个会话的子 agent 任务 DAG，见 `dag-store.ts`。 */
-  dagFile: string;
-  /** 每个节点运行的完整产出文本；一直是大文件，不进数据库。 */
-  dagResultsDir: string;
-  /** 每次 DAG 节点运行的转写，`<会话>/<runId>.json`，重启后仍能查看执行过程。 */
-  dagRunsDir: string;
   providersFile: string;
   gatewayCredentialsFile: string;
   mcpFile: string;
@@ -160,9 +160,12 @@ function buildFastVibePaths(): FastVibePaths {
   if (!userData) throw new Error("FastVibe 数据目录尚未配置");
   const logs = join(userData, "logs");
   const runtimeRoot = join(userData, "runtime", "engine");
-  const agentDir = join(runtimeRoot, "agent");
+  recoverPiEngineMigration(userData);
+  const engine = readPiEngineState(userData);
+  const agentDir = engine.agentDir;
   const skillsDir = join(agentDir, "skills");
-  const sessionsDir = join(agentDir, "sessions");
+  // Conversation ownership never changes when the configuration source changes.
+  const sessionsDir = join(engine.isolatedAgentDir, "sessions");
   const worktreesDir = join(runtimeRoot, "wt");
   const scratchDir = join(runtimeRoot, "scratch");
 
@@ -175,22 +178,22 @@ function buildFastVibePaths(): FastVibePaths {
     logs,
     runtimeRoot,
     agentDir,
+    engineMode: engine.mode,
+    isolatedAgentDir: engine.isolatedAgentDir,
+    globalAgentDir: engine.globalAgentDir,
     skillsDir,
     sessionsDir,
     worktreesDir,
     scratchDir,
     modelsJson: join(agentDir, "models.json"),
-    agentEnv: join(agentDir, ".env"),
-    oauthFile: join(agentDir, "oauth.json"),
+    agentEnv: join(engine.isolatedAgentDir, ".env"),
+    oauthFile: join(agentDir, engine.mode === "global" ? "auth.json" : "oauth.json"),
     databaseFile: join(userData, "fastvibe.db"),
     conversationsFile: join(userData, "conversations.json"),
-    dagFile: join(userData, "dag.json"),
-    dagResultsDir: join(userData, "dag.json.results"),
-    dagRunsDir: join(runtimeRoot, "dag-runs"),
     providersFile: join(userData, "providers.json"),
     /** Panel credentials for custom relays (new-api); never served, never in providers.json. */
     gatewayCredentialsFile: join(userData, "gateway-credentials.json"),
-    mcpFile: join(userData, "mcp.json"),
+    mcpFile: engine.mode === "global" ? join(agentDir, "mcp.json") : join(userData, "mcp.json"),
     settingsFile: join(userData, "settings.json"),
     windowStateFile: join(userData, "window-state.json"),
     subagentsFile: join(agentDir, "subagents.json"),

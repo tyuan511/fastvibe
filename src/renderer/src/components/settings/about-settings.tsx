@@ -6,15 +6,8 @@ import { Download01Icon, RotateCcwIcon, StarIcon } from "@hugeicons/core-free-ic
 import { AppLogo } from "@/components/app-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cleanError } from "@/lib/ipc-error";
 import { useSettingsStore } from "@/stores/settings";
 import type { AppInfo } from "@shared/ipc";
@@ -43,21 +36,37 @@ export function AboutSettings(): JSX.Element {
   const [exporting, setExporting] = useState(false);
   const [exportedPath, setExportedPath] = useState("");
   const [resetting, setResetting] = useState(false);
-  const [confirmSync, setConfirmSync] = useState(false);
-  const [syncing, setSyncing] = useState<"merge" | "replace" | null>(null);
+  const [engine, setEngine] = useState<import("@shared/pi-engine").PiEngineState | null>(null);
+  const [switchingEngine, setSwitchingEngine] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.fastvibe.engine.getPiEngine()
+      .then((next) => { if (!cancelled) setEngine(next); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     void window.fastvibe.app
       .getInfo()
-      .then((next) => {
-        if (!cancelled) setInfo(next);
-      })
+      .then((next) => { if (!cancelled) setInfo(next); })
       .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
+
+  function switchEngine(mode: "global" | "isolated"): void {
+    if (!engine || mode === engine.mode || switchingEngine) return;
+    setSwitchingEngine(true);
+    void window.fastvibe.engine.switchPiEngine(mode)
+      .then((result) => {
+        toast.success(t("about.engineSwitchDone"));
+        if (!result.restartRequired) setEngine(result);
+      })
+      .catch((err: unknown) => toast.error(t("about.engineSwitchFailed", { error: cleanError(err) })))
+      .finally(() => setSwitchingEngine(false));
+  }
 
   async function exportLogs(): Promise<void> {
     // The zip lands in the host's downloads, where a remote caller cannot get at it.
@@ -70,21 +79,6 @@ export function AboutSettings(): JSX.Element {
     } finally {
       setExporting(false);
     }
-  }
-
-  function syncConfig(mode: "merge" | "replace"): void {
-    setSyncing(mode);
-    void window.fastvibe.engine
-      .syncPiConfig(mode)
-      .then((report) => {
-        setConfirmSync(false);
-        if (report.unchanged) toast.success(t("about.syncUnchanged"));
-        else toast.success(report.backupDir ? t("about.syncDoneBackup") : t("about.syncDone"));
-      })
-      .catch((err: unknown) => {
-        toast.error(t("about.syncFailed", { error: err instanceof Error ? err.message : String(err) }));
-      })
-      .finally(() => setSyncing(null));
   }
 
   return (
@@ -126,38 +120,36 @@ export function AboutSettings(): JSX.Element {
         />
       </SettingsGroup>
 
+      <SettingsGroup title={t("about.engineSection")}>
+        <SettingsRow
+          title={t("about.engineMode")}
+          description={t("about.engineModeDesc")}
+          control={engine ? (
+            <Select value={engine.mode} onValueChange={(value) => switchEngine(value as "global" | "isolated")} disabled={switchingEngine}>
+              <SelectTrigger size="sm" className="w-44" aria-label={t("about.engineMode")}>
+                {switchingEngine ? <Spinner className="size-3" /> : (
+                  <SelectValue>
+                    {engine.mode === "global" ? t("about.engineGlobal") : t("about.engineIsolated")}
+                  </SelectValue>
+                )}
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">{t("about.engineGlobal")}</SelectItem>
+                <SelectItem value="isolated">{t("about.engineIsolated")}</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : null}
+        />
+        <SettingsRow
+          title={t("about.piVersion")}
+          description={t("about.piVersionDesc")}
+          control={<Badge variant="secondary" className="font-mono">v{info?.engineVersion ?? "—"}</Badge>}
+        />
+      </SettingsGroup>
+
       <AboutUpdate />
 
-      <Dialog open={confirmSync} onOpenChange={(open) => { if (!syncing) setConfirmSync(open); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("about.syncConfirmTitle")}</DialogTitle>
-            <DialogDescription>{t("about.syncConfirmBody")}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" disabled={syncing !== null} onClick={() => setConfirmSync(false)}>
-              {t("about.syncCancel")}
-            </Button>
-            <Button variant="outline" disabled={syncing !== null} onClick={() => syncConfig("merge")}>
-              {syncing === "merge" ? t("about.syncing") : t("about.syncMerge")}
-            </Button>
-            <Button disabled={syncing !== null} onClick={() => syncConfig("replace")}>
-              {syncing === "replace" ? t("about.syncing") : t("about.syncReplace")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <SettingsGroup title={t("about.more")}>
-        <SettingsRow
-          title={t("about.sync")}
-          description={t("about.syncDesc")}
-          control={
-            <Button size="xs" variant="outline" disabled={syncing !== null} onClick={() => setConfirmSync(true)}>
-              {syncing ? t("about.syncing") : t("about.syncAction")}
-            </Button>
-          }
-        />
         <SettingsRow
           title={t("about.dataDir")}
           description={<span className="break-all font-mono">{info?.userData ?? "—"}</span>}

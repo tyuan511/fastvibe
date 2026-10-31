@@ -2867,16 +2867,19 @@ multi-select picker of that agent's sessions; nothing is imported until the user
 - **Icons** are the four brands from LobeHub (`components/agent-brand-icon.tsx`), inlined as
   `currentColor` paths rather than `<img>` so they follow the active theme.
 
-### 同步配置到全局 pi（设置 → 关于）
+### 同步配置到全局 pi（引擎模式切换的一步）
 
 One direction, and not a shared data root. `syncFastVibeConfigToPi`
 (`src/main/engine/sync-pi-config.ts`) writes connected providers, the default model,
-thinking level and MCP into `~/.pi/agent`. The confirm offers both: merge replaces a
-shared provider or MCP server and keeps one that exists only in pi; replace drops
-those. Sessions, UI preferences and FastVibe's own runtime stay put either way. API keys are written as pi
-config literals — `escapePiConfigSecret`, because a raw `$` is interpolated and a
-leading `!` is a shell command. Existing files are copied under `backups/` before a
-real change. A file that is not valid JSON stops the sync before anything is written.
+thinking level and MCP into the target pi agent directory in pi's own format. It
+used to be the manual 设置 → 关于 → 同步配置 button with a merge / replace choice;
+that button is gone with the 引擎模式 switch, which calls this function in `merge`
+while migrating to 全局 pi (`pi-engine-switch.ts`), so there is one path and no
+second copy of the rules. Sessions, UI preferences and FastVibe's own runtime stay
+put. API keys are written as pi config literals — `escapePiConfigSecret`, because a
+raw `$` is interpolated and a leading `!` is a shell command. The target directory
+is copied under `engine-backups/` before anything changes, and a file that is not
+valid JSON stops the switch before it writes.
 
 ## Usage statistics (使用统计)
 
@@ -3959,4 +3962,8 @@ markdown renderer when a feed does hand us markdown.
 
 - Code / Office / Cowork are first-class; pi-coding-agent is the default backend.
 - Office and extra ACP agents come later; keep Host adapters (RPC/ACP) decoupled from the renderer.
-- There is no built-in model provider. The user adds one (a pi built-in or any compatible endpoint, e.g. the FastVibe relay at `https://fastvibe.dev/v1`) by pasting an API key; FastVibe fetches `/models`, writes isolated `models.json`, then starts the embedded engine. Do not mention the backend runtime in the UI.
+- There is no built-in model provider. The user adds one (a pi built-in or any compatible endpoint, e.g. the FastVibe relay at `https://fastvibe.dev/v1`) by pasting an API key. In isolated mode FastVibe writes its own model configuration; in global mode it reads and updates the user's pi configuration. Do not mention the backend runtime in the UI.
+
+## Pi engine modes
+
+The embedded SDK can use either FastVibe's isolated pi configuration or the user's global pi configuration. Settings → About → Engine switches the mode. A switch requires no running conversations, parked extension prompts, or sub-agents; it backs up the target configuration, migrates models, credentials, defaults, MCP, and resource directories, then restarts. Conversation transcripts, SQLite state, queues, checkpoints, DAGs, and schedules stay in FastVibe's data directory. The source configuration is retained so switching back is possible.

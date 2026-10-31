@@ -1,17 +1,22 @@
+import { app } from "electron";
 import { dialog, shell } from "electron";
 import { Ipc } from "@shared/ipc";
 import type { ImportSourceId } from "@shared/types";
 import { handle } from "./registry";
 import { uiText } from "../engine/ui-text";
 import { fetchPackageCatalog } from "../pi/package-catalog";
-import { getFastVibePaths } from "../engine/paths";
-import { syncFastVibeConfigToPi } from "../engine/sync-pi-config";
 import { PiProcessManager } from "../pi/process-manager";
 
 /** Register engine/session IPC without mixing it into the Electron bootstrap. */
 export function registerEngineIpc(engine: PiProcessManager): void {
   handle(Ipc.engineSubmitPrompt, (payload: Parameters<typeof engine.submitPrompt>[0]) => engine.submitPrompt(payload));
   handle(Ipc.engineGetStatus, () => engine.status);
+  handle(Ipc.engineGetPiEngine, () => engine.piEngineState);
+  handle(Ipc.engineSwitchPiEngine, async (payload: { mode: "global" | "isolated" }) => {
+    const result = await engine.switchPiEngine(payload?.mode);
+    if (result.restartRequired) setImmediate(() => { app.relaunch(); app.exit(0); });
+    return result;
+  });
 
   handle(Ipc.engineStart, async (payload?: { cwd?: string }) => {
     return engine.start(payload?.cwd ?? engine.cwd);
@@ -269,11 +274,6 @@ export function registerEngineIpc(engine: PiProcessManager): void {
   );
   handle(Ipc.engineImportSessions, async (payload: { source: ImportSourceId; ids: string[] }) =>
     engine.importSessions(payload.source, payload.ids),
-  );
-  // One-shot write into ~/.pi/agent. It does not touch the live engine or its sessions.
-  // `replace` drops providers and MCP servers that exist only in pi; `merge` keeps them.
-  handle(Ipc.engineSyncPiConfig, async (payload?: { mode?: "merge" | "replace" }) =>
-    syncFastVibeConfigToPi(getFastVibePaths(), undefined, payload?.mode === "replace" ? "replace" : "merge"),
   );
 
 }

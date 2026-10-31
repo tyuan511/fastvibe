@@ -37,6 +37,7 @@ const DENIED = new Map<string, string>([
   [Ipc.engineImportSkill, "\u8be5\u64cd\u4f5c\u4f1a\u5728\u8fd0\u884c\u670d\u52a1\u7aef\u7684\u7535\u8111\u4e0a\u6253\u5f00\u6587\u4ef6\u9009\u62e9\u6846\uff0c\u8fdc\u7a0b\u65e0\u6cd5\u5b8c\u6210"],
   [Ipc.engineExportHtml, "\u5bfc\u51fa\u4f1a\u5199\u5165\u8fd0\u884c\u670d\u52a1\u7aef\u7684\u7535\u8111\uff0c\u8fdc\u7a0b\u65e0\u6cd5\u53d6\u56de"],
   [Ipc.appExportLogs, "\u65e5\u5fd7\u5bfc\u51fa\u4f1a\u5199\u5165\u8fd0\u884c\u670d\u52a1\u7aef\u7684\u7535\u8111\uff0c\u8fdc\u7a0b\u65e0\u6cd5\u53d6\u56de"],
+  [Ipc.engineSwitchPiEngine, "引擎配置只能在本机切换"],
 
   // (b) Acts on the desktop that is running the server, not on the client's.
   [Ipc.workspaceReveal, "\u8be5\u64cd\u4f5c\u53ea\u4f5c\u7528\u4e8e\u8fd0\u884c\u670d\u52a1\u7aef\u7684\u7535\u8111"],
@@ -173,11 +174,6 @@ const ALLOWED = new Set<string>([
   Ipc.memoryRun,
   Ipc.memoryClear,
   // 图和它的操作都在同一台机器上，手机能看、能取消、能重试，和桌面一样。
-  Ipc.dagList,
-  Ipc.dagOutput,
-  Ipc.dagCancel,
-  Ipc.dagRetry,
-  Ipc.dagResume,
   Ipc.scheduleList,
   Ipc.scheduleCreate,
   Ipc.scheduleUpdate,
@@ -209,6 +205,13 @@ const ALLOWED = new Set<string>([
   Ipc.engineGetState,
   Ipc.engineGetStats,
   Ipc.engineGetStatus,
+  Ipc.engineGetPiEngine,
+  Ipc.engineGetAgentThreads,
+  Ipc.engineGetAgentThreadMessages,
+  Ipc.engineSendAgentMessage,
+  Ipc.engineFollowupAgent,
+  Ipc.engineWaitAgents,
+  Ipc.engineInterruptAgent,
   Ipc.engineGetSubagentMessages,
   Ipc.engineGetSubagents,
   Ipc.engineListAgentConfigs,
@@ -217,7 +220,6 @@ const ALLOWED = new Set<string>([
   Ipc.engineImportCandidates,
   Ipc.engineImportSessions,
   Ipc.engineImportSources,
-  Ipc.engineSyncPiConfig,
   Ipc.engineInstallExtensionPackage,
   // skills.sh 的搜索、详情页与安装都是对这台电脑的普通读写，和新建技能、保存 MCP 同级。
   Ipc.engineInstallSkillMarket,

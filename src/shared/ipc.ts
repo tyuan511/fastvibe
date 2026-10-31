@@ -2,6 +2,8 @@ import type { OfficialState } from "./official";
 import type { MenuBindings, MenuCommandId } from "./menu-commands.ts";
 export const Ipc = {
   engineGetStatus: "engine:get-status",
+  engineGetPiEngine: "engine:get-pi-engine",
+  engineSwitchPiEngine: "engine:switch-pi-engine",
   engineStart: "engine:start",
   engineStop: "engine:stop",
   enginePrompt: "engine:prompt",
@@ -84,8 +86,6 @@ export const Ipc = {
   engineImportSources: "engine:import-sources",
   engineImportCandidates: "engine:import-candidates",
   engineImportSessions: "engine:import-sessions",
-  /** Merge the connected provider / model / MCP config into the global pi agent directory. */
-  engineSyncPiConfig: "engine:sync-pi-config",
   workspacePick: "workspace:pick",
   event: "engine:event",
   status: "engine:status",
@@ -308,12 +308,6 @@ export const Ipc = {
   memoryRun: "memory:run",
   memoryClear: "memory:clear",
   memoryChanged: "memory:changed",
-  /** 子 agent 任务编排：每个会话的 DAG 图。 */
-  dagList: "dag:list",
-  dagOutput: "dag:output",
-  dagCancel: "dag:cancel",
-  dagRetry: "dag:retry",
-  dagResume: "dag:resume",
   scheduleList: "schedule:list",
   scheduleCreate: "schedule:create",
   scheduleUpdate: "schedule:update",

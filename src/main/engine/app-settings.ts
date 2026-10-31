@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { nativeTheme, type BrowserWindow } from "electron";
 import { THINKING_EFFORT_LEVELS, type ComputerSettings, type EngineModel, type ProjectModelDefault, type ThinkingLevel } from "@shared/types";
@@ -61,6 +62,16 @@ export function readPreferredModelSettings(paths: FastVibePaths, project?: strin
   model?: EngineModel;
   thinkingLevel?: ThinkingLevel | "auto";
 } {
+  if (paths.engineMode === "global") {
+    try {
+      const settings = JSON.parse(readFileSync(join(paths.agentDir, "settings.json"), "utf8")) as Record<string, unknown>;
+      return {
+        model: typeof settings.defaultProvider === "string" && typeof settings.defaultModel === "string"
+          ? { provider: settings.defaultProvider, id: settings.defaultModel } : undefined,
+        thinkingLevel: readThinkingLevel(settings.defaultThinkingLevel),
+      };
+    } catch { return {}; }
+  }
   const settings = readAppSettings(paths);
   const projectDefaults = settings.projectDefaults;
   const projectDefault = project && typeof projectDefaults === "object" && projectDefaults !== null && !Array.isArray(projectDefaults)

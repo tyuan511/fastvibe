@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { InMemoryModelsStore, type AssistantMessage, type AuthPrompt } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
+  readStoredCredential,
   createAgentSession,
   createCodemodeExtension,
   createToolSearchExtension,
@@ -171,11 +172,14 @@ import { testProviderModel } from "../engine/provider-test";
 import { importCcSwitch, scanCcSwitch } from "../engine/cc-switch";
 import { catalogPrice } from "../engine/models-dev";
 import { findNativeProvider } from "../engine/native-providers";
+import { globalPiModels } from "../engine/global-pi-providers";
 import { hasOAuthCredential, OAuthCredentialStore, readOrCreateDeviceId } from "../engine/oauth-store";
 import { priceUsage } from "../engine/pricing";
 import { fetchOpenAIAccountQuota, openAICodexAccountId } from "../engine/openai-quota";
 import { fetchGatewayBalance, gatewayTargets, probeGateway, readGatewayCredentials, writeGatewayCredentials } from "../engine/gateway-probe";
 import { ensureScratchWorkspace, getFastVibePaths, scratchWorkspace, type FastVibePaths } from "../engine/paths";
+import type { PiEngineMode, PiEngineState, PiEngineSwitchResult } from "../../shared/pi-engine.ts";
+import { switchPiEngine } from "../engine/pi-engine-switch.ts";
 import { DisabledMemoryHost, type MemoryHost } from "../engine/memory-host";
 import { SubagentManager } from "../engine/subagents";
 import { reduceSubagent } from "@shared/subagent-state";
@@ -210,13 +214,8 @@ import { SendNowSpans } from "./send-now";
 import { PromptPreparations } from "./prompt-preparation";
 import { sendOpeningPrompt } from "./opening-prompt";
 import type { AppConfigHostRequest, AppConfigHostResult } from "@shared/app-config";
-import type { DagHostRequest, DagHostResult } from "@shared/dag-tools";
-import { DAG_TOOLS, canonicalDagId, dagNodeFinished, dagNodeTools, isDagNodeId, type DagGraph, type DagNode, type DagOutputPage } from "@shared/dag";
-import { buildPrompt, DagScheduler, type DagNodeRun, type DagRunner } from "./dag-scheduler";
-import { DagStore } from "../engine/dag-store";
 import { ScheduledTaskManager } from "./scheduled-task-manager";
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot } from "@shared/schedules";
-import { runDagTool } from "../dag-tools";
 import { builtinExtensionPaths, builtinSkillPaths, ExtensionManager } from "./extension-manager";
 import { createGitWorktree, gitBranch, gitCommonRoot, gitToplevel, listGitWorktrees, removeGitWorktree } from "./git-worktree";
 import { bindBrowserConversation, bindComputerConversation } from "./conversation-binding";
@@ -282,11 +281,24 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
    * and falls back to `ctx.model` when it is unset or unusable.
    */
   lightModel(): EngineModel | undefined;
-  /** The DAG of sub-agent tasks, for the built-in `dag` extension (`src/main/dag-tools.ts`). */
-  dag(request: DagHostRequest, signal?: AbortSignal): Promise<DagHostResult>;
   schedules(request: ScheduleHostRequest): Promise<unknown>;
 };
 
+type AgentSpawnRequest = {
+  conversationId: string;
+  parentId?: string;
+  agent: string;
+  task: string;
+  systemPrompt: string;
+  tools?: string[];
+  model?: string;
+  fallbackModel?: string;
+  thinkingLevel?: ThinkingLevel;
+  cwd: string;
+};
+type AgentMessageRequest = { conversationId: string; threadId: string; message: string; senderId: string };
+type AgentFollowupRequest = AgentMessageRequest & { task?: string };
+type AgentWaitRequest = { conversationId: string; threadIds?: string[]; timeoutMs?: number };
 type ScheduleHostRequest =
   | { action: "list" }
   | { action: "create"; draft: ScheduledTaskDraft & { reportBack?: boolean } }
@@ -402,6 +414,9 @@ export type StreamWatch = {
   publish(event: Record<string, unknown>): void;
 };
 
+/** Start background context maintenance before the native 90% safety threshold. */
+const BACKGROUND_COMPACTION_PERCENT = 75;
+
 /** How long a message typed by a person waits for the launch-time MCP connect before going without its tools. */
 const MCP_PROMPT_GRACE_MS = 3_000;
 /** How long the MCP settings pane waits for it to report how each server ended up. */
@@ -410,13 +425,17 @@ const MCP_PANE_GRACE_MS = 1_500;
 /** Host adapter backed by pi-coding-agent. It keeps one AgentSession per conversation in one Node process. */
 export class PiProcessManager {
   #paths: FastVibePaths;
+  #engineSwitching = false;
   /** One connection for every data-class store this process owns (`engine/db.ts`). */
   #db: Db;
+  #agentThreads: AgentThreadStore;
   #catalog: ConversationCatalog;
   #sessions = new Map<string, ManagedSession>();
   /** Last time each resident session was opened or asked for, for the idle sweep. */
   #sessionTouched = new Map<string, number>();
   #sessionSweep: NodeJS.Timeout | null = null;
+  #backgroundCompactions = new Map<string, Promise<boolean>>();
+  #backgroundCompactionEpoch = 0;
   #activeId: string | null = null;
   /** Monotonic generation for foreground conversation activation. A slow open must not win over a newer one. */
   #activationTicket = new ActivationTicket();
@@ -656,20 +675,6 @@ export class PiProcessManager {
   #mcpVersion = 0;
   #skills: SkillManager;
   #appConfigHost: ((request: AppConfigHostRequest) => Promise<AppConfigHostResult>) | null = null;
-  /**
-   * The DAG of sub-agent tasks, per conversation. Owned by the engine rather than by Electron Main
-   * so an SSH Agent runtime — the same class, no Electron — runs graphs exactly as the desktop does,
-   * and its changes reach the desktop as ordinary engine events (`dag_changed`), whose conversation
-   * ids the remote gateway already rewrites.
-   */
-  #dagStore: DagStore;
-  #dagScheduler: DagScheduler;
-  /**
-   * The parent chat's model as of the last time it used the DAG tools. A node can start long
-   * after the call that created it, when an idle session may have been swept — and a sub-agent
-   * follows its parent's model, so the answer has to outlive the session.
-   */
-  #dagParentModel = new Map<string, string>();
   /** pi package installs (extensions), kept in the isolated agentDir. */
   #extensions: ExtensionManager;
   #memory: MemoryHost;
@@ -732,7 +737,7 @@ export class PiProcessManager {
     this.#checkpoints = new CheckpointStore(this.#db, { legacyFile: checkpointFile(this.#paths.runtimeRoot) });
     this.#usage = usageLedgerFor(this.#paths.usageLedgerFile);
     this.#messageQueue = new MessageQueueStore(this.#db, { legacyFile: this.#paths.messageQueueFile });
-    this.#mcp = new McpManager(this.#paths.mcpFile);
+    this.#mcp = new McpManager(this.#paths.mcpFile, { piFormat: this.#paths.engineMode === "global" });
     this.#skills = new SkillManager(this.#paths.agentDir, this.#paths.skillsDir);
     this.#extensions = new ExtensionManager(this.#paths.agentDir, this.#paths.scratchDir);
     this.#subagentManager = new SubagentManager(this.#paths);
@@ -748,25 +753,6 @@ export class PiProcessManager {
       complete: (system, user, signal, model) => this.#completeMemoryText(system, user, signal, model),
       inputBudgetChars: (model) => this.#memoryInputBudget(model),
       runAgent: (request) => this.#runMemoryAgent(request),
-    });
-    this.#dagStore = new DagStore(this.#db, {
-      resultsDir: this.#paths.dagResultsDir,
-      legacyFile: this.#paths.dagFile,
-    });
-    this.#dagStore.onChange = (conversationId, graph) => this.#emit({ type: "dag_changed", conversationId, graph });
-    this.#dagScheduler = new DagScheduler(this.#dagStore, (args) => this.runDagNode(args), {
-      onSettled: (conversationId, nodes) => this.#announceDagSettled(conversationId, nodes),
-      notifyFailures: true,
-      parentModel: (conversationId) => this.#dagParentModel.get(conversationId),
-      providerConcurrency: 3,
-      resource: (conversationId, node) => {
-        let fallback = node.fallbackModel ?? this.#dagParentModel.get(conversationId);
-        if (!fallback) { const preferred = readDefaultModel(this.#paths); if (preferred) fallback = `${preferred.provider}/${preferred.id}`; }
-        const model = resolveSubagentModel(this.#models, node.model, fallback);
-        let workspace = this.#catalog.get(conversationId)?.cwd ?? conversationId;
-        try { workspace = realpathSync(workspace); } catch { /* A not-yet-created workspace keeps its catalog identity. */ }
-        return { workspace, provider: model?.provider };
-      },
     });
     // The extension API's getAgentDir() is environment-based, while FastVibe passes
     // the isolated directory programmatically to createAgentSession. Keep the role
@@ -823,21 +809,26 @@ export class PiProcessManager {
     this.#catalog.flush();
     this.#reasoning.flush();
     this.#usage.flush();
-    this.#dagStore.flush();
     this.#scheduledTasks.flush();
-    // A node still running when the app quits keeps what it had done so far: its transcript is
-    // what 恢复 / 重启后 shows for that run.
-    for (const [runId, session] of this.#subagentSessions) {
-      const owner = this.#subagents.get(runId)?.conversationId;
-      if (!owner || !isDagNodeId(runId)) continue;
-      try {
-        const entryIds = sessionEntryIds(session);
-        this.#saveDagRun(owner, runId, mapEngineMessages(session.messages, (message) => entryIds.get(message), this.#subagentReasoning.get(runId), undefined, sessionCompletionTimes(session)));
-      } catch {
-        // A transcript that cannot be written is lost for that run; the quit must not be.
-      }
-    }
   }
+  get piEngineState(): PiEngineState {
+    return { mode: this.#paths.engineMode, agentDir: this.#paths.agentDir, globalAgentDir: this.#paths.globalAgentDir, isolatedAgentDir: this.#paths.isolatedAgentDir };
+  }
+
+  async switchPiEngine(mode: PiEngineMode): Promise<PiEngineSwitchResult> {
+    if (mode !== "global" && mode !== "isolated") throw new Error("Invalid pi engine mode");
+    if (mode === this.#paths.engineMode) return { ...this.piEngineState, backupDir: "", restartRequired: false };
+    if (this.#engineSwitching) throw new Error("引擎正在切换，请稍后再试");
+    if (this.getRunningConversations().length > 0) throw new Error("请先等待当前任务完成，再切换引擎");
+    if (this.#pendingUi.size > 0 || this.#subagentSessions.size > 0) throw new Error("请先处理等待中的问题或子 Agent，再切换引擎");
+    this.#engineSwitching = true;
+    try {
+      await this.stop();
+      const result = await switchPiEngine(this.#paths, mode);
+      return { ...this.piEngineState, mode: result.mode, agentDir: mode === "global" ? result.globalAgentDir : this.#paths.isolatedAgentDir, backupDir: result.backupDir, restartRequired: true };
+    } finally { this.#engineSwitching = false; }
+  }
+
   get status(): EngineStatus { return this.#status; }
   get cwd(): string { return this.#cwd; }
   onStatus(listener: (status: EngineStatus) => void): () => void { this.#statusListeners.add(listener); return () => this.#statusListeners.delete(listener); }
@@ -965,191 +956,6 @@ export class PiProcessManager {
   setStreamWatch(watch: StreamWatch | null): void {
     this.#streamWatch = watch;
   }
-  /** Every conversation's graph (the side pane's 任务图 and the sidebar's sub-tasks read these). */
-  listDagGraphs(): DagGraph[] {
-    return this.#dagStore.list();
-  }
-  getDagOutput(conversationId: string, id: string, offset = 0): DagOutputPage {
-    const node = this.#dagStore.node(conversationId, canonicalDagId(id));
-    if (!node) throw new Error("没有这个任务");
-    const output = this.#dagStore.output(conversationId, node);
-    const start = Math.max(0, Math.min(output.length, Number.isFinite(offset) ? Math.trunc(offset) : 0));
-    const end = Math.min(output.length, start + 12000);
-    return { output: output.slice(start, end), offset: start, totalChars: output.length, ...(end < output.length ? { nextOffset: end } : {}) };
-  }
-  cancelDag(conversationId: string, ids?: string[]): string[] {
-    return this.#dagScheduler.cancel(conversationId, ids);
-  }
-  retryDagNode(conversationId: string, id: string): string[] {
-    return this.#dagScheduler.retry(conversationId, id);
-  }
-  resumeDag(conversationId: string): string[] {
-    return this.#dagScheduler.resume(conversationId);
-  }
-  /**
-   * Run one DAG node as a sub-agent on a throwaway in-process session: the node's own
-   * profile as its system prompt, only the tools the profile allows (read-only unless the
-   * main agent granted more), the parent chat's model. Each run has its own id (`runId`:
-   * `T-0001`, then `T-0001.2` …), so `abortSubagent` and the pane's transcript tab address it like
-   * any other delegated run, and a rerun never inherits the previous run's status or transcript.
-   */
-  runDagNode: DagRunner = async ({ conversationId, node, prompt, signal, onUsage }): Promise<DagNodeRun> => {
-    const conversation = this.#catalog.get(conversationId);
-    const live = this.#sessions.get(conversationId)?.session.model;
-    const parent = node.fallbackModel ?? (live ? `${live.provider}/${live.id}` : this.#dagParentModel.get(conversationId));
-    const granted = (await this.#mcp.tools()).filter((tool) => node.profile.tools?.includes(tool.name));
-    const upstream = (node.contextFrom ?? node.dependsOn).map((id) => this.#dagStore.node(conversationId, id)).filter((value): value is DagNode => Boolean(value));
-    const response = await this.#runSubagent(conversationId, {
-      subagentId: node.runId ?? node.id,
-      agent: node.profile.name,
-      // `project`: a node's profile is written for it by the main agent, so a built-in role
-      // that happens to share its name must not lend it that role's model override. A node
-      // that reuses a configured agent carries that agent's model itself (`node.model`),
-      // which outranks the parent below.
-      agentSource: "project",
-      task: prompt,
-      systemPrompt: node.profile.instructions,
-      tools: dagNodeTools(node),
-      ...(node.model ? { model: node.model } : {}),
-      ...(node.thinkingLevel && (THINKING_EFFORT_LEVELS as readonly string[]).includes(node.thinkingLevel)
-        ? { thinkingLevel: node.thinkingLevel as ThinkingLevel }
-        : {}),
-      ...(parent ? { fallbackModel: parent } : {}),
-      cwd: conversation?.cwd ?? this.#cwd,
-      signal,
-      dag: {
-        coordinator: node.coordinator,
-        skills: node.profile.skills,
-        acceptance: node.acceptance ?? (node.coordinator ? "核对所有必要子任务的产物；说明失败或取消的分支如何解决，提供最终验收证据。" : undefined),
-        onUsage,
-        onCheckpoint: () => {
-          const session = this.#subagentSessions.get(node.runId ?? node.id);
-          const current = this.#dagStore.node(conversationId, node.id);
-          if (!session || current?.runId !== node.runId) return;
-          const entryIds = sessionEntryIds(session);
-          this.#saveDagRun(conversationId, node.runId ?? node.id, mapEngineMessages(session.messages, (message) => entryIds.get(message), this.#subagentReasoning.get(node.runId ?? node.id), undefined, sessionCompletionTimes(session)));
-          const output = lastAssistantText(session.messages);
-          if (output) this.#dagStore.patch(conversationId, node.id, { output });
-        },
-        tools: granted,
-        prepareTask: (chars) => buildPrompt(node, upstream, chars),
-        childrenReady: () => this.#dagScheduler.descendants(conversationId, node.id).every((child) => dagNodeFinished(child.status)),
-      },
-    });
-    const runId = node.runId ?? node.id;
-    const transcript = this.#subagentMessages.get(runId);
-    if (transcript && this.#dagStore.node(conversationId, node.id) && this.#saveDagRun(conversationId, runId, transcript)) this.#subagentMessages.delete(runId);
-    if (!this.#dagStore.node(conversationId, node.id)) { this.#subagentMessages.delete(runId); this.#subagents.delete(runId); }
-    const output = lastAssistantText(response.messages);
-    const aborted = response.stopReason === "aborted";
-    return {
-      status: aborted ? "aborted" : response.report?.outcome === "blocked" ? "blocked" : response.exitCode === 0 ? "completed" : "failed",
-      output,
-      ...(response.report ? { report: response.report } : {}),
-      ...(response.errorMessage && !aborted ? { error: response.errorMessage } : {}),
-      ...(response.model ? { model: response.model } : {}),
-    };
-  };
-
-  /**
-   * A DAG run's transcript on disk, so the execution a node did is still there after a restart.
-   * One file per run (`dag-runs/<conversation>/<runId>.json`): a retry is a new run and keeps the
-   * earlier attempt's record, and deleting the conversation removes the folder.
-   */
-  #dagRunFile(conversationId: string, runId: string): string | undefined {
-    // Both halves become path segments; anything but an id shape is refused rather than joined.
-    if (!/^[\w.-]+$/.test(conversationId) || !isDagNodeId(runId)) return undefined;
-    return join(this.#paths.dagRunsDir, conversationId, `${runId}.json`);
-  }
-
-  #saveDagRun(conversationId: string, runId: string, messages: ChatMessage[]): boolean {
-    const file = this.#dagRunFile(conversationId, runId);
-    if (!file) return false;
-    try {
-      mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(`${file}.tmp`, JSON.stringify(messages));
-      renameSync(`${file}.tmp`, file);
-      return true;
-    } catch (error) {
-      console.warn(`[dag] could not save the transcript of ${runId}:`, error);
-      return false;
-    }
-  }
-
-  #readDagRun(conversationId: string, runId: string): ChatMessage[] {
-    const file = this.#dagRunFile(conversationId, runId);
-    if (!file) return [];
-    try {
-      const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
-      return Array.isArray(parsed) ? (parsed as ChatMessage[]) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  /** The conversation is gone: stop its graph, drop it, and remove the run transcripts with it. */
-  #dropDag(conversationId: string): void {
-    this.#dagScheduler.dropConversation(conversationId);
-    this.#dagParentModel.delete(conversationId);
-    for (const [id, info] of this.#subagents) if (info.conversationId === conversationId && isDagNodeId(id)) { this.#subagentMessages.delete(id); this.#subagents.delete(id); }
-    if (!/^[\w.-]+$/.test(conversationId)) return;
-    void rm(join(this.#paths.dagRunsDir, conversationId), { recursive: true, force: true }).catch(() => undefined);
-  }
-
-  /**
-   * A graph finished while the main agent was not waiting on it: tell the agent, so it reads the
-   * results and answers the user instead of the work ending silently in the side pane.
-   *
-   * A hidden custom message (`display: false`), not a user prompt: the model receives the full
-   * note, and the transcript draws only a one-line system event (the inline graph already shows
-   * how each task ended). `followUp` waits for a run in progress; on an idle chat `triggerTurn`
-   * starts the turn that writes the summary.
-   */
-  async #announceDagSettled(conversationId: string, nodes: DagNode[]): Promise<boolean> {
-    if (this.#queueShutdown || !this.#catalog.get(conversationId)) return false;
-    const settled = !(this.#dagStore.get(conversationId)?.nodes.some((node) => !dagNodeFinished(node.status)) ?? false);
-    const counts = new Map<string, number>();
-    for (const node of nodes) counts.set(node.status, (counts.get(node.status) ?? 0) + 1);
-    const label = (status: string): string =>
-      ({ completed: uiText("完成", "completed"), failed: uiText("失败", "failed"), blocked: uiText("阻塞", "blocked"), skipped: uiText("跳过", "skipped"), cancelled: uiText("取消", "cancelled") })[status] ?? status;
-    const summary = ["completed", "failed", "blocked", "skipped", "cancelled"]
-      .filter((status) => counts.get(status))
-      .map((status) => `${counts.get(status)} ${label(status)}`)
-      .join(uiText("，", ", "));
-    const lines = nodes.map((node) => {
-      const reason = node.status !== "completed" && node.error ? uiText(`：${node.error}`, `: ${node.error}`) : "";
-      return `- ${node.id} ${node.title} — ${label(node.status)}${reason.slice(0, 500)}${node.report ? `: ${node.report.summary.slice(0, 600)}` : ""}`.slice(0, Math.floor(12000 / Math.max(1, nodes.length)));
-    });
-    const text = [
-      settled ? uiText(`子任务已全部结束（${summary}）。`, `All sub-tasks have finished (${summary}).`) : uiText(`子任务有需要处理的新结果（${summary}），其他任务仍在执行。`, `Sub-tasks need attention (${summary}); other tasks are still running.`),
-      ...lines,
-      "",
-      uiText(
-        "请用 dag_result 读取需要的产出，向用户汇总结果；失败或被跳过的任务说明原因，必要时用 dag_retry 重试。",
-        "Read the outputs you need with dag_result and summarise the results for the user; explain any failed or skipped task, and retry with dag_retry if it makes sense.",
-      ),
-    ].join("\n");
-    const noticeId = nodes.map((node) => `${node.id}:${node.runId ?? "skip"}:${node.status}:${node.endedAt}`).join("|");
-    let deliveredSession: AgentSession | undefined;
-    const alreadyDelivered = (): boolean => deliveredSession?.messages.some((message) => {
-      const raw = message as unknown as { customType?: string; details?: { noticeId?: string } };
-      return raw.customType === "dag-settled" && raw.details?.noticeId === noticeId;
-    }) ?? false;
-    try {
-      const { session } = await this.#sessionFor(conversationId);
-      deliveredSession = session;
-      if (alreadyDelivered()) return true;
-      if (this.#queueShutdown || this.#dagStore.get(conversationId)?.paused) return false;
-      await session.sendCustomMessage(
-        { customType: "dag-settled", content: text, display: false, details: { noticeId, settled, nodes: nodes.map((node) => ({ id: node.id, status: node.status })) } },
-        { triggerTurn: true, deliverAs: "followUp" },
-      );
-      return true;
-    } catch (error) {
-      console.warn(`[dag] could not tell ${conversationId} its sub-tasks finished:`, error);
-      return alreadyDelivered();
-    }
-  }
   /**
    * Where the `fastvibe_config_*` tools land. Injected rather than imported because the
    * actions dispatch into the desktop's call table, which an SSH Agent runtime (the same
@@ -1198,7 +1004,9 @@ export class PiProcessManager {
       // too. A subscription (OAuth) token is the exception: its refresh token has to
       // survive a restart, so it is persisted under the isolated agentDir instead.
       this.#runtime = await ModelRuntime.create({
-        credentials: new OAuthCredentialStore(this.#paths.oauthFile),
+        ...(this.#paths.engineMode === "global"
+          ? { authPath: this.#paths.oauthFile }
+          : { credentials: new OAuthCredentialStore(this.#paths.oauthFile) }),
         modelsStore: new InMemoryModelsStore(),
         modelsPath: join(this.#paths.agentDir, "models.json"),
         allowModelNetwork: false,
@@ -1216,6 +1024,7 @@ export class PiProcessManager {
       // not for a thought (`thinking-off.ts`).
       installThinkingOffGuard(this.#runtime, this.#noThinkingOffModels, this.#thinkingOffRefused);
       await this.#models.refresh({ allowNetwork: false });
+      if (this.#paths.engineMode === "global") this.#modelsCache = globalPiModels(this.#models);
       await this.#mcp.load();
       markStartup("engine-runtime");
       // Servers connect in the background. Awaiting them here put the slowest one (an `npx`
@@ -1229,7 +1038,6 @@ export class PiProcessManager {
       const active = this.#catalog.activeId ? this.#catalog.get(this.#catalog.activeId) : undefined;
       if (active) await this.#ensureSession(active);
       markStartup("engine-session");
-      this.#dagScheduler.start();
       this.#setStatus({ state: "ready", cwd: this.#cwd });
       markStartup("engine-ready");
       this.#scheduledTasks.start();
@@ -1244,9 +1052,10 @@ export class PiProcessManager {
   async stop(): Promise<void> {
     this.#promptPreparations.cancel();
     this.#queueShutdown = true;
-    this.#dagScheduler.stop(uiText("引擎已停止", "The engine was stopped"));
     this.#scheduledTasks.stop();
     this.#stopSessionSweep();
+    this.#backgroundCompactionEpoch++;
+    this.#backgroundCompactions.clear();
     await this.#queue(async () => {
       const sessions = [...this.#sessions.values()];
       this.#sessions.clear();
@@ -1338,6 +1147,7 @@ export class PiProcessManager {
     },
   ): Promise<void> {
     const { id, session } = await this.#sessionFor(options?.conversationId);
+    if (id) await this.#waitForBackgroundCompaction(id);
     const held = this.#holdCommand(id, message);
     try {
       if (await this.#compactIfCommand(session, message)) return;
@@ -1397,6 +1207,7 @@ export class PiProcessManager {
     await this.#ensureReady();
     const managed = await this.#ensureSession(conversation);
     if (signal?.aborted) throw new Error("任务已停止");
+    if (id) await this.#waitForBackgroundCompaction(id);
     if (await this.#compactIfCommand(managed.session, message)) return;
     // Same rule as prompt(): only a pause over an empty queue is cleared here.
     if (this.#messageQueue.releaseEmptyPause(id)) this.#emitQueue(id);
@@ -1681,10 +1492,6 @@ export class PiProcessManager {
   async abort(conversationId?: string): Promise<void> {
     const queueOwner = conversationId ?? this.#activeId ?? undefined;
     if (queueOwner) this.#promptPreparations.cancel(queueOwner);
-    // Stopping the chat stops what it set running: its sub-agent tasks are not left to carry on
-    // behind a Stop the user believes ended everything. Told before the session is awaited, so a
-    // slow stop cannot let a node start in the meantime.
-    if (queueOwner) this.#dagScheduler.cancel(queueOwner, undefined, uiText("主会话已停止", "The main chat was stopped"));
     if (queueOwner) {
       // Invalidate drains before waiting for session creation or the queue lock. A
       // drain waiting on the same promise must observe Stop before entering the SDK.
@@ -1748,10 +1555,6 @@ export class PiProcessManager {
     const control = this.#subagentControls.get(subagentId);
     if (!control) return;
     this.#stoppedSubagents.add(subagentId);
-    if (owner && isDagNodeId(subagentId)) {
-      const node = this.#dagStore.get(owner)?.nodes.find((item) => item.runId === subagentId);
-      if (node) this.#dagScheduler.cancel(owner, [node.id], uiText("已被用户终止", "Stopped by the user"));
-    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -1793,6 +1596,7 @@ export class PiProcessManager {
     const owner = conversationId ?? this.#activeId ?? undefined;
     this.#resolvePendingUi(owner);
     const { session } = await this.#sessionFor(conversationId);
+    if (owner) await this.#waitForBackgroundCompaction(owner);
     // 0.87.0 made the session projection the provider context. Splicing
     // `agent.state.messages` is overwritten by the next request, so a failed attempt
     // has to be omitted with a context edit or the resume stacks on top of it. The
@@ -2268,10 +2072,7 @@ export class PiProcessManager {
       );
     }
     const cached = this.#subagentMessages.get(subagentId);
-    if (cached) return cached.slice();
-    // A DAG run from before a restart: its transcript was written to disk when it ended.
-    if (isDagNodeId(subagentId) && conversationId) return this.#readDagRun(conversationId, subagentId);
-    return [];
+    return cached ? cached.slice() : [];
   }
   async getSubagents(conversationId?: string): Promise<SubagentInfo[]> {
     return [...this.#subagents.values()]
@@ -2496,7 +2297,6 @@ export class PiProcessManager {
     for (const child of children) await this.deleteConversation(child.id);
     const wasActive = this.#catalog.activeId === id;
     const removed = this.#catalog.remove(id);
-    this.#dropDag(id);
     if (removed?.sessionFile) {
       // Fold the transcript into the usage ledger *before* unlinking it: a turn the
       // live hook never saw (history from before the ledger existed, or a run that
@@ -2728,7 +2528,6 @@ export class PiProcessManager {
     const wasActive = this.#catalog.get(this.#catalog.activeId ?? "")?.project === cwd;
     const removed = this.#catalog.removeProject(cwd);
     await Promise.all(removed.map(async (item) => {
-      this.#dropDag(item.id);
       this.#queueRebuilds.add(item.id);
       this.#bumpQueueEpoch(item.id);
       try {
@@ -3406,12 +3205,46 @@ export class PiProcessManager {
   getPendingUi(): Array<Record<string, unknown>> {
     return [...this.#pendingUi.values()].map((pending) => pending.request);
   }
+  /** Wait for a scheduled background checkpoint before accepting the next user turn. */
+  #waitForBackgroundCompaction(conversationId: string): Promise<boolean> {
+    return this.#backgroundCompactions.get(conversationId) ?? Promise.resolve(false);
+  }
   /**
-   * Whether a conversation is still working: a run in flight, or a compaction.
-   *
-   * The sidebar's 运行中 mark and 运行时保持唤醒 both read this, so a chat that
-   * compacts in the background stays visibly busy instead of looking idle.
+   * Prepare a compacted projection after an idle turn. The raw transcript stays intact;
+   * `session.compact()` only adds the SDK checkpoint that the next request projects.
    */
+  #scheduleBackgroundCompaction(conversationId: string, session: AgentSession): void {
+    if (readAppSettings(this.#paths).backgroundCompaction !== true) return;
+    if (!session.isIdle || this.#backgroundCompactions.has(conversationId)) return;
+    const usage = session.getContextUsage();
+    if (!usage || usage.tokens === null || usage.contextWindow <= 0 || (usage.percent ?? 0) < BACKGROUND_COMPACTION_PERCENT) return;
+    const epoch = this.#backgroundCompactionEpoch;
+    const task = (async () => {
+      this.#emit({ type: "background_compaction", conversationId, status: "start" });
+      try {
+        await session.compact();
+        if (epoch !== this.#backgroundCompactionEpoch) return false;
+        const after = session.getContextUsage();
+        this.#emit({ type: "background_compaction", conversationId, status: "done", tokensBefore: usage.tokens, tokensAfter: after?.tokens ?? undefined });
+        return true;
+      } catch (error) {
+        if (epoch === this.#backgroundCompactionEpoch) {
+          this.#emit({
+            type: "background_compaction",
+            conversationId,
+            status: "failed",
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return false;
+      }
+    })();
+    this.#backgroundCompactions.set(conversationId, task);
+    void task.finally(() => {
+      if (this.#backgroundCompactions.get(conversationId) === task) this.#backgroundCompactions.delete(conversationId);
+    });
+  }
+  /** Whether a conversation is still working: a run in flight, or a compaction. */
   #busy(id: string): boolean { return this.#running.get(id) === true || this.#compacting.has(id); }
   /**
    * What a client is told about a conversation: `#busy`, or a 立即 between its two runs.
@@ -3595,7 +3428,9 @@ export class PiProcessManager {
     if (id === "openai-codex") {
       // Prefer the SDK's persisted, refreshed account id; the JWT fallback keeps older
       // credential files working and never sends the token itself to the renderer.
-      const stored = await new OAuthCredentialStore(this.#paths.oauthFile).read(id);
+      const stored = this.#paths.engineMode === "global"
+        ? readStoredCredential(id, this.#paths.oauthFile)
+        : await new OAuthCredentialStore(this.#paths.oauthFile).read(id);
       const storedId = stored && "accountId" in stored && typeof stored.accountId === "string" ? stored.accountId : undefined;
       accountId = storedId ?? openAICodexAccountId(apiKey);
     }
@@ -3645,7 +3480,7 @@ export class PiProcessManager {
         prompt: (prompt) => this.#askOAuth(id, prompt, login),
       }, { getDeviceId: () => readOrCreateDeviceId(this.#paths.oauthFile) });
       const env = providerKeyEnv(this.#paths, id);
-      if (env) await setProviderKey(this.#paths, env, "");
+      if (env && this.#paths.engineMode !== "global") await setProviderKey(this.#paths, env, "");
       await this.reloadProviders();
       return { ok: true };
     } catch (error) {
@@ -3654,7 +3489,9 @@ export class PiProcessManager {
       // synchronisation pass (recompose, model refresh, availability) runs behind the
       // login and can throw on its own. A token on disk is a successful login; only a
       // real failure may say otherwise, or the user would re-authorise for nothing.
-      if (hasOAuthCredential(this.#paths.oauthFile, id)) await this.reloadProviders();
+      if (this.#paths.engineMode === "global"
+        ? readStoredCredential(id, this.#paths.oauthFile)?.type === "oauth"
+        : hasOAuthCredential(this.#paths.oauthFile, id)) await this.reloadProviders();
       else return { ok: false, error: error instanceof Error ? error.message : String(error) };
       return { ok: true };
     } finally {
@@ -3716,6 +3553,13 @@ export class PiProcessManager {
       const runtime = this.#runtime;
       const registry = this.#models;
       if (!runtime || !registry) return this.#status;
+      if (this.#paths.engineMode === "global") {
+        await registry.refresh({ allowNetwork: false });
+        this.#modelsCache = globalPiModels(registry);
+        this.#prices = modelPriceIndex(this.#paths);
+        await this.#rebindModels();
+        return this.#status;
+      }
       const keys = await loadProviderKeys(this.#paths);
       const providers = usableProviders(this.#paths, keys);
       // The overlay is the only thing we put keys in, so it also lists exactly the
@@ -3756,6 +3600,7 @@ export class PiProcessManager {
    * engine here would make a button in 关于 a surprising side effect.
    */
   async reloadModelMetadata(): Promise<void> {
+    if (this.#paths.engineMode === "global") return;
     if (!this.#models) return;
     await this.#queue(async () => {
       const registry = this.#models;
@@ -4215,7 +4060,7 @@ export class PiProcessManager {
         // history keeps a reference to it rather than its bytes (`engine/tool-images-extension.ts`).
         factory: toolImagesExtension({ dir: this.#paths.toolImagesDir, conversationId: conversation.id, resize: resizeForModel, reader: this.#toolImageReader }),
       }, {
-        // Switches codemode, tool_search and the dag_* tools on or off from the settings
+        // Switches codemode and tool_search on or off from the settings
         // as they are at `session_start`, which a reload emits again — the SDK's
         // `defaultTools` setting can only add.
         name: "fastvibe-tool-modes",
@@ -4256,7 +4101,9 @@ export class PiProcessManager {
       resourceLoader,
       ...(sessionStartEvent ? { sessionStartEvent } : {}),
     });
-    installNativeCompactionGuard(result.session);
+    installNativeCompactionGuard(result.session, {
+      waitForBackgroundCompaction: () => this.#waitForBackgroundCompaction(conversation.id),
+    });
     this.#armModelNotice(conversation.id, result.session);
     lap("session");
     this.#promptPreparations.install(conversation.id, result.session);
@@ -4481,6 +4328,7 @@ export class PiProcessManager {
           this.#pendingCwdRebind.delete(conversation.id);
           void this.#rebindSessionCwd(conversation.id).catch(() => undefined);
         }
+        this.#scheduleBackgroundCompaction(conversation.id, result.session);
       }
       // A user turn has no id of its own; the session entry that stores it does.
       // The renderer's optimistic copy needs that id to branch (retry / edit) back
@@ -4588,7 +4436,7 @@ export class PiProcessManager {
     // 自动压缩 is always on for a new session. The engine keeps the flag in its own
     // settings file, which FastVibe does not own, so it is pinned here where every
     // conversation passes. Skipped when it already matches, since writing touches the file.
-    if (!result.session.autoCompactionEnabled) result.session.setAutoCompactionEnabled(true);
+    if (this.#paths.engineMode !== "global" && !result.session.autoCompactionEnabled) result.session.setAutoCompactionEnabled(true);
     // A conversation with no history yet starts on the user's pinned 默认模型.
     if (result.session.messages.length === 0) await this.#applyPreferredModel(result.session, conversation.project, Boolean(conversation.scheduledTaskId));
     const payload: ConversationReadyEvent = {
@@ -4823,6 +4671,7 @@ export class PiProcessManager {
     const held = this.#holdCommand(conversationId, message);
     try {
       if (signal?.aborted) throw new Error("任务已停止");
+      if (conversationId) await this.#waitForBackgroundCompaction(conversationId);
       if (await this.#compactIfCommand(session, message)) return;
       // Queued rows, scheduled tasks and delegated work have no one waiting at a keyboard, and
       // a run that silently lacks its MCP tools is worse than one that starts a moment later.
@@ -5722,40 +5571,6 @@ export class PiProcessManager {
           case "stopRun": return this.stopScheduledRun(request.id);
           case "history": return this.scheduleHistory(request.id);
         }
-      },
-      dag: async (request, signal) => {
-        const model = this.#sessions.get(conversationId)?.session.model;
-        if (model) this.#dagParentModel.set(conversationId, `${model.provider}/${model.id}`);
-        const ownedNode = owner !== conversationId ? this.#dagStore.get(conversationId)?.nodes.find((node) => node.runId === owner) : undefined;
-        if (owner !== conversationId && !ownedNode) return { ok: false, error: "这次子任务已结束" };
-        return runDagTool(
-          {
-            tools: [...DAG_TOOLS, ...(await this.#mcp.tools()).map((tool) => tool.name)],
-            ...(ownedNode ? { scope: { nodeId: ownedNode.id, runId: owner } } : {}),
-            send: async (id, message) => {
-              const node = this.#dagStore.node(conversationId, id);
-              const child = node?.runId ? this.#subagentSessions.get(node.runId) : undefined;
-              if (!node || node.status !== "running" || !child || this.#subagentControls.get(node.runId!)?.aborted) throw new Error("任务当前无法接收信息；待执行或已结束的任务请用 dag_update");
-              await child.steer(message);
-            },
-            store: this.#dagStore,
-            scheduler: this.#dagScheduler,
-            // Read at call time: a role saved in Settings mid-conversation is reusable on the
-            // next batch, not only after the engine restarts.
-            agents: () =>
-              this.#subagentManager.list().map((agent) => ({
-                name: agent.name,
-                description: agent.description,
-                instructions: agent.systemPrompt,
-                tools: agent.tools,
-                model: agent.model,
-                thinkingLevel: agent.thinkingLevel,
-              })),
-          },
-          request,
-          conversationId,
-          signal,
-        );
       },
       // 需求批准 has no timeout of its own, and an unanswered prompt parks the tool (and
       // the run's settle) forever. A generous default keeps a background chat from

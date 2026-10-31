@@ -6,7 +6,6 @@ import { engine, getStatus, onConversationReady, onEvent, onStatus } from "@/lib
 import { createConversationRefresh } from "@/lib/conversation-refresh";
 import { coalesce } from "@/lib/coalesce";
 import { createWorkspaceRestore } from "@/lib/workspace-restore";
-import { isDagNodeId } from "@shared/dag";
 import { findSubagent } from "@shared/subagent-state";
 import { conversationIdFromHash, conversationPath } from "@/lib/routes";
 import { resolvePath } from "@/lib/workspace-path";
@@ -279,8 +278,7 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
         // no side-pane write per token.
         if (event.type !== "subagent_event" && event.type !== "subagent_state") {
           const subagentId = typeof event.subagentId === "string" ? event.subagentId : "";
-          // A DAG node is opened on demand from the graph, not given a tab as it starts.
-          if (subagentId && !isDagNodeId(subagentId)) {
+          if (subagentId) {
             const info = findSubagent(useSessionStore.getState().subagents, subagentId, conversationId);
             useSidePaneStore.getState().registerSubagent(subagentId, {
               conversationId: typeof event.conversationId === "string" ? event.conversationId : info?.conversationId,

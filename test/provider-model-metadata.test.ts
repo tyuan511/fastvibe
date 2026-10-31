@@ -74,6 +74,7 @@ function loadProviders() {
     "./pi-global-sync.ts": { piProviderModelsEntry: () => undefined },
     "./gateway-probe": { isGatewayKind: () => false },
     "./oauth-store": { deleteOAuthCredential: () => undefined, readOAuthProviderIds: () => new Set<string>() },
+    "./global-pi-providers": { readGlobalPiProviders: () => [], updateGlobalPiProvider: () => undefined, setGlobalPiKey: async () => undefined, removeGlobalPiProvider: async () => undefined, globalPiCredentialKinds: () => new Map() },
   };
   const exports = {};
   new Function("require", "exports", source)((name: string) => {

@@ -120,6 +120,7 @@
   "collapseThinkingDesc": "Fold a finished thought into the tool line it belongs to, shown as \"Thought N times\"; one still being written keeps its own line"
  },
  "about": {
+  "engineSection": "Engine",
   "more": "More",
   "tagline": "Desktop client for agent work, code, and cowork",
   "openSource": "Open source",
@@ -136,20 +137,15 @@
   "resetDesc": "Restore appearance, chat and shortcut defaults; conversations are untouched",
   "resetAction": "Reset",
   "engine": "Engine version",
-  "engineDesc": "The pi coding agent embedded in this install.",
-  "sync": "Sync configuration to pi",
-  "syncDesc": "Writes connected providers, the default model and MCP servers into pi on this machine. Sessions stay here.",
-  "syncAction": "Sync",
-  "syncConfirmTitle": "Sync to global pi",
-  "syncConfirmBody": "API keys are written into ~/.pi/agent. Merge keeps entries only pi has; replace swaps in this configuration.",
-  "syncMerge": "Merge",
-  "syncReplace": "Replace",
-  "syncCancel": "Cancel",
-  "syncing": "Syncing…",
-  "syncDone": "Synced to global pi",
-  "syncDoneBackup": "Synced to global pi. The previous files were backed up.",
-  "syncUnchanged": "Global pi already matches this configuration",
-  "syncFailed": "Sync failed: {{error}}"
+  "engineMode": "Configuration source",
+  "piVersion": "Pi version",
+  "piVersionDesc": "The version of the embedded Pi coding agent currently in use.",
+  "engineModeDesc": "Choose the global Pi configuration or FastVibe's isolated configuration. Switching migrates configuration and restarts the app.",
+  "engineGlobal": "Use global Pi",
+  "engineIsolated": "Use isolated Pi",
+  "engineSwitchDone": "Engine configuration switched; the app will restart",
+  "engineSwitchFailed": "Could not switch engine: {{error}}",
+  "engineDesc": "The Pi coding agent embedded in this install."
  },
  "defaultModel": {
   "title": "Chat model",

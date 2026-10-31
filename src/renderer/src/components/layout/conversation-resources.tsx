@@ -26,7 +26,6 @@ import { subscribeGitStatus, useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
 import { useSessionStore, useConversationWorking } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
-import { useDagStore } from "@/stores/dag";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { useTranscriptNavigation } from "@/stores/transcript-navigation";
 import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
@@ -156,12 +155,21 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   const narrow = useIsNarrowViewport();
   const messages = useSessionStore((state) => state.messages);
   const registry = useSessionStore((state) => state.subagents);
-  const graph = useDagStore((state) => state.graphs[conversation.id]);
   const working = useConversationWorking();
+  const [threadAgents, setThreadAgents] = useState<ResourceAgent[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void getAgentThreads(conversation.id).then((threads) => {
+      if (!cancelled) setThreadAgents(threads.map((thread) => ({ id: thread.id, name: thread.name ?? thread.agent ?? thread.id, brief: thread.task, status: thread.status === "working" || thread.status === "queued" ? "running" : thread.status, parentId: thread.parentId })));
+    }).catch(() => { if (!cancelled) setThreadAgents([]); });
+    return () => { cancelled = true; };
+  }, [conversation.id]);
+
+
   // Same display rule as the panel above the composer: an abandoned checklist is not
   // a resource of the current turn, so it does not get a section here either.
   const todo = useConversationTodo();
-  const agents = useMemo(() => conversationAgents(conversation.id, messages, registry, graph?.nodes ?? []), [conversation.id, messages, registry, graph]);
+  const agents = useMemo(() => [...conversationAgents(conversation.id, messages, registry), ...threadAgents], [conversation.id, messages, registry, threadAgents]);
   const outputs = useMemo(() => conversationOutputs(messages, (path) => resolvePath(path, conversation.cwd)), [messages, conversation.cwd]);
   const [moreOutputs, setMoreOutputs] = useState(false);
   const [moreAgents, setMoreAgents] = useState(false);
@@ -200,13 +208,9 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   const agentRow = (agent: ResourceAgent) => {
     const live = agent.status === "running" && agent.info?.phase !== "waiting";
     const attention = agent.info?.phase === "waiting" || ["blocked", "failed", "error"].includes(agent.status);
-    const label = agent.node && (agent.status !== "running" || !agent.info)
-      ? t("dag.status." + agent.node.status) : subagentStatusText(agent.info, agent.status);
-    return <Button key={agent.id} variant="ghost" className={ROW} disabled={narrow && !agent.node} title={agent.brief} onClick={() => {
-      const pane = useSidePaneStore.getState();
-      if (agent.node && narrow) useDagStore.getState().openViewer(conversation.id, agent.node.id);
-      else if (agent.node) pane.openDagNode(conversation.id, agent.node);
-      else pane.openSubagent(agent.id, { conversationId: conversation.id, title: agent.name, status: agent.status, brief: agent.brief });
+    const label = subagentStatusText(agent.info, agent.status);
+    return <Button key={agent.id} variant="ghost" className={cn(ROW, agent.parentId && "pl-6")} title={agent.brief} onClick={() => {
+      useSidePaneStore.getState().openSubagent(agent.id, { conversationId: conversation.id, title: agent.name, status: agent.status, brief: agent.brief });
       onClose();
     }}>
       {live ? <RunningMark /> : <HugeiconsIcon icon={BotIcon} strokeWidth={2} className={cn("size-4 shrink-0 text-muted-foreground", attention && "text-warning")} />}

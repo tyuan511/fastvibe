@@ -94,6 +94,7 @@ export function createTransport(config: McpServerConfig, onStderr: (chunk: strin
 
 export class McpManager {
   #file: string;
+  #piFormat: boolean;
   #createTransport: McpTransportFactory;
   #configs: McpServerConfig[] = [];
   #connections = new Map<string, Connection>();
@@ -103,8 +104,9 @@ export class McpManager {
   /** The same, for one server: `reconnect(id)` discards that server's connect that is still in flight. */
   #epochs = new Map<string, number>();
 
-  constructor(file: string, options: { createTransport?: McpTransportFactory } = {}) {
+  constructor(file: string, options: { createTransport?: McpTransportFactory; piFormat?: boolean } = {}) {
     this.#file = file;
+    this.#piFormat = options.piFormat === true;
     this.#createTransport = options.createTransport ?? createTransport;
   }
 
@@ -117,7 +119,10 @@ export class McpManager {
 
   async save(configs: McpServerConfig[]): Promise<void> {
     this.#configs = configs.filter(isConfig);
-    await writeFile(this.#file, `${JSON.stringify(this.#configs, null, 2)}\n`, "utf8");
+    const value = this.#piFormat
+      ? { mcpServers: Object.fromEntries(this.#configs.map((config) => [config.name, piMcpEntry(config)])) }
+      : this.#configs;
+    await writeFile(this.#file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
   list(): McpServerStatus[] {
@@ -269,6 +274,11 @@ function toParameters(schema: McpTool["inputSchema"] | undefined): Record<string
   return { ...base, type: base.type ?? "object", ...(base.properties === undefined ? { properties: {} } : {}) };
 }
 
+function piMcpEntry(config: McpServerConfig): Record<string, unknown> {
+  return config.transport === "stdio"
+    ? { command: config.command, ...(config.args?.length ? { args: config.args } : {}), ...(config.env ? { env: config.env } : {}), ...(config.enabled === false ? { enabled: false } : {}), ...(config.exposure && config.exposure !== "direct" ? { exposure: config.exposure } : {}) }
+    : { url: config.url, ...(config.headers ? { headers: config.headers } : {}), ...(config.enabled === false ? { enabled: false } : {}), ...(config.exposure && config.exposure !== "direct" ? { exposure: config.exposure } : {}) };
+}
 export function normalizeConfigs(value: unknown): McpServerConfig[] {
   if (Array.isArray(value)) return value.filter(isConfig);
   if (!value || typeof value !== "object") return [];
