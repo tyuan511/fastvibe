@@ -85,6 +85,12 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   );
   handle(Ipc.engineSkillMarketDetail, (payload: SkillMarketTarget) => engine.skillMarketDetail(payload));
   handle(Ipc.engineInstallSkillMarket, (payload: SkillMarketTarget) => engine.installMarketSkill(payload));
+  handle(Ipc.engineGetAgentThreads, (payload?: { conversationId?: string }) => engine.listAgentThreads(payload?.conversationId));
+  handle(Ipc.engineGetAgentThreadMessages, (payload: { threadId: string; conversationId?: string }) => engine.getAgentThreadMessages(payload.threadId, payload.conversationId));
+  handle(Ipc.engineSendAgentMessage, (payload: { conversationId: string; threadId: string; message: string; senderId: string }) => engine.sendAgentMessage(payload));
+  handle(Ipc.engineFollowupAgent, (payload: { conversationId: string; threadId: string; message: string; senderId: string; task?: string }) => engine.followupAgent(payload));
+  handle(Ipc.engineWaitAgents, (payload: { conversationId: string; threadIds?: string[]; timeoutMs?: number }) => engine.waitAgents(payload));
+  handle(Ipc.engineInterruptAgent, (payload: { threadId: string; conversationId?: string }) => engine.interruptAgent(payload.threadId, payload.conversationId));
   handle(Ipc.engineGetSubagents, (payload?: { conversationId?: string }) => engine.getSubagents(payload?.conversationId));
   handle(Ipc.engineListAgentConfigs, () => engine.getAgentConfigs());
   handle(Ipc.engineSaveAgentConfig, (payload: SubagentDraft) => engine.saveAgentConfig(payload));

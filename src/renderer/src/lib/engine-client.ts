@@ -1,4 +1,5 @@
 import { useSessionStore } from "@/stores/session";
+import type { AgentThreadMessage } from "@shared/agent-thread";
 import type { ChatMessage, ConversationOpenResult, EngineSessionState, PromptImage, SessionStats, TranscriptTail } from "@shared/types";
 
 type FastVibeEngine = typeof window.fastvibe.engine;
@@ -94,7 +95,13 @@ export const engine = {
 
   setThinking: (level: string, conversationId?: string): Promise<EngineSessionState> =>
     window.fastvibe.engine.setThinking(level, conversationId ?? activeId()),
+
+  interruptAgent: (threadId: string, conversationId?: string): Promise<void> =>
+    window.fastvibe.engine.interruptAgent(threadId, conversationId ?? activeId()),
+  getAgentThreadMessages: (threadId: string, conversationId?: string): Promise<AgentThreadMessage[]> =>
+    window.fastvibe.engine.getAgentThreadMessages(threadId, conversationId ?? activeId()),
 };
+
 
 /**
  * The calls that carry no conversation: they are about the install, not a chat.
@@ -136,6 +143,12 @@ export const abortSubagent: FastVibeEngine["abortSubagent"] = (subagentId, conve
   window.fastvibe.engine.abortSubagent(subagentId, conversationId ?? activeId());
 export const getSubagents: FastVibeEngine["getSubagents"] = (conversationId) =>
   window.fastvibe.engine.getSubagents(conversationId ?? activeId());
+export const getAgentThreads: FastVibeEngine["getAgentThreads"] = (conversationId) =>
+  window.fastvibe.engine.getAgentThreads(conversationId ?? activeId());
+export const getAgentThreadMessages: FastVibeEngine["getAgentThreadMessages"] = (threadId, conversationId) =>
+  window.fastvibe.engine.getAgentThreadMessages(threadId, conversationId ?? activeId());
+export const interruptAgent: FastVibeEngine["interruptAgent"] = (threadId, conversationId) =>
+  window.fastvibe.engine.interruptAgent(threadId, conversationId ?? activeId());
 export const getSubagentMessages: FastVibeEngine["getSubagentMessages"] = (subagentId, conversationId) =>
   window.fastvibe.engine.getSubagentMessages(subagentId, conversationId ?? activeId());
 export const getCheckpoint: FastVibeEngine["getCheckpoint"] = (conversationId) =>

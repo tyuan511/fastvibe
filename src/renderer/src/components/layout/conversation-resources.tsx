@@ -16,6 +16,7 @@ import { FileIcon } from "@/components/file-icon";
 import { RunningMark } from "@/components/running-mark";
 import { TodoRow } from "@/components/chat/todo-list";
 import { activeTodo } from "@/lib/todos";
+import { getAgentThreads } from "@/lib/engine-client";
 import { useConversationTodo } from "@/lib/use-conversation-todo";
 import { conversationAgents, resourceAgentFinished, type ResourceAgent } from "@/lib/conversation-resources";
 import { subagentStatusText } from "@/lib/subagent-status";

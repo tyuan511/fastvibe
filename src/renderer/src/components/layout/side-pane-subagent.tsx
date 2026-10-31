@@ -6,12 +6,19 @@ import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
 import { usagePercent } from "@/components/chat/session-controls";
 import { useSessionStore } from "@/stores/session";
-import { abortSubagent, getSubagentMessages, getSubagents } from "@/lib/engine-client";
+import { abortSubagent, getAgentThreadMessages, getAgentThreads, getSubagentMessages, getSubagents, interruptAgent } from "@/lib/engine-client";
 import { findSubagent, subagentFinished, subagentKey, subagentViewStatus } from "@shared/subagent-state";
 import { subagentStatusText } from "@/lib/subagent-status";
 import { toast } from "sonner";
+import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
 import type { ChatMessage } from "@shared/types";
 import type { SidePaneTab } from "@/stores/side-pane";
+
+function threadMessagesToChat(thread: AgentThread, messages: AgentThreadMessage[]): ChatMessage[] {
+  const output: ChatMessage[] = [{ id: `${thread.id}:task`, role: "user", text: thread.task, tools: [], parts: [{ kind: "text", text: thread.task }], createdAt: thread.createdAt }];
+  for (const message of messages) if (message.kind === "result" && message.text) output.push({ id: message.id, role: "assistant", text: message.text, tools: [], parts: [{ kind: "text", text: message.text }], createdAt: message.createdAt });
+  return output;
+}
 
 function SubagentEmpty(): JSX.Element {
   const { t } = useTranslation("sidepane");
@@ -55,53 +62,56 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   const active = useSessionStore((state) =>
     subagentId ? findSubagent(state.subagents, subagentId, conversationId) : undefined,
   );
-  const streamed = useSessionStore((state) => (subagentId ? state.subagentStreams[subagentKey(subagentId, conversationId)] : undefined));
+  const streamed = useSessionStore((state) => {
+    if (!subagentId) return undefined;
+    const runId = thread ? `${thread.id}:turn:${thread.currentTurn ?? 1}` : subagentId;
+    return state.subagentStreams[subagentKey(runId, conversationId)];
+  });
   const models = useSessionStore((state) => state.models);
   const [loaded, setLoaded] = useState<ChatMessage[] | null>(null);
+  const [thread, setThread] = useState<AgentThread | undefined>();
+  const [threadMessages, setThreadMessages] = useState<AgentThreadMessage[]>([]);
 
-  const task = (tab.subagentBrief ?? active?.detail ?? "").trim();
-  // `tab.openedAt` keeps the value defined, so the brief's identity never changes
-  // when the engine's snapshot finally carries the run's real `startedAt`.
-  const startedAt = active?.startedAt ?? tab.openedAt;
-  const status = subagentViewStatus(active, tab.subagentStatus);
+  const task = (thread?.task ?? tab.subagentBrief ?? active?.detail ?? "").trim();
+  const startedAt = thread?.startedAt ?? active?.startedAt ?? tab.openedAt;
+  const status = thread?.status === "working" || thread?.status === "queued" ? "running" : thread?.status === "waiting" ? "waiting" : subagentViewStatus(active, tab.subagentStatus);
   const running = status === "running";
-  const finished = subagentFinished(status);
+  const finished = thread ? ["completed", "failed", "interrupted", "closed"].includes(thread.status) : subagentFinished(status);
+
+  useEffect(() => {
+    setThread(undefined);
+    setThreadMessages([]);
+    if (!subagentId?.startsWith("agent-")) return;
+    let cancelled = false;
+    void Promise.all([getAgentThreads(conversationId), getAgentThreadMessages(subagentId, conversationId)]).then(([threads, messages]) => {
+      if (!cancelled) { setThread(threads.find((item) => item.id === subagentId)); setThreadMessages(messages); }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [subagentId, conversationId]);
+
 
   useEffect(() => {
     setLoaded(null);
+    if (subagentId?.startsWith("agent-")) return;
     void getSubagents(conversationId).then(useSessionStore.getState().setSubagents).catch(() => undefined);
   }, [subagentId, conversationId]);
 
-  // Pull the cached transcript exactly once, when the run is over. Reading it while
-  // the run was live mixed a mid-flight snapshot into the growing stream and swapped
-  // the whole list — the pane flickered, and the authoritative mapping is only
-  // written at the end anyway.
+  // Pull the cached transcript exactly once after a legacy delegated run settles.
   useEffect(() => {
-    if (!subagentId || !finished) return;
+    if (!subagentId || subagentId.startsWith("agent-") || !finished) return;
     let cancelled = false;
-    void getSubagentMessages(subagentId, conversationId)
-      .then((result) => {
-        if (!cancelled && result.length > 0) setLoaded(result);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+    void getSubagentMessages(subagentId, conversationId).then((result) => {
+      if (!cancelled && result.length > 0) setLoaded(result);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
   }, [subagentId, finished, conversationId]);
 
   const brief = useMemo<ChatMessage | null>(() => {
     if (!task) return null;
-    return {
-      id: `${subagentId ?? tab.id}:brief`,
-      role: "user",
-      text: task,
-      tools: [],
-      parts: [{ kind: "text", text: task }],
-      createdAt: startedAt,
-    };
+    return { id: `${subagentId ?? tab.id}:brief`, role: "user", text: task, tools: [], parts: [{ kind: "text", text: task }], createdAt: startedAt };
   }, [startedAt, subagentId, tab.id, task]);
 
-  const body = (finished ? loaded ?? streamed : streamed) ?? [];
+  const body = thread ? threadMessagesToChat(thread, threadMessages) : (finished ? loaded ?? streamed : streamed) ?? [];
   const messages = useMemo(() => {
     // The cached transcript repeats the delegated turn the engine stored; the brief
     // already stands for it.
@@ -149,7 +159,9 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
           onChange={noop}
           onSubmit={noop}
           onAbort={() => {
-            if (subagentId) void abortSubagent(subagentId, conversationId).catch((error: unknown) => toast.error(String(error)));
+            if (!subagentId) return;
+            const action = subagentId.startsWith("agent-") ? interruptAgent(subagentId, conversationId) : abortSubagent(subagentId, conversationId);
+            void action.catch((error: unknown) => toast.error(String(error)));
           }}
           onPickWorkspace={noop}
           onSelectProject={noop}

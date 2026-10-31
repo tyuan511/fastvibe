@@ -86,6 +86,9 @@ import { previewTranscript } from "@shared/transcript-preview";
 import { TranscriptReader } from "../engine/transcript-reader";
 import { ToolDeltaThrottle } from "./tool-delta-throttle";
 import { ConversationCatalog } from "../engine/conversation-catalog";
+import { AgentThreadStore } from "../engine/agent-thread-store";
+import type { AgentThread, AgentThreadMessage, AgentThreadStatus } from "@shared/agent-thread";
+import { agentThreadFinished } from "@shared/agent-thread";
 import { installNativeCompactionGuard } from "../engine/native-compaction";
 import { runtimeContextExtension } from "../engine/runtime-context";
 import { lastRequestUsage, turnTokens } from "../engine/turn-usage";
@@ -260,6 +263,12 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
    * no `pi` CLI to spawn (see `resources/extensions/subagent/index.ts`).
    */
   runSubagent(request: SubagentHostRequest): Promise<SubagentHostResponse>;
+  spawnAgent(request: AgentSpawnRequest): Promise<AgentThread>;
+  sendAgentMessage(request: AgentMessageRequest): Promise<AgentThreadMessage>;
+  followupAgent(request: AgentFollowupRequest): Promise<AgentThread>;
+  waitAgents(request: AgentWaitRequest): Promise<AgentThread[]>;
+  interruptAgent(threadId: string, conversationId?: string): Promise<void>;
+  listAgentThreads(conversationId?: string): Promise<AgentThread[]>;
   searchConversation(request: ConversationSearchHostRequest): Promise<ConversationSearchHostResult>;
   createWorktree(options?: { path?: string; branch?: string; label?: string }): Promise<WorktreeHostResult>;
   bindWorktree(path: string): Promise<WorktreeHostResult>;
@@ -690,6 +699,9 @@ export class PiProcessManager {
   #oauthListeners = new Set<(payload: OAuthEventPayload) => void>();
   /** In-flight subagent sessions, keyed by subagent id, so `stop()` can dispose them. */
   #subagentSessions = new Map<string, AgentSession>();
+  #agentThreadRuns = new Map<string, Promise<SubagentHostResponse>>();
+  #agentThreadRunIds = new Map<string, string>();
+  #agentThreadWaiters = new Set<() => void>();
   #subagentControls = new Map<string, SubagentControl>();
   /**
    * Runs the user stopped by hand.
@@ -704,6 +716,8 @@ export class PiProcessManager {
     this.#paths = paths;
     this.#memory = memory;
     this.#db = openDatabase(paths.databaseFile);
+    this.#agentThreads = new AgentThreadStore(this.#db);
+    this.#agentThreads.recoverAfterRestart();
     this.#catalog = new ConversationCatalog(this.#db, {
       scratchRoot: this.#paths.scratchDir,
       legacyFile: this.#paths.conversationsFile,
@@ -2263,6 +2277,107 @@ export class PiProcessManager {
     return [...this.#subagents.values()]
       .filter((item) => !conversationId || item.conversationId === conversationId)
       .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+  }
+
+  async listAgentThreads(conversationId?: string): Promise<AgentThread[]> {
+    return this.#agentThreads.list(conversationId);
+  }
+
+  async getAgentThreadMessages(threadId: string, conversationId?: string): Promise<AgentThreadMessage[]> {
+    const thread = this.#agentThreads.get(threadId);
+    if (!thread || (conversationId && thread.conversationId !== conversationId)) return [];
+    return this.#agentThreads.messages(threadId);
+  }
+
+  async spawnAgent(request: AgentSpawnRequest): Promise<AgentThread> {
+    const id = `agent-${randomUUID()}`;
+    const thread = this.#agentThreads.create({ id, conversationId: request.conversationId, parentId: request.parentId, agent: request.agent, name: request.agent, task: request.task, cwd: request.cwd, systemPrompt: request.systemPrompt, tools: request.tools, fallbackModel: request.fallbackModel, status: "queued" });
+    const runId = `${id}:turn:1`;
+    this.#agentThreadRunIds.set(id, runId);
+    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: request.agent, task: request.task, systemPrompt: request.systemPrompt, tools: request.tools, model: request.model, fallbackModel: request.fallbackModel, thinkingLevel: request.thinkingLevel, cwd: request.cwd });
+    this.#agentThreadRuns.set(id, run);
+    const started = this.#agentThreads.setStatus(id, "working", { startedAt: Date.now(), currentTurn: 1 });
+    if (started) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: started });
+    void run.then((response) => {
+      const status: AgentThreadStatus = response.stopReason === "aborted" ? "interrupted" : response.exitCode === 0 ? "completed" : "failed";
+      const output = lastAssistantText(response.messages);
+      const next = this.#agentThreads.setStatus(id, status, { endedAt: Date.now(), lastMessage: output, unread: true });
+      if (output) this.#agentThreads.send(id, "agent", output, "result");
+      if (next) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: next });
+      for (const wake of this.#agentThreadWaiters) wake();
+    }).finally(() => this.#agentThreadRuns.delete(id));
+    return this.#agentThreads.get(id) ?? thread;
+  }
+
+  async sendAgentMessage(request: AgentMessageRequest): Promise<AgentThreadMessage> {
+    const thread = this.#agentThreads.get(request.threadId);
+    if (!thread || thread.conversationId !== request.conversationId) throw new Error("找不到这个 Agent thread");
+    const message = this.#agentThreads.send(request.threadId, request.senderId, request.message);
+    const runId = this.#agentThreadRunIds.get(request.threadId);
+    const session = runId ? this.#subagentSessions.get(runId) : undefined;
+    if (runId && session && !this.#subagentControls.get(runId)?.aborted) await session.steer(request.message);
+    return message;
+  }
+
+  async followupAgent(request: AgentFollowupRequest): Promise<AgentThread> {
+    const thread = this.#agentThreads.get(request.threadId);
+    if (!thread || thread.conversationId !== request.conversationId) throw new Error("找不到这个 Agent thread");
+    const task = request.task?.trim() || request.message.trim();
+    if (!task) throw new Error("followup_task 需要任务内容");
+    await this.sendAgentMessage(request);
+    if (this.#agentThreadRuns.has(thread.id)) return thread;
+    const turn = (thread.currentTurn ?? 1) + 1;
+    const context = this.#agentThreads.messages(thread.id)
+      .slice(-20)
+      .map((message) => `${message.kind === "result" ? "Agent" : message.senderId}: ${message.text}`)
+      .join("\n");
+    const systemPrompt = [thread.systemPrompt, context ? `Previous messages in this thread:\n${context}` : ""]
+      .filter(Boolean)
+      .join("\n\n");
+    const runId = `${thread.id}:turn:${turn}`;
+    this.#agentThreadRunIds.set(thread.id, runId);
+    const next = this.#agentThreads.patch(thread.id, { task, status: "working", currentTurn: turn, startedAt: Date.now(), endedAt: undefined, unread: false });
+    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: thread.agent ?? "worker", task, systemPrompt, tools: thread.tools, fallbackModel: thread.fallbackModel, cwd: thread.cwd });
+    this.#agentThreadRuns.set(thread.id, run);
+    void run.then((response) => {
+      const status: AgentThreadStatus = response.stopReason === "aborted" ? "interrupted" : response.exitCode === 0 ? "completed" : "failed";
+      const output = lastAssistantText(response.messages);
+      const ended = this.#agentThreads.setStatus(thread.id, status, { endedAt: Date.now(), lastMessage: output, unread: true });
+      if (output) this.#agentThreads.send(thread.id, "agent", output, "result", request.senderId);
+      if (ended) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: ended });
+      for (const wake of this.#agentThreadWaiters) wake();
+    }).finally(() => this.#agentThreadRuns.delete(thread.id));
+    return next ?? thread;
+  }
+
+  async waitAgents(request: AgentWaitRequest): Promise<AgentThread[]> {
+    const selected = (): AgentThread[] => {
+      const all = this.#agentThreads.list(request.conversationId);
+      if (!request.threadIds?.length) return all;
+      const ids = new Set(request.threadIds);
+      return all.filter((thread) => ids.has(thread.id));
+    };
+    const finished = (): boolean => {
+      const threads = selected();
+      return threads.length > 0 && threads.every((thread) => agentThreadFinished(thread.status));
+    };
+    if (finished() || request.timeoutMs === 0) return selected();
+    await new Promise<void>((resolve) => {
+      let timer: NodeJS.Timeout | undefined;
+      const wake = (): void => { if (!finished()) return; if (timer) clearTimeout(timer); this.#agentThreadWaiters.delete(wake); resolve(); };
+      this.#agentThreadWaiters.add(wake);
+      timer = setTimeout(() => { this.#agentThreadWaiters.delete(wake); resolve(); }, Math.min(request.timeoutMs ?? 300_000, 1_800_000));
+      timer.unref?.();
+    });
+    return selected();
+  }
+
+  async interruptAgent(threadId: string, conversationId?: string): Promise<void> {
+    const thread = this.#agentThreads.get(threadId);
+    if (!thread || (conversationId && thread.conversationId !== conversationId)) return;
+    const runId = this.#agentThreadRunIds.get(threadId);
+    if (runId) await this.abortSubagent(runId, thread.conversationId);
+    this.#agentThreads.setStatus(threadId, "interrupted", { endedAt: Date.now(), unread: true });
   }
 
   getAgentConfigs(): SubagentConfig[] {
@@ -5573,6 +5688,12 @@ export class PiProcessManager {
         dialog<Array<string | null> | undefined>("questions", { title, questions, timeout: opts?.timeout }, undefined, opts?.timeout),
       conversationId,
       runSubagent: (request) => this.#runSubagent(conversationId, request),
+      spawnAgent: (request) => this.spawnAgent({ ...request, conversationId }),
+      sendAgentMessage: (request) => this.sendAgentMessage({ ...request, conversationId }),
+      followupAgent: (request) => this.followupAgent({ ...request, conversationId }),
+      waitAgents: (request) => this.waitAgents({ ...request, conversationId }),
+      interruptAgent: (threadId, ownerConversationId) => this.interruptAgent(threadId, ownerConversationId ?? conversationId),
+      listAgentThreads: (ownerConversationId) => this.listAgentThreads(ownerConversationId ?? conversationId),
       searchConversation: (request) => this.#searchConversationForAgent(request),
       createWorktree: (options) => this.#hostCreateWorktree(conversationId, options),
       bindWorktree: (path) => this.#hostBindWorktree(conversationId, path),

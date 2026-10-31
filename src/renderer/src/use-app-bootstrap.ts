@@ -260,6 +260,17 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
       // the focus routing so every run's tab stays live either way. Each run owns a
       // tab (`subagent:<toolCallId>:<index>`), keyed to the conversation that
       // spawned it, so two chats delegating at once never share a view.
+      if (event.type === "agent_thread_changed" && event.thread && typeof event.thread === "object") {
+        const thread = event.thread as { id?: unknown; conversationId?: unknown; name?: unknown; status?: unknown; task?: unknown };
+        const threadId = typeof thread.id === "string" ? thread.id : "";
+        if (threadId) useSidePaneStore.getState().registerSubagent(threadId, {
+          conversationId: typeof thread.conversationId === "string" ? thread.conversationId : (conversationId ?? undefined),
+          title: typeof thread.name === "string" ? thread.name : threadId,
+          status: typeof thread.status === "string" ? thread.status : "working",
+          brief: typeof thread.task === "string" ? thread.task : undefined,
+        });
+        return;
+      }
       if (event.type === "subagent_event" || event.type === "subagent_state" || event.type === "subagent_lifecycle" || event.type === "subagent_progress") {
         applyEvent(event);
         // A lifecycle event is where a run gets its tab (created, not focused).

@@ -1,7 +1,7 @@
 import { Ipc } from "@shared/ipc";
+import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
 import type { BrowserLibrary, BrowserClearData, BrowserDownloadAction, BrowserShortcut } from "./browser-workspace";
 import type { SubmitPromptRequest } from "./prompt-submission";
-import type { DagGraph, DagOutputPage } from "@shared/dag";
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot } from "@shared/schedules";
 import type {
   ChatMessage,
@@ -206,6 +206,18 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineSkillMarketDetail, target),
       installMarketSkill: (target: SkillMarketTarget): Promise<SkillMarketInstallResult> =>
         t.invoke(Ipc.engineInstallSkillMarket, target),
+      getAgentThreads: (conversationId?: string): Promise<AgentThread[]> =>
+        t.invoke(Ipc.engineGetAgentThreads, { conversationId }),
+      getAgentThreadMessages: (threadId: string, conversationId?: string): Promise<AgentThreadMessage[]> =>
+        t.invoke(Ipc.engineGetAgentThreadMessages, { threadId, conversationId }),
+      sendAgentMessage: (payload: { conversationId: string; threadId: string; message: string; senderId: string }): Promise<AgentThreadMessage> =>
+        t.invoke(Ipc.engineSendAgentMessage, payload),
+      followupAgent: (payload: { conversationId: string; threadId: string; message: string; senderId: string; task?: string }): Promise<AgentThread> =>
+        t.invoke(Ipc.engineFollowupAgent, payload),
+      waitAgents: (payload: { conversationId: string; threadIds?: string[]; timeoutMs?: number }): Promise<AgentThread[]> =>
+        t.invoke(Ipc.engineWaitAgents, payload),
+      interruptAgent: (threadId: string, conversationId?: string): Promise<void> =>
+        t.invoke(Ipc.engineInterruptAgent, { threadId, conversationId }),
       getSubagents: (conversationId?: string): Promise<SubagentInfo[]> =>
         t.invoke(Ipc.engineGetSubagents, { conversationId }),
       listAgentConfigs: (): Promise<SubagentConfig[]> => t.invoke(Ipc.engineListAgentConfigs),
