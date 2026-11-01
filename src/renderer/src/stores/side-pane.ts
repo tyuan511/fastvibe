@@ -18,6 +18,8 @@ export type SidePaneTabType =
 
 /** Everything needed to mint/re-title a subagent run's tab. */
 export type SubagentTabInit = {
+  /** Stable per-thread avatar seed. */
+  avatarSeed?: number;
   /** The conversation whose tool call spawned the run. */
   conversationId?: string;
   /** Display name; defaults to the run's role. */
@@ -65,6 +67,8 @@ export type SidePaneTab = {
   focusComposer?: boolean;
   /** The subagent run this tab shows (`type: "subagent"`). */
   subagentId?: string;
+  /** Stable per-thread avatar seed. */
+  subagentAvatarSeed?: number;
   /** The conversation whose tool call spawned that run; scopes the tab. */
   subagentConversationId?: string;
   /**
@@ -367,6 +371,7 @@ function upsertSubagentTab(tabs: SidePaneTab[], subagentId: string, init?: Subag
     ...(existing ?? { id, type: "subagent" as const, openedAt: Date.now(), quiet }),
     subagentId,
     subagentConversationId: init?.conversationId ?? existing?.subagentConversationId,
+    subagentAvatarSeed: init?.avatarSeed ?? existing?.subagentAvatarSeed,
     // The base name stays stable; the tab bar appends the live status at render
     // time (`subagentStatus`), so a re-title from the tool card cannot clobber it.
     // Empty when no role is known yet — `subagentTabName` reads the pane's own label

@@ -16,6 +16,8 @@ import {
 } from "./frames.ts";
 import type { RemoteSocket } from "../server/server.ts";
 
+export type ChannelTraffic = { direction: "in" | "out"; bytes: number };
+
 /**
  * The part of a node-datachannel `DataChannel` this adapter drives. A fake stands in for
  * it in the tests, so none of them needs a network.
@@ -94,6 +96,8 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
   /** Direct-path fragments grow to this, and only when the peer negotiated it. */
   #direct = false;
   #maxMessageBytes = MAX_MESSAGE_BYTES;
+  #bytesIn = 0;
+  #bytesOut = 0;
 
   constructor(channel: DataChannelLike, options: { maxFrameBytes: number; compress?: boolean }) {
     super();
@@ -117,6 +121,11 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
 
   get bufferedAmount(): number {
     return this.#queuedBytes + this.#stagedBytes + (this.#closed ? 0 : this.#channel.bufferedAmount());
+  }
+
+  /** Wire bytes handed to or received from the data channel, including frame headers. */
+  traffic(): { bytesIn: number; bytesOut: number } {
+    return { bytesIn: this.#bytesIn, bytesOut: this.#bytesOut };
   }
 
   send(data: string | Uint8Array, callback?: (error?: Error) => void): void {
@@ -219,6 +228,8 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
     // Strings are not part of the format: everything is binary, text included.
     if (typeof message === "string") return this.#violation("text message");
     const bytes = message instanceof ArrayBuffer ? Buffer.from(message) : message;
+    this.#bytesIn += bytes.byteLength;
+    this.emit("traffic", { direction: "in", bytes: bytes.byteLength } satisfies ChannelTraffic);
     let incoming;
     try {
       incoming = this.#assembler.push(bytes);
@@ -262,6 +273,8 @@ export class ChannelSocket extends EventEmitter implements RemoteSocket {
       let failed = false;
       try {
         this.#channel.sendMessageBinary(next.message);
+        this.#bytesOut += next.message.byteLength;
+        this.emit("traffic", { direction: "out", bytes: next.message.byteLength } satisfies ChannelTraffic);
         failed = !this.#channel.isOpen();
       } catch {
         failed = true;

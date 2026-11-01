@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BotIcon } from "@hugeicons/core-free-icons";
+import { AgentAvatar } from "@/components/agent-avatar";
 import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
 import { usagePercent } from "@/components/chat/session-controls";
@@ -62,15 +63,15 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   const active = useSessionStore((state) =>
     subagentId ? findSubagent(state.subagents, subagentId, conversationId) : undefined,
   );
+  const [loaded, setLoaded] = useState<ChatMessage[] | null>(null);
+  const [thread, setThread] = useState<AgentThread | undefined>();
+  const [threadMessages, setThreadMessages] = useState<AgentThreadMessage[]>([]);
   const streamed = useSessionStore((state) => {
     if (!subagentId) return undefined;
     const runId = thread ? `${thread.id}:turn:${thread.currentTurn ?? 1}` : subagentId;
     return state.subagentStreams[subagentKey(runId, conversationId)];
   });
   const models = useSessionStore((state) => state.models);
-  const [loaded, setLoaded] = useState<ChatMessage[] | null>(null);
-  const [thread, setThread] = useState<AgentThread | undefined>();
-  const [threadMessages, setThreadMessages] = useState<AgentThreadMessage[]>([]);
 
   const task = (thread?.task ?? tab.subagentBrief ?? active?.detail ?? "").trim();
   const startedAt = thread?.startedAt ?? active?.startedAt ?? tab.openedAt;
@@ -123,6 +124,13 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2">
+        <AgentAvatar seed={thread?.avatarSeed ?? active?.avatarSeed ?? tab.subagentAvatarSeed ?? 0} size="size-7" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{thread?.name ?? active?.name ?? tab.title}</div>
+          <div className="truncate text-xs text-muted-foreground">{thread?.agent ?? active?.agent ?? t("subagent.title")}</div>
+        </div>
+      </div>
       <div className="min-h-0 flex-1">
         {messages.length === 0 ? (
           <SubagentEmpty />
@@ -184,6 +192,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   prev.tab.subagentId === next.tab.subagentId &&
   // The brief arrives with a later `registerSubagent` when the tool card is what
   // opened the tab, and it is what the pane draws as the run's opening message.
+  prev.tab.subagentAvatarSeed === next.tab.subagentAvatarSeed &&
   prev.tab.subagentBrief === next.tab.subagentBrief &&
   prev.tab.openedAt === next.tab.openedAt &&
   prev.tab.conversationId === next.tab.conversationId &&

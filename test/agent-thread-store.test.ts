@@ -8,6 +8,9 @@ test("agent threads persist parent roots and mailbox messages", () => {
   const store = new AgentThreadStore(db);
   const root = store.create({ id: "agent-root", conversationId: "conversation", task: "inspect", cwd: "/repo", status: "working" });
   const child = store.create({ id: "agent-child", conversationId: "conversation", parentId: root.id, task: "verify", cwd: "/repo", status: "queued" });
+  assert.equal(typeof root.name, "string");
+  assert.notEqual(root.name, undefined);
+  assert.equal(typeof root.avatarSeed, "number");
   assert.equal(child.rootId, root.id);
   const message = store.send(child.id, root.id, "Please report the result", "message");
   assert.equal(store.messages(child.id)[0]?.id, message.id);
@@ -17,6 +20,8 @@ test("agent threads persist parent roots and mailbox messages", () => {
   const recovered = reopened.recoverAfterRestart();
   assert.equal(recovered.some((item) => item.id === root.id), true);
   assert.equal(reopened.get(root.id)?.status, "interrupted");
+  assert.equal(reopened.get(child.id)?.name, child.name);
+  assert.equal(reopened.get(child.id)?.avatarSeed, child.avatarSeed);
   assert.deepEqual(reopened.get(child.id), updated);
   assert.equal(reopened.messages(child.id)[0]?.id, message.id);
   assert.equal(reopened.messages(child.id)[0]?.text, message.text);

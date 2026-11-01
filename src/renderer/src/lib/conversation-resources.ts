@@ -9,6 +9,7 @@ export type ResourceAgent = {
   status: string;
   info?: SubagentInfo;
   parentId?: string;
+  avatarSeed?: number;
 };
 
 /** Agents that belong to one conversation, with live state overriding transcript fallback. */
@@ -24,7 +25,7 @@ export function conversationAgents(conversationId: string, messages: readonly Ch
   for (const info of registry) {
     if (info.conversationId !== conversationId) continue;
     const previous = runs.get(info.id);
-    runs.set(info.id, { id: info.id, name: info.name ?? info.agent ?? previous?.name ?? info.id, brief: info.detail ?? previous?.brief, status: info.status ?? "unknown", info });
+    runs.set(info.id, { id: info.id, name: info.name ?? info.agent ?? previous?.name ?? info.id, brief: info.detail ?? previous?.brief, status: info.status ?? "unknown", info, avatarSeed: info.avatarSeed });
   }
   return [...runs.values()].sort((a, b) => resourceAgentPriority(a) - resourceAgentPriority(b));
 }

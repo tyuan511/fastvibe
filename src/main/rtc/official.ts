@@ -69,6 +69,8 @@ export type OfficialDeps = {
     reserve: (localAddress: string) => Promise<number | null>;
     map: (localAddress: string, port: number) => Promise<PortMapping | null>;
   };
+  /** Byte-level telemetry from each connected data channel. */
+  onTraffic?: (sample: { connectionId: string; path: "connecting" | "direct" | "relay"; direction: "in" | "out"; bytes: number }) => void;
   fetch?: typeof fetch;
   log: { info(message: string): void; warn(message: string): void };
   connectTimeoutMs?: number;
@@ -335,6 +337,7 @@ export class OfficialConnection {
       ...(this.#deps.portMap ? { portMap: this.#deps.portMap } : {}),
       sendSignal: (data) => signaling.signal(cid, data),
       attach: (socket) => this.#deps.attach(socket, { id: `rtc:${cid}`, label: peer.name }),
+      onTraffic: (sample) => this.#deps.onTraffic?.({ connectionId: `rtc:${cid}`, ...sample }),
       onChange: () => this.#emit(),
       onClientId: (id, { successor }) => {
         // The same phone calling again (the app restarted, the network changed) while its

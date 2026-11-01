@@ -350,6 +350,8 @@ export type SubagentInfo = {
   /** Stable role identifier when this run comes from a built-in agent. */
   agent?: string;
   name?: string;
+  /** Stable avatar seed for a persistent Agent thread. */
+  avatarSeed?: number;
   description?: string;
   mode?: "single" | "parallel" | "chain" | string;
   status?: string;
@@ -661,13 +663,15 @@ export type ComputerRequest = {
   pid?: number;
   /** Window id as a decimal string — the driver's ids are `bigint` and JSON is not. */
   windowId?: string;
+  /** Screen coordinate for cursor, scroll, or coordinate-based actions. */
   x?: number;
+  /** Screen coordinate for cursor, scroll, or coordinate-based actions. */
   y?: number;
   text?: string;
   key?: string;
   keys?: string[];
   modifiers?: string[];
-  /** Opaque handle for an element from `computer_window_state`, preferred over x/y. */
+  /** Opaque handle from `computer_window_state`, preferred over coordinates. */
   elementToken?: string;
   button?: "left" | "right" | "middle";
   count?: number;
@@ -680,8 +684,21 @@ export type ComputerRequest = {
   foreground?: boolean;
   includeScreenshot?: boolean;
   maxElements?: number;
+  maxDepth?: number;
+  maxDimension?: number;
   onScreenOnly?: boolean;
+  fromX?: number;
+  fromY?: number;
+  toX?: number;
+  toY?: number;
+  durationMs?: number;
+  stepsCount?: number;
+  expect?: unknown[];
+  stableSamples?: number;
+  width?: number;
+  height?: number;
   timeoutMs?: number;
+  session?: string;
   conversationId?: string;
 };
 
@@ -689,7 +706,10 @@ export type ComputerResult = {
   text: string;
   /** Base64 payloads, shaped like the SDK's own image content parts. */
   images: Array<{ mimeType: string; data: string }>;
+  /** Native structured JSON, when Cua provides it. */
   structured?: string;
+  /** Result metadata that is useful to the renderer but too noisy for the main text. */
+  structuredMeta?: string;
   /** The application the action was routed to, when the call named a window. */
   targetApp?: { name: string; bundleId?: string };
 };

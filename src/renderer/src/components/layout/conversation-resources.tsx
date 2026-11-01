@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { IconButton } from "@/components/icon-button";
+import { AgentAvatar } from "@/components/agent-avatar";
 import { FileIcon } from "@/components/file-icon";
 import { RunningMark } from "@/components/running-mark";
 import { TodoRow } from "@/components/chat/todo-list";
@@ -160,7 +161,7 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   useEffect(() => {
     let cancelled = false;
     void getAgentThreads(conversation.id).then((threads) => {
-      if (!cancelled) setThreadAgents(threads.map((thread) => ({ id: thread.id, name: thread.name ?? thread.agent ?? thread.id, brief: thread.task, status: thread.status === "working" || thread.status === "queued" ? "running" : thread.status, parentId: thread.parentId })));
+      if (!cancelled) setThreadAgents(threads.map((thread) => ({ id: thread.id, name: thread.name ?? thread.agent ?? thread.id, brief: thread.task, status: thread.status === "working" || thread.status === "queued" ? "running" : thread.status, parentId: thread.parentId, avatarSeed: thread.avatarSeed })));
     }).catch(() => { if (!cancelled) setThreadAgents([]); });
     return () => { cancelled = true; };
   }, [conversation.id]);
@@ -210,10 +211,10 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
     const attention = agent.info?.phase === "waiting" || ["blocked", "failed", "error"].includes(agent.status);
     const label = subagentStatusText(agent.info, agent.status);
     return <Button key={agent.id} variant="ghost" className={cn(ROW, agent.parentId && "pl-6")} title={agent.brief} onClick={() => {
-      useSidePaneStore.getState().openSubagent(agent.id, { conversationId: conversation.id, title: agent.name, status: agent.status, brief: agent.brief });
+      useSidePaneStore.getState().openSubagent(agent.id, { conversationId: conversation.id, title: agent.name, avatarSeed: agent.avatarSeed, status: agent.status, brief: agent.brief });
       onClose();
     }}>
-      {live ? <RunningMark /> : <HugeiconsIcon icon={BotIcon} strokeWidth={2} className={cn("size-4 shrink-0 text-muted-foreground", attention && "text-warning")} />}
+      {live ? <RunningMark /> : <AgentAvatar seed={agent.avatarSeed ?? 0} size="size-4" className={cn(attention && "opacity-70")} />}
       <span className="min-w-0 flex-1"><span className="block truncate text-sm">{agent.name}</span>{agent.brief ? <span className="block truncate text-xs text-muted-foreground">{agent.brief}</span> : null}</span>
       <span className={cn("shrink-0 text-xs text-muted-foreground", attention && "text-warning")}>{label}</span>
     </Button>;

@@ -88,6 +88,7 @@ import { TranscriptReader } from "../engine/transcript-reader";
 import { ToolDeltaThrottle } from "./tool-delta-throttle";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { AgentThreadStore } from "../engine/agent-thread-store";
+import { agentIdentityForId } from "@shared/agent-identity";
 import type { AgentThread, AgentThreadMessage, AgentThreadStatus } from "@shared/agent-thread";
 import { agentThreadFinished } from "@shared/agent-thread";
 import { installNativeCompactionGuard } from "../engine/native-compaction";
@@ -2092,10 +2093,11 @@ export class PiProcessManager {
 
   async spawnAgent(request: AgentSpawnRequest): Promise<AgentThread> {
     const id = `agent-${randomUUID()}`;
-    const thread = this.#agentThreads.create({ id, conversationId: request.conversationId, parentId: request.parentId, agent: request.agent, name: request.agent, task: request.task, cwd: request.cwd, systemPrompt: request.systemPrompt, tools: request.tools, fallbackModel: request.fallbackModel, status: "queued" });
+    const identity = agentIdentityForId(id);
+    const thread = this.#agentThreads.create({ id, conversationId: request.conversationId, parentId: request.parentId, agent: request.agent, name: identity.name, avatarSeed: identity.avatarSeed, task: request.task, cwd: request.cwd, systemPrompt: request.systemPrompt, tools: request.tools, fallbackModel: request.fallbackModel, status: "queued" });
     const runId = `${id}:turn:1`;
     this.#agentThreadRunIds.set(id, runId);
-    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: request.agent, task: request.task, systemPrompt: request.systemPrompt, tools: request.tools, model: request.model, fallbackModel: request.fallbackModel, thinkingLevel: request.thinkingLevel, cwd: request.cwd });
+    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: request.agent, displayName: identity.name, avatarSeed: identity.avatarSeed, task: request.task, systemPrompt: request.systemPrompt, tools: request.tools, model: request.model, fallbackModel: request.fallbackModel, thinkingLevel: request.thinkingLevel, cwd: request.cwd });
     this.#agentThreadRuns.set(id, run);
     const started = this.#agentThreads.setStatus(id, "working", { startedAt: Date.now(), currentTurn: 1 });
     if (started) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: started });
@@ -2138,7 +2140,7 @@ export class PiProcessManager {
     const runId = `${thread.id}:turn:${turn}`;
     this.#agentThreadRunIds.set(thread.id, runId);
     const next = this.#agentThreads.patch(thread.id, { task, status: "working", currentTurn: turn, startedAt: Date.now(), endedAt: undefined, unread: false });
-    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: thread.agent ?? "worker", task, systemPrompt, tools: thread.tools, fallbackModel: thread.fallbackModel, cwd: thread.cwd });
+    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: thread.agent ?? "worker", displayName: thread.name, avatarSeed: thread.avatarSeed, task, systemPrompt, tools: thread.tools, fallbackModel: thread.fallbackModel, cwd: thread.cwd });
     this.#agentThreadRuns.set(thread.id, run);
     void run.then((response) => {
       const status: AgentThreadStatus = response.stopReason === "aborted" ? "interrupted" : response.exitCode === 0 ? "completed" : "failed";

@@ -7,6 +7,7 @@ import { readComputerSettings } from "../engine/app-settings";
 import { unpackedPath } from "../engine/asar-unpacked";
 import { getFastVibePaths } from "../engine/paths";
 import { resolveComputerAvailability } from "@shared/computer-availability";
+import { serializeWindowState } from "@shared/cua-observation";
 import {
   cancelComputerComponent,
   computerComponentReady,
@@ -625,6 +626,14 @@ function summarise(done: ComputerResult[], steps: ComputerRequest[]): string {
  * normal shape and the steps before it explain what the screenshot shows. Images are
  * concatenated in order for the same reason.
  */
+function parseStructured(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 function merge(results: ComputerResult[], steps: ComputerRequest[]): ComputerResult {
   const text = results
     .map((result, index) => {
@@ -632,10 +641,18 @@ function merge(results: ComputerResult[], steps: ComputerRequest[]): ComputerRes
       return body ? `[${index + 1}/${results.length}] ${steps[index].action}: ${body}` : `[${index + 1}/${results.length}] ${steps[index].action}: ok`;
     })
     .join("\n");
+  const structuredSteps = results
+    .map((result, index) => ({
+      step: index + 1,
+      ...(result.structured !== undefined ? { structured: parseStructured(result.structured) } : {}),
+      ...(result.structuredMeta !== undefined ? { structuredMeta: parseStructured(result.structuredMeta) } : {}),
+    }))
+    .filter((step) => Object.keys(step).length > 1);
   return {
     text,
     images: results.flatMap((result) => result.images),
     structured: results.find((result) => result.structured)?.structured,
+    structuredMeta: structuredSteps.length ? JSON.stringify({ steps: structuredSteps }) : undefined,
     targetApp: results.find((result) => result.targetApp)?.targetApp,
   };
 }
@@ -647,7 +664,16 @@ function merge(results: ComputerResult[], steps: ComputerRequest[]): ComputerRes
  * window is worth doing wherever the caller can. `"primary"` is the display id Cua's own
  * examples use for the whole-desktop fallback.
  */
+function validateScope(request: ComputerRequest): void {
+  const hasPid = request.pid !== undefined;
+  const hasWindow = request.windowId !== undefined;
+  if (hasPid !== hasWindow) {
+    throw new Error(uiText("pid 和 windowId 必须同时提供，或同时省略。", "pid and windowId must be provided together or both omitted."));
+  }
+}
+
 function target(module: DriverModule, request: ComputerRequest) {
+  validateScope(request);
   if (request.pid !== undefined && request.windowId !== undefined) {
     return new module.ActionTarget.Window({ pid: request.pid, windowId: windowId(request.windowId) });
   }
@@ -662,6 +688,7 @@ function target(module: DriverModule, request: ComputerRequest) {
  * never enumerated.
  */
 function optionalTarget(module: DriverModule, request: ComputerRequest) {
+  validateScope(request);
   if (request.pid !== undefined && request.windowId !== undefined) {
     return new module.ActionTarget.Window({ pid: request.pid, windowId: windowId(request.windowId) });
   }
@@ -752,8 +779,39 @@ function smaller(
   return a.length <= b.length ? { bytes: a, mimeType: aType } : { bytes: b, mimeType: bType };
 }
 
+function imageMetadata(image: { mimeType: string; data: string }): { mimeType: string; width?: number; height?: number } {
+  try {
+    const decoded = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
+    const { width, height } = decoded.getSize();
+    return { mimeType: image.mimeType, width, height };
+  } catch {
+    return { mimeType: image.mimeType };
+  }
+}
+
 function budgetImages(images: Array<{ mimeType: string; data: string }>): Array<{ mimeType: string; data: string }> {
   return images.map(budgetImage);
+}
+
+const CUA_ENUMS: Record<string, string[]> = {
+  effect: ["Confirmed", "Partial", "Unverifiable", "SuspectedNoop", "Refused"],
+  route: ["Accessibility", "SyntheticEvents", "GlobalInput", "SystemApi", "Dom", "TrustedInput"],
+  mode: ["Background", "Foreground", "NotApplicable", "Unknown"],
+  target: ["Pixel", "Foreground", "Page", "Session"],
+  reason: ["RouteUnavailable", "DeliveryFailed", "EffectUnconfirmed", "SuspectedNoop", "PermissionRequired"],
+  status: ["Satisfied", "Unsatisfied", "Unknown"],
+  unknownReason: ["InvalidPredicate", "UnsupportedPredicate", "UntrustedSource", "MultiMatch", "TargetMissing", "ObservationUnavailable", "StabilityUnproven"],
+  kind: ["ValueReadback", "WindowChange"],
+};
+
+function normalizeCuaMetadata(value: unknown, key?: string): unknown {
+  if (typeof value === "bigint") return value.toString();
+  if (Array.isArray(value)) return value.map((item) => normalizeCuaMetadata(item, key));
+  if (!value || typeof value !== "object") {
+    if (typeof value === "number" && key && CUA_ENUMS[key]?.[value] !== undefined) return CUA_ENUMS[key][value];
+    return value;
+  }
+  return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, normalizeCuaMetadata(item, name)]));
 }
 
 function toolResult(result: {
@@ -762,15 +820,80 @@ function toolResult(result: {
   structuredJson?: string;
   isError: boolean;
   errorCode?: string;
+  degraded?: boolean;
+  rawJson?: string;
+  action?: unknown;
+  verification?: unknown;
 }): ComputerResult {
   if (result.isError) {
     throw new Error(result.text || result.errorCode || uiText("电脑操作失败", "Computer action failed"));
   }
+  const metadata = {
+    degraded: result.degraded ?? false,
+    ...(result.errorCode ? { errorCode: result.errorCode } : {}),
+    ...(result.action !== undefined ? { action: normalizeCuaMetadata(result.action) } : {}),
+    ...(result.verification !== undefined ? { verification: normalizeCuaMetadata(result.verification) } : {}),
+    ...(result.rawJson ? { rawJson: result.rawJson } : {}),
+  };
+  const hasMetadata = Boolean(
+    result.degraded || result.errorCode || result.action !== undefined || result.verification !== undefined || result.rawJson,
+  );
   return {
     text: result.text,
     images: budgetImages(result.images.map((image) => ({ mimeType: image.mimeType, data: image.dataBase64 }))),
     structured: result.structuredJson,
+    structuredMeta: hasMetadata ? JSON.stringify(metadata, replacer, 2) : undefined,
   };
+}
+
+function requiredNumber(request: ComputerRequest, key: keyof ComputerRequest): number {
+  const value = request[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(uiText(`电脑操作缺少有效参数：${String(key)}`, `Computer action requires a valid ${String(key)}`));
+  }
+  return value;
+}
+
+function requiredWindowId(request: ComputerRequest): bigint {
+  if (!request.windowId) throw new Error(uiText("缺少 windowId", "windowId is required"));
+  return windowId(request.windowId);
+}
+
+function toStatePredicates(module: DriverModule, input: unknown[] | undefined): ReturnType<DriverModule["StatePredicate"]["new"]>[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((raw) => {
+    const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+    const window = item.window && typeof item.window === "object" ? item.window as Record<string, unknown> : undefined;
+    const element = item.element && typeof item.element === "object" ? item.element as Record<string, unknown> : undefined;
+    const bounds = window?.bounds && typeof window.bounds === "object" ? window.bounds as Record<string, unknown> : undefined;
+    const selector = element?.selector && typeof element.selector === "object" ? element.selector as Record<string, unknown> : {};
+    return module.StatePredicate.new({
+      window: window ? module.WindowPredicate.new({
+        exists: typeof window.exists === "boolean" ? window.exists : undefined,
+        bounds: bounds ? module.BoundsExpectation.new({
+          x: Number(bounds.x ?? 0),
+          y: Number(bounds.y ?? 0),
+          width: Number(bounds.width ?? 0),
+          height: Number(bounds.height ?? 0),
+          tolerancePx: bounds.tolerancePx === undefined ? undefined : Number(bounds.tolerancePx),
+        }) : undefined,
+      }) : undefined,
+      element: element ? module.ElementPredicate.new({
+        selector: module.ElementSelector.new({
+          role: typeof selector.role === "string" ? selector.role : undefined,
+          labelContains: typeof selector.labelContains === "string" ? selector.labelContains : undefined,
+        }),
+        exists: typeof element.exists === "boolean" ? element.exists : undefined,
+        valueEquals: typeof element.valueEquals === "string" ? element.valueEquals : undefined,
+        enabled: typeof element.enabled === "boolean" ? element.enabled : undefined,
+        selected: typeof element.selected === "boolean" ? element.selected : undefined,
+      }) : undefined,
+    });
+  });
+}
+
+function readableActionResult(_module: DriverModule, result: unknown): unknown {
+  return normalizeCuaMetadata(result);
 }
 
 async function dispatch(
@@ -834,6 +957,8 @@ async function dispatch(
           includeAccessibilityTree: true,
           includeScreenshot: request.includeScreenshot ?? false,
           maxElements: request.maxElements ?? 200,
+          maxDepth: request.maxDepth,
+          maxDimension: request.maxDimension,
         }),
         opts,
       );
@@ -857,27 +982,122 @@ async function dispatch(
         .filter((element) => !element.elementToken && /statictext|^text$/i.test(element.role.replace(/^AX/, "")))
         .map((element) => (element.value || element.label || "").trim())
         .filter(Boolean);
+      const treeElements = output.elements?.map((element) => ({
+        ...element,
+        ...(element.elementToken ? { token: element.elementToken } : {}),
+      }));
+      const images = budgetImages(output.images.map((image) => ({ mimeType: image.mimeType, data: image.dataBase64 })));
+      const imageInfo = images.map(imageMetadata);
+      const firstImage = imageInfo[0];
+      const scale = firstImage?.width && output.screenshotWidth && output.screenshotScale
+        ? output.screenshotScale * firstImage.width / output.screenshotWidth
+        : output.screenshotScale;
+      const text = serializeWindowState({
+        ...output,
+        ...(firstImage?.width ? { screenshotWidth: firstImage.width } : {}),
+        ...(firstImage?.height ? { screenshotHeight: firstImage.height } : {}),
+        ...(firstImage?.mimeType ? { screenshotMimeType: firstImage.mimeType } : {}),
+        ...(scale !== undefined ? { screenshotScale: scale } : {}),
+        // Keep the old `elements` meaning (interactive tokens only) and expose the
+        // complete native tree beside it for callers that need hierarchy or static text.
+        elements,
+        treeElements,
+        images: imageInfo,
+        ...(texts.length ? { texts } : {}),
+        ...(elements.length ? { interactiveElementCount: elements.length } : {}),
+      });
       return {
-        text: JSON.stringify(
-          {
-            appName: output.appName,
-            windowTitle: output.windowTitle,
-            truncated: output.truncated ?? false,
-            truncationReason: output.truncationReason,
-            elements,
-            ...(texts.length ? { texts } : {}),
-          },
-          null,
-          2,
-        ),
-        images: budgetImages(output.images.map((image) => ({ mimeType: image.mimeType, data: image.dataBase64 }))),
+        text,
+        images,
       };
     }
+
+    case "drag": {
+      const button =
+        request.button === "right"
+          ? module.ClickButton.Right
+          : request.button === "middle"
+            ? module.ClickButton.Middle
+            : module.ClickButton.Left;
+      return toolResult(
+        await active.drag(
+          module.DragInput.new({
+            fromX: requiredNumber(request, "fromX"),
+            fromY: requiredNumber(request, "fromY"),
+            toX: requiredNumber(request, "toX"),
+            toY: requiredNumber(request, "toY"),
+            target: optionalTarget(module, request),
+            session: SESSION,
+            durationMs: request.durationMs === undefined ? undefined : BigInt(Math.max(0, Math.trunc(request.durationMs))),
+            steps: request.stepsCount === undefined ? undefined : BigInt(Math.max(1, Math.trunc(request.stepsCount))),
+            button,
+            modifier: request.modifiers,
+          }),
+          opts,
+        ),
+      );
+    }
+
+    case "move_cursor":
+      return toolResult(
+        await active.moveCursor(
+          module.MoveCursorInput.new({
+            x: requiredNumber(request, "x"),
+            y: requiredNumber(request, "y"),
+            target: optionalTarget(module, request),
+            session: SESSION,
+          }),
+          opts,
+        ),
+      );
+
+    case "screen_size":
+      return toolResult(await active.getScreenSize(module.GetScreenSizeInput.new({ session: SESSION }), opts));
+
+    case "set_window_frame":
+      return toolResult(
+        await active.setWindowFrame(
+          module.SetWindowFrameInput.new({
+            pid: request.pid ?? 0,
+            windowId: requiredWindowId(request),
+            x: requiredNumber(request, "x"),
+            y: requiredNumber(request, "y"),
+            width: requiredNumber(request, "width"),
+            height: requiredNumber(request, "height"),
+            session: SESSION,
+          }),
+          opts,
+        ),
+      );
+
+    case "cursor_position":
+      return toolResult(await active.getCursorPosition(module.GetCursorPositionInput.new({ session: SESSION }), opts));
+
+    case "cursor_state":
+      return toolResult(
+        await active.getAgentCursorState(module.GetAgentCursorStateInput.new({ session: SESSION }), opts),
+      );
+
+    case "verify_state":
+      return toolResult(
+        await active.verifyState(
+          module.VerifyStateInput.new({
+            pid: BigInt(requiredNumber(request, "pid")),
+            windowId: requiredWindowId(request),
+            expect: toStatePredicates(module, request.expect),
+            session: SESSION,
+            timeoutMs: request.timeoutMs === undefined ? undefined : BigInt(Math.max(0, Math.trunc(request.timeoutMs))),
+            stableSamples: request.stableSamples === undefined ? undefined : BigInt(Math.max(1, Math.trunc(request.stableSamples))),
+            includeScreenshot: request.includeScreenshot ?? false,
+          }),
+          opts,
+        ),
+      );
 
     case "click": {
       const position = request.elementToken
         ? new module.ClickPosition.Element({ elementToken: request.elementToken })
-        : new module.ClickPosition.Coordinates({ x: request.x ?? 0, y: request.y ?? 0 });
+        : new module.ClickPosition.Coordinates({ x: requiredNumber(request, "x"), y: requiredNumber(request, "y") });
       const button =
         request.button === "right"
           ? module.ClickButton.Right
@@ -899,7 +1119,7 @@ async function dispatch(
         }),
         opts,
       );
-      return { text: JSON.stringify(result, replacer, 2), images: [] };
+      return { text: JSON.stringify(readableActionResult(module, result), replacer, 2), images: [] };
     }
 
     case "type":
@@ -951,8 +1171,8 @@ async function dispatch(
       return toolResult(
         await active.scroll(
           module.ScrollInput.new({
-            x: request.x ?? 0,
-            y: request.y ?? 0,
+            x: requiredNumber(request, "x"),
+            y: requiredNumber(request, "y"),
             direction,
             target: optionalTarget(module, request),
             session: SESSION,
@@ -968,7 +1188,7 @@ async function dispatch(
         await active.invokeMenu(
           module.InvokeMenuInput.new({
             pid: request.pid ?? 0,
-            windowId: windowId(request.windowId),
+            windowId: requiredWindowId(request),
             path: request.path ?? [],
             session: SESSION,
           }),

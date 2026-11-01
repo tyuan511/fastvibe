@@ -97,6 +97,16 @@ test("a binary frame stays binary", async () => {
   assert.ok(data.equals(bytes));
 });
 
+test("traffic reports framed bytes in both directions", async () => {
+  const { a, left, right } = pair();
+  const received = once<[Buffer, boolean]>(right, "message");
+  left.send("hello");
+  await received;
+  assert.equal(left.traffic().bytesOut, a.sent.reduce((sum, frame) => sum + frame.byteLength, 0));
+  assert.equal(right.traffic().bytesIn, left.traffic().bytesOut);
+  assert.equal(left.traffic().bytesIn, 0);
+});
+
 test("no message exceeds the interoperable size", async () => {
   const { a, left } = pair();
   left.send("x".repeat(100_000));

@@ -13,11 +13,10 @@ description: 通过 Cua Driver 操作本机桌面上的原生应用与窗口；�
 
 1. `computer_list_apps` 找到目标应用的 `pid`。
 2. `computer_list_windows`（传 pid）拿到 `windowId`。
-3. `computer_window_state`（传 pid + windowId）读取窗口里的可交互元素，拿到 `elementToken`。
+3. `computer_window_state`（传 pid + windowId）读取窗口里的无障碍树，拿到 `elementToken`。
 4. 用 `elementToken` 调用 `computer_click`。**只有在确实拿不到令牌时才退回 x/y 坐标**。
-5. 操作后重新截图或重新读取窗口状态，确认结果符合预期再继续。
-
-令牌会随窗口内容变化而失效。界面变了就重新读一次，不要复用旧令牌，也不要用旧快照里的坐标。
+5. 点击、输入或拖动后，用 `computer_window_state` 或 `computer_verify_state` 检查结果；不要只根据动作返回成功就假定界面已经改变。
+6. 界面变了就重新读取状态；令牌和旧快照里的坐标都不能跨状态复用。
 
 ## 为什么优先用令牌
 
@@ -52,12 +51,18 @@ computer_batch([
 
 - `computer_screenshot`：看整个桌面现在是什么样。用于定位和验证。
 - `computer_list_apps` / `computer_list_windows`：定位目标应用和窗口。
-- `computer_window_state`：读取窗口内的元素和令牌，是判断界面状态的主要依据。元素太多时用 `query` 按文本筛选。
+- `computer_window_state`：读取完整的窗口无障碍树、元素层级、元素状态、截断/降级信息和可选截图，是判断界面状态的主要依据。元素太多时用 `query`、`maxElements` 或 `maxDepth` 收窄范围。
 - `computer_click`：点击，优先传 `elementToken`。
 - `computer_type`：输入文本。调用前先确认焦点在预期的输入框里。
 - `computer_key` / `computer_hotkey`：单键（可带修饰键）和组合键。
 - `computer_menu`：走应用菜单，比点击屏幕上展开的菜单可靠，因为不依赖展开后的坐标。
 - `computer_scroll`：滚动。
+- `computer_verify_state`：等待一个窗口满足元素或窗口条件，适合点击、输入、拖动后的确认；多个条件会同时检查。
+- `computer_drag`：拖动滑块、文件或窗口。坐标必须来自最新状态或截图，完成后再验证。
+- `computer_move_cursor`：移动可见的 Agent Cursor，不执行点击，用于定位或让用户看清动作位置。
+- `computer_set_window_frame`：移动或调整窗口大小；先读取窗口 bounds，完成后验证。
+- `computer_cursor_position` / `computer_cursor_state`：读取指针位置和可见状态，用于解释或续接坐标动作。
+- `computer_screen_size`：读取 CUA 当前桌面的逻辑尺寸，只有坐标操作需要时才调用。
 - `computer_clipboard_read` / `computer_clipboard_write`：读写系统剪贴板。写入会覆盖用户原有内容。
 
 ## 边界

@@ -1,3 +1,4 @@
+import { agentIdentityForId } from "../../shared/agent-identity.ts";
 import type { AgentMessageKind, AgentThread, AgentThreadMessage, AgentThreadStatus } from "../../shared/agent-thread.ts";
 import type { Db } from "./db.ts";
 
@@ -5,24 +6,33 @@ export class AgentThreadStore {
   #db: Db;
   constructor(db: Db) { this.#db = db; }
 
+  #normalize(thread: AgentThread): AgentThread {
+    if (typeof thread.avatarSeed === "number" && thread.name && thread.name !== thread.agent) return thread;
+    const identity = agentIdentityForId(thread.id);
+    const next = { ...thread, name: identity.name, avatarSeed: identity.avatarSeed };
+    this.#db.run("UPDATE agent_threads SET data = ? WHERE id = ?", JSON.stringify(next), thread.id);
+    return next;
+  }
+
   create(input: Omit<AgentThread, "rootId" | "revision" | "createdAt" | "updatedAt"> & { id: string; createdAt?: number }): AgentThread {
     const now = input.createdAt ?? Date.now();
     const rootId = input.parentId ? this.get(input.parentId)?.rootId ?? input.parentId : input.id;
-    const thread: AgentThread = { ...input, rootId, createdAt: now, updatedAt: now, revision: 1 };
+    const identity = input.avatarSeed === undefined || !input.name ? agentIdentityForId(input.id) : { name: input.name, avatarSeed: input.avatarSeed };
+    const thread: AgentThread = { ...input, name: identity.name, avatarSeed: identity.avatarSeed, rootId, createdAt: now, updatedAt: now, revision: 1 };
     this.#db.run("INSERT INTO agent_threads (id, conversation_id, parent_id, root_id, status, updated_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)", thread.id, thread.conversationId, thread.parentId, thread.rootId, thread.status, now, JSON.stringify(thread));
     return thread;
   }
 
   get(id: string): AgentThread | undefined {
     const row = this.#db.get<{ data?: string }>("SELECT data FROM agent_threads WHERE id = ?", id);
-    return row?.data ? JSON.parse(row.data) as AgentThread : undefined;
+    return row?.data ? this.#normalize(JSON.parse(row.data) as AgentThread) : undefined;
   }
 
   list(conversationId?: string): AgentThread[] {
     const rows = conversationId
       ? this.#db.all<{ data: string }>("SELECT data FROM agent_threads WHERE conversation_id = ? ORDER BY updated_at DESC, id", conversationId)
       : this.#db.all<{ data: string }>("SELECT data FROM agent_threads ORDER BY updated_at DESC, id");
-    return rows.map((row) => JSON.parse(row.data) as AgentThread);
+    return rows.map((row) => this.#normalize(JSON.parse(row.data) as AgentThread));
   }
 
   patch(id: string, patch: Partial<Omit<AgentThread, "id" | "conversationId" | "rootId" | "createdAt">>): AgentThread | undefined {

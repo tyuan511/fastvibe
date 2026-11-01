@@ -35,6 +35,8 @@ export type SubagentHostRequest = {
   /** `${parentToolCallId}:${index}` — the same id the tool-call tracker mints. */
   subagentId: string;
   agent: string;
+  displayName?: string;
+  avatarSeed?: number;
   agentSource?: "user" | "project";
   task: string;
   systemPrompt: string;
@@ -162,7 +164,7 @@ export class SubagentTurnRunner {
   async #runSubagent(conversationId: string, request: SubagentHostRequest): Promise<SubagentHostResponse> {
     const { subagentId } = request;
     const lifecycle = (status: string, error?: string): void => {
-      this.#emit({ type: "subagent_lifecycle", subagentId, conversationId, agent: request.agent, name: request.agent, status, detail: request.task, ...(error ? { error } : {}) });
+      this.#emit({ type: "subagent_lifecycle", subagentId, conversationId, agent: request.agent, name: request.displayName ?? request.agent, avatarSeed: request.avatarSeed, status, detail: request.task, ...(error ? { error } : {}) });
     };
     const control = new SubagentControl(request.signal, () => this.#resolvePendingUi(undefined, subagentId));
     this.#subagentControls.set(subagentId, control);

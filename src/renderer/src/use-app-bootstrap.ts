@@ -260,11 +260,12 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
       // tab (`subagent:<toolCallId>:<index>`), keyed to the conversation that
       // spawned it, so two chats delegating at once never share a view.
       if (event.type === "agent_thread_changed" && event.thread && typeof event.thread === "object") {
-        const thread = event.thread as { id?: unknown; conversationId?: unknown; name?: unknown; status?: unknown; task?: unknown };
+        const thread = event.thread as { id?: unknown; conversationId?: unknown; name?: unknown; avatarSeed?: unknown; status?: unknown; task?: unknown };
         const threadId = typeof thread.id === "string" ? thread.id : "";
         if (threadId) useSidePaneStore.getState().registerSubagent(threadId, {
           conversationId: typeof thread.conversationId === "string" ? thread.conversationId : (conversationId ?? undefined),
           title: typeof thread.name === "string" ? thread.name : threadId,
+          avatarSeed: typeof thread.avatarSeed === "number" ? thread.avatarSeed : undefined,
           status: typeof thread.status === "string" ? thread.status : "working",
           brief: typeof thread.task === "string" ? thread.task : undefined,
         });
@@ -283,6 +284,7 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
             useSidePaneStore.getState().registerSubagent(subagentId, {
               conversationId: typeof event.conversationId === "string" ? event.conversationId : info?.conversationId,
               title: info?.name || info?.agent,
+              avatarSeed: info?.avatarSeed,
               status: typeof event.status === "string" ? event.status : info?.status,
               brief: info?.detail,
             });

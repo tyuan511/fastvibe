@@ -8,8 +8,10 @@ export type AgentThread = {
   conversationId: string;
   parentId?: string;
   rootId: string;
+  /** Configured role name; `name` is the per-thread display identity. */
   agent?: string;
   name?: string;
+  avatarSeed?: number;
   task: string;
   cwd: string;
   systemPrompt?: string;

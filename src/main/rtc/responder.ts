@@ -1,6 +1,6 @@
 import type { OfficialPath } from "../../shared/official.ts";
 import { mappedCandidate, parseCandidate, predictedCandidates } from "./candidates.ts";
-import { ChannelSocket } from "./channel-socket.ts";
+import { ChannelSocket, type ChannelTraffic } from "./channel-socket.ts";
 import type { IceServerConfig } from "./ice.ts";
 import { isGlobalV6, isPublicV4, maskAddress, type PathPlan } from "./netpath.ts";
 import type { PeerChannel, PeerFactory, PeerLike, PeerOptions } from "./peer.ts";
@@ -105,6 +105,8 @@ export type ResponderDeps = {
   sendSignal: (data: unknown) => boolean;
   /** The data channel is open: hand it to the remote server. */
   attach: (socket: RemoteSocket) => void;
+  /** Byte-level transport telemetry. A caller should charge only samples whose path is `relay`. */
+  onTraffic?: (sample: ChannelTraffic & { path: OfficialPath }) => void;
   /** Something the pane shows changed (the path, or that it connected). */
   onChange: () => void;
   /**
@@ -560,6 +562,7 @@ export class Responder {
       if (this.#timeout) clearTimeout(this.#timeout);
       this.#timeout = null;
       socket.once("close", () => this.close());
+      socket.on("traffic", (sample: ChannelTraffic) => this.#deps.onTraffic?.({ ...sample, path: this.#path }));
       this.#refreshPath();
       this.#poll = setInterval(() => this.#refreshPath(), this.#deps.pathPollMs);
       this.#poll.unref();

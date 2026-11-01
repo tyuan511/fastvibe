@@ -3,7 +3,8 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync }
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import type { AddressInfo } from "node:net";
-import type { AccountState, AccountUser } from "@shared/account";
+import type { AccountState, AccountUser } from "../../shared/account.ts";
+import { IrohRelayQuotaExceeded, parseIrohRelayConfig, parseIrohRelayUsage, type IrohRelayConfig, type IrohRelayUsage } from "../../shared/iroh-relay.ts";
 import { uiText } from "./ui-text.ts";
 
 /**
@@ -194,6 +195,44 @@ export class AccountService {
       });
     }
     return this.state();
+  }
+
+  async issueIrohRelay(deviceId: string, endpointId: string): Promise<IrohRelayConfig> {
+    const token = this.#stored?.token;
+    if (!token) throw new Error("account is signed out");
+    const response = await this.#call("/api/relay/iroh/token", {
+      method: "POST",
+      token,
+      body: { device_id: deviceId, endpoint_id: endpointId },
+    });
+    const body: unknown = await response.json().catch(() => undefined);
+    const code = (body as { error?: { code?: unknown } } | undefined)?.error?.code;
+    if (response.status === 429 && code === "relay_quota_exceeded") throw new IrohRelayQuotaExceeded();
+    if (!response.ok) throw new Error(`iroh relay token request failed: ${response.status}`);
+    const config = parseIrohRelayConfig(body);
+    if (!config) throw new Error("invalid iroh relay response");
+    return config;
+  }
+
+  async reportIrohUsage(input: {
+    deviceId: string;
+    token: string;
+    reportId: string;
+    bytesIn: number;
+    bytesOut: number;
+  }): Promise<IrohRelayUsage> {
+    const accountToken = this.#stored?.token;
+    if (!accountToken) throw new Error("account is signed out");
+    const response = await this.#call("/api/relay/iroh/usage", {
+      method: "POST",
+      token: accountToken,
+      body: input,
+    });
+    const body = (await response.json().catch(() => undefined)) as { usage?: unknown } | undefined;
+    if (!response.ok) throw new Error(`iroh relay usage report failed: ${response.status}`);
+    const usage = parseIrohRelayUsage(body?.usage);
+    if (!usage) throw new Error("invalid iroh relay usage response");
+    return usage;
   }
 
   /**

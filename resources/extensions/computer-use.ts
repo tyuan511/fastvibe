@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -36,8 +36,21 @@ type ComputerRequest = {
   foreground?: boolean;
   includeScreenshot?: boolean;
   maxElements?: number;
+  maxDepth?: number;
+  maxDimension?: number;
   onScreenOnly?: boolean;
+  fromX?: number;
+  fromY?: number;
+  toX?: number;
+  toY?: number;
+  durationMs?: number;
+  stepsCount?: number;
+  expect?: unknown[];
+  stableSamples?: number;
+  width?: number;
+  height?: number;
   timeoutMs?: number;
+  session?: string;
   conversationId?: string;
 };
 
@@ -45,6 +58,7 @@ type ComputerResult = {
   text: string;
   images: Array<{ mimeType: string; data: string }>;
   structured?: string;
+  structuredMeta?: string;
   targetApp?: { name: string; bundleId?: string };
 };
 
@@ -63,7 +77,108 @@ function boundConversationId(): string | undefined {
 
 /** Window ids are 64-bit; they travel as strings so no precision is lost on the way. */
 const WINDOW_ID = Type.String({ description: "computer_list_windows 返回的 windowId（字符串形式的整数）" });
-const PID = Type.Number({ description: "computer_list_apps 返回的进程 pid" });
+const PID = Type.Number({ description: "computer_list_apps 返回的应用 pid" });
+const COORDINATE = Type.Number({ description: "屏幕坐标，单位是逻辑像素" });
+const ACTION_BUTTON = Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("right"), Type.Literal("middle")]));
+const STATE_SELECTOR = Type.Object({
+  role: Type.Optional(Type.String({ description: "无障碍 role" })),
+  labelContains: Type.Optional(Type.String({ description: "标签包含的文字" })),
+});
+const STATE_ELEMENT = Type.Object({
+  selector: STATE_SELECTOR,
+  exists: Type.Optional(Type.Boolean()),
+  valueEquals: Type.Optional(Type.String()),
+  enabled: Type.Optional(Type.Boolean()),
+  selected: Type.Optional(Type.Boolean()),
+});
+const STATE_WINDOW = Type.Object({
+  exists: Type.Optional(Type.Boolean()),
+  bounds: Type.Optional(Type.Object({
+    x: COORDINATE,
+    y: COORDINATE,
+    width: Type.Number({ description: "窗口宽度" }),
+    height: Type.Number({ description: "窗口高度" }),
+    tolerancePx: Type.Optional(Type.Number()),
+  })),
+});
+const STATE_PREDICATE = Type.Object({
+  window: Type.Optional(STATE_WINDOW),
+  element: Type.Optional(STATE_ELEMENT),
+});
+
+const BATCH_SCOPE = {
+  pid: Type.Optional(PID),
+  windowId: Type.Optional(WINDOW_ID),
+};
+
+function batchStep(action: string, fields: Record<string, TSchema> = {}): TSchema {
+  return Type.Object({ action: Type.Literal(action), ...BATCH_SCOPE, ...fields });
+}
+
+const BATCH_STEP = Type.Union([
+  batchStep("screenshot"),
+  batchStep("list_apps"),
+  batchStep("list_windows", { onScreenOnly: Type.Optional(Type.Boolean()) }),
+  batchStep("window_state", {
+    pid: PID,
+    windowId: WINDOW_ID,
+    query: Type.Optional(Type.String()),
+    includeScreenshot: Type.Optional(Type.Boolean()),
+    maxElements: Type.Optional(Type.Number()),
+    maxDepth: Type.Optional(Type.Number()),
+    maxDimension: Type.Optional(Type.Number()),
+  }),
+  batchStep("click", {
+    elementToken: Type.Optional(Type.String()),
+    x: Type.Optional(COORDINATE),
+    y: Type.Optional(COORDINATE),
+    button: ACTION_BUTTON,
+    count: Type.Optional(Type.Number()),
+    foreground: Type.Optional(Type.Boolean()),
+  }),
+  batchStep("type", { text: Type.String(), pid: Type.Optional(PID), windowId: Type.Optional(WINDOW_ID) }),
+  batchStep("key", { key: Type.String(), modifiers: Type.Optional(Type.Array(Type.String())) }),
+  batchStep("hotkey", { keys: Type.Array(Type.String()), modifiers: Type.Optional(Type.Array(Type.String())) }),
+  batchStep("scroll", {
+    x: COORDINATE,
+    y: COORDINATE,
+    direction: Type.Optional(Type.Union([Type.Literal("up"), Type.Literal("down"), Type.Literal("left"), Type.Literal("right")])),
+    amount: Type.Optional(Type.Number()),
+  }),
+  batchStep("drag", {
+    fromX: COORDINATE,
+    fromY: COORDINATE,
+    toX: COORDINATE,
+    toY: COORDINATE,
+    durationMs: Type.Optional(Type.Number()),
+    stepsCount: Type.Optional(Type.Number()),
+    button: ACTION_BUTTON,
+    modifiers: Type.Optional(Type.Array(Type.String())),
+  }),
+  batchStep("move_cursor", { x: COORDINATE, y: COORDINATE }),
+  batchStep("screen_size"),
+  batchStep("set_window_frame", {
+    pid: PID,
+    windowId: WINDOW_ID,
+    x: COORDINATE,
+    y: COORDINATE,
+    width: Type.Number(),
+    height: Type.Number(),
+  }),
+  batchStep("cursor_position"),
+  batchStep("cursor_state"),
+  batchStep("verify_state", {
+    pid: PID,
+    windowId: WINDOW_ID,
+    expect: Type.Array(STATE_PREDICATE, { minItems: 1, maxItems: 8 }),
+    timeoutMs: Type.Optional(Type.Number()),
+    stableSamples: Type.Optional(Type.Number()),
+    includeScreenshot: Type.Optional(Type.Boolean()),
+  }),
+  batchStep("menu", { pid: PID, windowId: WINDOW_ID, path: Type.Array(Type.String()) }),
+  batchStep("clipboard_read"),
+  batchStep("clipboard_write", { text: Type.String() }),
+]);
 
 export default function computerUse(pi: ExtensionAPI): void {
   const conversationId = boundConversationId();
@@ -91,7 +206,15 @@ export default function computerUse(pi: ExtensionAPI): void {
     else if (prefix) content.push({ type: "text", text: prefix.trim() });
     for (const image of result.images) content.push({ type: "image", data: image.data, mimeType: image.mimeType });
     if (content.length === 0) content.push({ type: "text", text: "(无输出)" });
-    return { content, details: result.structured ? { structured: result.structured } : undefined };
+    return {
+      content,
+      details: result.structured || result.structuredMeta
+        ? {
+            ...(result.structured ? { structured: result.structured } : {}),
+            ...(result.structuredMeta ? { structuredMeta: result.structuredMeta } : {}),
+          }
+        : undefined,
+    };
   }
 
   pi.registerTool({
@@ -143,6 +266,8 @@ export default function computerUse(pi: ExtensionAPI): void {
       query: Type.Optional(Type.String({ description: "按文本筛选元素，减少返回量" })),
       includeScreenshot: Type.Optional(Type.Boolean({ description: "同时返回该窗口的截图" })),
       maxElements: Type.Optional(Type.Number({ description: "最多返回多少个元素，默认 200" })),
+      maxDepth: Type.Optional(Type.Number({ description: "最多读取无障碍树的深度" })),
+      maxDimension: Type.Optional(Type.Number({ description: "截图最长边上限，单位是像素" })),
     }),
     async execute(_id, params) {
       return call("window_state", {
@@ -151,7 +276,119 @@ export default function computerUse(pi: ExtensionAPI): void {
         query: params.query,
         includeScreenshot: params.includeScreenshot,
         maxElements: params.maxElements,
+        maxDepth: params.maxDepth,
+        maxDimension: params.maxDimension,
       });
+    },
+  });
+
+  pi.registerTool({
+    name: "computer_drag",
+    label: "拖动",
+    description:
+      "把鼠标从起点拖到终点。用于拖动滑块、调整窗口或移动文件。优先先读取窗口状态；坐标必须基于最新截图或元素 frame，拖动后再用 computer_verify_state 或 computer_window_state 验证结果。",
+    promptSnippet: "拖动鼠标",
+    parameters: Type.Object({
+      fromX: COORDINATE,
+      fromY: COORDINATE,
+      toX: COORDINATE,
+      toY: COORDINATE,
+      pid: Type.Optional(PID),
+      windowId: Type.Optional(WINDOW_ID),
+      durationMs: Type.Optional(Type.Number({ description: "拖动持续时间，毫秒" })),
+      stepsCount: Type.Optional(Type.Number({ description: "拖动分成多少步" })),
+      button: ACTION_BUTTON,
+      modifiers: Type.Optional(Type.Array(Type.String())),
+    }),
+    async execute(_id, params) {
+      return call("drag", params);
+    },
+  });
+
+  pi.registerTool({
+    name: "computer_move_cursor",
+    label: "移动鼠标",
+    description: "把可见的 Agent Cursor 移到屏幕坐标。只用于定位或让用户看清下一步，不会点击。",
+    promptSnippet: "移动鼠标",
+    parameters: Type.Object({
+      x: COORDINATE,
+      y: COORDINATE,
+      pid: Type.Optional(PID),
+      windowId: Type.Optional(WINDOW_ID),
+    }),
+    async execute(_id, params) {
+      return call("move_cursor", params);
+    },
+  });
+
+  pi.registerTool({
+    name: "computer_screen_size",
+    label: "读取屏幕尺寸",
+    description: "读取 CUA 当前桌面的逻辑尺寸。只有在必须使用坐标且最新窗口状态没有足够坐标信息时调用。",
+    promptSnippet: "读取屏幕尺寸",
+    parameters: Type.Object({}),
+    async execute() {
+      return call("screen_size");
+    },
+  });
+
+  pi.registerTool({
+    name: "computer_set_window_frame",
+    label: "调整窗口",
+    description:
+      "移动或调整指定窗口的大小。先用 computer_list_windows 读取当前 bounds 和 screen size，完成后用 computer_window_state 或 computer_verify_state 确认目标窗口仍然正确。",
+    promptSnippet: "调整窗口位置或大小",
+    parameters: Type.Object({
+      pid: PID,
+      windowId: WINDOW_ID,
+      x: COORDINATE,
+      y: COORDINATE,
+      width: Type.Number({ description: "窗口宽度" }),
+      height: Type.Number({ description: "窗口高度" }),
+    }),
+    async execute(_id, params) {
+      return call("set_window_frame", params);
+    },
+  });
+
+  pi.registerTool({
+    name: "computer_cursor_position",
+    label: "读取鼠标位置",
+    description: "读取当前 Agent Cursor 的位置，用于继续拖动或解释上一步坐标动作。",
+    promptSnippet: "读取鼠标位置",
+    parameters: Type.Object({}),
+    async execute() {
+      return call("cursor_position");
+    },
+  });
+
+  pi.registerTool({
+    name: "computer_cursor_state",
+    label: "读取指针状态",
+    description: "读取 Agent Cursor 是否启用及其主题、动画和当前位置。",
+    promptSnippet: "读取指针状态",
+    parameters: Type.Object({}),
+    async execute() {
+      return call("cursor_state");
+    },
+  });
+
+  pi.registerTool({
+    name: "computer_verify_state",
+    label: "验证界面状态",
+    description:
+      "等待并验证指定窗口是否达到预期状态。用在点击、输入或拖动之后，避免只凭动作返回成功就继续。expect 中的多个条件必须同时满足；超时会返回未满足的条件和最后一次观测。",
+    promptSnippet: "验证界面状态",
+    parameters: Type.Object({
+      pid: PID,
+      windowId: WINDOW_ID,
+      expect: Type.Array(STATE_PREDICATE, { minItems: 1, maxItems: 8 }),
+      timeoutMs: Type.Optional(Type.Number({ description: "最多等待多少毫秒，0 表示只检查一次" })),
+      stableSamples: Type.Optional(Type.Number({ description: "连续满足多少次才算稳定" })),
+      includeScreenshot: Type.Optional(Type.Boolean({ description: "同时返回最后一次窗口截图" })),
+    }),
+    async execute(_id, params) {
+      return call("verify_state", params);
     },
   });
 
@@ -301,38 +538,10 @@ export default function computerUse(pi: ExtensionAPI): void {
     name: "computer_batch",
     label: "连续操作",
     description:
-      "一次执行一串动作，按顺序跑，任何一步失败就停下并告诉你停在哪。只要下一步不依赖上一步的返回结果，就应该用它，而不是连着发好几个 computer_* 调用——每个单独调用都要多一轮模型往返、一次确认和一张截图。\n" +
-      "典型用法：点击输入框 → 输入文本 → 回车 → 截图。每步的 action 和参数与同名单独工具一致（click、type、key、hotkey、scroll、menu、screenshot、window_state、list_apps、list_windows、clipboard_read、clipboard_write）。\n" +
-      "不要把需要先看结果再决定的步骤放进同一批：元素令牌要先 computer_window_state 拿到，拿令牌和用令牌应该分两次。",
+      "一次执行一串动作，按顺序跑，任何一步失败就停下并告诉你停在第几步。适合把不依赖中间观测的点击、输入、按键和截图合并，减少模型往返。需要先读结果再决定的步骤不要合并，例如 elementToken 必须来自前一次 computer_window_state。动作列表支持 screenshot、list_apps、list_windows、window_state、click、type、key、hotkey、scroll、drag、move_cursor、screen_size、set_window_frame、cursor_position、cursor_state、verify_state、menu、clipboard_read、clipboard_write。",
     promptSnippet: "连续执行几步电脑操作",
     parameters: Type.Object({
-      steps: Type.Array(
-        Type.Object({
-          action: Type.String({
-            description: "click、type、key、hotkey、scroll、menu、screenshot、window_state、list_apps、list_windows、clipboard_read、clipboard_write",
-          }),
-          elementToken: Type.Optional(Type.String()),
-          pid: Type.Optional(Type.Number()),
-          windowId: Type.Optional(Type.String()),
-          x: Type.Optional(Type.Number()),
-          y: Type.Optional(Type.Number()),
-          text: Type.Optional(Type.String()),
-          key: Type.Optional(Type.String()),
-          keys: Type.Optional(Type.Array(Type.String())),
-          modifiers: Type.Optional(Type.Array(Type.String())),
-          button: Type.Optional(Type.String()),
-          count: Type.Optional(Type.Number()),
-          direction: Type.Optional(Type.String()),
-          amount: Type.Optional(Type.Number()),
-          path: Type.Optional(Type.Array(Type.String())),
-          query: Type.Optional(Type.String()),
-          foreground: Type.Optional(Type.Boolean()),
-          includeScreenshot: Type.Optional(Type.Boolean()),
-          maxElements: Type.Optional(Type.Number()),
-          onScreenOnly: Type.Optional(Type.Boolean()),
-        }),
-        { description: "按顺序执行的动作列表" },
-      ),
+      steps: Type.Array(BATCH_STEP, { minItems: 1, maxItems: 32 }),
     }),
     async execute(_id, params) {
       return call("batch", { steps: params.steps as any });

@@ -54,6 +54,19 @@ async function cloud(): Promise<Cloud> {
       if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
       return state.meStatus === 200 ? send(200, { ...USER, login: "octocat-renamed" }) : send(state.meStatus, {});
     }
+    if (req.url === "/api/relay/iroh/token") {
+      if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
+      return send(200, {
+        relay_id: "hk1", url: "https://relay.example.test:8444", quic_port: 7842,
+        token: "fvr1.payload.signature", expires_at: "2026-11-01T00:10:00Z",
+        usage: { period_start: "2026-11-01T00:00:00Z", resets_at: "2026-12-01T00:00:00Z", used_bytes: 10, quota_bytes: 1000, remaining_bytes: 990 },
+      });
+    }
+    if (req.url === "/api/relay/iroh/usage") {
+      if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
+      await readJson(req);
+      return send(200, { allowed: true, usage: { period_start: "2026-11-01T00:00:00Z", resets_at: "2026-12-01T00:00:00Z", used_bytes: 20, quota_bytes: 1000, remaining_bytes: 980 } });
+    }
     if (req.url === "/api/auth/logout") {
       state.revoked.push(String(req.headers.authorization));
       return res.writeHead(204).end();
@@ -176,6 +189,28 @@ test("a sign-in goes through the browser, stores a private token, and lifts the 
   } finally { closeAll(r); }
 });
 
+test("an account receives the iroh relay URL and can report cumulative bytes", async () => {
+  const r = await rig();
+  try {
+    await r.service.login();
+    await settled(r, "signed-in");
+    const issued = await r.service.issueIrohRelay("00000000-0000-0000-0000-000000000001", "endpoint-a");
+    assert.equal(issued.relayId, "hk1");
+    assert.equal(issued.url, "https://relay.example.test:8444");
+    assert.equal(issued.quicPort, 7842);
+    assert.equal(issued.usage.remainingBytes, 990);
+    const usage = await r.service.reportIrohUsage({
+      deviceId: "00000000-0000-0000-0000-000000000001",
+      token: issued.token,
+      reportId: "00000000-0000-0000-0000-000000000002",
+      bytesIn: 12,
+      bytesOut: 34,
+    });
+    assert.equal(usage.remainingBytes, 980);
+    assert.ok(r.cloud.calls.includes("POST /api/relay/iroh/token"));
+    assert.ok(r.cloud.calls.includes("POST /api/relay/iroh/usage"));
+  } finally { closeAll(r); }
+});
 test("the browser is told the outcome on the page it is left on", async () => {
   const r = await rig();
   try {
