@@ -19,8 +19,8 @@ test("native Android release metadata and updater asset contract stay aligned", 
   const workflow = readFileSync(join(root, ".github", "workflows", "mobile-android.yml"), "utf8");
   const metadata = readFileSync(join(android, "version.properties"), "utf8");
 
-  assert.match(metadata, /^versionName=0\.5\.12$/m);
-  assert.match(metadata, /^versionCode=512$/m);
+  assert.match(metadata, /^versionName=0\.5\.13$/m);
+  assert.match(metadata, /^versionCode=513$/m);
   assert.match(workflow, /tags:\s*\n\s+- "app-v\*"/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /tool\/build\.sh --release --with-aar/);
@@ -39,15 +39,15 @@ test("native Android release metadata and updater asset contract stay aligned", 
 });
 
 test("Android metadata checker accepts the shipping version and matching tag", () => {
-  const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), "app-v0.5.12"]);
+  const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), "app-v0.5.13"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Android 0\.5\.12 \(versionCode 512\), ABI arm64-v8a/);
+  assert.match(result.stdout, /Android 0\.5\.13 \(versionCode 513\), ABI arm64-v8a/);
 });
 
 test("Android metadata checker rejects a mismatched release tag", () => {
   const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), "app-v0.5.10"]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /does not match app-v0\.5\.12/);
+  assert.match(result.stderr, /does not match app-v0\.5\.13/);
 });
 
 test("signed native release build fails closed before Gradle without all signing inputs", () => {
