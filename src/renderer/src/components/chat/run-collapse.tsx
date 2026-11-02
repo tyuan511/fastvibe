@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Spinner } from "@/components/ui/spinner";
+import { RunningMark } from "@/components/running-mark";
 import { PROCESS_BODY_CAP } from "@/lib/process-body";
 import { formatDuration } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -21,19 +21,19 @@ export function RunProgress({ startedAt }: { startedAt: number }): JSX.Element {
   const { t } = useTranslation("chat");
   const [now, setNow] = useState(() => Date.now());
 
-  // Keep the tenth-second clock local so ticks never re-render the transcript.
+  // Keep the whole-second clock local so ticks never re-render the transcript.
   useEffect(() => {
     setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [startedAt]);
 
   return (
     <div data-slot="run-progress" className="flex items-center gap-2 text-sm text-muted-foreground">
-      <Spinner aria-hidden className="size-4 shrink-0" />
+      <RunningMark className="size-4" label={t("message.working")} />
       <span className="font-medium">{t("message.working")}</span>
       <span role="timer" className="tabular-nums">
-        {formatDuration(Math.max(0, now - startedAt), { fractionalSeconds: true })}
+        {formatDuration(Math.floor(Math.max(0, now - startedAt) / 1000) * 1000)}
       </span>
     </div>
   );

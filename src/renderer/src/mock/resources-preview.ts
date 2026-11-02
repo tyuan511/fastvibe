@@ -35,7 +35,7 @@ export function previewResources(mode: string, attempt = 0): void {
       { id: "other-conversation", conversationId: "other", name: "must-not-appear", status: "running" },
     ],
   });
-  if (mode === "agents") {
+  if (mode === "agents" || mode === "agent-actions") {
     const createdAt = Date.now() - 50000;
     const threads: AgentThread[] = [
       { id: "agent-preview-one", name: "Warm Seal", avatarSeed: 42, task: "为当前改动添加真实 SDK 集成测试", status: "working" },
@@ -45,12 +45,22 @@ export function previewResources(mode: string, attempt = 0): void {
     window.fastvibe.engine.getAgentThreadMessages = async () => [];
     const currentRun: ChatMessage[] = [{ id: "agent-current", role: "assistant", text: "正在检查 SDK 集成测试的上下文。", tools: [{ id: "agent-read", name: "read", status: "done", args: { path: "test/agent-thread-store.test.ts" }, result: "Test setup" }], parts: [{ kind: "tool", toolId: "agent-read" }, { kind: "text", text: "正在检查 SDK 集成测试的上下文。" }], createdAt }];
     const creations: ToolCallBlock[] = threads.map((thread, index) => ({ id: `spawn-preview-${index}`, name: "spawn_agent", status: "done", args: { task_name: thread.taskName, message: thread.task }, details: { thread } }));
+    const actions: ToolCallBlock[] = mode === "agent-actions" ? [
+      { id: "action-send", name: "send_message", status: "done", args: { target: threads[0].id, message: "请补充测试证据。" } },
+      { id: "action-followup", name: "followup_task", status: "done", args: { target: threads[1].id, message: "继续检查边界情况。" }, details: { result: threads[1] } },
+      { id: "action-interrupt", name: "interrupt_agent", status: "done", args: { target: threads[1].id } },
+      { id: "action-list", name: "list_agents", status: "done", args: {}, details: { threads } },
+      { id: "action-wait-many", name: "wait_agent", status: "done", args: { targets: threads.map((thread) => thread.id) }, details: { threads } },
+      { id: "action-error", name: "send_message", status: "error", args: { target: threads[1].id }, result: "Thread is closed" },
+      { id: "action-wait", name: "wait_agent", status: "running", args: { targets: [threads[0].id] } },
+    ] : [];
+    const displayed = [...creations, ...actions];
     const history: ChatMessage[] = [
       { id: "agents-user", role: "user", text: "安排智能体检查这次改动。", tools: [], createdAt },
-      { id: "agents-process", role: "assistant", text: "", tools: creations, parts: [{ kind: "thinking", text: "把两个检查任务交给不同的智能体。" }, ...creations.map((tool) => ({ kind: "tool" as const, toolId: tool.id }))], createdAt: createdAt + 1000, completedAt: createdAt + 5000 },
+      { id: "agents-process", role: "assistant", text: "", tools: displayed, parts: [{ kind: "thinking", text: "把两个检查任务交给不同的智能体。" }, ...displayed.map((tool) => ({ kind: "tool" as const, toolId: tool.id }))], createdAt: createdAt + 1000, completedAt: createdAt + 5000 },
       { id: "agents-answer", role: "assistant", text: "已创建两位智能体，点击名字可以查看对应线程。", tools: [], createdAt: createdAt + 5000, completedAt: createdAt + 6000 },
     ];
-    useSessionStore.setState({ messages: history, subagentStreams: { [subagentKey(`${threads[0].id}:turn:1`, id)]: currentRun }, streaming: false, running: { ...store.running, [id]: false }, subagents: threads.map((thread) => ({ id: `${thread.id}:turn:1`, conversationId: id, name: thread.name, avatarSeed: thread.avatarSeed, detail: thread.task, status: thread.status === "working" ? "running" : "completed" })) });
+    useSessionStore.setState({ messages: history, subagentStreams: { [subagentKey(`${threads[0].id}:turn:1`, id)]: currentRun }, streaming: mode === "agent-actions", running: { ...store.running, [id]: mode === "agent-actions" }, subagents: threads.map((thread) => ({ id: `${thread.id}:turn:1`, conversationId: id, name: thread.name, avatarSeed: thread.avatarSeed, detail: thread.task, status: thread.status === "working" ? "running" : "completed" })) });
   }
   useSidePaneStore.getState().setCollapsed(true);
 }

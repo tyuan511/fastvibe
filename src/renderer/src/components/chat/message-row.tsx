@@ -4,7 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { AlertCircleIcon, ArrowRight01Icon, Copy01Icon, GitForkIcon, PencilEdit02Icon, RotateCcwIcon, StopCircleIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
-import { Spinner } from "@/components/ui/spinner";
+import { RunningMark } from "@/components/running-mark";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -230,7 +230,7 @@ function RetryStatus({ message }: { message: ChatMessage }): JSX.Element | null 
   return (
     <PartSlot>
       <ToolRow
-        icon={<Spinner className="size-3" />}
+        icon={<RunningMark />}
         label={t("errors.retryingLabel")}
         context={context}
         running

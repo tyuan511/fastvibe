@@ -2077,7 +2077,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
       just because it is unfinished.
     - **Busy marks follow the run.** The header's leading glyph and the leading glyph
       of the item `in_progress` are `RunningMark` (`components/running-mark.tsx`) —
-      the same sweeping-arc mark the sidebar puts on a running conversation, shared so
+      the same nine-dot grid the sidebar puts on a running conversation, shared so
       "a run is in flight" reads identically — but only while that conversation is
       working. Idle, a stalled item falls back to the plain circle (`StatusIcon`), in
       the panel and in the transcript card alike (the card reads the same flag through
@@ -2110,6 +2110,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   - **Verification.** `test/agent-team-context.test.ts` uses the real SDK and a scripted model for request visibility, Continue, reload, compaction, tool pairing and durable deduplication. `test/agent-thread-mailbox.test.ts`, `test/agent-team-lifecycle.test.ts` and `test/subagent-team-prompt.test.ts` cover transactions, scoped waits, cancellation and collaboration guidance.
   - **Renderer.** `agent_thread_changed` registers a quiet Agent Team tab. The resource panel shows parent indentation, the side pane shows the thread transcript and read-only runtime state, and the shared `subagent-state` reducer keeps live events scoped by conversation and monotonic revision. The thread's display name and avatar are persistent, local SVG data; no network avatar request is made.
   - **Creation stays visible in history.** `spawn_agent` is a standalone agent action, showing the persisted result's name and avatar; clicking the name opens its thread. It stays outside the settled run fold and process overflow. Resources merge creation results, persisted threads and live `<threadId>:turn:<n>` runs under the thread id, with the latest turn owning live status; the avatar stays at the front while the running mark sits beside the trailing status. Thread tabs read the current turn's stream/cache and adopt revisioned thread updates, including a follow-up's start. Preview: `mock.html?resources=agents&lang=zh`.
+  - **Agent tool actions share one identity format.** `AgentActionCard` renders create / wait / send / follow-up / interrupt / list as translated action sentences, without raw tool names or an extra "agent" noun. Avatar and name are one clickable button that opens that thread; each target in a multi-target action has its own button. Identity comes from preceding persisted creation results, the call's structured result and the conversation-scoped run registry (`lib/agent-tool.ts`), with no per-row request. The details trigger is a sibling so it never nests buttons. A finished wait says it ended waiting, because it may have timed out while a target still runs. Preview: `mock.html?resources=agent-actions&lang=zh|en`; tests: `test/agent-tool-presentation.test.ts`.
 - **Computer use** downloads its engine the first time 设置 → 电脑操控 → 允许操作电脑 is turned on. The installer does not carry the `cua-driver` worker or the `@trycua/cua-driver-*` native library (together ~80 MB). The small JS bindings stay, so the platform package can be resolved from the data directory after the download. A dev tree still fetches the worker in `predev`. Do not put either artifact back into `electron-builder.yml`.
 - **CUA 观测和操作桥接**（`src/main/pi/cua-bridge.ts`、`resources/extensions/computer-use.ts`）必须把 SDK 的结果分成两条路径：模型通过 `content` 读取可行动文本和结构化结果，渲染层通过 `details` 读取完整元数据。`window_state` 保留旧的交互元素 `elements` 兼容形状，并在 `treeElements` 提供完整无障碍树、层级、截断/降级状态和截图实际尺寸；截图经过 bridge 的压缩后，快照里的尺寸、MIME 和 scale 必须对应压缩后的图片。动作结果的 effect、route、verification 和 evidence 枚举先转成人类可读值再交给模型。
   - 工具流程是「定位应用 → 定位窗口 → 读取窗口树 → token 操作 → 验证结果」。`computer_verify_state` 用于点击、输入、拖动后的状态确认；`computer_batch` 只允许参数完整的 action 联合，最多 32 步，不能把半个窗口作用域静默降级到桌面作用域。
@@ -2938,6 +2939,7 @@ means either: an agent **run** and a **compaction**.
   uses the same gate as the button it clicks. A delegated run's tab is the same idea one
   level down: `Main` finalises it when the sub-session's prompt has settled and its
   transcript/state have been cached, then publishes the terminal lifecycle.
+- **Running marks are nine-dot grids** (`components/running-mark.tsx`, `index.css`): the same 1.2-second staggered opacity animation is used for live conversations, projects, todos, Agent resources, tool execution, retry status and the reply's 工作中 row. It keeps the existing square slots and theme colour, and stops animating under reduced motion. Ordinary page, button and request loading still uses the existing Spinner / FLoader. 工作中 shows whole seconds and updates once per second.
 - The renderer's `streaming` is deliberately *not* that mark: it means 「a run is in flight
   for the chat on screen」, and is read only where that is the question — the transcript's
   caret / working row / per-message footer, and whether a send is queued (steer or
@@ -2949,8 +2951,8 @@ means either: an agent **run** and a **compaction**.
   (`components/chat/run-collapse.tsx`) renders 「工作中 + elapsed duration」 throughout `streaming`,
   including thinking, tools, text output and retry backoff. It replaces the old conditional
   `WorkingStatus` and the separate elapsed header above the reply. The clock uses the merged
-  reply's `runStartedAt ?? createdAt`, so remounting does not reset it; a local 100ms interval
-  updates tenths of a second without re-rendering the transcript, and unmounts on settle.
+  reply's `runStartedAt ?? createdAt`, so remounting does not reset it; a local 1-second interval
+  updates whole seconds without re-rendering the transcript, and unmounts on settle.
 - **`engine:prompt` answers 「sent」, not 「finished」.** It resolves when the SDK accepts the
   prompt (`preflightResult(true)`, `pi/prompt-acceptance.ts`) and rejects only when it was
   refused; a run that fails afterwards is logged and reaches clients through its events. So a

@@ -129,6 +129,42 @@
     "questionCount_other": "{{count}} questions",
     "todoUpdating": "Updating tasks",
     "todoUpdated": "Tasks updated",
+    "agentAction": {
+      "spawn": {
+        "running": "Creating <agents/>",
+        "done": "Created <agents/>",
+        "error": "Create <agents/>"
+      },
+      "wait": {
+        "running": "Waiting for <agents/> to finish",
+        "done": "Finished waiting for <agents/>",
+        "error": "Wait for <agents/>"
+      },
+      "send": {
+        "running": "Sending a message to <agents/>",
+        "done": "Sent a message to <agents/>",
+        "error": "Send a message to <agents/>"
+      },
+      "followup": {
+        "running": "Asking <agents/> to continue",
+        "done": "Asked <agents/> to continue",
+        "error": "Ask <agents/> to continue"
+      },
+      "interrupt": {
+        "running": "Interrupting <agents/>",
+        "done": "Interrupted <agents/>",
+        "error": "Interrupt <agents/>"
+      },
+      "list": {
+        "running": "Checking <agents/>",
+        "done": "Checked <agents/>",
+        "error": "Check <agents/>"
+      }
+    },
+    "agentUnnamed": "Unnamed",
+    "agentTeam": "the team",
+    "agentNew": "a new teammate",
+    "agentDetails": "View call details",
     "agentCreating": "Creating agent",
     "agentCreated": "Created agent",
     "agentFallback": "Agent",

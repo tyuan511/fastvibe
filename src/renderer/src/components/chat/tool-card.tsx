@@ -5,7 +5,7 @@ import { ArrowDown01Icon } from "@hugeicons/core-free-icons";
 import { subagentStatusText } from "@/lib/subagent-status";
 import { findSubagentForThread, subagentToolRuns } from "@shared/subagent-state";
 import { AgentAvatar } from "@/components/agent-avatar";
-import { Spinner } from "@/components/ui/spinner";
+import { RunningMark } from "@/components/running-mark";
 import { Button } from "@/components/ui/button";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
@@ -20,6 +20,8 @@ import { CodeBlock, MarkdownView } from "./markdown-view";
 import { QuestionAnswers } from "./question-answers";
 import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
+import { AgentActionCard } from "./agent-action-card";
+import { agentToolAction } from "@/lib/agent-tool";
 import { useTranscriptConversation } from "./conversation-context";
 import { cn } from "@/lib/utils";
 
@@ -220,7 +222,7 @@ function CodemodeCallRow({ call }: { call: CodemodeCall }): JSX.Element {
   const { t } = useTranslation("chat");
   const status =
     call.status === "running" ? (
-      <Spinner className="size-3" />
+      <RunningMark className="size-3" />
     ) : (
       <span
         aria-label={call.status === "ok" ? t("tools.completed") : call.status === "cancelled" ? t("tools.callCancelled") : t("tools.error")}
@@ -448,8 +450,7 @@ export const ToolCard = memo(function ToolCard({
   showIcon?: boolean;
 }): JSX.Element {
   const cwd = useWorkspacePath();
-  const conversationId = useTranscriptConversation();
-  const spawned = tool.name === "spawn_agent" ? subagentToolRuns(tool)[0] : undefined;
+  if (agentToolAction(tool.name)) return <AgentActionCard tool={tool} showIcon={showIcon}><ToolDetail tool={tool} running={tool.status === "running"} /></AgentActionCard>;
   const view = describeTool(tool, cwd);
   const running = tool.status === "running";
   // read / search / list are single-line rows in zcode: the subject opens the file
@@ -489,14 +490,14 @@ export const ToolCard = memo(function ToolCard({
   // the doorway to that run's tab (see SubagentPanel).
   return (
     <ToolRow
-      icon={running ? <Spinner className="size-3" /> : view.icon}
+      icon={running ? <RunningMark /> : view.icon}
       label={view.label}
       subject={view.subject}
       context={view.context}
       error={tool.status === "error" ? tool.result ?? view.statusLabel : undefined}
       running={running}
       title={view.title}
-      canToggle={!inline && !spawned}
+      canToggle={!inline}
       showIcon={showIcon}
       persistKey={tool.id}
       trailing={
@@ -514,9 +515,7 @@ export const ToolCard = memo(function ToolCard({
         ) : undefined
       }
       onSubjectClick={
-        spawned ? () => useSidePaneStore.getState().openSubagent(spawned.id, {
-          conversationId: conversationId ?? undefined, title: spawned.name, avatarSeed: spawned.avatarSeed, status: spawned.status, brief: spawned.task,
-        }) : view.family === "read" && path ? () => void useSessionStore.getState().openPreview(path) : undefined
+        view.family === "read" && path ? () => void useSessionStore.getState().openPreview(path) : undefined
       }
     >
       {hasDetail ? <ToolDetail tool={tool} running={running} /> : null}

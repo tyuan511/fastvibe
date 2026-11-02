@@ -682,6 +682,23 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
   }
 }
 
+/* Live-task mark only; request loading keeps the ordinary Spinner. */
+.running-grid > circle {
+  animation: running-grid-pulse 1.2s linear infinite;
+}
+
+@keyframes running-grid-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .running-grid > circle {
+    animation: none;
+    opacity: 0.75;
+  }
+}
+
 /* In-flight labels (running tool calls, active reasoning).
    A same-hue shimmer sweeps through the text — the wave is the signal, not a hue
    change, so the row stays quiet. Ported from zcode's `animated-gradient-text`. */

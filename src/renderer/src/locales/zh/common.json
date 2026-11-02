@@ -129,6 +129,42 @@
     "questionCount_other": "共 {{count}} 个问题",
     "todoUpdating": "正在更新待办",
     "todoUpdated": "已更新待办",
+    "agentAction": {
+      "spawn": {
+        "running": "正在创建 <agents/>",
+        "done": "已创建 <agents/>",
+        "error": "创建 <agents/>"
+      },
+      "wait": {
+        "running": "正在等待 <agents/> 完成",
+        "done": "已结束等待 <agents/>",
+        "error": "等待 <agents/>"
+      },
+      "send": {
+        "running": "正在向 <agents/> 发送消息",
+        "done": "已向 <agents/> 发送消息",
+        "error": "向 <agents/> 发送消息"
+      },
+      "followup": {
+        "running": "正在让 <agents/> 继续任务",
+        "done": "已让 <agents/> 继续任务",
+        "error": "让 <agents/> 继续任务"
+      },
+      "interrupt": {
+        "running": "正在中断 <agents/>",
+        "done": "已中断 <agents/>",
+        "error": "中断 <agents/>"
+      },
+      "list": {
+        "running": "正在查看 <agents/>",
+        "done": "已查看 <agents/>",
+        "error": "查看 <agents/>"
+      }
+    },
+    "agentUnnamed": "未命名",
+    "agentTeam": "团队",
+    "agentNew": "新成员",
+    "agentDetails": "查看调用详情",
     "agentCreating": "正在创建智能体",
     "agentCreated": "已创建智能体",
     "agentFallback": "智能体",
