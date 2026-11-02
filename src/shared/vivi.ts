@@ -4,6 +4,7 @@ export type ViviPosition = "top-left" | "top-right" | "bottom-left" | "bottom-ri
 
 export type ViviSettings = {
   enabled: boolean;
+  messages: boolean;
   palette: ViviPalette;
   scale: number;
   opacity: number;
@@ -62,6 +63,8 @@ export type ViviSnapshot = {
   settings: ViviSettings;
   actors: ViviActor[];
   visible: boolean;
+  /** Whether a FastVibe workspace window is focused; the pet itself is excluded. */
+  appFocused?: boolean;
   surface?: ViviSurfaceLayout;
   uiLanguage?: "zh" | "en";
   error?: string;
@@ -81,6 +84,7 @@ export const VIVI_PALETTES: Record<ViviPalette, {
 
 export const DEFAULT_VIVI_SETTINGS: ViviSettings = {
   enabled: false,
+  messages: true,
   palette: "sky",
   scale: 0.5,
   opacity: 0.9,
@@ -100,6 +104,7 @@ export function isViviPosition(value: unknown): value is ViviPosition {
 export function normalizeViviSettings(settings: Record<string, unknown>): ViviSettings {
   const result: ViviSettings = { ...DEFAULT_VIVI_SETTINGS };
   if (typeof settings.viviEnabled === "boolean") result.enabled = settings.viviEnabled;
+  if (typeof settings.viviMessages === "boolean") result.messages = settings.viviMessages;
   if (isViviPalette(settings.viviPalette)) result.palette = settings.viviPalette;
   if (typeof settings.viviScale === "number" && Number.isFinite(settings.viviScale)) result.scale = Math.min(1.5, Math.max(0.3, settings.viviScale));
   if (typeof settings.viviOpacity === "number" && Number.isFinite(settings.viviOpacity)) result.opacity = Math.min(1, Math.max(0.3, settings.viviOpacity));
@@ -114,6 +119,7 @@ export function normalizeViviSettings(settings: Record<string, unknown>): ViviSe
 export function viviSettingsPatch(settings: ViviSettings): Record<string, unknown> {
   return {
     viviEnabled: settings.enabled,
+    viviMessages: settings.messages,
     viviPalette: settings.palette,
     viviScale: settings.scale,
     viviOpacity: settings.opacity,

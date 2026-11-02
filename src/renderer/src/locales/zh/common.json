@@ -84,8 +84,8 @@
       "done": "技能"
     },
     "agent": {
-      "running": "子智能体运行中",
-      "done": "子智能体"
+      "running": "智能体运行中",
+      "done": "智能体"
     },
     "todo": {
       "running": "正在更新待办",
@@ -129,7 +129,9 @@
     "questionCount_other": "共 {{count}} 个问题",
     "todoUpdating": "正在更新待办",
     "todoUpdated": "已更新待办",
-    "agentFallback": "子 Agent",
+    "agentCreating": "正在创建智能体",
+    "agentCreated": "已创建智能体",
+    "agentFallback": "智能体",
     "agentMore": "{{shown}} 等 {{count}} 个"
   },
   "group": {

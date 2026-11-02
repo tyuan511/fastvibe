@@ -286,7 +286,12 @@ const windows = new Set<BrowserWindow>();
 function createWindow(): void {
   // Leaving the app is when a question raised while the user was watching first needs
   // saying out loud — see notifyParkedPrompts.
-  createDesktopWindow(windows, scheduleParkedPromptNotice);
+  createDesktopWindow(windows, scheduleParkedPromptNotice, () => {
+    // This collection contains only workspace windows; Vivi and browser guests do not count.
+    const pet = getViviPetWindow();
+    pet.setMainWindow([...windows].find((window) => !window.isDestroyed()) ?? null);
+    pet.setAppFocused([...windows].some((window) => !window.isDestroyed() && window.isFocused()));
+  });
 }
 function openWindow(): void {
   const existing = [...windows].find((window) => !window.isDestroyed());

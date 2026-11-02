@@ -2103,8 +2103,13 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   - **Role overrides are bounded.** A role may choose its own model, reasoning level and tool list, but it does not silently escape the parent conversation's cwd or runtime authority. FastVibe has no separate Codex approval/sandbox policy, so the inherited authority is the current FastVibe tool boundary.
   - **Persistent thread identity.** `AgentThreadStore` stores the thread tree, `taskName`, mailbox, status and revision in SQLite. Each thread gets a stable random display name and avatar seed. The Agent Team resource list, lifecycle events, side-pane tab and thread detail all use that identity.
   - **In-process runner.** The app embeds the pi SDK and keeps provider credentials in Main, so child agents run through `SubagentTurnRunner` in the same Main process with a throwaway SDK session. The child has its own session and context; its streamed events are published under the thread's turn id and its final mailbox result is persisted.
-  - **Lifecycle and recovery.** `send_message` queues mailbox content without starting a turn; `followup_task` starts or resumes an idle thread; `interrupt_agent` stops the current turn while leaving the thread resumable; `wait_agent` waits for terminal statuses; `list_agents` returns the current parent/child tree. On process restart, active in-memory runs become persisted `interrupted` threads instead of remaining falsely `working`.
+  - **Conversation Stop includes its team.** `abort(conversationId)` stops the main session and every live subagent control owned by that conversation, including runs still creating their session. It waits for all stop attempts and reports failures; other conversations are unaffected. `spawn_agent` also forwards its cancellation signal through the host to the runner. Normal parent completion leaves persistent child threads running; explicit Stop interrupts them and preserves their history for follow-up.
+  - **Model awareness follows Codex V2.** `agent-team-context.ts` reads this conversation's existing threads at each provider request, including Continue, reload and post-compaction requests. It injects at most eight escaped identities in a 1 KiB `<subagents>` block; latest statuses stay behind `list_agents`. The roster is request-local, not a growing series of history entries. Static tool guidelines explain delegation, ownership, notification messages and explicit follow-up after a user asks to continue. The reference is Codex `a09812981de703f18f38015cd5d500ab373f616c` (`session/world_state.rs`, `agent/control/completion.rs`, `prompts/src/model_messages/multi_agent.rs`).
+  - **Results are model mail, not an automatic run.** `AgentThreadStore.finishTurn` atomically commits a terminal status and a result keyed by thread + turn in the existing message table. Completed and failed results are addressed to their conversation; ordinary interruptions only retain partial output for follow-up. The request-time hook appends hidden `FINAL_ANSWER` entries between complete tool exchanges, persists the transcript, then acknowledges mail. A persisted notice id deduplicates a crash between those writes. Each request consumes at most eight results, showing 8,000 characters per result with a truncation note while the mailbox retains the full text. An idle/stopped parent never starts from these messages. UI `unread` and model `deliveredAt` are separate.
+  - **Lifecycle and recovery.** `send_message` queues mailbox content without starting a turn; `followup_task` starts or resumes an idle thread; `interrupt_agent` stops the current turn while leaving the thread resumable; `wait_agent` wakes when a selected result arrives (other threads may still be running), when all selected threads have ended, on timeout, or on cancellation; `list_agents` returns the current parent/child tree. A completed runner releases its slot before waking waiters so an immediate follow-up cannot be swallowed. On process restart, active in-memory runs become persisted `interrupted` threads instead of remaining falsely `working`.
+  - **Verification.** `test/agent-team-context.test.ts` uses the real SDK and a scripted model for request visibility, Continue, reload, compaction, tool pairing and durable deduplication. `test/agent-thread-mailbox.test.ts`, `test/agent-team-lifecycle.test.ts` and `test/subagent-team-prompt.test.ts` cover transactions, scoped waits, cancellation and collaboration guidance.
   - **Renderer.** `agent_thread_changed` registers a quiet Agent Team tab. The resource panel shows parent indentation, the side pane shows the thread transcript and read-only runtime state, and the shared `subagent-state` reducer keeps live events scoped by conversation and monotonic revision. The thread's display name and avatar are persistent, local SVG data; no network avatar request is made.
+  - **Creation stays visible in history.** `spawn_agent` is a standalone agent action, showing the persisted result's name and avatar; clicking the name opens its thread. It stays outside the settled run fold and process overflow. Resources merge creation results, persisted threads and live `<threadId>:turn:<n>` runs under the thread id, with the latest turn owning live status; the avatar stays at the front while the running mark sits beside the trailing status. Thread tabs read the current turn's stream/cache and adopt revisioned thread updates, including a follow-up's start. Preview: `mock.html?resources=agents&lang=zh`.
 - **Computer use** downloads its engine the first time 设置 → 电脑操控 → 允许操作电脑 is turned on. The installer does not carry the `cua-driver` worker or the `@trycua/cua-driver-*` native library (together ~80 MB). The small JS bindings stay, so the platform package can be resolved from the data directory after the download. A dev tree still fetches the worker in `predev`. Do not put either artifact back into `electron-builder.yml`.
 - **CUA 观测和操作桥接**（`src/main/pi/cua-bridge.ts`、`resources/extensions/computer-use.ts`）必须把 SDK 的结果分成两条路径：模型通过 `content` 读取可行动文本和结构化结果，渲染层通过 `details` 读取完整元数据。`window_state` 保留旧的交互元素 `elements` 兼容形状，并在 `treeElements` 提供完整无障碍树、层级、截断/降级状态和截图实际尺寸；截图经过 bridge 的压缩后，快照里的尺寸、MIME 和 scale 必须对应压缩后的图片。动作结果的 effect、route、verification 和 evidence 枚举先转成人类可读值再交给模型。
   - 工具流程是「定位应用 → 定位窗口 → 读取窗口树 → token 操作 → 验证结果」。`computer_verify_state` 用于点击、输入、拖动后的状态确认；`computer_batch` 只允许参数完整的 action 联合，最多 32 步，不能把半个窗口作用域静默降级到桌面作用域。
@@ -2117,6 +2122,21 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   `handleBrowserRequest` (`components/layout/side-pane-browser.tsx`), which owns the webview
   registry and injects the page scripts. The payload is **one shared `BrowserRequest`**
   (`@shared/types`) — the extension, the bridge and the renderer must not re-declare it.
+  - **Script batches use `codemode`, not a second browser runtime.** Every `browser_*` tool
+    declares an `outputSchema` and returns `structuredContent`, so scripts consume objects
+    (`page.elements`, `opened.tabId`) and tab-list arrays directly. A failed action (`ok`,
+    `clicked`, `filled` or `loaded` equal to false) throws with its diagnostic data: merely
+    returning `isError` with structured content would still resolve inside codemode and let a
+    form keep submitting. One script can observe, branch, fill, submit and verify while only
+    returning the required result to the model. Same-tab steps are sequential; independent
+    reads on different tabs may run in parallel. A disabled codemode keeps direct tools usable.
+    `browser_wait` polls a cheap shared `checkBody` through both backends for visible selector,
+    body text and/or URL substring (all supplied conditions must match, 10s default, 60s max),
+    pins the first resolved tab and honours Stop between probes and during its delay. Probes
+    never re-stamp snapshot refs. Tool descriptions, prompt guidelines and the built-in
+    browser-use skill all teach this route. `test/browser-script.test.ts` runs the real SDK
+    and QuickJS for structured return values, sequential execution, failure before submit,
+    timeout, tab pinning and cancellation; page-condition semantics are tested separately.
   - **Injected scripts are the fragile part.** Electron reports a script that never compiles as
     `GUEST_VIEW_MANAGER_CALL: Script failed to execute`, naming neither the script nor the cause —
     a single missing brace made every `browser_snapshot` fail. So page scripts are wrapped
@@ -2386,10 +2406,10 @@ Deliberately deferred. Plugin authors are expected to degrade via `ctx.mode` /
   `consolidation.md` 当唯一一条用户消息。Codex 用 git 仓库给它 `phase2_workspace_diff.md`；这里没有 git 可依赖，
   所以文件夹旁边留一份**基线副本**（`memories-baseline/`），差异自己生成（`memory-workspace.ts`，Myers 行差异，
   `git apply` 验证过）。文件夹和基线一致且产物有效 = 不唤醒 agent。
-- **产物校验**：`MEMORY.md` 是文件、`memory_summary.md` 第一行恰好是 `v1`、没有符号链接（会被删掉）。不过关
+- **产物校验**：`MEMORY.md` 是文件、`memory_summary.md` 第一行恰好是 `v1` 且全文不超过 20,000 个 UTF-16 字符、没有符号链接（会被删掉）。不过关
   就报错、**不推进基线**，下一轮 agent 会再看到同一份差异。
-- **读取**：隐藏扩展在 `before_agent_start` 把 `read_path.md` 的固定规则追加到当轮系统提示，摘要全文（上限
-  20,000 字符）则作为隐藏上下文快照持久化。内容变化才追加；从会话投影判断是否已存在，重载、分支和压缩后都能
+- **读取**：隐藏扩展在 `before_agent_start` 把 `read_path.md` 的固定规则追加到当轮系统提示，摘要（上限
+  20,000 字符）则作为隐藏上下文快照持久化。预算内全文保留；旧的超长摘要由 `memory-summary.ts` 按章节分配预算，优先给检索目录，目录内按项目/日期分配；放不下的目录长条目保留完整标题与检索指引，不再只截前缀。省略提示允许按范围补读全文，全文哈希让被省略尾部的更新也触发新快照。整理提示要求目录占至少一半预算；超长产物在同一整理会话内修复一次，仍超长不推进基线。内容变化才追加；从会话投影判断是否已存在，重载、分支和压缩后都能
   正确复用或补回。关闭记忆或摘要消失时，后续请求过滤全部旧快照，原始转写仍保留。没有记忆工具，智能体用普通的 `read` / `grep`。
 - **使用次数靠引用块**：read_path 要求用了记忆的回复末尾带 `<oai-mem-citation>`，里面的 `rollout_ids`
   （就是对话 id）经 `MemoryManager.noteReply` 记一次使用，决定整合时谁留下。引用块对读者没用，
@@ -2925,15 +2945,12 @@ means either: an agent **run** and a **compaction**.
   queue drain). `streaming ⇒ working` always: a run is a subset of working, and a
   `conversation_running: false` for the chat on screen clears `streaming` in the same batch,
   so the two can never be seen to contradict each other.
-- **The transcript's working row is gated on the reply's tail, not on whether it has text.**
-  `WorkingStatus` (`components/chat/message-list.tsx`) renders 「正在工作 / 继续工作」 while `streaming`
-  and *nothing live is at the end of the reply* — where 「live」 means a trailing text part (its caret
-  blinks), a trailing thinking block (it shimmers 正在思考), or any tool still `running` (its spinner).
-  The old gate was `!hasText`, which showed the row only in a reply that had not written a word yet:
-  a run that had already produced prose then went quiet for the whole tool→model boundary, because
-  the tool cards had settled and the next token had not arrived — a transcript of finished rows that
-  read as a hang. The point is that a live element is *last*, so a reply whose text is followed by a
-  running tool still shows only the spinner.
+- **The transcript keeps one live status below the reply.** `RunProgress`
+  (`components/chat/run-collapse.tsx`) renders 「工作中 + elapsed duration」 throughout `streaming`,
+  including thinking, tools, text output and retry backoff. It replaces the old conditional
+  `WorkingStatus` and the separate elapsed header above the reply. The clock uses the merged
+  reply's `runStartedAt ?? createdAt`, so remounting does not reset it; a local 100ms interval
+  updates tenths of a second without re-rendering the transcript, and unmounts on settle.
 - **`engine:prompt` answers 「sent」, not 「finished」.** It resolves when the SDK accepts the
   prompt (`preflightResult(true)`, `pi/prompt-acceptance.ts`) and rejects only when it was
   refused; a run that fails afterwards is logged and reaches clients through its events. So a

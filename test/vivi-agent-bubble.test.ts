@@ -1,10 +1,36 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { viviSurfaceLayout } from "../src/main/vivi/panel-bounds.ts";
+import { viviNotificationSurfaceLayout, viviSurfaceLayout } from "../src/main/vivi/panel-bounds.ts";
 import { ViviAgentActivity, viviClickFeedback } from "../src/renderer/src/lib/vivi-agent-activity.ts";
 import type { EngineEvent } from "../src/shared/types.ts";
 
 const event = (value: Record<string, unknown>) => value as EngineEvent;
+
+test("notifications keep the same frame and canvas offset across content sizes at every screen edge", () => {
+  for (const area of [{ x: 0, y: 24, width: 1440, height: 816 }, { x: -1920, y: -500, width: 1920, height: 1080 }, { x: 0, y: 0, width: 400, height: 300 }]) {
+    for (const x of [area.x, area.x + area.width / 2 - 70, area.x + area.width - 140]) {
+      for (const y of [area.y, area.y + area.height / 2 - 70, area.y + area.height - 140]) {
+        const pet = { x, y, width: 140, height: 140 };
+        const initial = viviNotificationSurfaceLayout(pet, area, 0);
+        for (const [height, width] of [[36, 68], [76, 280], [0, 280], [120, 360], [56, 154], [0, 154]]) {
+          const layout = viviNotificationSurfaceLayout(pet, area, height, width);
+          assert.deepEqual(layout.window, initial.window);
+          assert.deepEqual(layout.pet, initial.pet);
+          assert.equal(layout.window.x + layout.pet.x, x);
+          assert.equal(layout.window.y + layout.pet.y, y);
+          assert.ok(layout.window.x >= area.x && layout.window.y >= area.y);
+          assert.ok(layout.window.x + layout.window.width <= area.x + area.width);
+          assert.ok(layout.window.y + layout.window.height <= area.y + area.height);
+          if (layout.bubble) {
+            assert.ok(layout.bubble.x >= 0 && layout.bubble.y >= 0);
+            assert.ok(layout.bubble.x + layout.bubble.width <= layout.window.width);
+            assert.ok(layout.bubble.y + layout.bubble.height <= layout.window.height);
+          } else assert.equal(height, 0);
+        }
+      }
+    }
+  }
+});
 
 test("measured text dimensions reach the surface without fixed width or height floors", () => {
   const area = { x: 0, y: 24, width: 1440, height: 816 };

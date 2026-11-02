@@ -103,6 +103,10 @@ test("a consolidation counts only when MEMORY.md exists and the summary starts w
     assert.match(String(await validateArtifacts(dir)), /does not start with the line v1/);
     writeFileSync(join(dir, "memory_summary.md"), "v1\n\n## User Profile\n");
     assert.equal(await validateArtifacts(dir), null);
+    writeFileSync(join(dir, "memory_summary.md"), "v1\n" + "x".repeat(20_000));
+    assert.match(String(await validateArtifacts(dir)), /20003 characters; maximum is 20000/);
+    writeFileSync(join(dir, "memory_summary.md"), "v1\n" + "x".repeat(19_997));
+    assert.equal(await validateArtifacts(dir), null, "the exact budget is accepted");
     const outside = tmp();
     symlinkSync(outside, join(dir, "skills"));
     assert.match(String(await validateArtifacts(dir)), /symbolic links/);

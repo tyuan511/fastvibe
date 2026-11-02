@@ -11,7 +11,7 @@ import { broadcast } from "../ipc/broadcast";
 import { ViviStateStore } from "./state";
 import { clampViviBounds, viviBoundsFor, VIVI_BASE_SIZE } from "./bounds";
 import { ViviFlight, ViviThrowVelocity } from "./throw-motion";
-import { viviSurfaceLayout } from "./panel-bounds";
+import { viviNotificationSurfaceLayout, viviSurfaceLayout } from "./panel-bounds";
 import type { ViviSurfaceLayout } from "../../shared/vivi";
 
 type PersistSettings = (settings: ViviSettings) => void;
@@ -19,6 +19,10 @@ const SUCCESS_DURATION_MS = 5_000;
 
 export class ViviPetWindow {
   private window: BrowserWindow | null = null;
+  private mainWindow: BrowserWindow | null = null;
+  private desktopBounds: Electron.Rectangle | undefined;
+  private readonly onFullScreenChanged = (): void => this.syncFullScreenParent();
+  private readonly onMainWindowClose = (): void => this.setMainWindow(null);
   private store = new ViviStateStore(readAppSettings(getFastVibePaths()));
   private persistSettings: PersistSettings | undefined;
   private dragTimer: ReturnType<typeof setInterval> | undefined;
@@ -33,6 +37,7 @@ export class ViviPetWindow {
   private error: string | undefined;
   private disposed = false;
   private modelReady = false;
+  private appFocused = false;
   private showRequested = false;
   private successTimer: ReturnType<typeof setTimeout> | undefined;
   private bubbleHeight = 0;
@@ -60,13 +65,16 @@ export class ViviPetWindow {
       ? screen.getDisplayMatching({ x: settings.x, y: settings.y, width: size, height: size })
       : screen.getPrimaryDisplay();
     const window = new BrowserWindow({
-      ...this.boundsFor(settings, display),
+      ...viviBoundsFor(settings, display.workArea),
       title: "Vivi",
       frame: false,
       transparent: true,
       backgroundColor: "#00000000",
       hasShadow: false,
       resizable: false,
+      fullscreenable: false,
+      maximizable: false,
+      minimizable: false,
       movable: true,
       focusable: true,
       skipTaskbar: true,
@@ -80,8 +88,10 @@ export class ViviPetWindow {
       },
     });
     this.window = window;
+    window.setIgnoreMouseEvents(true, { forward: true });
     this.surface = undefined;
-    this.setWindowBounds(window.getBounds());
+    this.syncFullScreenParent();
+    this.setWindowBounds(this.petBounds());
     screen.on("display-added", this.onDisplaysChanged);
     screen.on("display-removed", this.onDisplaysChanged);
     screen.on("display-metrics-changed", this.onDisplaysChanged);
@@ -131,6 +141,49 @@ export class ViviPetWindow {
     });
   }
 
+  /** Keep the desktop pet independent normally, but auxiliary to our own full-screen Space. */
+  setMainWindow(window: BrowserWindow | null): void {
+    if (this.disposed || process.platform !== "darwin" || this.mainWindow === window) return;
+    this.mainWindow?.removeListener("enter-full-screen", this.onFullScreenChanged);
+    this.mainWindow?.removeListener("leave-full-screen", this.onFullScreenChanged);
+    this.mainWindow?.removeListener("close", this.onMainWindowClose);
+    this.mainWindow = window;
+    window?.on("enter-full-screen", this.onFullScreenChanged);
+    window?.on("leave-full-screen", this.onFullScreenChanged);
+    // Detach before native parent teardown, which would otherwise destroy its child too.
+    window?.on("close", this.onMainWindowClose);
+    this.syncFullScreenParent();
+  }
+
+  private fullScreenArea(): Electron.Rectangle | undefined {
+    const main = this.mainWindow;
+    return main && !main.isDestroyed() && main.isFullScreen() ? main.getContentBounds() : undefined;
+  }
+
+  private movementArea(bounds: Electron.Rectangle): Electron.Rectangle {
+    return this.fullScreenArea() ?? screen.getDisplayMatching(bounds).workArea;
+  }
+
+  private syncFullScreenParent(): void {
+    const window = this.window;
+    if (!window || window.isDestroyed()) return;
+    const parent = this.fullScreenArea() ? this.mainWindow : null;
+    if (window.getParentWindow() === parent) return;
+    const bounds = this.petBounds();
+    const restore = this.desktopBounds;
+    if (parent) this.desktopBounds ??= bounds;
+    // Stop a drag/flight after preserving the desktop position so its cleanup cannot
+    // save coordinates already clamped into the full-screen display.
+    this.cancelMotion();
+    if (!parent) this.desktopBounds = undefined;
+    // fullscreenable:false gives this window FullScreenAuxiliary on macOS. Parenting
+    // puts it in FastVibe's Space without exposing it over every other full-screen app.
+    window.setParentWindow(parent);
+    const settings = this.getSettings();
+    const desktop = restore ? viviBoundsFor({ ...settings, position: "custom", x: restore.x, y: restore.y }, screen.getDisplayMatching(restore).workArea) : bounds;
+    this.setWindowBounds(parent ? this.boundsFor(settings, screen.getDisplayMatching(parent.getBounds())) : desktop);
+  }
+
   show(): void {
     if (!this.getSettings().enabled || this.disposed) return;
     this.create();
@@ -157,6 +210,7 @@ export class ViviPetWindow {
   destroy(): void {
     this.cancelSuccess();
     this.cancelMotion();
+    this.setMainWindow(null);
     this.disposed = true;
     if (this.window && !this.window.isDestroyed()) this.window.destroy();
     this.window = null;
@@ -192,9 +246,15 @@ export class ViviPetWindow {
     }
     return state;
   }
+  setAppFocused(focused: boolean): void {
+    if (this.disposed || this.appFocused === focused) return;
+    this.appFocused = focused;
+    this.publish();
+  }
+
   getSnapshot(): ViviSnapshot {
     const settings = readAppSettings(getFastVibePaths());
-    return { ...this.store.snapshot(), surface: this.surface, uiLanguage: settings.uiLanguage === "en" ? "en" : "zh", ...(this.error ? { error: this.error } : {}) };
+    return { ...this.store.snapshot(), appFocused: this.appFocused, surface: this.surface, uiLanguage: settings.uiLanguage === "en" ? "en" : "zh", ...(this.error ? { error: this.error } : {}) };
   }
 
   updateActors(actors: ViviActor[]): void {
@@ -244,7 +304,7 @@ export class ViviPetWindow {
     this.dragOrigin = undefined;
     if (throwPet && this.window && !this.window.isDestroyed()) {
       const bounds = this.petBounds();
-      const flight = new ViviFlight(bounds, velocity, screen.getDisplayMatching(bounds).workArea);
+      const flight = new ViviFlight(bounds, velocity, this.movementArea(bounds));
       if (flight.active) {
         this.flight = flight;
         this.flightAt = performance.now();
@@ -316,7 +376,7 @@ export class ViviPetWindow {
       x: this.dragOrigin.windowX + cursor.x - this.dragOrigin.cursorX,
       y: this.dragOrigin.windowY + cursor.y - this.dragOrigin.cursorY,
     };
-    const next = clampViviBounds(intended, screen.getDisplayNearestPoint(cursor).workArea);
+    const next = clampViviBounds(intended, this.fullScreenArea() ?? screen.getDisplayNearestPoint(cursor).workArea);
     let impact: ViviImpact | undefined;
     const nx = Math.sign(next.x - intended.x);
     const ny = Math.sign(next.y - intended.y);
@@ -333,7 +393,7 @@ export class ViviPetWindow {
   }
 
   private savePosition(): void {
-    if (!this.window || this.window.isDestroyed()) return;
+    if (!this.window || this.window.isDestroyed() || this.desktopBounds) return;
     const { x, y } = this.petBounds();
     const previous = this.getSettings();
     if (previous.position === "custom" && previous.x === x && previous.y === y) return;
@@ -373,7 +433,7 @@ export class ViviPetWindow {
   private keepOnScreen(): void {
     if (!this.window || this.window.isDestroyed()) return;
     const bounds = this.petBounds();
-    this.setWindowBounds(clampViviBounds(bounds, screen.getDisplayMatching(bounds).workArea));
+    this.setWindowBounds(clampViviBounds(bounds, this.movementArea(bounds)));
   }
 
   setBubble(window: BrowserWindow | null, height: number, composerHeight = 0, width?: number): void {
@@ -383,6 +443,12 @@ export class ViviPetWindow {
     const measuredWidth = width === undefined ? undefined : Math.max(1, Math.min(360, Math.ceil(width)));
     if (next === this.bubbleHeight && controls === this.composerHeight && measuredWidth === this.bubbleWidth) return;
     const bounds = this.petBounds();
+    if (next === 0 && this.bubbleHeight > 0) {
+      const cursor = screen.getCursorScreenPoint();
+      if (cursor.x < bounds.x || cursor.x >= bounds.x + bounds.width || cursor.y < bounds.y || cursor.y >= bounds.y + bounds.height) {
+        this.window.setIgnoreMouseEvents(true, { forward: true });
+      }
+    }
     this.bubbleHeight = next;
     this.composerHeight = controls;
     this.bubbleWidth = measuredWidth;
@@ -404,7 +470,10 @@ export class ViviPetWindow {
   private setWindowBounds(bounds: Electron.Rectangle): void {
     if (!this.window || this.window.isDestroyed()) return;
     const moving = Boolean(this.dragOrigin || this.flight);
-    const surface = viviSurfaceLayout(bounds, screen.getDisplayMatching(bounds).workArea, moving ? 0 : this.bubbleHeight, moving ? 0 : this.composerHeight, this.bubbleWidth);
+    const area = this.movementArea(bounds);
+    bounds = clampViviBounds(bounds, area);
+    const surface = moving ? viviSurfaceLayout(bounds, area, 0)
+      : viviNotificationSurfaceLayout(bounds, area, this.bubbleHeight, this.bubbleWidth);
     const previous = this.surface;
     this.surface = surface;
     const current = this.window.getBounds();
@@ -417,7 +486,7 @@ export class ViviPetWindow {
   }
 
   private boundsFor(settings: ViviSettings, display: Electron.Display): Electron.Rectangle {
-    return viviBoundsFor(settings, display.workArea);
+    return viviBoundsFor(settings, this.fullScreenArea() ?? display.workArea);
   }
 
   private publish(): void { if (!this.disposed) broadcast(Ipc.viviChanged, this.getSnapshot()); }

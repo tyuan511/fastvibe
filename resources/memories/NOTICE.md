@@ -9,9 +9,11 @@ Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
 - `consolidation.md`: the same directory and commit. Changed: the memory-extension placeholders were removed; the
   git-repository paragraph and two shell hints (`wc -l`, `rg --files`) were reworded for FastVibe, which keeps a
   baseline copy of the folder instead of a git repository and gives the agent no shell; "Codex" became "FastVibe".
+  A shared character budget and required routing-index space were added so generated summaries fit the read path.
 - `read_path.md`: `codex-rs/core/templates/memories/read_path.md` at tag `rust-v0.120.0` (the last release that ships
   it as a standalone file). Changed: the description of the rollout transcript format, which is pi's session format here;
   the folder is named as an absolute path a shell command must quote, with one ready-to-run search command, because
   FastVibe keeps the memory folder under a userData directory whose own name contains a space.
+  An abridged summary may be searched or read in ranges to recover omitted topics.
 
 The templates are instructions to a model and are read at run time (`src/main/engine/memory-templates.ts`).

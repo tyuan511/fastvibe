@@ -33,6 +33,33 @@ test("saved palettes reach the same actor and survive engine activity and reopen
   assert.equal(state.snapshot().actors[0]?.mood, "idle");
 });
 
+test("messages default to enabled and ignore invalid stored values", () => {
+  for (const value of [undefined, null, "false", 0, 1, {}]) {
+    assert.equal(new ViviStateStore({ viviMessages: value }).settings().messages, true);
+  }
+  assert.equal(new ViviStateStore({ viviMessages: true }).settings().messages, true);
+});
+
+test("disabling messages survives reopening without hiding or changing the pet", () => {
+  const state = new ViviStateStore({ viviEnabled: true });
+  state.setVisible(true);
+  state.setMood("working", "chat");
+  const before = state.snapshot();
+  state.applySettings(state.patchSettings({ messages: false }));
+  const snapshot = state.snapshot();
+  assert.equal(snapshot.settings.messages, false);
+  assert.equal(snapshot.settings.enabled, true);
+  assert.equal(snapshot.visible, true);
+  assert.deepEqual(snapshot.actors, before.actors);
+  const persisted = viviSettingsPatch(state.settings());
+  assert.equal(persisted.viviMessages, false);
+  const reopened = new ViviStateStore(persisted);
+  assert.equal(reopened.settings().messages, false);
+  assert.equal(reopened.settings().enabled, true);
+  reopened.applySettings(reopened.patchSettings({ messages: true }));
+  assert.equal(new ViviStateStore(viviSettingsPatch(reopened.settings())).settings().messages, true);
+});
+
 test("old multi-agent preferences cannot create multiple pets", () => {
   const state = new ViviStateStore({ viviMultiAgent: true });
   state.follow([
@@ -45,10 +72,11 @@ test("old multi-agent preferences cannot create multiple pets", () => {
 });
 
 test("unrelated stale settings saves preserve Vivi preferences", () => {
-  const current = { ...viviSettingsPatch({ ...DEFAULT_VIVI_SETTINGS, enabled: true, palette: "mint" }), glass: true };
+  const current = { ...viviSettingsPatch({ ...DEFAULT_VIVI_SETTINGS, enabled: true, messages: false, palette: "mint" }), glass: true };
   const saved = mergeClientSettings(current, { ...viviSettingsPatch(DEFAULT_VIVI_SETTINGS), glass: false });
   assert.equal(saved.viviEnabled, true);
   assert.equal(saved.viviPalette, "mint");
+  assert.equal(saved.viviMessages, false);
   assert.equal(saved.glass, false);
   assert.equal(mergeClientSettings({}, { viviEnabled: true }).viviEnabled, undefined);
 });

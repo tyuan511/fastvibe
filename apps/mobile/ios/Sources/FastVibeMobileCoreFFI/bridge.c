@@ -1,5 +1,21 @@
 #include "FastVibeMobileCoreFFI.h"
 
+#include <TargetConditionals.h>
+
+#if TARGET_OS_IOS
+
+/* Direct references retain the runtime entry points when the app links Rust statically. */
+void *fastvibe_mobile_core_bridge_create(void) { return fv_mobile_core_create(); }
+void fastvibe_mobile_core_bridge_destroy(void *handle) { fv_mobile_core_destroy(handle); }
+char *fastvibe_mobile_core_bridge_version(void) { return fv_mobile_core_version(); }
+char *fastvibe_mobile_core_bridge_command_json(void *handle, const char *input) {
+    return fv_mobile_core_command_json(handle, input);
+}
+void fastvibe_mobile_core_bridge_free_string(char *value) { fv_mobile_core_free_string(value); }
+
+#else
+
+/* Host SwiftPM tests can run without building the iOS Rust artifact. */
 #include <dlfcn.h>
 
 typedef void *(*create_function)(void);
@@ -34,3 +50,5 @@ void fastvibe_mobile_core_bridge_free_string(char *value) {
     free_function function = (free_function)rust_symbol("fv_mobile_core_free_string");
     if (function != NULL) function(value);
 }
+
+#endif

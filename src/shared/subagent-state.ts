@@ -44,6 +44,46 @@ export function subagentEntries(args: unknown): Array<{ agent: string; task?: st
   return entries;
 }
 
+/** A persistent thread keeps one resource identity across all of its turns. */
+export function agentThreadIdForRun(id: string): string {
+  return /^(agent-.+):turn:\d+$/.exec(id)?.[1] ?? id;
+}
+
+/** Resolve both persisted creation results and legacy delegation calls. The tool
+ * result owns the thread id; a tool-call id is not a persistent thread id. */
+export function subagentToolRuns(tool: ToolCallBlock): Array<{
+  id: string; agent: string; name: string; task?: string; avatarSeed?: number; parentId?: string; status: string;
+}> {
+  if (tool.name === "spawn_agent") {
+    const thread = record(record(tool.details)?.thread);
+    if (typeof thread?.id !== "string") return [];
+    const args = record(tool.args);
+    const agent = typeof thread.agent === "string" ? thread.agent : "worker";
+    return [{
+      id: thread.id, agent,
+      name: typeof thread.name === "string" ? thread.name : agent,
+      task: typeof thread.task === "string" ? thread.task : typeof args?.message === "string" ? args.message : undefined,
+      avatarSeed: typeof thread.avatarSeed === "number" ? thread.avatarSeed : undefined,
+      parentId: typeof thread.parentId === "string" ? thread.parentId : undefined,
+      status: thread.status === "working" || thread.status === "queued" ? "running" : String(thread.status ?? "unknown"),
+    }];
+  }
+  return subagentEntries(tool.args).map((entry, index) => ({
+    ...entry, id: `${tool.id}:${index}`, name: entry.agent, status: subagentResultStatus(tool, index),
+  }));
+}
+
+export function findSubagentForThread(list: readonly SubagentInfo[], id: string, conversationId?: string | null): SubagentInfo | undefined {
+  let latest: SubagentInfo | undefined;
+  let latestTurn = -1;
+  for (const info of list) {
+    if (info.conversationId !== (conversationId ?? undefined) || agentThreadIdForRun(info.id) !== id) continue;
+    const turn = Number(/:turn:(\d+)$/.exec(info.id)?.[1] ?? 0);
+    if (turn > latestTurn) { latest = info; latestTurn = turn; }
+  }
+  return latest;
+}
+
 /** Main and renderer use the same reducer. Only the runner's final lifecycle ends
  * a delegation: agent_end can retry, and agent_settled precedes transcript caching. */
 export function reduceSubagent(previous: SubagentInfo | undefined, event: Event, now = Date.now()): SubagentInfo | undefined {

@@ -4,8 +4,10 @@
 <dict>
     <key>CFBundleDisplayName</key>
     <string>FastVibe</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.fastvibe.mobile</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleName</key>
     <string>FastVibe</string>
     <key>CFBundlePackageType</key>
@@ -16,6 +18,8 @@
     <string>1</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>FastVibe 使用本地网络直接连接同一账号下的电脑，以访问会话和接收回复。</string>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UIApplicationSceneManifest</key>

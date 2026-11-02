@@ -1,8 +1,15 @@
-import { test } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WORKSPACE_DIFF_FILE, consolidationPrompt, readPathContext, readPathPrompt, renderTemplate, stage1Input, stage1System, SUMMARY_PROMPT_MAX_CHARS } from "../src/main/engine/memory-templates.ts";
+
+const originalResources = process.env.FASTVIBE_RESOURCES_PATH;
+before(() => { process.env.FASTVIBE_RESOURCES_PATH = join(process.cwd(), "resources"); });
+after(() => {
+  if (originalResources === undefined) delete process.env.FASTVIBE_RESOURCES_PATH;
+  else process.env.FASTVIBE_RESOURCES_PATH = originalResources;
+});
 
 test("Codex's templates ship with their notice and render with no placeholder left", () => {
   assert.ok(existsSync(join(process.cwd(), "resources", "memories", "NOTICE.md")));
@@ -30,6 +37,8 @@ test("the consolidation prompt points at the folder and the diff file, and no lo
   assert.match(prompt, /Folder structure \(under \/Users\/me\/memories\/\)/);
   assert.ok(prompt.includes(`Read \`${WORKSPACE_DIFF_FILE}\` in this same folder first.`));
   assert.match(prompt, /memory_summary\.md[\s\S]*First line must be exactly `v1`/);
+  assert.ok(prompt.includes(`${SUMMARY_PROMPT_MAX_CHARS}\n  characters`));
+  assert.match(prompt, /Reserve at least half of that budget/);
   assert.ok(!/managed by Codex|wc -l|rg --files/.test(prompt));
 });
 
@@ -46,7 +55,9 @@ test("the read path puts the summary inline, with the folder, and caps a huge on
   assert.ok(prompt.includes(`rg -n --heading -g MEMORY.md '<keyword 1>|<keyword 2>' "/Users/me/memories"`), prompt.slice(0, 600));
   assert.match(prompt, /========= MEMORY_SUMMARY BEGINS =========\nv1\n\n## User Profile\n- likes pnpm\n========= MEMORY_SUMMARY ENDS =========/);
   const huge = readPathPrompt({ basePath: "/m", summary: "v1\n".padEnd(SUMMARY_PROMPT_MAX_CHARS * 3, "x") });
-  assert.ok(huge.includes("…(truncated)"));
+  assert.ok(huge.includes("Memory summary abridged"));
+  assert.match(prompt, /do not reopen unless the snapshot/);
+  assert.match(prompt, /says it is abridged/);
   assert.ok(huge.length < SUMMARY_PROMPT_MAX_CHARS + 10_000);
 });
 
@@ -65,8 +76,9 @@ test("memory updates keep read rules identical and bound only the changing snaps
   assert.doesNotMatch(first.systemPrompt, /first preference/);
   assert.match(second.content, /second preference/);
   const large = readPathContext({ basePath: "/m", summary: "x".repeat(SUMMARY_PROMPT_MAX_CHARS * 2) });
-  assert.match(large.content, /…\(truncated\)/);
+  assert.match(large.content, /Memory summary abridged/);
   assert.ok(large.content.length < SUMMARY_PROMPT_MAX_CHARS + 150);
+  assert.equal(large.systemPrompt, first.systemPrompt.replaceAll("/memory folder", "/m"));
 });
 
 test("a placeholder with no value is an error", () => {

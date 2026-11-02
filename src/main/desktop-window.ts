@@ -36,7 +36,7 @@ const DEFAULT_WINDOW_SIZE = { width: 1280, height: 840 } as const;
 const MIN_WINDOW_SIZE = { width: 920, height: 640 } as const;
 const WINDOW_STATE_SAVE_DELAY_MS = 250;
 
-export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => void): void {
+export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => void, onFocusChanged?: () => void): void {
   const paths = getFastVibePaths();
   const restored = readWindowState(paths.windowStateFile);
   const workArea = screen.getPrimaryDisplay().workAreaSize;
@@ -105,6 +105,10 @@ export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => 
   // parked waiting for an answer at that moment, because a question raised while the
   // user was watching had nothing anywhere saying so once they walk away.
   if (onBlur) window.on("blur", onBlur);
+  if (onFocusChanged) {
+    window.on("focus", onFocusChanged);
+    window.on("blur", onFocusChanged);
+  }
   window.on("close", () => {
     if (stateSaveTimer) clearTimeout(stateSaveTimer);
     stateSaveTimer = undefined;
@@ -129,6 +133,7 @@ export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => 
     if (stateSaveTimer) clearTimeout(stateSaveTimer);
     windows.delete(window);
     if (mainWindow === window) mainWindow = windows.values().next().value ?? null;
+    onFocusChanged?.();
   });
   window.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
@@ -149,6 +154,7 @@ export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => 
 
   mainWindow = window;
   windows.add(window);
+  onFocusChanged?.();
   log.info("window opened");
 }
 

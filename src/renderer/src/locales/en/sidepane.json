@@ -4,7 +4,7 @@
     "terminal": "Terminal",
     "browser": "Browser",
     "files": "Files",
-    "subagent": "Subagent",
+    "subagent": "Agent",
     "sideChat": "Side chat {{n}}",
     "status": {
       "running": "Running",
@@ -101,11 +101,11 @@
     "placeholder": "Ask anything"
   },
   "subagent": {
-    "title": "Subagent",
+    "title": "Agent",
     "desc": "When the main agent delegates a task, its isolated conversation streams here.",
     "readOnlyRunning": "This delegated run is read-only",
     "readOnlyDone": "This delegated run has ended",
-    "readOnlyStatus": "Subagent · {{status}} · Read-only",
+    "readOnlyStatus": "Agent · {{status}} · Read-only",
     "status": {
       "running": "Running",
       "completed": "Completed",
@@ -396,7 +396,7 @@
     "copyFailed": "Could not copy path",
     "todos": "Todo list",
     "progress": "{{done}}/{{total}} completed",
-    "agents": "Subagents",
+    "agents": "Agents",
     "finished": "Finished · {{count}}",
     "outputs": "Recent outputs",
     "changes": "Workspace changes",

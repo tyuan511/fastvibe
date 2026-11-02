@@ -7,7 +7,7 @@ import { AppLogo } from "@/components/app-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { cleanError } from "@/lib/ipc-error";
 import { useSettingsStore } from "@/stores/settings";
 import type { AppInfo } from "@shared/ipc";
@@ -26,7 +26,7 @@ function GithubMark(): JSX.Element {
  * Settings → 关于: who this install is (logo, version) and what it is built from.
  *
  * 开源 links to the repository. 更新 is the app's own update check. The next card
- * holds the embedded engine version and the one-shot merge into the global pi install.
+ * holds the configuration-source switch.
  * 更多 holds the data directory, log export, and preference reset.
  */
 export function AboutSettings(): JSX.Element {
@@ -38,6 +38,10 @@ export function AboutSettings(): JSX.Element {
   const [resetting, setResetting] = useState(false);
   const [engine, setEngine] = useState<import("@shared/pi-engine").PiEngineState | null>(null);
   const [switchingEngine, setSwitchingEngine] = useState(false);
+  const [engineSwitchOpen, setEngineSwitchOpen] = useState(false);
+  const [engineSwitchError, setEngineSwitchError] = useState("");
+  const targetMode = engine?.mode === "global" ? "isolated" : "global";
+  const switchAction = t(targetMode === "global" ? "about.engineSwitchToGlobal" : "about.engineSwitchToIsolated");
 
   useEffect(() => {
     let cancelled = false;
@@ -56,16 +60,22 @@ export function AboutSettings(): JSX.Element {
     return () => { cancelled = true; };
   }, []);
 
-  function switchEngine(mode: "global" | "isolated"): void {
-    if (!engine || mode === engine.mode || switchingEngine) return;
+  async function switchEngine(): Promise<void> {
+    if (!engine || !engineSwitchOpen || switchingEngine) return;
     setSwitchingEngine(true);
-    void window.fastvibe.engine.switchPiEngine(mode)
-      .then((result) => {
-        toast.success(t("about.engineSwitchDone"));
-        if (!result.restartRequired) setEngine(result);
-      })
-      .catch((err: unknown) => toast.error(t("about.engineSwitchFailed", { error: cleanError(err) })))
-      .finally(() => setSwitchingEngine(false));
+    setEngineSwitchError("");
+    try {
+      const result = await window.fastvibe.engine.switchPiEngine(targetMode);
+      // Keep the dialog busy until Main restarts the app after a real migration.
+      if (result.restartRequired) return;
+      setEngine(result);
+      setEngineSwitchOpen(false);
+      setSwitchingEngine(false);
+      toast.success(t("about.engineSwitchDone"));
+    } catch (err) {
+      setEngineSwitchError(t("about.engineSwitchFailed", { error: cleanError(err) }));
+      setSwitchingEngine(false);
+    }
   }
 
   async function exportLogs(): Promise<void> {
@@ -123,29 +133,49 @@ export function AboutSettings(): JSX.Element {
       <SettingsGroup title={t("about.engineSection")}>
         <SettingsRow
           title={t("about.engineMode")}
-          description={t("about.engineModeDesc")}
+          description={engine ? t("about.engineModeDesc", {
+            source: t(engine.mode === "global" ? "about.engineGlobal" : "about.engineIsolated"),
+          }) : undefined}
           control={engine ? (
-            <Select value={engine.mode} onValueChange={(value) => switchEngine(value as "global" | "isolated")} disabled={switchingEngine}>
-              <SelectTrigger size="sm" className="w-44" aria-label={t("about.engineMode")}>
-                {switchingEngine ? <Spinner className="size-3" /> : (
-                  <SelectValue>
-                    {engine.mode === "global" ? t("about.engineGlobal") : t("about.engineIsolated")}
-                  </SelectValue>
-                )}
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="global">{t("about.engineGlobal")}</SelectItem>
-                <SelectItem value="isolated">{t("about.engineIsolated")}</SelectItem>
-              </SelectContent>
-            </Select>
+            <Button size="sm" variant="outline" disabled={switchingEngine} onClick={() => {
+              setEngineSwitchError("");
+              setEngineSwitchOpen(true);
+            }}>
+              {switchAction}
+            </Button>
           ) : null}
         />
-        <SettingsRow
-          title={t("about.piVersion")}
-          description={t("about.piVersionDesc")}
-          control={<Badge variant="secondary" className="font-mono">v{info?.engineVersion ?? "—"}</Badge>}
-        />
       </SettingsGroup>
+
+      <AlertDialog open={engineSwitchOpen} onOpenChange={(open, details) => {
+        if (switchingEngine) {
+          details.cancel();
+          return;
+        }
+        setEngineSwitchOpen(open);
+      }}>
+        <AlertDialogContent aria-busy={switchingEngine}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{switchAction}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(targetMode === "global" ? "about.engineSwitchGlobalDesc" : "about.engineSwitchIsolatedDesc")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p>{t("about.engineSwitchBackup")}</p>
+            <p>{t("about.engineSwitchRestart")}</p>
+          </div>
+          {engineSwitchError ? <p role="alert" className="wrap-anywhere text-sm text-destructive">{engineSwitchError}</p> : null}
+          {switchingEngine ? <p role="status" className="text-sm text-muted-foreground">{t("about.engineSwitchProgress")}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={switchingEngine}>{t("about.engineSwitchCancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={switchingEngine} onClick={() => void switchEngine()}>
+              {switchingEngine ? <Spinner aria-hidden="true" /> : null}
+              {t(switchingEngine ? "about.engineSwitching" : "about.engineSwitchConfirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AboutUpdate />
 

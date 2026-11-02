@@ -7,7 +7,7 @@ import { Composer } from "@/components/chat/composer";
 import { MessageList } from "@/components/chat/message-list";
 import { usagePercent } from "@/components/chat/session-controls";
 import { useSessionStore } from "@/stores/session";
-import { abortSubagent, getAgentThreadMessages, getAgentThreads, getSubagentMessages, getSubagents, interruptAgent } from "@/lib/engine-client";
+import { abortSubagent, getAgentThreadMessages, getAgentThreads, getSubagentMessages, getSubagents, interruptAgent, onEvent } from "@/lib/engine-client";
 import { findSubagent, subagentFinished, subagentKey, subagentViewStatus } from "@shared/subagent-state";
 import { subagentStatusText } from "@/lib/subagent-status";
 import { toast } from "sonner";
@@ -60,22 +60,19 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
   const { t } = useTranslation("sidepane");
   const subagentId = tab.subagentId ?? null;
   const conversationId = tab.subagentConversationId ?? tab.conversationId;
-  const active = useSessionStore((state) =>
-    subagentId ? findSubagent(state.subagents, subagentId, conversationId) : undefined,
-  );
-  const [loaded, setLoaded] = useState<ChatMessage[] | null>(null);
   const [thread, setThread] = useState<AgentThread | undefined>();
+  const runId = thread ? `${thread.id}:turn:${thread.currentTurn ?? 1}` : subagentId;
+  const active = useSessionStore((state) =>
+    runId ? findSubagent(state.subagents, runId, conversationId) : undefined,
+  );
+  const [loaded, setLoaded] = useState<{ runId: string; messages: ChatMessage[] } | null>(null);
   const [threadMessages, setThreadMessages] = useState<AgentThreadMessage[]>([]);
-  const streamed = useSessionStore((state) => {
-    if (!subagentId) return undefined;
-    const runId = thread ? `${thread.id}:turn:${thread.currentTurn ?? 1}` : subagentId;
-    return state.subagentStreams[subagentKey(runId, conversationId)];
-  });
+  const streamed = useSessionStore((state) => runId ? state.subagentStreams[subagentKey(runId, conversationId)] : undefined);
   const models = useSessionStore((state) => state.models);
 
   const task = (thread?.task ?? tab.subagentBrief ?? active?.detail ?? "").trim();
   const startedAt = thread?.startedAt ?? active?.startedAt ?? tab.openedAt;
-  const status = thread?.status === "working" || thread?.status === "queued" ? "running" : thread?.status === "waiting" ? "waiting" : subagentViewStatus(active, tab.subagentStatus);
+  const status = thread ? thread.status === "working" || thread.status === "queued" ? "running" : thread.status : subagentViewStatus(active, tab.subagentStatus);
   const running = status === "running";
   const finished = thread ? ["completed", "failed", "interrupted", "closed"].includes(thread.status) : subagentFinished(status);
 
@@ -84,10 +81,20 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
     setThreadMessages([]);
     if (!subagentId?.startsWith("agent-")) return;
     let cancelled = false;
+    const adopt = (next: AgentThread | undefined) => {
+      if (!cancelled && next) setThread((current) => !current || next.revision > current.revision ? next : current);
+    };
+    const stop = onEvent((event) => {
+      if (event.type !== "agent_thread_changed" || event.conversationId !== conversationId) return;
+      const next = event.thread as AgentThread | undefined;
+      if (next?.id !== subagentId) return;
+      adopt(next);
+      void getAgentThreadMessages(subagentId, conversationId).then((messages) => { if (!cancelled) setThreadMessages(messages); }).catch(() => undefined);
+    });
     void Promise.all([getAgentThreads(conversationId), getAgentThreadMessages(subagentId, conversationId)]).then(([threads, messages]) => {
-      if (!cancelled) { setThread(threads.find((item) => item.id === subagentId)); setThreadMessages(messages); }
+      if (!cancelled) { adopt(threads.find((item) => item.id === subagentId)); setThreadMessages(messages); }
     }).catch(() => undefined);
-    return () => { cancelled = true; };
+    return () => { cancelled = true; stop(); };
   }, [subagentId, conversationId]);
 
 
@@ -97,22 +104,24 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
     void getSubagents(conversationId).then(useSessionStore.getState().setSubagents).catch(() => undefined);
   }, [subagentId, conversationId]);
 
-  // Pull the cached transcript exactly once after a legacy delegated run settles.
+  // The current turn's cache contains its tools and thinking as well as the final
+  // reply. Mailbox results alone cannot reconstruct that execution transcript.
   useEffect(() => {
-    if (!subagentId || subagentId.startsWith("agent-") || !finished) return;
+    if (!runId || !finished) return;
     let cancelled = false;
-    void getSubagentMessages(subagentId, conversationId).then((result) => {
-      if (!cancelled && result.length > 0) setLoaded(result);
+    void getSubagentMessages(runId, conversationId).then((result) => {
+      if (!cancelled && result.length > 0) setLoaded({ runId, messages: result });
     }).catch(() => undefined);
     return () => { cancelled = true; };
-  }, [subagentId, finished, conversationId]);
+  }, [runId, finished, conversationId]);
 
   const brief = useMemo<ChatMessage | null>(() => {
     if (!task) return null;
     return { id: `${subagentId ?? tab.id}:brief`, role: "user", text: task, tools: [], parts: [{ kind: "text", text: task }], createdAt: startedAt };
   }, [startedAt, subagentId, tab.id, task]);
 
-  const body = thread ? threadMessagesToChat(thread, threadMessages) : (finished ? loaded ?? streamed : streamed) ?? [];
+  const currentTurn = (finished && loaded?.runId === runId ? loaded.messages : streamed) ?? [];
+  const body = currentTurn.length ? currentTurn : thread ? threadMessagesToChat(thread, threadMessages) : [];
   const messages = useMemo(() => {
     // The cached transcript repeats the delegated turn the engine stored; the brief
     // already stands for it.
@@ -151,7 +160,7 @@ export const SidePaneSubagent = memo(function SidePaneSubagent({ tab }: { tab: S
           disabled
           streaming={running}
           working={running}
-          placeholder={t("subagent.readOnlyStatus", { status: subagentStatusText(active, tab.subagentStatus) })}
+          placeholder={t("subagent.readOnlyStatus", { status: subagentStatusText(undefined, status) })}
           models={models}
           model={active?.model}
           thinkingLevel={active?.thinkingLevel}

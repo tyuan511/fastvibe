@@ -80,7 +80,9 @@ and no network, which is what Codex's sandbox achieves. No extensions, so no mem
 the thing that writes memory; ten-minute cap.
 
 Afterwards the folder must hold a `MEMORY.md` that is a file and a `memory_summary.md` whose
-first line is exactly `v1`, and contain no symlink (they are removed, as Codex does). Otherwise
+first line is exactly `v1`, fits the shared 20,000-character budget, and contain no symlink (they are removed, as Codex does).
+The prompt reserves at least half the summary for the routing index. An oversized result gets one
+size-repair request in the same consolidation session, under the original time/cancellation budget. Otherwise
 the pass reports an error, the baseline is **not** advanced, and the next pass shows the agent
 the same diff again. Only a valid result becomes the new baseline.
 
@@ -90,9 +92,15 @@ the same diff again. Only a valid result becomes the new baseline.
 `before_agent_start`, when memory is on and `memory_summary.md` exists, it keeps Codex's
 `read_path.md` rules in the system prompt: the folder layout, when to use memory, a quick pass
 of at most four to six lookups, "never update memories", and how to treat stale facts. The
-summary itself (capped at 20,000 characters, Codex's 5,000 tokens) is a hidden persisted context
-message. A changed summary appends a new snapshot, preserving earlier request bytes; an
-unchanged one adds nothing. Only the latest snapshot describes the current memory map.
+summary itself is a hidden persisted context message with a 20,000-character budget (not a
+token count). Summaries within budget are kept in full. Legacy oversized summaries share the
+budget between profile, preferences, tips and the routing index, with extra weight for the index;
+projects and days share its space instead of being dropped after a prefix cutoff. Complete
+paragraphs/topics are kept where possible; a topic too large for its share becomes its complete
+title plus a pointer to search `MEMORY.md`. An abridgement notice gives the full summary path
+and permits range reads. A hash of the whole summary makes omitted-tail changes visible too.
+A changed summary appends a new snapshot, preserving earlier request bytes; an unchanged one
+adds nothing. Only the latest snapshot describes the current memory map.
 The compaction-aware projection decides whether one already exists, so reloads and forks
 deduplicate correctly and compaction can trigger reinjection. Turning memory off or losing
 the summary filters all memory snapshots from subsequent requests; raw session history stays

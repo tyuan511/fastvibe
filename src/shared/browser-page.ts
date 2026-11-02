@@ -161,6 +161,24 @@ export function typeBody(request: { selector?: string; ref?: string; text?: stri
   `;
 }
 
+/** A cheap poll for scripts: no snapshot refs are changed or large text returned. */
+export function checkBody(request: { selector?: string; text?: string; url?: string }): string {
+  return `
+    const selector = ${JSON.stringify(request.selector ?? "")};
+    const text = ${JSON.stringify(request.text ?? "")};
+    const url = ${JSON.stringify(request.url ?? "")};
+    const el = selector ? document.querySelector(selector) : null;
+    const rect = el && el.getBoundingClientRect();
+    const style = el && getComputedStyle(el);
+    const visible = !!(rect && rect.width > 1 && rect.height > 1 && style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0.05);
+    return {
+      matched: (!selector || visible) && (!text || !!document.body && document.body.innerText.includes(text)) && (!url || location.href.includes(url)),
+      url: location.href,
+      title: document.title,
+    };
+  `;
+}
+
 export function pressBody(key: string): string {
   return `
     const key = ${JSON.stringify(key)};

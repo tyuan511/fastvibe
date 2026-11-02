@@ -40,6 +40,8 @@ export type AgentThreadMessage = {
   kind: AgentMessageKind;
   text: string;
   turn?: number;
+  /** Terminal outcome captured with this result, independent of later thread turns. */
+  status?: "completed" | "failed";
   createdAt: number;
   deliveredAt?: number;
 };

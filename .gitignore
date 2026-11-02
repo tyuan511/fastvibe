@@ -31,6 +31,9 @@ resources/models-dev/**
 *.p12
 *.p8
 # Native mobile generated files
+# Legacy workspaces retain only generated build products after the source migration.
+/native/target/
+/apps/mobile_flutter/
 /rust/target/
 apps/mobile/android/.gradle/
 apps/mobile/android/local.properties

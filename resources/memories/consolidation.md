@@ -470,6 +470,13 @@ v1
 
 Density objective (strict):
 
+- The ENTIRE `memory_summary.md`, including headings, must fit within {{ summary_max_chars }}
+  characters (JavaScript UTF-16 length, not words or tokens). This is a hard acceptance limit.
+  Reserve at least half of that budget for `## What's in Memory`, with routing coverage for
+  every project/task group. Keep profile, preferences and tips within the remaining half.
+- Move detailed examples, commands and provenance to `MEMORY.md` or rollout summaries.
+  Compress and deduplicate before finishing; never meet the limit by cutting off the end
+  of the file, dropping the routing section, or leaving incomplete entries.
 - `memory_summary.md` is prompt-loaded context, so optimize for high signal per token.
 - Keep only high-level, cross-task signal and brief routing summaries. Put details, provenance,
   runbooks, and task-local nuance in `MEMORY.md`, skills, or rollout summaries.

@@ -23,7 +23,8 @@ exactly as written: the reader tools take it unchanged, and a shell command has 
 it, because this folder can sit under a path with a space in it. Never rebuild one
 relative to the current directory — `../../` counting is wrong more often than right.
 
-- {{ base_path }}/memory_summary.md (already provided below; do NOT open again)
+- {{ base_path }}/memory_summary.md (provided in context; do not reopen unless the snapshot
+  says it is abridged — then search it or read relevant ranges with offset/limit as needed)
 - {{ base_path }}/MEMORY.md (searchable registry; primary file to query — it grows to
   hundreds of KB, so search it rather than reading it whole)
 - {{ base_path }}/skills/<skill-name>/ (skill folder)

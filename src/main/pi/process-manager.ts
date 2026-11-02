@@ -90,10 +90,11 @@ import { ToolDeltaThrottle } from "./tool-delta-throttle";
 import { ConversationCatalog } from "../engine/conversation-catalog";
 import { AgentThreadStore } from "../engine/agent-thread-store";
 import { agentIdentityForId } from "@shared/agent-identity";
-import type { AgentThread, AgentThreadMessage, AgentThreadStatus } from "@shared/agent-thread";
+import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
 import { agentThreadFinished } from "@shared/agent-thread";
 import { installNativeCompactionGuard } from "../engine/native-compaction";
 import { runtimeContextExtension } from "../engine/runtime-context";
+import { agentTeamContextExtension } from "../engine/agent-team-context";
 import { lastRequestUsage, turnTokens } from "../engine/turn-usage";
 import { conversationStats } from "../engine/conversation-stats";
 import { promptPreview } from "../engine/prompt-preview";
@@ -300,10 +301,11 @@ type AgentSpawnRequest = {
   forkTurns?: "none" | "all";
   initialEntries?: FileEntry[];
   cwd: string;
+  signal?: AbortSignal;
 };
 type AgentMessageRequest = { conversationId: string; threadId: string; message: string; senderId: string };
 type AgentFollowupRequest = AgentMessageRequest & { task?: string };
-type AgentWaitRequest = { conversationId: string; threadIds?: string[]; timeoutMs?: number };
+type AgentWaitRequest = { conversationId: string; threadIds?: string[]; timeoutMs?: number; signal?: AbortSignal };
 type ScheduleHostRequest =
   | { action: "list" }
   | { action: "create"; draft: ScheduledTaskDraft & { reportBack?: boolean } }
@@ -1524,18 +1526,28 @@ export class PiProcessManager {
     // fallback, so a tool in a background chat was denied a prompt the user never saw.
     this.#resolvePendingUi(conversationId ?? this.#activeId ?? undefined);
     const { session } = await this.#sessionFor(conversationId);
+    // Persistent threads can also be resumed without a parent tool signal. A
+    // chat-level Stop still means stop the work owned by this chat; abort every
+    // live child alongside the parent run.
+    const childStop = queueOwner ? this.#abortOwnedSubagents(queueOwner) : Promise.resolve();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => reject(new Error(uiText("停止运行超时；会话仍可能在后台运行", "Stop timed out; the session may still be running in the background"))), 15_000);
+      timer = setTimeout(() => reject(new Error(uiText("停止运行超时；会话仍可能在后台运行", "Stop timed out; the session may still be running in the background"))), 15_000);
       timer.unref?.();
     });
     try {
-      await Promise.race([session.abort(), timeout]);
+      const parentStop = Promise.race([session.abort(), timeout]);
+      const results = await Promise.allSettled([parentStop, childStop]);
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failure) throw failure.reason;
     } catch (error) {
       // Do not report idle after an uncertain abort. The caller can reopen the
       // session, while the explicit error prevents a follow-up prompt from being
       // sent to a runtime whose termination was not confirmed.
       this.#setStatus({ state: "error", cwd: this.#cwd, message: error instanceof Error ? error.message : uiText("停止运行失败", "Failed to stop") });
       throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
     // A verdict is read by the settle of the run it stopped. With no run to stop
     // there is no settle, and a verdict left behind would be read by whichever run
@@ -1544,15 +1556,23 @@ export class PiProcessManager {
       this.#interruptedRuns.delete(queueOwner);
     }
   }
+  async #abortOwnedSubagents(conversationId: string): Promise<void> {
+    const ids = [...this.#subagents.values()]
+      .filter((item) => item.conversationId === conversationId && this.#subagentControls.has(item.id))
+      .map((item) => item.id);
+    const results = await Promise.allSettled(ids.map((id) => this.abortSubagent(id, conversationId)));
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failure) throw failure.reason;
+  }
+
   /**
    * Stop one delegated run, leaving its parent and its siblings alone.
    *
-   * The run is a tool call inside the parent's turn, so aborting its own session makes
-   * the parent's tool call return — with a failed result the main agent reads, which is
-   * how the delegation is "told" it was stopped. A parked prompt belongs to the *run*
-   * (its UI context is the parent conversation's, so the two would be indistinguishable
-   * by chat id), and the `tool_call` hook cannot observe the abort while it awaits one,
-   * so those are answered first — scoped to this owner, not the parent's prompts.
+   * Each thread turn has its own SDK session. Its control cancels preparation and
+   * the running session; the runner publishes the final interrupted outcome. A parked
+   * prompt belongs to the run (its UI context is the parent conversation's, so the two
+   * would be indistinguishable by chat id), and cannot observe the abort while awaiting
+   * an answer, so release those prompts first — scoped to this owner.
    */
   async abortSubagent(subagentId: string, conversationId?: string): Promise<void> {
     const owner = this.#subagents.get(subagentId)?.conversationId;
@@ -2102,18 +2122,11 @@ export class PiProcessManager {
     const runId = `${id}:turn:1`;
     const initialEntries = request.forkTurns === "all" ? this.#sessions.get(request.conversationId)?.session.sessionManager.getBranch() : undefined;
     this.#agentThreadRunIds.set(id, runId);
-    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: request.agent, displayName: identity.name, avatarSeed: identity.avatarSeed, task: request.task, systemPrompt: request.systemPrompt, tools: request.tools, model: request.model, fallbackModel: request.fallbackModel, thinkingLevel: request.thinkingLevel, forkTurns: request.forkTurns ?? "all", initialEntries, cwd: request.cwd });
+    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: request.agent, displayName: identity.name, avatarSeed: identity.avatarSeed, task: request.task, systemPrompt: request.systemPrompt, tools: request.tools, model: request.model, fallbackModel: request.fallbackModel, thinkingLevel: request.thinkingLevel, forkTurns: request.forkTurns ?? "all", initialEntries, cwd: request.cwd, signal: request.signal });
     this.#agentThreadRuns.set(id, run);
     const started = this.#agentThreads.setStatus(id, "working", { startedAt: Date.now(), currentTurn: 1 });
     if (started) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: started });
-    void run.then((response) => {
-      const status: AgentThreadStatus = response.stopReason === "aborted" ? "interrupted" : response.exitCode === 0 ? "completed" : "failed";
-      const output = lastAssistantText(response.messages);
-      const next = this.#agentThreads.setStatus(id, status, { endedAt: Date.now(), lastMessage: output, unread: true });
-      if (output) this.#agentThreads.send(id, "agent", output, "result");
-      if (next) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: next });
-      for (const wake of this.#agentThreadWaiters) wake();
-    }).finally(() => this.#agentThreadRuns.delete(id));
+    this.#trackAgentThreadRun(id, runId, 1, run);
     return this.#agentThreads.get(id) ?? thread;
   }
 
@@ -2145,17 +2158,32 @@ export class PiProcessManager {
     const runId = `${thread.id}:turn:${turn}`;
     this.#agentThreadRunIds.set(thread.id, runId);
     const next = this.#agentThreads.patch(thread.id, { task, status: "working", currentTurn: turn, startedAt: Date.now(), endedAt: undefined, unread: false });
+    if (next) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: next });
     const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: thread.agent ?? "worker", displayName: thread.name, avatarSeed: thread.avatarSeed, task, systemPrompt, tools: thread.tools, fallbackModel: thread.fallbackModel, cwd: thread.cwd });
     this.#agentThreadRuns.set(thread.id, run);
-    void run.then((response) => {
-      const status: AgentThreadStatus = response.stopReason === "aborted" ? "interrupted" : response.exitCode === 0 ? "completed" : "failed";
-      const output = lastAssistantText(response.messages);
-      const ended = this.#agentThreads.setStatus(thread.id, status, { endedAt: Date.now(), lastMessage: output, unread: true });
-      if (output) this.#agentThreads.send(thread.id, "agent", output, "result", request.senderId);
-      if (ended) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: ended });
-      for (const wake of this.#agentThreadWaiters) wake();
-    }).finally(() => this.#agentThreadRuns.delete(thread.id));
+    this.#trackAgentThreadRun(thread.id, runId, turn, run);
     return next ?? thread;
+  }
+
+  #trackAgentThreadRun(threadId: string, runId: string, turn: number, run: Promise<SubagentHostResponse>): void {
+    const finish = (response: SubagentHostResponse): void => {
+      if (this.#agentThreadRunIds.get(threadId) !== runId) return;
+      const status = response.stopReason === "aborted" ? "interrupted" : response.exitCode === 0 ? "completed" : "failed";
+      const thread = this.#agentThreads.finishTurn(threadId, turn, status, lastAssistantText(response.messages), response.errorMessage);
+      // Release before waking wait_agent: an immediate followup_task may start a new turn.
+      this.#agentThreadRuns.delete(threadId);
+      this.#agentThreadRunIds.delete(threadId);
+      if (thread) this.#emit({ type: "agent_thread_changed", conversationId: thread.conversationId, thread });
+      for (const wake of this.#agentThreadWaiters) wake();
+    };
+    void run.then(finish, (error) => finish({ messages: [], exitCode: 1, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 }, stopReason: "error", errorMessage: error instanceof Error ? error.message : String(error) }))
+      .catch((error) => {
+        if (this.#agentThreadRunIds.get(threadId) === runId) {
+          this.#agentThreadRuns.delete(threadId);
+          this.#agentThreadRunIds.delete(threadId);
+        }
+        console.error(`[agent-team] could not finalize ${runId}:`, error);
+      });
   }
 
   async waitAgents(request: AgentWaitRequest): Promise<AgentThread[]> {
@@ -2167,14 +2195,24 @@ export class PiProcessManager {
     };
     const finished = (): boolean => {
       const threads = selected();
-      return threads.length > 0 && threads.every((thread) => agentThreadFinished(thread.status));
+      const updates = this.#agentThreads.pendingResults(request.conversationId);
+      return updates.some((message) => !request.threadIds?.length || request.threadIds.includes(message.threadId))
+        || (threads.length > 0 && threads.every((thread) => agentThreadFinished(thread.status)));
     };
+    if (request.signal?.aborted) throw new DOMException("Agent wait cancelled", "AbortError");
     if (finished() || request.timeoutMs === 0) return selected();
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       let timer: NodeJS.Timeout | undefined;
-      const wake = (): void => { if (!finished()) return; if (timer) clearTimeout(timer); this.#agentThreadWaiters.delete(wake); resolve(); };
+      const cleanup = (): void => {
+        if (timer) clearTimeout(timer);
+        this.#agentThreadWaiters.delete(wake);
+        request.signal?.removeEventListener("abort", cancel);
+      };
+      const wake = (): void => { if (!finished()) return; cleanup(); resolve(); };
+      const cancel = (): void => { cleanup(); reject(new DOMException("Agent wait cancelled", "AbortError")); };
       this.#agentThreadWaiters.add(wake);
-      timer = setTimeout(() => { this.#agentThreadWaiters.delete(wake); resolve(); }, Math.min(request.timeoutMs ?? 300_000, 1_800_000));
+      request.signal?.addEventListener("abort", cancel, { once: true });
+      timer = setTimeout(() => { cleanup(); resolve(); }, Math.min(request.timeoutMs ?? 300_000, 1_800_000));
       timer.unref?.();
     });
     return selected();
@@ -4079,6 +4117,18 @@ export class PiProcessManager {
             pi.setActiveTools(applyToolModes(pi.getActiveTools(), toolModes(readAppSettings(this.#paths), this.#mcp.list())));
           });
         },
+      }, {
+        name: "fastvibe-agent-team-context",
+        hidden: true,
+        factory: agentTeamContextExtension({
+          conversationId: conversation.id,
+          store: this.#agentThreads,
+          sessionManager,
+          persist: () => {
+            const session = this.#sessions.get(conversation.id)?.session;
+            return session ? this.#persist(session) : false;
+          },
+        }),
       }, {
         // Read live, but append a hidden context snapshot only when folders change.
         name: "fastvibe-project-folders",

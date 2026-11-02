@@ -62,13 +62,13 @@
     "waitTurn": "打断前等本回合结束",
     "steerAll": "打断消息一次全部执行",
     "followUpAll": "稍后消息一次全部执行",
-    "viewSubagents": "查看子 Agent",
+    "viewSubagents": "查看智能体",
     "exportHtml": "导出 HTML",
     "compactTitle": "压缩上下文",
     "compactPlaceholder": "可选：压缩时希望保留的重点",
     "cancel": "取消",
     "startCompact": "开始压缩",
-    "subagents": "子 Agent",
+    "subagents": "智能体",
     "running": "运行中"
   },
   "handoff": {
@@ -127,7 +127,6 @@
     "aborted": "已终止"
   },
   "run": {
-    "processing": "已处理 {{duration}}",
     "duration": "用时 {{duration}}"
   },
   "todo": {
@@ -181,8 +180,7 @@
     "editSend": "发送",
     "retry": "重试",
     "fork": "从此处分叉",
-    "working": "正在工作",
-    "workingOn": "正在工作",
+    "working": "工作中",
     "skill": "技能",
     "expand": "展开",
     "collapse": "收起",

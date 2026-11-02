@@ -62,13 +62,13 @@
     "waitTurn": "Wait for this turn before interrupting",
     "steerAll": "Run interrupt messages all at once",
     "followUpAll": "Run follow-up messages all at once",
-    "viewSubagents": "View subagents",
+    "viewSubagents": "View agents",
     "exportHtml": "Export HTML",
     "compactTitle": "Compact context",
     "compactPlaceholder": "Optional: what to keep when compacting",
     "cancel": "Cancel",
     "startCompact": "Start compacting",
-    "subagents": "Subagents",
+    "subagents": "Agents",
     "running": "Running"
   },
   "handoff": {
@@ -127,7 +127,6 @@
     "aborted": "Stopped"
   },
   "run": {
-    "processing": "Working for {{duration}}",
     "duration": "{{duration}}"
   },
   "todo": {
@@ -182,7 +181,6 @@
     "retry": "Retry",
     "fork": "Fork from here",
     "working": "Working",
-    "workingOn": "Still working",
     "skill": "Skill",
     "expand": "Expand",
     "collapse": "Collapse",

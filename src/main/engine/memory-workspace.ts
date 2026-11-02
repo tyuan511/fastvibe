@@ -1,6 +1,7 @@
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { WORKSPACE_DIFF_FILE } from "./memory-templates.ts";
+import { summaryBudgetProblem } from "./memory-summary.ts";
 
 /**
  * What changed in the memory folder since the last consolidation that succeeded.
@@ -220,5 +221,5 @@ export async function validateArtifacts(root: string): Promise<string | null> {
   const summary = await readFile(join(root, "memory_summary.md"), "utf8").catch(() => null);
   if (summary === null) return "memory_summary.md was not written";
   if (summary.split("\n", 1)[0].replace(/\r$/, "") !== "v1") return "memory_summary.md does not start with the line v1";
-  return null;
+  return summaryBudgetProblem(summary) ?? null;
 }

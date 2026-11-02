@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* FastVibeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* FastVibeApp.swift */; };
+		A10000000000000000000003 /* FastVibeUI in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000070 /* FastVibeUI */; };
 		A10000000000000000000002 /* FastVibeMobileCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* FastVibeMobileCore.xcframework */; }; 
 /* End PBXBuildFile section */
 
@@ -24,6 +25,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000002 /* FastVibeMobileCore.xcframework in Frameworks */,
+				A10000000000000000000003 /* FastVibeUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -120,7 +122,7 @@
 				INFOPLIST_FILE = FastVibeApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = ( "$(inherited)", "@executable_path/Frameworks" );
-				OTHER_LDFLAGS = ( "$(inherited)", "-Wl,-u,_fv_mobile_core_version", "-Wl,-u,_fv_mobile_core_apply_json", "-Wl,-u,_fv_mobile_core_free_string" );
+				OTHER_LDFLAGS = ( "$(inherited)" );
 				PRODUCT_BUNDLE_IDENTIFIER = dev.fastvibe.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
@@ -133,7 +135,7 @@
 				INFOPLIST_FILE = FastVibeApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = ( "$(inherited)", "@executable_path/Frameworks" );
-				OTHER_LDFLAGS = ( "$(inherited)", "-Wl,-u,_fv_mobile_core_version", "-Wl,-u,_fv_mobile_core_apply_json", "-Wl,-u,_fv_mobile_core_free_string" );
+				OTHER_LDFLAGS = ( "$(inherited)" );
 				PRODUCT_BUNDLE_IDENTIFIER = dev.fastvibe.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;

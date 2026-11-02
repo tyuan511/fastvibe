@@ -18,20 +18,22 @@ export function formatRelativeTime(timestamp: number): string {
  * other and read the same turns, so a compact `1m05s` beside a `1 分钟 5 秒` was two notations
  * for one number.
  *
+ * Live timers can opt into tenths of a second; settled durations keep whole seconds.
+ *
  * `null`/negative spans return an empty string, leaving the caller to pick its own placeholder
  * (the popover's `—`) or to fall back to a start time, as the footer does.
  */
-export function formatDuration(ms: number | null | undefined): string {
+export function formatDuration(ms: number | null | undefined, { fractionalSeconds = false }: { fractionalSeconds?: boolean } = {}): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return "";
-  const total = Math.round(ms / 1000);
+  const total = fractionalSeconds ? Math.floor(ms / 100) / 10 : Math.round(ms / 1000);
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
+  const seconds = fractionalSeconds ? (total % 60).toFixed(1) : total % 60;
   const parts: string[] = [];
   if (hours > 0) parts.push(i18n.t("common:duration.hours", { n: hours }) as string);
   if (minutes > 0) parts.push(i18n.t("common:duration.minutes", { n: minutes }) as string);
   // Sub-minute spans must still say something, and a 1h00m00s run does not need the
   // zero seconds spelled out — but once a smaller unit is present it stays readable.
-  if (seconds > 0 || parts.length === 0) parts.push(i18n.t("common:duration.seconds", { n: seconds }) as string);
+  if (fractionalSeconds || total % 60 > 0 || parts.length === 0) parts.push(i18n.t("common:duration.seconds", { n: seconds }) as string);
   return parts.join(" ");
 }

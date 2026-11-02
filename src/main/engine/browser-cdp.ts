@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAppSettings } from "./app-settings";
 import { getFastVibePaths } from "./paths";
-import { clickBody, pageProgram, pressBody, SNAPSHOT_BODY, typeBody } from "@shared/browser-page";
+import { checkBody, clickBody, pageProgram, pressBody, SNAPSHOT_BODY, typeBody } from "@shared/browser-page";
 import type { BrowserRequest } from "@shared/types";
 import { uiText } from "./ui-text";
 
@@ -325,6 +325,8 @@ export async function runBrowserCdp(request: BrowserRequest, profileDir: string)
       return { ok: true, url: session.url };
     case "snapshot":
       return { tabId: session.id, ...(await evaluate(session, SNAPSHOT_BODY) as Record<string, unknown>) };
+    case "check":
+      return { tabId: session.id, ...(await evaluate(session, checkBody(request)) as Record<string, unknown>) };
     case "click":
       if (!request.selector && !request.ref && !request.text) throw fail("click 需要 selector、ref 或 text", "click requires selector, ref or text");
       return evaluate(session, clickBody(request));

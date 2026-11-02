@@ -5,6 +5,7 @@ import { AiExpandIcon, ArrowRight01Icon, BotIcon, ComputerIcon, Copy01Icon, Fold
 import { toast } from "sonner";
 import { conversationOutputs } from "@shared/conversation-outputs";
 import { folderName, projectFolderPaths } from "@shared/project-folders";
+import type { AgentThread } from "@shared/agent-thread";
 import type { GitStatus } from "@shared/ipc";
 import type { Conversation, Project } from "@shared/types";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,7 @@ import { FileIcon } from "@/components/file-icon";
 import { RunningMark } from "@/components/running-mark";
 import { TodoRow } from "@/components/chat/todo-list";
 import { activeTodo } from "@/lib/todos";
-import { getAgentThreads } from "@/lib/engine-client";
+import { getAgentThreads, onEvent } from "@/lib/engine-client";
 import { useConversationTodo } from "@/lib/use-conversation-todo";
 import { conversationAgents, resourceAgentFinished, type ResourceAgent } from "@/lib/conversation-resources";
 import { subagentStatusText } from "@/lib/subagent-status";
@@ -157,20 +158,31 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   const messages = useSessionStore((state) => state.messages);
   const registry = useSessionStore((state) => state.subagents);
   const working = useConversationWorking();
-  const [threadAgents, setThreadAgents] = useState<ResourceAgent[]>([]);
+  const [threadAgents, setThreadAgents] = useState<AgentThread[]>([]);
   useEffect(() => {
     let cancelled = false;
+    const merge = (threads: AgentThread[]) => setThreadAgents((current) => {
+      const next = new Map(current.map((thread) => [thread.id, thread]));
+      for (const thread of threads) {
+        if (thread.conversationId !== conversation.id) continue;
+        if ((next.get(thread.id)?.revision ?? -1) < thread.revision) next.set(thread.id, thread);
+      }
+      return [...next.values()];
+    });
+    const stop = onEvent((event) => {
+      if (event.type === "agent_thread_changed" && event.conversationId === conversation.id && event.thread) merge([event.thread as AgentThread]);
+    });
     void getAgentThreads(conversation.id).then((threads) => {
-      if (!cancelled) setThreadAgents(threads.map((thread) => ({ id: thread.id, name: thread.name ?? thread.agent ?? thread.id, brief: thread.task, status: thread.status === "working" || thread.status === "queued" ? "running" : thread.status, parentId: thread.parentId, avatarSeed: thread.avatarSeed })));
-    }).catch(() => { if (!cancelled) setThreadAgents([]); });
-    return () => { cancelled = true; };
+      if (!cancelled) merge(threads);
+    }).catch(() => undefined);
+    return () => { cancelled = true; stop(); };
   }, [conversation.id]);
 
 
   // Same display rule as the panel above the composer: an abandoned checklist is not
   // a resource of the current turn, so it does not get a section here either.
   const todo = useConversationTodo();
-  const agents = useMemo(() => [...conversationAgents(conversation.id, messages, registry), ...threadAgents], [conversation.id, messages, registry, threadAgents]);
+  const agents = useMemo(() => conversationAgents(conversation.id, messages, registry, threadAgents), [conversation.id, messages, registry, threadAgents]);
   const outputs = useMemo(() => conversationOutputs(messages, (path) => resolvePath(path, conversation.cwd)), [messages, conversation.cwd]);
   const [moreOutputs, setMoreOutputs] = useState(false);
   const [moreAgents, setMoreAgents] = useState(false);
@@ -214,8 +226,9 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
       useSidePaneStore.getState().openSubagent(agent.id, { conversationId: conversation.id, title: agent.name, avatarSeed: agent.avatarSeed, status: agent.status, brief: agent.brief });
       onClose();
     }}>
-      {live ? <RunningMark /> : <AgentAvatar seed={agent.avatarSeed ?? 0} size="size-4" className={cn(attention && "opacity-70")} />}
+      <AgentAvatar seed={agent.avatarSeed ?? 0} size="size-6" className={cn(attention && "opacity-70")} />
       <span className="min-w-0 flex-1"><span className="block truncate text-sm">{agent.name}</span>{agent.brief ? <span className="block truncate text-xs text-muted-foreground">{agent.brief}</span> : null}</span>
+      {live ? <RunningMark /> : null}
       <span className={cn("shrink-0 text-xs text-muted-foreground", attention && "text-warning")}>{label}</span>
     </Button>;
   };

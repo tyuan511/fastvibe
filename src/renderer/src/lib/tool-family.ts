@@ -39,6 +39,7 @@ export function familyOf(name: string): ToolFamily {
   if (/^(find|glob|ls|list|list_dir|listdir|tree|list_files|listfiles)$/.test(key)) return "list";
   if (/^(bash|shell|shell_exec|shellexec|exec|execute|run_command|runcommand|command|terminal|run)$/.test(key)) return "terminal";
   if (key.includes("skill")) return "skill";
+  if (key === "spawn_agent") return "agent";
   if (/^(task|agent|subagent|dispatch|delegate)/.test(key)) return "agent";
   if (key.includes("todo")) return "todo";
   if (/^(question|ask_user|askuser|questionnaire)$/.test(key)) return "question";

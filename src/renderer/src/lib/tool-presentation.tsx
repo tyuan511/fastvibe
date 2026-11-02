@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { BotIcon, ChromeIcon, FileEditIcon, FileMinusIcon, FilePlusIcon, FileTextIcon, FolderTreeIcon, Image01Icon, ListChecksIcon, MessageQuestionIcon, Plug01Icon, Search01Icon, SourceCodeIcon, SparklesIcon, SquareTerminalIcon, Wrench01Icon } from "@hugeicons/core-free-icons";
+import { subagentToolRuns } from "@shared/subagent-state";
+import { AgentAvatar } from "@/components/agent-avatar";
 import type { ToolCallBlock } from "@shared/types";
 import { i18n } from "@/lib/i18n";
 import { codemodeCalls, codemodeCode, codemodeFailures, codemodeSummary } from "./codemode";
@@ -237,6 +239,14 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
       return view;
     }
     case "agent": {
+      if (tool.name === "spawn_agent") {
+        const entry = subagentToolRuns(tool)[0];
+        view.label = i18n.t(running ? "common:tool.agentCreating" : entry ? "common:tool.agentCreated" : "common:tool.agent.done") as string;
+        view.subject = entry?.name ?? (argString(tool.args, ["task_name", "agent_type"]) || undefined);
+        view.title = entry?.task ?? argString(tool.args, ["message"]);
+        if (entry) view.icon = <AgentAvatar seed={entry.avatarSeed ?? 0} size="size-5" />;
+        return view;
+      }
       const args = asRecord(tool.args);
       const names: string[] = [];
       if (typeof args?.agent === "string") names.push(args.agent);

@@ -79,8 +79,7 @@ body {
   color: var(--popover-foreground);
 }
 
-.vivi-text-bubble,
-.vivi-composer {
+.vivi-text-bubble {
   border: 1px solid color-mix(in oklch, var(--border) 85%, transparent);
   background: color-mix(in oklch, var(--popover) 96%, transparent);
   border-radius: 999px;
@@ -117,20 +116,13 @@ body {
   overflow: hidden;
 }
 
-.vivi-text-bubble:not(.is-expanded) > div:first-child > button:first-child > span {
+.vivi-notification-content {
+  white-space: pre-wrap;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
   overflow-wrap: anywhere;
-}
-
-.vivi-text-bubble.is-expanded {
-  border-radius: 28px;
-}
-
-.vivi-composer {
-  min-width: 0;
 }
 
 .vivi-bubble-close {
@@ -141,10 +133,6 @@ body {
 .vivi-text-bubble:hover .vivi-bubble-close,
 .vivi-text-bubble:focus-within .vivi-bubble-close {
   opacity: 1;
-}
-
-.vivi-agent-bubble > div > div > .\@container\/composer {
-  padding: 0 8px 8px;
 }
 
 html,

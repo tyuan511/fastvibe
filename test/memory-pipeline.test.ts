@@ -182,6 +182,29 @@ test("consolidation that leaves no valid summary is an error, and does not becom
   } finally { cleanup(h); }
 });
 
+test("an oversized unchanged baseline is consolidated again and cannot advance until it fits", async () => {
+  const h = harness({ chats: 1 });
+  try {
+    await h.manager.run();
+    const oversized = "v1\n\n## User preferences\n" + "x".repeat(30_000);
+    for (const folder of [h.files.memoriesDir, h.files.memoriesBaselineDir]) {
+      writeFileSync(join(folder, "memory_summary.md"), oversized);
+    }
+    h.agentWrites.value = false;
+    const failed = await h.manager.run();
+    assert.equal(h.calls.agent, 2, "size validation wakes consolidation even without a diff");
+    assert.match(failed.error ?? "", /maximum is 20000/);
+    assert.equal(readFileSync(join(h.files.memoriesBaselineDir, "memory_summary.md"), "utf8"), oversized);
+    assert.equal(readFileSync(join(h.files.memoriesDir, "memory_summary.md"), "utf8"), oversized, "validation never truncates the actual file");
+    h.agentWrites.value = true;
+    const repaired = await h.manager.run();
+    assert.equal(repaired.error, undefined);
+    assert.equal(h.calls.agent, 3);
+    assert.equal(h.calls.complete, 1, "the existing extracted evidence is reused");
+    assert.match(readFileSync(join(h.files.memoriesBaselineDir, "memory_summary.md"), "utf8"), /偏好 pnpm/);
+  } finally { cleanup(h); }
+});
+
 test("a summary that does not start with v1 is refused", async () => {
   const h = harness({ chats: 1 });
   try {

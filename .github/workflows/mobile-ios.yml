@@ -1,18 +1,55 @@
 name: Native mobile iOS
 
 on:
+  workflow_call:
   workflow_dispatch:
-  push:
-    paths: ["apps/mobile/**", ".github/workflows/mobile-ios.yml"]
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    # `macos-14` ships Swift 5.10 and the package asks for tools 6.0, so `swift test` failed
-    # before it compiled a line. `macos-15` carries Xcode 16.x and a Swift 6 toolchain.
+  build:
     runs-on: macos-15
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - run: swift test --package-path apps/mobile/ios
+      - name: Check Apple toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/mobile/core
+      - name: Test native Swift code
+        run: swift test --package-path apps/mobile/ios
+      - name: Build Rust XCFramework
+        run: bash scripts/build-mobile-ios.sh
+      - name: Check device and simulator slices
+        run: bash scripts/check-mobile-ios.sh
+      - name: Build iOS simulator app
+        run: |
+          xcodebuild -project apps/mobile/ios/FastVibeApp.xcodeproj -scheme FastVibe \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/fastvibe-ios-simulator" \
+            CODE_SIGNING_ALLOWED=NO build
+      - name: Build iOS device app
+        run: |
+          xcodebuild -project apps/mobile/ios/FastVibeApp.xcodeproj -scheme FastVibe \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/fastvibe-ios-device" \
+            CODE_SIGNING_ALLOWED=NO build
+      - name: Package simulator app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$RUNNER_TEMP/fastvibe-ios-simulator/Build/Products/Debug-iphonesimulator/FastVibe.app" \
+            "$RUNNER_TEMP/FastVibe-iOS-simulator.zip"
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastVibe-iOS-simulator
+          path: ${{ runner.temp }}/FastVibe-iOS-simulator.zip
+          if-no-files-found: error
+          retention-days: 14

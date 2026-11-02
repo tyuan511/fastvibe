@@ -173,23 +173,6 @@ function MessageActions({
   );
 }
 
-function WorkingStatus({ message }: { message: ChatMessage }): JSX.Element {
-  const { t } = useTranslation("chat");
-  // The run is between tool calls or about to write, so this row is the only thing
-  // in the reply. It stays in the same inline icon + shimmering-label shape as the
-  // thinking block and tool rows — a chip here would be the one bordered box in a
-  // transcript of quiet rows — but at the reading size and the emphasis shade, so
-  // "still working" is legible where a line of 12.5px grey was not.
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      <Spinner className="size-4 text-muted-foreground" />
-      <span className="animated-gradient-text animated-gradient-text-emphasis font-normal">
-        {message.tools.length > 0 ? t("message.workingOn") : t("message.working")}
-      </span>
-    </div>
-  );
-}
-
 /**
  * Why a reply ended early when nothing failed: it hit the model's output limit, or the
  * run was stopped. Quieter than the error bubble — neither is a failed request — but
@@ -575,8 +558,8 @@ function ChatMessageRowImpl({
   //
   // Decided only once the run is over, and only when it produced both halves: something to
   // hide and an answer to leave on screen. A run still in flight, one that stopped on a tool
-  // call, and a failed one all draw the plain transcript instead. While in flight, a separate
-  // non-interactive header reports the elapsed time without folding any content.
+  // call, and a failed one all draw the plain transcript instead. While in flight, the
+  // persistent status below the reply reports elapsed time without folding any content.
   //
   // The split is anchored on where the last process part ended, not on 「the last text」:
   // which prose will turn out to be the answer cannot be known while it streams, but where
@@ -650,6 +633,7 @@ function ChatMessageRowImpl({
     // cut already promises a body with something in it — that is the same condition the old
     // 「a body that would render nothing」 check was spelling out by hand.
     if (cut === 0) return null;
+    if (!parts.slice(0, cut).some((part, index) => !(part.kind === "tool" && part.tool.name === "spawn_agent") && partTakesRow(part, index) && isProcessKind(part.kind))) return null;
     // No prose after the last tool call: the run wrote no answer, so there is nothing to
     // leave on screen and folding would hide its only output. A reply that ends in nothing
     // but line breaks is the same case wearing a tail — it takes no row either.
@@ -690,7 +674,7 @@ function ChatMessageRowImpl({
     const cutoff = Math.max(0, parts.length - MAX_VISIBLE_PROCESS_PARTS);
     const hidden = parts
       .map((part, index) => ({ part, index }))
-      .filter(({ part, index }) => index < cutoff && isProcessKind(part.kind) && partTakesRow(part, index));
+      .filter(({ part, index }) => index < cutoff && isProcessKind(part.kind) && !(part.kind === "tool" && part.tool.name === "spawn_agent") && partTakesRow(part, index));
     return hidden.length > 0 ? { hidden, firstIndex: hidden[0].index } : null;
   }, [fold, isUser, partTakesRow, parts]);
 
@@ -738,26 +722,6 @@ function ChatMessageRowImpl({
     );
   }
 
-  // Outside the `renderPart` closure: it is a fact about the reply, not about one
-  // part, and the row's working marker below is the only consumer.
-  //
-  // Whether the tail of the reply already says "still going". A tool call in flight
-  // carries its own spinner, an open thinking block shimmers 「正在思考」, and a
-  // trailing text part blinks the caret — so when one of those is on screen the row
-  // would just be a second, redundant marker. Everything else — the wait after a
-  // tool returns, before its result is fed back and the model writes its next
-  // token — has no live element at all, and the settled tool cards above read as a
-  // hang. The gate is the *tail*, not "the reply has no text yet": once a run has
-  // written a sentence, every later tool→model boundary was silent.
-  //
-  // A running tool is its own spinner, wherever it sits, so the working row stays off
-  // while any call in this reply is still in flight.
-  const lastPart = parts.at(-1);
-  const liveTail =
-    lastPart?.kind === "text" ||
-    (showThinking && lastPart?.kind === "thinking") ||
-    (lastPart?.kind === "compact" && lastPart.compact?.status === "running") ||
-    message.tools.some((tool) => tool.status === "running");
   if (isUser && editing) {
     return (
       <Message align="end" className="group/row">
@@ -855,8 +819,6 @@ function ChatMessageRowImpl({
         {message.attachments?.length ? <AttachmentStrip items={message.attachments} /> : null}
         {message.skill && isUser ? <SkillBadgeRow skill={message.skill} /> : null}
 
-        {streaming && !isUser ? <RunProgress startedAt={runStart} /> : null}
-
         {foldHead > 0 ? parts.slice(0, foldHead).map((part, index) => renderPart(part, index)) : null}
 
         {fold && foldHead < fold.cut ? (
@@ -866,13 +828,12 @@ function ChatMessageRowImpl({
           >
             {parts
               .slice(foldHead, fold.cut)
-              .map((part, index) => renderPart(part, foldHead + index, false))}
+              .map((part, index) => part.kind === "tool" && part.tool.name === "spawn_agent" ? null : renderPart(part, foldHead + index, false))}
           </RunCollapse>
         ) : null}
-        {/* The graph of sub-tasks a run created is what the run set going, not how it got there:
-            it stays on screen when the rest of the process folds away. */}
+        {/* Created threads stay reachable in history after the run's process folds. */}
         {fold && foldHead < fold.cut
-          ? parts.slice(foldHead, fold.cut).map((part, index) => renderPart(part, foldHead + index, false))
+          ? parts.slice(foldHead, fold.cut).map((part, index) => part.kind === "tool" && part.tool.name === "spawn_agent" ? renderPart(part, foldHead + index, false) : null)
           : null}
 
         {fold
@@ -888,7 +849,7 @@ function ChatMessageRowImpl({
             )}
 
         {message.retry ? <RetryStatus message={message} /> : null}
-        {streaming && !message.error && !message.retry && !liveTail ? <WorkingStatus message={message} /> : null}
+        {streaming && !isUser ? <RunProgress startedAt={runStart} /> : null}
 
         {message.error && !message.retry && !streaming ? <AssistantErrorNotice error={message.error} /> : null}
         {message.stop && !message.error && !message.retry && !streaming ? <StopNotice reason={message.stop} cause={message.stopCause} /> : null}

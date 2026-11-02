@@ -2,7 +2,7 @@ import { normalizeBrowserUrl } from "@shared/browser-workspace";
 import { i18n } from "@/lib/i18n";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
-import { clickBody, pageProgram, pressBody, SNAPSHOT_BODY, typeBody } from "@shared/browser-page";
+import { checkBody, clickBody, pageProgram, pressBody, SNAPSHOT_BODY, typeBody } from "@shared/browser-page";
 import type { BrowserRequest } from "@shared/types";
 
 function be(key: string, options?: Record<string, unknown>): string {
@@ -768,6 +768,8 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
       rememberUrl(entry);
       return { tabId: entry.id, ...result };
     }
+    case "check":
+      return { tabId: entry.id, ...(await inject(entry, checkBody(request)) as Record<string, unknown>) };
     case "click": {
       if (!request.selector && !request.ref && !request.text) throw new Error(be("needClick"));
       return act(entry, clickBody(request), { clicked: true, warning: be("clickNav") });

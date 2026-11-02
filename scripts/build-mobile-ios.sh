@@ -38,7 +38,7 @@ build_target() {
     local target="$1"
     local output="$2"
     log "building $target with features $CARGO_FEATURES"
-    cargo build --manifest-path "$CORE_DIR/Cargo.toml" --release --target "$target" --no-default-features --features "$CARGO_FEATURES"
+    cargo build --locked --manifest-path "$CORE_DIR/Cargo.toml" --release --target "$target" --no-default-features --features "$CARGO_FEATURES"
     cp "$CORE_DIR/target/$target/release/libfastvibe_mobile_core.a" "$output/libfastvibe_mobile_core.a"
 }
 

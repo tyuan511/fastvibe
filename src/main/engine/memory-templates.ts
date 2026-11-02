@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { boundedMemorySummary, SUMMARY_PROMPT_MAX_CHARS } from "./memory-summary.ts";
+
+export { SUMMARY_PROMPT_MAX_CHARS } from "./memory-summary.ts";
 
 /**
  * The four prompts of the memory pipeline, which are Codex's own (see `resources/memories/NOTICE.md`):
@@ -45,25 +48,18 @@ export function stage1Input(input: { rolloutPath: string; rolloutCwd: string; co
 export const WORKSPACE_DIFF_FILE = "phase2_workspace_diff.md";
 
 export function consolidationPrompt(memoryRoot: string): string {
-  return renderTemplate(load("consolidation.md"), { memory_root: memoryRoot, phase2_workspace_diff_file: WORKSPACE_DIFF_FILE });
+  return renderTemplate(load("consolidation.md"), { memory_root: memoryRoot, phase2_workspace_diff_file: WORKSPACE_DIFF_FILE, summary_max_chars: String(SUMMARY_PROMPT_MAX_CHARS) });
 }
-
-/** Codex caps the summary placed in the prompt at 5,000 tokens; characters are the cheap proxy. */
-export const SUMMARY_PROMPT_MAX_CHARS = 20_000;
 
 export function readPathPrompt(input: { basePath: string; summary: string }): string {
-  const summary = boundedSummary(input.summary);
+  const summary = boundedMemorySummary(input.summary, input.basePath);
   return `\n\n${renderTemplate(load("read_path.md"), { base_path: input.basePath, memory_summary: summary.trim() })}`;
-}
-
-function boundedSummary(summary: string): string {
-  return summary.length > SUMMARY_PROMPT_MAX_CHARS ? `${summary.slice(0, SUMMARY_PROMPT_MAX_CHARS)}\n…(truncated)` : summary;
 }
 
 /** Keep Codex's read rules stable while the changing summary travels as context. */
 export function readPathContext(input: { basePath: string; summary: string }): { systemPrompt: string; content: string } {
   return {
     systemPrompt: readPathPrompt({ basePath: input.basePath, summary: "Use the latest FastVibe memory context snapshot in this conversation for the current MEMORY_SUMMARY." }),
-    content: `========= MEMORY_SUMMARY BEGINS =========\n${boundedSummary(input.summary).trim()}\n========= MEMORY_SUMMARY ENDS =========`,
+    content: `========= MEMORY_SUMMARY BEGINS =========\n${boundedMemorySummary(input.summary, input.basePath)}\n========= MEMORY_SUMMARY ENDS =========`,
   };
 }

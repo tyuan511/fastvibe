@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowDown01Icon } from "@hugeicons/core-free-icons";
 import { subagentStatusText } from "@/lib/subagent-status";
-import { findSubagent, subagentEntries, subagentResultStatus } from "@shared/subagent-state";
+import { findSubagentForThread, subagentToolRuns } from "@shared/subagent-state";
+import { AgentAvatar } from "@/components/agent-avatar";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import type { ToolCallBlock } from "@shared/types";
@@ -334,12 +335,13 @@ function SubagentSummary({ tool }: { tool: ToolCallBlock }): JSX.Element {
   const conversationId = useTranscriptConversation();
   const subagents = useSessionStore((state) => state.subagents);
   const counts = new Map<string, number>();
-  subagentEntries(tool.args).forEach((_, index) => {
-    const info = findSubagent(subagents, `${tool.id}:${index}`, conversationId);
-    const label = subagentStatusText(info, subagentResultStatus(tool, index));
+  subagentToolRuns(tool).forEach((entry) => {
+    const info = findSubagentForThread(subagents, entry.id, conversationId);
+    if (!info && tool.name === "spawn_agent") return;
+    const label = subagentStatusText(info, entry.status);
     counts.set(label, (counts.get(label) ?? 0) + 1);
   });
-  return <span className="text-xs text-muted-foreground">{[...counts].map(([label, count]) => `${label} ${count}`).join(" · ")}</span>;
+  return <span className="text-xs text-muted-foreground">{[...counts].map(([label, count]) => tool.name === "spawn_agent" ? label : `${label} ${count}`).join(" · ")}</span>;
 }
 
 /**
@@ -353,15 +355,18 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
   const conversationId = useTranscriptConversation();
   const subagents = useSessionStore((state) => state.subagents);
   const openSubagent = useSidePaneStore((state) => state.openSubagent);
-  const entries = subagentEntries(tool.args);
+  const entries = subagentToolRuns(tool);
+  if (!entries.length) return <><Parameters args={tool.args} />{tool.result ? <OutputBlock text={tool.result} /> : null}</>;
 
   return (
     <div className="flex flex-col gap-1.5">
-      {entries.map((entry, index) => {
-        const id = `${tool.id}:${index}`;
-        const state = findSubagent(subagents, id, conversationId);
-        const fallback = subagentResultStatus(tool, index);
+      {entries.map((entry) => {
+        const id = entry.id;
+        const state = findSubagentForThread(subagents, id, conversationId);
+        const fallback = tool.name === "spawn_agent" ? "unknown" : entry.status;
         const status = subagentStatusText(state, fallback);
+        const name = state?.name ?? entry.name;
+        const avatarSeed = state?.avatarSeed ?? entry.avatarSeed;
         return (
           <button
             key={id}
@@ -370,13 +375,15 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
             onClick={() =>
               openSubagent(id, {
                 conversationId: conversationId ?? undefined,
-                title: entry.agent,
+                title: name,
+                avatarSeed,
                 status: state?.status ?? fallback,
                 brief: entry.task ?? state?.detail,
               })
             }
           >
-            <span className="shrink-0 font-mono text-sm text-foreground">{entry.agent}</span>
+            <AgentAvatar seed={avatarSeed ?? 0} size="size-6" />
+            <span className="shrink-0 text-sm text-foreground">{name}</span>
             {entry.task ? (
               <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{entry.task}</span>
             ) : (
@@ -441,6 +448,8 @@ export const ToolCard = memo(function ToolCard({
   showIcon?: boolean;
 }): JSX.Element {
   const cwd = useWorkspacePath();
+  const conversationId = useTranscriptConversation();
+  const spawned = tool.name === "spawn_agent" ? subagentToolRuns(tool)[0] : undefined;
   const view = describeTool(tool, cwd);
   const running = tool.status === "running";
   // read / search / list are single-line rows in zcode: the subject opens the file
@@ -487,7 +496,7 @@ export const ToolCard = memo(function ToolCard({
       error={tool.status === "error" ? tool.result ?? view.statusLabel : undefined}
       running={running}
       title={view.title}
-      canToggle={!inline}
+      canToggle={!inline && !spawned}
       showIcon={showIcon}
       persistKey={tool.id}
       trailing={
@@ -505,7 +514,9 @@ export const ToolCard = memo(function ToolCard({
         ) : undefined
       }
       onSubjectClick={
-        view.family === "read" && path ? () => void useSessionStore.getState().openPreview(path) : undefined
+        spawned ? () => useSidePaneStore.getState().openSubagent(spawned.id, {
+          conversationId: conversationId ?? undefined, title: spawned.name, avatarSeed: spawned.avatarSeed, status: spawned.status, brief: spawned.task,
+        }) : view.family === "read" && path ? () => void useSessionStore.getState().openPreview(path) : undefined
       }
     >
       {hasDetail ? <ToolDetail tool={tool} running={running} /> : null}

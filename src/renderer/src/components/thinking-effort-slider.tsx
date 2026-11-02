@@ -83,7 +83,7 @@ export function ThinkingEffortSlider({
             commit(Array.isArray(next) ? next[0] : next);
           }}
         />
-        <div aria-hidden="true" className="thinking-effort-ticks pointer-events-none absolute inset-x-4 inset-y-0 flex items-center justify-between">
+        <div aria-hidden="true" className="thinking-effort-ticks pointer-events-none absolute inset-y-0 flex items-center justify-between">
           {options.map((level, tick) => (
             <span key={level} data-filled={tick <= index && preview !== "auto" || undefined} />
           ))}
@@ -91,8 +91,8 @@ export function ThinkingEffortSlider({
         {atMax && !disabled ? (
           <div
             aria-hidden="true"
-            className="thinking-effort-particles pointer-events-none absolute inset-x-0 inset-y-2 overflow-hidden rounded-full"
-            style={{ clipPath: `inset(0 calc(${1 - position / (options.length - 1)} * (100% - 2rem) + 1rem) 0 0)` }}
+            className="thinking-effort-particles pointer-events-none absolute inset-x-0 overflow-hidden rounded-full"
+            style={{ clipPath: `inset(0 calc(${1 - position / (options.length - 1)} * (100% - var(--thinking-thumb-size)) + var(--thinking-thumb-size) / 2) 0 0)` }}
           >
             {Array.from({ length: 30 }, (_, particle) => (
               <i key={particle} style={{

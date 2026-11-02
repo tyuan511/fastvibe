@@ -331,6 +331,20 @@ export function ViviSettings(): JSX.Element {
           }
         />
       </SettingsGroup>
+
+      <SettingsGroup title={t("vivi.behavior")}>
+        <SettingsRow
+          title={t("vivi.messages")}
+          description={t("vivi.messagesDesc")}
+          control={
+            <Switch
+              checked={settings.messages}
+              onCheckedChange={(checked) => updateSetting("messages", checked)}
+              aria-label={t("vivi.messages")}
+            />
+          }
+        />
+      </SettingsGroup>
     </div>
   );
 }

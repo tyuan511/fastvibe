@@ -148,6 +148,7 @@ test("Main stops the selected chat's preparation before waiting for queue cleanu
   Object.assign(host, {
     activeId: "active", promptPreparations: { cancel: (id?: string) => cancelled.push(id) },
     bumpQueueEpoch() {}, withQueue: async () => cleanup.promise, resolvePendingUi() {},
+    abortOwnedSubagents: async () => {},
     isLive: () => false, interruptedRuns: new Map(),
     sessionFor: async () => ({ session: { abort: async () => {} } }),
   });

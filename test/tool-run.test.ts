@@ -125,7 +125,7 @@ test("a file change stays in the batch so the summary can name it", () => {
 });
 
 test("questions, todos and sub-agents stay out", () => {
-  for (const name of ["question", "todo", "subagent", "present"]) {
+  for (const name of ["question", "todo", "subagent", "spawn_agent", "present"]) {
     assert.equal(foldsIntoRun(name), false, name);
   }
   assert.equal(foldsIntoRun("bash"), true);

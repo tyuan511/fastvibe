@@ -2,6 +2,26 @@ import type { ViviBounds } from "./bounds.ts";
 
 export type ViviSurfaceLayout = { window: ViviBounds; pet: ViviBounds; bubble?: ViviBounds; composer?: ViviBounds };
 
+/**
+ * Keep the native frame and the canvas offset fixed while notifications change.
+ * Updating a native frame and delivering its new canvas offset are separate paints;
+ * reserving the three-line notification area avoids that visible intermediate position.
+ * Transparent pixels outside the pet and the notice remain click-through.
+ */
+export function viviNotificationSurfaceLayout(pet: ViviBounds, area: ViviBounds, requestedHeight: number, requestedWidth?: number): ViviSurfaceLayout {
+  const reserved = viviSurfaceLayout(pet, area, 120, 0, 360);
+  const slot = reserved.bubble;
+  const base = { window: reserved.window, pet: reserved.pet };
+  if (!slot || requestedHeight <= 0) return base;
+  const width = Math.min(slot.width, Math.max(1, Math.ceil(requestedWidth ?? 240)));
+  const height = Math.min(slot.height, Math.max(1, Math.ceil(requestedHeight)));
+  const x = Math.round(Math.min(Math.max(reserved.pet.x + (reserved.pet.width - width) / 2, slot.x), slot.x + slot.width - width));
+  const y = slot.y + slot.height <= reserved.pet.y ? slot.y + slot.height - height
+    : slot.y >= reserved.pet.y + reserved.pet.height ? slot.y
+    : Math.round(Math.min(Math.max(reserved.pet.y + (reserved.pet.height - height) / 2, slot.y), slot.y + slot.height - height));
+  return { ...base, bubble: { x, y, width, height } };
+}
+
 export function viviSurfaceLayout(pet: ViviBounds, area: ViviBounds, requestedHeight: number, composerHeight = 0, requestedWidth?: number): ViviSurfaceLayout {
   if (requestedHeight <= 0 && composerHeight <= 0) return { window: { ...pet }, pet: { x: 0, y: 0, width: pet.width, height: pet.height } };
   const defaultWidth = requestedHeight > 120 || composerHeight > 0 ? 360 : 240;

@@ -55,6 +55,61 @@ export class AgentThreadStore {
     return this.#db.all<{ data: string }>("SELECT data FROM agent_thread_messages WHERE thread_id = ? ORDER BY created_at, id", threadId).map((row) => JSON.parse(row.data) as AgentThreadMessage);
   }
 
+  /** Commit the outcome and its parent mailbox message together, once per thread turn. */
+  finishTurn(id: string, turn: number, status: "completed" | "failed" | "interrupted", output: string, error?: string): AgentThread | undefined {
+    return this.#db.transaction(() => {
+      const current = this.get(id);
+      if (!current || (current.currentTurn ?? 1) !== turn) return undefined;
+      const active = ["queued", "working", "waiting"].includes(current.status);
+      if (!active && !(status === "interrupted" && current.status === "interrupted")) return undefined;
+      const next = this.setStatus(id, status, { endedAt: Date.now(), lastMessage: output, unread: true });
+      // An interruption retains partial output for follow-up, but sends no parent notification.
+      if (status === "interrupted" && !output) return next;
+      const message: AgentThreadMessage = {
+        id: `${id}:result:${turn}`,
+        threadId: id,
+        senderId: id,
+        recipientId: status === "interrupted" ? undefined : current.conversationId,
+        kind: "result",
+        text: status === "failed" ? [error || "Agent turn failed.", output].filter(Boolean).join("\n\n") : output || "Agent completed without a text result.",
+        turn,
+        status: status === "interrupted" ? undefined : status,
+        createdAt: Date.now(),
+      };
+      this.#db.run("INSERT INTO agent_thread_messages (id, thread_id, created_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING", message.id, id, message.createdAt, JSON.stringify(message));
+      return next;
+    });
+  }
+
+  /** Model mailbox, separate from the UI's unread badge. Old unaddressed results stay historical. */
+  pendingResults(conversationId: string): AgentThreadMessage[] {
+    return this.#db.all<{ data: string }>(`
+      SELECT m.data FROM agent_thread_messages m
+      JOIN agent_threads t ON t.id = m.thread_id
+      WHERE t.conversation_id = ?
+        AND json_extract(m.data, '$.recipientId') = ?
+        AND json_extract(m.data, '$.kind') = 'result'
+        AND json_extract(m.data, '$.deliveredAt') IS NULL
+      ORDER BY m.created_at, m.id LIMIT 8
+    `, conversationId, conversationId).map((row) => JSON.parse(row.data) as AgentThreadMessage);
+  }
+
+  acknowledgeResults(conversationId: string, ids: string[]): void {
+    if (ids.length === 0) return;
+    this.#db.transaction(() => {
+      for (const id of ids) {
+        const row = this.#db.get<{ data: string }>(`
+          SELECT m.data FROM agent_thread_messages m JOIN agent_threads t ON t.id = m.thread_id
+          WHERE m.id = ? AND t.conversation_id = ?
+        `, id, conversationId);
+        if (!row) continue;
+        const message = JSON.parse(row.data) as AgentThreadMessage;
+        if (message.recipientId !== conversationId || message.kind !== "result" || message.deliveredAt) continue;
+        this.#db.run("UPDATE agent_thread_messages SET data = ? WHERE id = ?", JSON.stringify({ ...message, deliveredAt: Date.now() }), id);
+      }
+    });
+  }
+
   removeConversation(conversationId: string): void { this.#db.run("DELETE FROM agent_threads WHERE conversation_id = ?", conversationId); }
 
   /** A process restart cannot keep an in-memory runner alive; leave its thread resumable. */

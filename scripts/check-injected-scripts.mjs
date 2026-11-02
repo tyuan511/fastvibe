@@ -30,7 +30,7 @@ const TARGETS = [
 const FRAGMENT_CONSTANTS = ["PAGE_HELPERS", "SNAPSHOT_BODY", "PICK_BODY", "PICK_READ_BODY"];
 
 /** Functions whose returned template literal is a page script. */
-const SCRIPT_FUNCTIONS = ["clickBody", "typeBody", "pressBody"];
+const SCRIPT_FUNCTIONS = ["checkBody", "clickBody", "typeBody", "pressBody"];
 
 /** Read the template literal that starts at `text[start]` (a backtick), tracking
  * `${}` nesting so an interpolation containing a backtick or brace cannot end it. */

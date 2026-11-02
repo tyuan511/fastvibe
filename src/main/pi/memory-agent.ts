@@ -6,7 +6,10 @@ import {
   type ModelRegistry,
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { FastVibePaths } from "../engine/paths";
+import { summaryBudgetProblem } from "../engine/memory-summary.ts";
 
 /**
  * Tools the consolidation agent may use. No `bash`: the job is reading and editing Markdown
@@ -50,12 +53,21 @@ export async function runMemoryAgent(
     // Codex runs consolidation at medium reasoning.
     thinkingLevel: "medium",
   });
-  const stop = (): void => { void session.abort().catch(() => undefined); };
+  let stopped = false;
+  const stop = (): void => { stopped = true; void session.abort().catch(() => undefined); };
   const timer = setTimeout(stop, MEMORY_AGENT_TIMEOUT_MS);
   request.signal?.addEventListener("abort", stop, { once: true });
   try {
     if (request.signal?.aborted) return;
     await session.prompt(request.task);
+    if (stopped || request.signal?.aborted) return;
+    const summary = await readFile(join(request.cwd, "memory_summary.md"), "utf8").catch(() => "");
+    const problem = summaryBudgetProblem(summary);
+    if (problem && !stopped && !request.signal?.aborted) {
+      // One repair in the same session retains the evidence already read. Final validation
+      // in MemoryManager still rejects a failed repair and leaves the baseline untouched.
+      await session.prompt(`${problem}\nRevise memory_summary.md now. Preserve all project routing coverage and complete entries; move detail into MEMORY.md. Do not truncate the file. Finish within the stated character limit.`);
+    }
   } finally {
     clearTimeout(timer);
     request.signal?.removeEventListener("abort", stop);

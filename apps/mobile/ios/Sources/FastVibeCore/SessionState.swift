@@ -211,11 +211,25 @@ public struct MobileSessionState: Codable, Sendable {
     public var wireCursors: [String: MobileWireCursor]
     public var loadingHistory: Bool
     public var connection: String
+    public var endpointId: String?
+    public var path: String?
+    public var error: String?
+    public var workspace: MobileJSONValue?
 
-    enum CodingKeys: String, CodingKey { case snapshot, wireCursors, loadingHistory, connection, messages, running }
+    enum CodingKeys: String, CodingKey {
+        case snapshot, wireCursors, loadingHistory, connection, endpointId, path, error, workspace
+        case messages, running
+    }
 
     public init(messages: [MobileMessage] = [], connection: String = "disconnected", running: Bool = false) {
-        self.snapshot = MobileConversationSnapshot(messages: messages, running: running); self.wireCursors = [:]; self.loadingHistory = false; self.connection = connection
+        self.snapshot = MobileConversationSnapshot(messages: messages, running: running)
+        self.wireCursors = [:]
+        self.loadingHistory = false
+        self.connection = connection
+        self.endpointId = nil
+        self.path = nil
+        self.error = nil
+        self.workspace = nil
     }
 
     public var messages: [MobileMessage] { snapshot?.messages ?? [] }
@@ -231,13 +245,26 @@ public struct MobileSessionState: Codable, Sendable {
         } else {
             let messages = try values.decodeIfPresent([MobileMessage].self, forKey: .messages) ?? []
             snapshot = MobileConversationSnapshot(messages: messages, running: try values.decodeIfPresent(Bool.self, forKey: .running) ?? false)
-            wireCursors = [:]; loadingHistory = false; connection = try values.decodeIfPresent(String.self, forKey: .connection) ?? "disconnected"
+            wireCursors = [:]
+            loadingHistory = false
+            connection = try values.decodeIfPresent(String.self, forKey: .connection) ?? "disconnected"
         }
+        endpointId = try values.decodeIfPresent(String.self, forKey: .endpointId)
+        path = try values.decodeIfPresent(String.self, forKey: .path)
+        error = try values.decodeIfPresent(String.self, forKey: .error)
+        workspace = try values.decodeIfPresent(MobileJSONValue.self, forKey: .workspace)
     }
 
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encodeIfPresent(snapshot, forKey: .snapshot); try values.encode(wireCursors, forKey: .wireCursors); try values.encode(loadingHistory, forKey: .loadingHistory); try values.encode(connection, forKey: .connection)
+        try values.encodeIfPresent(snapshot, forKey: .snapshot)
+        try values.encode(wireCursors, forKey: .wireCursors)
+        try values.encode(loadingHistory, forKey: .loadingHistory)
+        try values.encode(connection, forKey: .connection)
+        try values.encodeIfPresent(endpointId, forKey: .endpointId)
+        try values.encodeIfPresent(path, forKey: .path)
+        try values.encodeIfPresent(error, forKey: .error)
+        try values.encodeIfPresent(workspace, forKey: .workspace)
     }
 }
 

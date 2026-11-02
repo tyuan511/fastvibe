@@ -87,6 +87,15 @@ private enum MobileKeychain {
         else { return nil }
         return String(data: data, encoding: .utf8)
     }
+
+    static func remove(_ key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
 }
 
 /// Main-actor session facade for the native SwiftUI shell.
@@ -104,36 +113,67 @@ public final class MobileSessionController: ObservableObject {
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var loginURL: URL?
     @Published public var conversationID: String
+    @Published private(set) var conversations: [NativeConversation] = []
+    @Published private(set) var projects: [NativeProject] = []
+    @Published public private(set) var isSending = false
 
     public let accountOrigin: String
     public let redirectURI = "fastvibe://oauth/callback"
 
+    public var endpointIdentifier: String? { endpointID ?? state.endpointId }
+    public var coreVersion: String? {
+        guard let raw = bridge.version, !raw.isEmpty else { return nil }
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = object["version"] as? String,
+              !version.isEmpty
+        else { return raw }
+        return version
+    }
+    public var connectionPath: String? { state.path }
+    public var accountEmail: String? { accountEmailValue }
+    public var localDeviceName: String {
+        get { deviceName }
+        set {
+            deviceName = newValue
+            UserDefaults.standard.set(newValue, forKey: Self.deviceNameKey)
+        }
+    }
+
+    private static let deviceNameKey = "fastvibe.mobile.device-name"
     private let bridge: MobileCoreBridge
-    private let executor: MobileCoreCommandExecutor
-    private let deviceName: String
+    private let coordinator: MobileCoreCommandCoordinator
     private let platform: String
     private let installID: String
+    private var deviceName: String
     private var localDeviceID: String?
     private var endpointID: String?
+    private var accountEmailValue: String?
     private var loginState: String?
     private var callbackState: String?
     private var pollTask: Task<Void, Never>?
+    private var resyncTask: Task<Void, Never>?
+    private var connectionGeneration: UInt64 = 0
+    private var conversationGeneration: UInt64 = 0
 
     public init(
         bridge: MobileCoreBridge = MobileCoreBridge(),
         accountOrigin: String = "https://app.fastvibe.dev",
         deviceName: String = "FastVibe Mobile",
         platform: String = "ios",
-        conversationID: String = ""
+        conversationID: String = "",
+        commandRuntime: (any MobileCoreCommanding)? = nil
     ) {
         self.bridge = bridge
-        self.executor = MobileCoreCommandExecutor(bridge: bridge)
         self.accountOrigin = accountOrigin.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        self.deviceName = deviceName
         self.platform = platform
         self.conversationID = conversationID
         self.installID = Self.loadInstallID()
+        self.deviceName = UserDefaults.standard.string(forKey: Self.deviceNameKey) ?? deviceName
+        let executor = MobileCoreCommandExecutor(bridge: bridge)
+        self.coordinator = MobileCoreCommandCoordinator(runtime: commandRuntime ?? executor)
         self.state = bridge.store.state
+
         if let savedIdentity = MobileKeychain.get("iroh.identity") {
             Task { [weak self] in
                 _ = try? await self?.perform("setIdentity", parameters: ["secretKey": .string(savedIdentity)])
@@ -143,23 +183,28 @@ public final class MobileSessionController: ObservableObject {
            let savedToken = MobileKeychain.get("account.token") {
             Task { [weak self] in
                 guard let self else { return }
-                _ = try? await self.perform("setToken", parameters: [
-                    "token": .string(savedToken),
-                    "origin": .string(savedOrigin),
-                ])
-                self.isAuthenticated = true
-                self.accountLabel = "已登录"
-                try? await self.refreshDevicesInternal()
+                do {
+                    _ = try await self.perform("setToken", parameters: [
+                        "token": .string(savedToken),
+                        "origin": .string(savedOrigin),
+                    ])
+                    self.isAuthenticated = true
+                    self.accountLabel = "已登录"
+                    try await self.refreshDevicesInternal()
+                } catch {
+                    self.errorMessage = self.message(for: error)
+                }
             }
         }
     }
 
     deinit {
         pollTask?.cancel()
+        resyncTask?.cancel()
     }
 
     public var messages: [MobileMessage] { state.messages }
-    public var isConnected: Bool { state.connection == "connected" }
+    public var isConnected: Bool { state.connection == "ready" }
     public var statusText: String { state.connection.capitalized }
 
     public func beginLogin() async {
@@ -169,7 +214,7 @@ public final class MobileSessionController: ObservableObject {
                 parameters: [
                     "origin": .string(accountOrigin),
                     "redirectUri": .string(redirectURI),
-                    "deviceName": .string(deviceName),
+                    "deviceName": .string(localDeviceName),
                     "platform": .string(platform),
                 ]
             )
@@ -193,8 +238,15 @@ public final class MobileSessionController: ObservableObject {
             return
         }
 
-        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        let values = Dictionary(uniqueKeysWithValues: query.map { ($0.name, $0.value ?? "") })
+        var values: [String: String] = [:]
+        for item in URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? [] {
+            guard values[item.name] == nil else {
+                errorMessage = MobileSessionControllerError.invalidLoginCallback.localizedDescription
+                loginState = nil
+                return
+            }
+            values[item.name] = item.value ?? ""
+        }
         if let callbackError = values["error"], !callbackError.isEmpty {
             errorMessage = "登录未完成：\(callbackError)"
             loginState = nil
@@ -221,13 +273,8 @@ public final class MobileSessionController: ObservableObject {
         }
     }
 
-    public func clearLoginURL() {
-        loginURL = nil
-    }
-
-    public func clearError() {
-        errorMessage = nil
-    }
+    public func clearLoginURL() { loginURL = nil }
+    public func clearError() { errorMessage = nil }
 
     /// Inject an already-issued account token. The token remains in Rust memory and is never
     /// persisted or exposed to SwiftUI. This is useful when the host app owns secure storage.
@@ -237,15 +284,16 @@ public final class MobileSessionController: ObservableObject {
             return
         }
         await runLoading { [self] in
+            let issuer = origin ?? accountOrigin
             _ = try await perform(
                 "setToken",
                 parameters: [
                     "token": .string(token),
-                    "origin": .string(origin ?? accountOrigin),
+                    "origin": .string(issuer),
                 ]
             )
             MobileKeychain.set(token, for: "account.token")
-            MobileKeychain.set(origin ?? accountOrigin, for: "account.origin")
+            MobileKeychain.set(issuer, for: "account.origin")
             isAuthenticated = true
             accountLabel = "已登录"
             try await refreshDevicesInternal()
@@ -264,14 +312,28 @@ public final class MobileSessionController: ObservableObject {
             errorMessage = MobileSessionControllerError.missingDeviceEndpoint.localizedDescription
             return
         }
-        guard !conversationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            errorMessage = "请输入会话 ID 后再连接。"
-            return
-        }
 
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         selectedDevice = device
-        await runLoading { [self] in
+        conversationID = ""
+        conversations = []
+        projects = []
+        stopPolling()
+        resyncTask?.cancel()
+        resyncTask = nil
+        await coordinator.failPending(message: "连接正在重新建立，草稿已保留。")
+        guard generation == connectionGeneration else { return }
+        defer { if generation == connectionGeneration { isLoading = false } }
+        isLoading = true
+        isSending = false
+        errorMessage = nil
+
+        do {
+            try await perform("disconnect")
+            guard generation == connectionGeneration else { return }
             let identity = try await perform("identity")
+            guard generation == connectionGeneration else { return }
             guard let localEndpointID = identity.result.stringValue(key: "endpointId") else {
                 throw MobileSessionControllerError.message("无法创建本机连接身份。")
             }
@@ -281,6 +343,7 @@ public final class MobileSessionController: ObservableObject {
             endpointID = localEndpointID
 
             let localID = try await ensureLocalDevice()
+            guard generation == connectionGeneration else { return }
             _ = try await perform(
                 "registerEndpoint",
                 parameters: [
@@ -288,6 +351,7 @@ public final class MobileSessionController: ObservableObject {
                     "endpointId": .string(localEndpointID),
                 ]
             )
+            guard generation == connectionGeneration else { return }
             let relay = try await perform(
                 "relay",
                 parameters: [
@@ -295,6 +359,7 @@ public final class MobileSessionController: ObservableObject {
                     "endpointId": .string(localEndpointID),
                 ]
             )
+            guard generation == connectionGeneration else { return }
             guard let relayURL = relay.result.stringValue(key: "url"),
                   let relayToken = relay.result.stringValue(key: "token")
             else {
@@ -305,20 +370,39 @@ public final class MobileSessionController: ObservableObject {
                 "connect",
                 parameters: [
                     "remoteId": .string(remoteEndpointID),
-                    "conversationId": .string(conversationID),
                     "relay": .object([
                         "url": .string(relayURL),
                         "token": .string(relayToken),
                     ]),
                 ]
             )
-            startPolling()
-            try await subscribeAndRequestSnapshot()
+            guard generation == connectionGeneration else { return }
+            startPolling(generation: generation)
+            guard await waitUntilReady(generation: generation) else { return }
+            try await initializeReadyConnection()
+            guard generation == connectionGeneration else { return }
+            isLoading = false
+        } catch is CancellationError {
+            if generation == connectionGeneration { isLoading = false }
+        } catch {
+            guard generation == connectionGeneration else { return }
+            isLoading = false
+            errorMessage = message(for: error)
+            state.connection = "error"
+            state.error = errorMessage
+            await coordinator.failPending(message: errorMessage ?? "连接失败。")
         }
     }
 
     public func disconnect() async {
+        connectionGeneration &+= 1
+        conversationGeneration &+= 1
+        isLoading = false
+        isSending = false
         stopPolling()
+        resyncTask?.cancel()
+        resyncTask = nil
+        await coordinator.failPending(message: "连接已断开，草稿已保留。")
         do {
             _ = try await perform("disconnect")
         } catch {
@@ -326,26 +410,203 @@ public final class MobileSessionController: ObservableObject {
         }
     }
 
-    public func sendPrompt(_ text: String) async {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let conversationID = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        guard !conversationID.isEmpty else {
-            errorMessage = "请输入会话 ID 后再发送。"
-            return
+    public func refreshConversations() async {
+        guard isConnected else { return }
+        await runLoading { [self] in
+            try await refreshConversationsInternal()
+        }
+    }
+
+    public func openConversation(_ id: String) async -> Bool {
+        let id = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, isConnected else { return false }
+        conversationGeneration &+= 1
+        let generation = conversationGeneration
+        conversationID = id
+        do {
+            _ = try await performRemote(
+                "openConversation",
+                parameters: ["id": .string(id), "activate": .bool(false)]
+            )
+            guard generation == conversationGeneration else { return false }
+            _ = try await performRemote(
+                "snapshot",
+                parameters: ["conversationId": .string(id), "historyLimit": .number(12)]
+            )
+            guard generation == conversationGeneration else { return false }
+            return true
+        } catch {
+            guard generation == conversationGeneration else { return false }
+            errorMessage = message(for: error)
+            return false
+        }
+    }
+
+    public func createConversation(projectPath: String?) async -> Bool {
+        guard isConnected else { return false }
+        var parameters: [String: MobileJSONValue] = [
+            "activate": .bool(false),
+            "reuseEmpty": .bool(false),
+        ]
+        if let projectPath, !projectPath.isEmpty {
+            parameters["project"] = .string(projectPath)
         }
         do {
-            _ = try await perform(
+            let response = try await performRemote("createConversation", parameters: parameters)
+            let id = response.result.stringValue(path: ["conversation", "id"])
+                ?? response.result.stringValue(key: "id")
+                ?? response.result.stringValue(key: "conversationId")
+            guard let id else {
+                throw MobileSessionControllerError.message("电脑没有返回新会话标识。")
+            }
+            try await refreshConversationsInternal()
+            return await openConversation(id)
+        } catch {
+            errorMessage = message(for: error)
+            return false
+        }
+    }
+
+    public func sendPrompt(_ text: String) async -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !id.isEmpty, isConnected, !isSending else { return false }
+        isSending = true
+        defer { isSending = false }
+        let enqueue = state.running || !(state.snapshot?.queue.items.isEmpty ?? true)
+        do {
+            _ = try await performRemote(
                 "prompt",
                 parameters: [
-                    "conversationId": .string(conversationID),
+                    "conversationId": .string(id),
                     "text": .string(text),
+                    "enqueue": .bool(enqueue),
+                    "images": .array([]),
+                    "idempotencyKey": .string(UUID().uuidString),
                 ]
             )
             errorMessage = nil
+            return true
+        } catch {
+            errorMessage = message(for: error)
+            return false
+        }
+    }
+
+    public func abort() async {
+        guard let id = nonEmptyConversationID else { return }
+        do {
+            _ = try await performRemote(
+                "abort",
+                parameters: ["conversationId": .string(id)]
+            )
         } catch {
             errorMessage = message(for: error)
         }
+    }
+
+    public func loadOlderMessages() async {
+        guard let id = nonEmptyConversationID,
+              let before = state.snapshot?.historyBeforeEntryId,
+              !before.isEmpty,
+              !state.loadingHistory
+        else { return }
+        do {
+            let response = try await performRemote(
+                "getMessagesPage",
+                parameters: [
+                    "conversationId": .string(id),
+                    "beforeEntryId": .string(before),
+                    "turnLimit": .number(12),
+                ]
+            )
+            if response.result?.objectValue?.boolValue("reset") == true, conversationID == id {
+                _ = try await performRemote("snapshot", parameters: [
+                    "conversationId": .string(id),
+                    "historyLimit": .number(12),
+                ])
+            }
+        } catch {
+            errorMessage = message(for: error)
+        }
+    }
+
+    public func removeQueuedMessage(_ id: String) async {
+        guard let conversationID = nonEmptyConversationID, !id.isEmpty else { return }
+        do {
+            _ = try await performRemote(
+                "call",
+                parameters: [
+                    "method": .string("engine:queue-cancel"),
+                    "payload": .object([
+                        "conversationId": .string(conversationID),
+                        "id": .string(id),
+                    ]),
+                ]
+            )
+        } catch {
+            errorMessage = message(for: error)
+        }
+    }
+
+    public func respondToPermission(_ request: MobileJSONValue, response: MobileJSONValue) async {
+        guard let requestObject = request.objectValue,
+              let requestID = requestObject["id"]?.stringValue,
+              let conversationID = nonEmptyConversationID
+        else { return }
+        var payload: [String: MobileJSONValue] = [
+            "id": .string(requestID),
+            "conversationId": .string(conversationID),
+        ]
+        if let responseObject = response.objectValue {
+            for key in ["confirmed", "value", "cancelled", "answers"] {
+                if let value = responseObject[key] { payload[key] = value }
+            }
+        }
+        do {
+            _ = try await performRemote(
+                "call",
+                parameters: [
+                    "method": .string("engine:permission-respond"),
+                    "payload": .object(payload),
+                ]
+            )
+        } catch {
+            errorMessage = message(for: error)
+        }
+    }
+
+    public func signOut() async {
+        connectionGeneration &+= 1
+        stopPolling()
+        resyncTask?.cancel()
+        resyncTask = nil
+        await coordinator.failPending(message: "已退出登录，草稿已保留。")
+        _ = try? await perform("disconnect")
+        MobileKeychain.remove("account.token")
+        MobileKeychain.remove("account.origin")
+        isAuthenticated = false
+        accountLabel = nil
+        accountEmailValue = nil
+        selectedDevice = nil
+        devices = []
+        conversations = []
+        projects = []
+        conversationID = ""
+        loginURL = nil
+        loginState = nil
+        callbackState = nil
+        localDeviceID = nil
+        isLoading = false
+        isSending = false
+        errorMessage = nil
+        state = MobileSessionState()
+        bridge.store.apply(snapshot: state)
+    }
+
+    private var nonEmptyConversationID: String? {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.isEmpty ? nil : id
     }
 
     private func exchangeOAuthCode(_ code: String) async {
@@ -360,6 +621,7 @@ public final class MobileSessionController: ObservableObject {
             )
             isAuthenticated = true
             accountLabel = response.result.stringValue(path: ["user", "login"]) ?? "已登录"
+            accountEmailValue = response.result.stringValue(path: ["user", "email"])
             if let token = response.result.stringValue(key: "accessToken") {
                 MobileKeychain.set(token, for: "account.token")
                 MobileKeychain.set(accountOrigin, for: "account.origin")
@@ -374,7 +636,7 @@ public final class MobileSessionController: ObservableObject {
             "registerDevice",
             parameters: [
                 "installId": .string(installID),
-                "name": .string(deviceName),
+                "name": .string(localDeviceName),
                 "platform": .string(platform),
             ]
         )
@@ -401,45 +663,224 @@ public final class MobileSessionController: ObservableObject {
         devices = try JSONDecoder().decode([MobileDevice].self, from: data)
     }
 
+    private func initializeReadyConnection() async throws {
+        _ = try await performRemote("subscribe", parameters: [
+            "scopes": .array([.string("*")]),
+        ])
+        try await refreshConversationsInternal()
+    }
+
+    private func refreshConversationsInternal() async throws {
+        let response = try await performRemote("listConversations")
+        if response.result != nil {
+            applyWorkspace(response.result)
+        }
+    }
+
     private func subscribeAndRequestSnapshot() async throws {
-        let scope = "conversation:\(conversationID)"
+        guard let id = nonEmptyConversationID else { return }
         var parameters: [String: MobileJSONValue] = [
-            "scopes": .array([.string(scope)]),
+            "scopes": .array([.string("conversation:\(id)")]),
         ]
-        if let cursor = state.wireCursors[scope] {
+        if let cursor = state.wireCursors["conversation:\(id)"] {
             parameters["since"] = .object([
-                scope: .object([
+                "conversation:\(id)": .object([
                     "epoch": .string(cursor.epoch),
                     "seq": .number(Double(cursor.seq)),
                 ])
             ])
         }
-        _ = try await perform("subscribe", parameters: parameters)
-        _ = try await perform(
-            "snapshot",
-            parameters: ["conversationId": .string(conversationID)]
-        )
+        _ = try await performRemote("subscribe", parameters: parameters)
+        _ = try await performRemote("snapshot", parameters: [
+            "conversationId": .string(id),
+            "historyLimit": .number(12),
+        ])
     }
 
     private func perform(
         _ action: String,
         parameters: [String: MobileJSONValue] = [:]
     ) async throws -> MobileCoreCommandResponse {
-        let response = try await executor.command(action, parameters: parameters)
-        if let newState = response.state {
-            apply(newState)
-        }
-        guard response.ok else {
-            throw MobileSessionControllerError.message(
-                response.error?.message ?? "Rust runtime rejected the command。"
-            )
-        }
+        let generation = connectionGeneration
+        let ticket = try await coordinator.start(action, parameters: parameters)
+        guard generation == connectionGeneration else { throw CancellationError() }
+        if let newState = ticket.initial.state { apply(newState) }
+        return ticket.initial
+    }
+
+    private func performRemote(
+        _ action: String,
+        parameters: [String: MobileJSONValue] = [:]
+    ) async throws -> MobileCoreCommandResponse {
+        let generation = connectionGeneration
+        let ticket = try await coordinator.start(action, parameters: parameters)
+        guard generation == connectionGeneration else { throw CancellationError() }
+        if let newState = ticket.initial.state { apply(newState) }
+        guard let requestID = ticket.requestID else { return ticket.initial }
+        let response = try await coordinator.awaitResult(requestID)
+        guard generation == connectionGeneration else { throw CancellationError() }
+        // Poll applies Rust's projection. Never reconstruct or merge protocol content in Swift.
         return response
     }
 
     private func apply(_ newState: MobileSessionState) {
         state = newState
         bridge.store.apply(snapshot: newState)
+        endpointID = newState.endpointId ?? endpointID
+        if let error = newState.error, !error.isEmpty { errorMessage = error }
+        if let workspace = newState.workspace { applyWorkspace(workspace) }
+    }
+
+    private func startPolling(generation: UInt64) {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.connectionGeneration == generation else { return }
+                do {
+                    let poll = try await self.coordinator.poll()
+                    guard self.connectionGeneration == generation else { return }
+                    await self.applyPoll(poll)
+                } catch {
+                    guard !Task.isCancelled, self.connectionGeneration == generation else { return }
+                    self.state.connection = "error"
+                    self.state.error = self.message(for: error)
+                    self.errorMessage = self.message(for: error)
+                    await self.coordinator.failPending(message: self.errorMessage ?? "连接已断开。")
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    private func applyPoll(_ poll: MobileCorePoll) async {
+        let oldConnection = state.connection
+        if let newState = poll.response.state { apply(newState) }
+        var connectionFailure: String?
+        for event in poll.events {
+            switch event.kind {
+            case "resync":
+                scheduleResync()
+            case "connection_error", "remote_close":
+                connectionFailure = event.string("message") ?? event.string("reason") ?? state.error ?? "与电脑的连接已断开。"
+            default:
+                break
+            }
+        }
+        if (state.connection == "error" || state.connection == "disconnected"), state.connection != oldConnection {
+            connectionFailure = connectionFailure ?? state.error ?? "与电脑的连接已中断。操作可能已经到达电脑，草稿已保留。"
+        }
+        if let failure = connectionFailure {
+            errorMessage = failure
+            await coordinator.failPending(message: failure)
+        }
+        if poll.overflowed { scheduleResync() }
+    }
+
+    private func scheduleResync() {
+        guard resyncTask == nil, isConnected else { return }
+        resyncTask = Task { [weak self] in
+            guard let self else { return }
+            defer { resyncTask = nil }
+            do {
+                try await subscribeAndRequestSnapshot()
+                try await refreshConversationsInternal()
+            } catch {
+                errorMessage = message(for: error)
+            }
+        }
+    }
+
+    private func waitUntilReady(generation: UInt64) async -> Bool {
+        let deadline = Date().addingTimeInterval(15)
+        while generation == connectionGeneration, Date() < deadline {
+            if state.connection == "ready" { return true }
+            if state.connection == "error" || state.connection == "disconnected" {
+                errorMessage = state.error ?? "无法连接这台电脑。"
+                return false
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        guard generation == connectionGeneration else { return false }
+        if state.connection != "ready" {
+            errorMessage = "连接电脑超时，请重试。"
+            return false
+        }
+        return true
+    }
+
+    private func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    private func applyWorkspace(_ raw: MobileJSONValue?) {
+        guard let root = raw?.objectValue else { return }
+        let workspace = root["workspace"]?.objectValue
+            ?? root["catalog"]?.objectValue
+            ?? root
+        let directConversations = (workspace["conversations"] ?? workspace["items"] ?? workspace["results"])?.arrayValue ?? []
+        let directProjects = (workspace["projects"] ?? workspace["groups"])?.arrayValue ?? []
+
+        var parsedProjects: [NativeProject] = []
+        var nestedConversations: [MobileJSONValue] = []
+        for (index, value) in directProjects.enumerated() {
+            guard let object = value.objectValue else { continue }
+            guard let path = object.stringValue("cwd", "path") else { continue }
+            let id = object.stringValue("id", "projectId") ?? path
+            let name = object.stringValue("name", "title", "label")
+                ?? path.split(separator: "/").last.map(String.init)
+                ?? id
+            parsedProjects.append(NativeProject(id: id, name: name, path: path))
+            nestedConversations += (object["conversations"] ?? object["items"])?.arrayValue ?? []
+        }
+
+        var allConversations = directConversations
+        if allConversations.isEmpty { allConversations = nestedConversations }
+        var parsedConversations: [NativeConversation] = []
+        var projectNames: [String: String] = [:]
+        var projectPaths: [String: String] = [:]
+        for project in parsedProjects {
+            projectNames[project.id] = project.name
+            projectPaths[project.id] = project.path
+            projectNames[project.path] = project.name
+            projectPaths[project.path] = project.path
+        }
+        for (index, value) in allConversations.enumerated() {
+            guard let object = value.objectValue,
+                  let id = object.stringValue("id", "conversationId", "conversation_id")
+            else { continue }
+            let projectValue = object["project"]
+            let projectObject = projectValue?.objectValue
+            let projectID = object.stringValue("project", "projectId", "project_id")
+                ?? projectObject?.stringValue("id", "cwd")
+                ?? projectValue?.stringValue
+            let projectName = object.stringValue("projectName", "project_name")
+                ?? projectObject?.stringValue("name", "title")
+                ?? projectID.flatMap { projectNames[$0] }
+            let projectPath = projectObject?.stringValue("cwd", "path")
+                ?? projectID.flatMap { projectPaths[$0] }
+            if let projectID, let projectName { projectNames[projectID] = projectName }
+            if let projectID, let projectPath { projectPaths[projectID] = projectPath }
+            let lastMessage = object["lastMessage"]?.objectValue ?? object["last_message"]?.objectValue
+            let preview = object.stringValue("preview", "subtitle", "lastText", "last_text")
+                ?? lastMessage?.stringValue("text", "content")
+                ?? ""
+            parsedConversations.append(NativeConversation(
+                id: id,
+                title: object.stringValue("title", "name") ?? "未命名会话",
+                preview: preview,
+                projectName: projectName ?? "未归属项目",
+                projectPath: projectPath,
+                updatedAt: dateValue(object["updatedAt"] ?? object["updated_at"] ?? object["lastActivityAt"] ?? object["last_activity_at"] ?? object["createdAt"] ?? object["created_at"]) ?? Date.distantPast,
+                running: object.boolValue("running", "isRunning") ?? false,
+                waiting: object.boolValue("waiting", "pending", "needsInput", "needs_input") ?? false,
+                unread: object.boolValue("unread", "hasUnread") ?? false,
+                archived: object.boolValue("archived", "isArchived") ?? false
+            ))
+        }
+        conversations = parsedConversations
+        projects = parsedProjects
     }
 
     private func runLoading(_ operation: @escaping @MainActor () async throws -> Void) async {
@@ -451,29 +892,6 @@ public final class MobileSessionController: ObservableObject {
             errorMessage = message(for: error)
         }
         isLoading = false
-    }
-
-    private func startPolling() {
-        guard pollTask == nil else { return }
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                do {
-                    _ = try await self.perform("poll")
-                } catch {
-                    if !Task.isCancelled {
-                        self.errorMessage = self.message(for: error)
-                    }
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-        }
-    }
-
-    private func stopPolling() {
-        pollTask?.cancel()
-        pollTask = nil
     }
 
     private func message(for error: Error) -> String {
@@ -494,25 +912,8 @@ public final class MobileSessionController: ObservableObject {
     }
 }
 
-private actor MobileCoreCommandExecutor {
-    private let bridge: MobileCoreBridge
-
-    init(bridge: MobileCoreBridge) {
-        self.bridge = bridge
-    }
-
-    func command(
-        _ action: String,
-        parameters: [String: MobileJSONValue]
-    ) throws -> MobileCoreCommandResponse {
-        try bridge.command(action, parameters: parameters)
-    }
-}
-
 private extension Optional where Wrapped == MobileJSONValue {
-    func stringValue(key: String) -> String? {
-        stringValue(path: [key])
-    }
+    func stringValue(key: String) -> String? { stringValue(path: [key]) }
 
     func stringValue(path: [String]) -> String? {
         guard case .some(.object(let object)) = self else { return nil }
@@ -527,358 +928,51 @@ private extension Optional where Wrapped == MobileJSONValue {
 }
 
 private extension MobileJSONValue {
-    var prettyDescription: String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(self),
-              let string = String(data: data, encoding: .utf8)
-        else { return "" }
-        return string
+    var objectValue: [String: MobileJSONValue]? {
+        guard case .object(let value) = self else { return nil }
+        return value
+    }
+
+    var arrayValue: [MobileJSONValue]? {
+        guard case .array(let value) = self else { return nil }
+        return value
+    }
+
+    var stringValue: String? {
+        guard case .string(let value) = self else { return nil }
+        return value
+    }
+
+}
+
+private extension Dictionary where Key == String, Value == MobileJSONValue {
+    func stringValue(_ keys: String...) -> String? {
+        for key in keys {
+            if let value = self[key]?.stringValue, !value.isEmpty { return value }
+        }
+        return nil
+    }
+
+    func boolValue(_ keys: String...) -> Bool? {
+        for key in keys {
+            if case .bool(let value) = self[key] { return value }
+            if case .string(let value) = self[key] {
+                if value.lowercased() == "true" { return true }
+                if value.lowercased() == "false" { return false }
+            }
+        }
+        return nil
     }
 }
 
-@MainActor
-public struct FastVibeRootView: View {
-    @StateObject private var session: MobileSessionController
-    @Environment(\.openURL) private var openURL
-
-    public init(session: MobileSessionController = MobileSessionController()) {
-        _session = StateObject(wrappedValue: session)
-    }
-
-    public var body: some View {
-        NavigationView {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        AccountSection(session: session)
-                        DeviceSection(session: session)
-                        TranscriptSection(session: session)
-                    }
-                    .padding()
-                }
-                .onReceive(session.$state) { _ in
-                    guard let id = session.messages.last?.id else { return }
-                    withAnimation { proxy.scrollTo(id, anchor: .bottom) }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                if session.isConnected {
-                    Composer(session: session)
-                }
-            }
-            .navigationTitle("FastVibe")
-            .toolbar {
-                ToolbarItem {
-                    if session.isConnected {
-                        Button("断开") { Task { await session.disconnect() } }
-                    }
-                }
-            }
-        }
-        .onReceive(session.$loginURL) { url in
-            guard let url else { return }
-            openURL(url)
-            session.clearLoginURL()
-        }
-        .alert(
-            "FastVibe",
-            isPresented: Binding(
-                get: { session.errorMessage != nil },
-                set: { if !$0 { session.clearError() } }
-            ),
-            presenting: session.errorMessage
-        ) { _ in
-            Button("好") { session.clearError() }
-        } message: { message in
-            Text(message)
-        }
-    }
-}
-
-private struct AccountSection: View {
-    @ObservedObject var session: MobileSessionController
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("远程工作区").font(.title2.bold())
-                    Text(session.isAuthenticated ? (session.accountLabel ?? "已登录") : "登录 FastVibe 账号以查看电脑")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if session.isLoading { ProgressView() }
-            }
-            if !session.isAuthenticated {
-                Button {
-                    Task { await session.beginLogin() }
-                } label: {
-                    Label("登录账号", systemImage: "person.crop.circle.badge.plus")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            if session.state.connection != "disconnected" {
-                Label("连接状态：\(session.statusText)", systemImage: "antenna.radiowaves.left.and.right")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-    }
-}
-
-private struct DeviceSection: View {
-    @ObservedObject var session: MobileSessionController
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("电脑").font(.headline)
-                Spacer()
-                if session.isAuthenticated {
-                    Button("刷新") { Task { await session.refreshDevices() } }
-                        .font(.subheadline)
-                }
-            }
-            if session.isAuthenticated {
-                TextField("会话 ID", text: $session.conversationID)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                if session.devices.isEmpty {
-                    Text("没有可用的电脑。")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    LazyVStack(spacing: 8) {
-                        ForEach(session.devices) { device in
-                            Button {
-                                Task { await session.connect(to: device) }
-                            } label: {
-                                DeviceRow(device: device, selected: session.selectedDevice?.id == device.id)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-        }
-        .padding()
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-    }
-}
-
-private struct DeviceRow: View {
-    let device: MobileDevice
-    let selected: Bool
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: device.platform.lowercased().contains("mac") ? "desktopcomputer" : "laptopcomputer")
-                .font(.title3)
-                .foregroundColor(selected ? Color.accentColor : Color.secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(device.name).font(.body.weight(.medium))
-                Text(device.online ? "在线 · \(device.platform)" : device.platform)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Image(systemName: selected ? "checkmark.circle.fill" : "chevron.right")
-                .foregroundColor(selected ? Color.accentColor : Color.gray)
-        }
-        .padding(12)
-        .background(selected ? Color.accentColor.opacity(0.1) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-private struct TranscriptSection: View {
-    @ObservedObject var session: MobileSessionController
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("会话").font(.headline)
-                Spacer()
-                if session.state.running { ProgressView().controlSize(.small) }
-            }
-            if session.messages.isEmpty {
-                Text(session.isConnected ? "等待会话快照或回复。" : "连接电脑后，消息会显示在这里。")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 24)
-            } else {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(session.messages) { message in
-                        MessageView(message: message)
-                            .id(message.id)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct MessageView: View {
-    let message: MobileMessage
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(label)
-                .font(.caption.bold())
-                .foregroundColor(message.role == .user ? Color.accentColor : Color.secondary)
-            if let parts = message.parts, !parts.isEmpty {
-                ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
-                    MessagePartView(part: part, tools: message.tools)
-                }
-            } else if !message.text.isEmpty {
-                Text(message.text)
-                    .textSelection(.enabled)
-            }
-            if let error = message.error, !error.isEmpty {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(message.role == .user ? Color.accentColor.opacity(0.1) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var label: String {
-        switch message.role {
-        case .user: return "你"
-        case .tool: return "工具"
-        case .system: return "系统"
-        case .assistant: return "FastVibe"
-        }
-    }
-}
-
-private struct MessagePartView: View {
-    let part: MobileMessagePart
-    let tools: [MobileToolCall]
-
-    var body: some View {
-        switch part {
-        case .text(let text):
-            Text(text).textSelection(.enabled)
-        case .thinking(let text, _, _):
-            VStack(alignment: .leading, spacing: 4) {
-                Label("思考", systemImage: "lightbulb")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                Text(text)
-                    .font(.system(.subheadline, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        case .tool(let toolID):
-            if let tool = tools.first(where: { $0.id == toolID }) {
-                ToolCallView(tool: tool)
-            } else {
-                Label("工具 \(toolID)", systemImage: "hammer")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        case .model(let from, let to):
-            HStack(spacing: 8) {
-                Image(systemName: "cpu")
-                Text(from.map { "\($0.provider)/\($0.model) → " } ?? "模型 → ")
-                Text("\(to.provider)/\(to.model)").bold()
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.vertical, 4)
-        case .compact(let text, let info):
-            VStack(alignment: .leading, spacing: 4) {
-                Label("上下文压缩", systemImage: "arrow.down.right.and.arrow.up.left")
-                    .font(.caption.bold())
-                Text(text).font(.caption).textSelection(.enabled)
-                if let info {
-                    Text(info.status + (info.reason.map { " · \($0)" } ?? ""))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(8)
-            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-        }
-    }
-}
-
-private struct ToolCallView: View {
-    let tool: MobileToolCall
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Label(tool.name, systemImage: "hammer")
-                    .font(.subheadline.bold())
-                Spacer()
-                Text(tool.status)
-                    .font(.caption)
-                    .foregroundStyle(tool.status == "error" ? .red : .secondary)
-            }
-            ToolValue(title: "参数", value: tool.args)
-            if let result = tool.result, !result.isEmpty {
-                Text("结果")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                Text(result)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            ToolValue(title: "详情", value: tool.details)
-            ToolValue(title: "省略", value: tool.omitted)
-        }
-        .padding(10)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
-    }
-}
-
-private struct ToolValue: View {
-    let title: String
-    let value: MobileJSONValue?
-
-    var body: some View {
-        if let value {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.caption.bold()).foregroundStyle(.secondary)
-                Text(value.prettyDescription)
-                    .font(.system(.caption2, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-}
-
-private struct Composer: View {
-    @ObservedObject var session: MobileSessionController
-    @State private var draft = ""
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("发送消息", text: $draft)
-                .textFieldStyle(.roundedBorder)
-            Button {
-                let text = draft
-                draft = ""
-                Task { await session.sendPrompt(text) }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
-            }
-            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session.isLoading)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.bar)
+private func dateValue(_ value: MobileJSONValue?) -> Date? {
+    switch value {
+    case .number(let milliseconds):
+        return Date(timeIntervalSince1970: milliseconds / 1000)
+    case .string(let string):
+        if let milliseconds = Double(string) { return Date(timeIntervalSince1970: milliseconds / 1000) }
+        return ISO8601DateFormatter().date(from: string)
+    default:
+        return nil
     }
 }

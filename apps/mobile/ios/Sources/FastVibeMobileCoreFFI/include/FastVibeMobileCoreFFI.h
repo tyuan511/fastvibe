@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-/* SwiftPM can test without an artifact; the iOS app resolves these symbols from Rust. */
+/* iOS links Rust directly; host SwiftPM tests can run without the iOS artifact. */
 void *fastvibe_mobile_core_bridge_create(void);
 void fastvibe_mobile_core_bridge_destroy(void *handle);
 char *fastvibe_mobile_core_bridge_version(void);
