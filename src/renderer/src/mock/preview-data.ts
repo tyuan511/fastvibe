@@ -721,8 +721,9 @@ export const PLAIN_ERROR_MESSAGES: ChatMessage[] = [
  *
  * The first turn is the shape that broke: a GitHub URL followed straight by Chinese, which
  * markdown autolinked into one link over the rest of the sentence (GFM ends a bare URL at
- * whitespace, and Chinese has none). The second is a paste past the fold threshold, so the
- * 展开 / 收起 control and its capped body can be read next to a prompt that must not fold.
+ * whitespace, and Chinese has none). It stays under 500 characters but folds whenever it
+ * wraps past two lines. The second is a long paste for checking the expanded height cap
+ * and internal scrollbar; the final brief prompt stays fully visible.
  */
 const URL_PROMPT =
   "探索一下使用rust+gpui重写整个应用的可能性，使用自研agent参考 https://github.com/can1357/oh-my-pi的实现，ui层使用gpui实现高性能绘制，界面对齐现在electron版本，给我一个可行性分析";
@@ -769,9 +770,9 @@ export const PROMPT_MESSAGES: ChatMessage[] = [
   {
     id: "msg-prompt-a2",
     role: "assistant",
-    text: "这一条超过 500 字，所以收成折叠块。",
+    text: "这一条超过两行，展开后超出阅读区一半的部分可以内部滚动。",
     tools: [],
-    parts: [{ kind: "text", text: "这一条超过 500 字，所以收成折叠块。" }],
+    parts: [{ kind: "text", text: "这一条超过两行，展开后超出阅读区一半的部分可以内部滚动。" }],
     createdAt: NOW - 3 * MINUTE,
     completedAt: NOW - 3 * MINUTE,
   },

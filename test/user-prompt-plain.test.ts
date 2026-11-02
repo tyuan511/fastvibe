@@ -13,9 +13,9 @@ import { readFileSync } from "node:fs";
  * and clicking it asked for a host that does not exist. Replies keep markdown; prompts
  * do not go near it, so nothing here is a transformer away from the bug coming back.
  *
- * The fold is pinned in the same pass because it is the other half of the same row:
- * folding is for a paste, not for a sentence, and the length rule lives with the
- * composer's own paste threshold (`lib/attachments.ts`).
+ * The fold is pinned in the same pass because it is part of the same row: prompts over two
+ * rendered lines stay compact, while the expanded body shares the transcript's height cap and
+ * scrolls internally instead of covering the reply.
  */
 
 const SOURCE = readFileSync(
@@ -43,13 +43,12 @@ test("the prompt bubble renders text, not markdown", () => {
   assert.match(bubble, /\{text\}/, "the prompt is handed over as a single text node");
 });
 
-test("only a long prompt folds, and the length rule is shared with the composer", () => {
+test("a prompt over two rendered lines folds and the expanded body stays scrollable", () => {
   const bubble = promptBubble();
 
-  assert.match(bubble, /shouldFoldPastedText\(text\)/, "the fold is decided by the shared 500-character rule");
-  assert.match(bubble, /foldable && "line-clamp-2"/, "a short prompt is never clamped");
-  assert.match(bubble, /foldable && overflows \? toggle : null/, "and never gets an 展开 control");
-  // The clamp must not be left running on a bubble that cannot fold: the measurement
-  // that decides 展开 is skipped for those, so a stale clamp would hide text forever.
-  assert.match(bubble, /if \(!foldable\) \{\s*setOverflows\(false\);\s*return;/);
+  assert.match(bubble, /: "line-clamp-2"/, "every prompt is measured against the two-line cap");
+  assert.match(bubble, /PROCESS_BODY_CAP/, "expanded prompts use the shared transcript height cap");
+  assert.match(bubble, /const observer = new ResizeObserver\(measure\)/, "the cap is remeasured when the layout changes");
+  assert.match(bubble, /overflows \? toggle : null/, "the expand control follows actual rendered overflow");
+  assert.match(bubble, /expanded \? cn\(PROCESS_BODY_CAP, "px-3 py-2"\)/);
 });

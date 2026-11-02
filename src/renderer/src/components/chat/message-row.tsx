@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDuration } from "@/lib/time";
 import { formatMessageTime } from "@/lib/message-time";
-import { shouldFoldPastedText, stripAttachmentBlock } from "@/lib/attachments";
+import { stripAttachmentBlock } from "@/lib/attachments";
 import { activeLanguage, i18n } from "@/lib/i18n";
 import { localeTag } from "@/lib/language";
 import { groupParts, mergeAssistantRun, resolveParts, type RenderPart } from "@/lib/group-parts";
@@ -283,13 +283,13 @@ function amendable(message: ChatMessage): boolean {
  * tail of the prompt. A prompt that really wants markup is rare; a prompt that pastes a
  * URL next to prose is not.
  *
- * A long prompt (see `shouldFoldPastedText`) clamps to two lines so a sticky turn header
- * stays compact; a short one is shown whole. The expand control only appears when the
- * text is long enough to fold *and* actually overflows the cap. Expanding still caps the
- * bubble: a pasted prompt would otherwise grow to the whole viewport and pin itself over
- * the reply. The rest scrolls inside. The scrollport fills the bubble so its bar sits on
- * the outer edge, with the padding reapplied around the text. Collapse is its own
- * full-width row under that, not a label sitting at the end of the last line.
+ * A prompt longer than two rendered lines clamps to two lines so a sticky turn header stays
+ * compact; shorter prompts are shown whole. The expand control only appears when the text
+ * actually overflows that cap. Expanding still caps the bubble: a long prompt would otherwise
+ * grow to the whole viewport and pin itself over the reply. The rest scrolls inside. The
+ * scrollport fills the bubble so its bar sits on the outer edge, with the padding reapplied
+ * around the text. Collapse is its own full-width row under that, not a label sitting at the
+ * end of the last line.
  */
 function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   const { t } = useTranslation("chat");
@@ -298,7 +298,6 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   // block never reaches the bubble — the engine's copy keeps it, and stripping it
   // here is what makes the live row and a re-read transcript agree.
   const text = stripAttachmentBlock(raw);
-  const foldable = shouldFoldPastedText(text);
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -308,10 +307,6 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   }, [text]);
 
   useLayoutEffect(() => {
-    if (!foldable) {
-      setOverflows(false);
-      return;
-    }
     const node = bodyRef.current;
     if (!node) return;
 
@@ -329,7 +324,7 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [text, expanded, foldable]);
+  }, [text, expanded]);
 
   const toggle = (
     <button
@@ -355,7 +350,7 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
       data-process-body={expanded ? "" : undefined}
       className={cn(
         "whitespace-pre-wrap wrap-anywhere",
-        expanded ? cn(PROCESS_BODY_CAP, "px-3 py-2") : foldable && "line-clamp-2",
+        expanded ? cn(PROCESS_BODY_CAP, "px-3 py-2") : "line-clamp-2",
       )}
     >
       {text}
@@ -375,7 +370,7 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
         ) : (
           <>
             {body}
-            {foldable && overflows ? toggle : null}
+            {overflows ? toggle : null}
           </>
         )}
       </BubbleContent>

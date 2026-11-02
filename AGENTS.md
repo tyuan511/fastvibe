@@ -1134,9 +1134,9 @@ No CSP change is needed.
   画 markdown 的提示词不常见。
 - **换行照原样保留**（`whitespace-pre-wrap`），长 URL/路径仍然断得开（`wrap-anywhere`，
   见「报错行」那一节为什么 `break-words` 不够）。
-- **折叠看字数，不看渲染出来的行数。** `shouldFoldPastedText`（`lib/attachments.ts`）复用
-  输入框那条 500 字的线：超过它才 `line-clamp-2` 并给出 展开/收起。旧规则是「超过两行就折」，
-  于是 120 字的一句话也要点一下才读完。
+- **折叠按实际显示行数判断。** 主聊天与侧边 Agent 聊天共用 `UserPromptBubble`：默认最多两行，
+  实际溢出才给出 展开/收起；宽度变化由 `ResizeObserver` 重新测量。展开后正文复用 `PROCESS_BODY_CAP`，
+  最高为当前聊天阅读区的一半，超出内部滚动。输入框粘贴转附件仍用 500 字阈值，与转写折叠独立。
 - **手机端同一判断**：`apps/mobile/screens/transcript.dart` 的用户气泡用 `Text`
   而不是 `MarkdownView`（`native Markdown renderer` 的自动链接犯同样的错）。手机没有折叠，所以只改这一处。
 - 预览：`mock.html?prompt=1`（一条带 URL 的短提示 + 一条 1189 字的粘贴）。验证：
