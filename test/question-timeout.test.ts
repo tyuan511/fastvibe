@@ -122,7 +122,7 @@ test("answered and manually cancelled questions clear their timers", async (t) =
   assert.equal((await cancelled).details.questions[0].answer, null);
   t.mock.timers.tick(WAIT_MS);
   assert.equal(f.host.pendingUi.size, 0);
-  assert.deepEqual(f.dismissals(), []);
+  assert.deepEqual(f.dismissals().map((event) => event.id), f.requests().map((event) => event.id));
 });
 
 test("a late reply to an expired question cannot answer the next question", async (t) => {
@@ -158,7 +158,7 @@ test("fallback selection and custom input share one deadline and preserve earlie
   assert.deepEqual(result.details.questions.map((item: any) => item.answer), ["Purple", null, null]);
   assert.equal(result.details.questions[0].source, "custom");
   assert.equal(f.requests().length, 3, "expiry must not open another dialog");
-  assert.equal(f.dismissals().length, 1);
+  assert.equal(f.dismissals().length, 3);
   assert.equal(f.host.pendingUi.size, 0);
 });
 

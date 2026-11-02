@@ -27,7 +27,7 @@
 
 macOS 打开 DMG 后，将 FastVibe 拖入「应用程序」；Windows 运行安装程序；Linux 安装 DEB，或为 AppImage 添加可执行权限后启动。桌面端会检查更新，由你决定何时下载并重启安装。
 
-手机端可从 [Android 发布页](https://github.com/tyuan511/fastvibe/releases?q=app-v&expanded=true) 下载 arm64 APK。iOS 可通过 [Flutter 项目](apps/mobile_flutter/README.md)自行构建。
+[Android 客户端](apps/mobile/android) 和 [iOS 客户端](apps/mobile/ios) 使用原生 Compose/SwiftUI，逻辑由共享 Rust 核心提供。
 
 ## 开始使用
 
@@ -47,7 +47,7 @@ macOS 打开 DMG 后，将 FastVibe 拖入「应用程序」；Windows 运行安
 - **接入自己的模型与工具。** 配置供应商及各模型的接口协议，连接 MCP 服务器，添加技能或 pi 扩展，查看跨对话的 Token 用量和费用估算。
 - **浏览器与电脑操控。** 让智能体操作内嵌浏览器，或在 macOS、Windows 上启用电脑操控；可选用 Jev 决策引擎处理浏览器、电脑和批量决策。
 - **可选长期记忆。** 将已结束对话的经验整理成本地 Markdown，供后续任务读取。默认关闭，可在设置中检查或清除。
-- **跨设备继续工作。** 用 Flutter 手机客户端连接电脑，或从桌面端通过 SSH 连接无图形界面的 Linux Agent。支持中英文界面、多主题、界面缩放和自定义快捷键。
+- **跨设备继续工作。** 用原生手机客户端连接电脑，或从桌面端通过 SSH 连接无图形界面的 Linux Agent。支持中英文界面、多主题、界面缩放和自定义快捷键。
 
 ## 用手机继续工作
 
@@ -93,7 +93,8 @@ pnpm dev
 | `pnpm build` | 将桌面端构建到 `out/` |
 | `pnpm dist:mac` / `pnpm dist:win` / `pnpm dist:linux` | 打包桌面端安装程序 |
 | `pnpm sync:models` | 更新 models.dev 快照 |
-| `pnpm flutter:analyze` / `pnpm flutter:test` | 检查 Flutter 手机客户端 |
+| `pnpm mobile:core:test` | 测试共享 Rust 移动端核心 |
+| `pnpm mobile:android` / `pnpm mobile:ios` | 构建或测试原生移动端 |
 
 在浏览器中预览界面：
 
@@ -111,7 +112,7 @@ src/preload/          Electron 桥接
 src/shared/           共享 API、类型和 App Protocol
 src/agent/            无图形界面的 Linux Agent
 resources/            内置扩展、技能、图标和模型元数据
-apps/mobile_flutter/  iOS / Android 手机客户端
+apps/mobile/         原生 iOS / Android 客户端与共享 Rust 核心
 ```
 
-进一步了解[架构与仓库约定](AGENTS.md)、[多文件夹项目](docs/multi-folder-projects.md)、[Agent runtime 发布](docs/agent-runtime.md)和 [Flutter 开发指南](apps/mobile_flutter/README.md)。遇到问题可在 [GitHub Issues](https://github.com/tyuan511/fastvibe/issues) 中附上应用版本、操作系统和复现步骤。
+进一步了解[架构与仓库约定](AGENTS.md)、[多文件夹项目](docs/multi-folder-projects.md)、[Agent runtime 发布](docs/agent-runtime.md)和 [原生移动端](apps/mobile/README.md)。遇到问题可在 [GitHub Issues](https://github.com/tyuan511/fastvibe/issues) 中附上应用版本、操作系统和复现步骤。

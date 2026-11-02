@@ -33,92 +33,92 @@ const files: GitStatus["files"] = [
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/AGENTS.md",
+    "path": "apps/mobile/AGENTS.md",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/chat/composer.dart",
+    "path": "apps/mobile/lib/chat/composer.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/chat/file_sheet.dart",
+    "path": "apps/mobile/lib/chat/file_sheet.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/chat/file_transfer.dart",
+    "path": "apps/mobile/lib/chat/file_transfer.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/chat/message.dart",
+    "path": "apps/mobile/lib/chat/message.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/i18n/en.dart",
+    "path": "apps/mobile/lib/i18n/en.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/i18n/zh.dart",
+    "path": "apps/mobile/lib/i18n/zh.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/main.dart",
+    "path": "apps/mobile/lib/main.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/protocol/client.dart",
+    "path": "apps/mobile/lib/protocol/client.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/protocol/diagnostics.dart",
+    "path": "apps/mobile/lib/protocol/diagnostics.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/screens/chat.dart",
+    "path": "apps/mobile/lib/screens/chat.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/screens/settings.dart",
+    "path": "apps/mobile/lib/screens/settings.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/screens/transcript.dart",
+    "path": "apps/mobile/lib/screens/transcript.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/session/connection.dart",
+    "path": "apps/mobile/lib/session/connection.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/test/output_files_test.dart",
+    "path": "apps/mobile/test/output_files_test.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/test/screens_test.dart",
+    "path": "apps/mobile/test/screens_test.dart",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/tool/i18n/en.json",
+    "path": "apps/mobile/tool/i18n/en.json",
     "index": " ",
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/tool/i18n/zh.json",
+    "path": "apps/mobile/tool/i18n/zh.json",
     "index": " ",
     "worktree": "M"
   },
@@ -478,32 +478,32 @@ const files: GitStatus["files"] = [
     "worktree": "M"
   },
   {
-    "path": "apps/mobile_flutter/lib/chat/download_maintenance.dart",
+    "path": "apps/mobile/lib/chat/download_maintenance.dart",
     "index": "?",
     "worktree": "?"
   },
   {
-    "path": "apps/mobile_flutter/lib/chat/transcript_cache.dart",
+    "path": "apps/mobile/lib/chat/transcript_cache.dart",
     "index": "?",
     "worktree": "?"
   },
   {
-    "path": "apps/mobile_flutter/lib/screens/connection_diagnostics.dart",
+    "path": "apps/mobile/lib/screens/connection_diagnostics.dart",
     "index": "?",
     "worktree": "?"
   },
   {
-    "path": "apps/mobile_flutter/test/chat_loading_test.dart",
+    "path": "apps/mobile/test/chat_loading_test.dart",
     "index": "?",
     "worktree": "?"
   },
   {
-    "path": "apps/mobile_flutter/test/diagnostics_test.dart",
+    "path": "apps/mobile/test/diagnostics_test.dart",
     "index": "?",
     "worktree": "?"
   },
   {
-    "path": "apps/mobile_flutter/test/transcript_cache_test.dart",
+    "path": "apps/mobile/test/transcript_cache_test.dart",
     "index": "?",
     "worktree": "?"
   },

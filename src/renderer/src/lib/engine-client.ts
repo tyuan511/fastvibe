@@ -28,6 +28,10 @@ function activeId(): string | undefined {
 }
 
 export const engine = {
+  getSnapshot: (conversationId = activeId(), historyLimit?: number) => {
+    if (!conversationId) return Promise.reject(new Error("No conversation selected"));
+    return window.fastvibe.engine.getSnapshot(conversationId, undefined, historyLimit);
+  },
   getMessagesPage: (beforeEntryId: string, conversationId = activeId(), turnLimit?: number) => {
     if (!conversationId) return Promise.reject(new Error("No conversation selected"));
     return window.fastvibe.engine.getMessagesPage({ conversationId, beforeEntryId, turnLimit });

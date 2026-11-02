@@ -30,7 +30,15 @@ resources/models-dev/**
 # catches the one time somebody exports a .p12 into the repo to "just try it".
 *.p12
 *.p8
-*.mobileprovision
+# Native mobile generated files
+/rust/target/
+apps/mobile/android/.gradle/
+apps/mobile/android/local.properties
+apps/mobile/android/**/build/
+apps/mobile/ios/DerivedData/
+apps/mobile/ios/Pods/
+apps/mobile/ios/**/xcuserdata/
+apps/mobile/ios/.build/
 
 # Fetched at build time by scripts/fetch-cua-driver.mjs, pinned and checksummed there.
 # 63 MB of third-party executable belongs in the release artifact, not in history.
@@ -47,3 +55,4 @@ resources/officecli/manifest.json
 # never in history. Ignore the whole directory: it is a scratch workspace for a
 # deliverable, not source the app builds.
 promo/
+.zcode

@@ -10,6 +10,7 @@ import {
   ImportIcon,
   InformationCircleIcon,
   KeyboardIcon,
+  LookBottomIcon,
   Plug01Icon,
   Router01Icon,
   Settings02Icon,
@@ -46,6 +47,7 @@ export type SectionId =
   | "computer"
   | "proxy"
   | "browser"
+  | "vivi"
   | "about";
 
 export type SettingsGroupId = "preferences" | "workspace" | "integrations" | "system" | "about";
@@ -67,6 +69,7 @@ export const SETTINGS_SECTIONS: Array<{
       { id: "general", icon: <HugeiconsIcon strokeWidth={2} icon={Settings02Icon} /> },
       { id: "personalization", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
       { id: "shortcuts", icon: <HugeiconsIcon strokeWidth={2} icon={KeyboardIcon} /> },
+      { id: "vivi", icon: <HugeiconsIcon strokeWidth={2} icon={LookBottomIcon} /> },
     ],
   },
   {

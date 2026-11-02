@@ -233,7 +233,7 @@ or signed out → signaling closes and every phone is dropped.
   on this network never needs. A STUN server that never answers still releases them after
   the same bounded wait. After the channel opens a `hangup` only frees the phone's signaling
   slot — it is ignored.
-- **Frames are fragmented** (`rtc/frames.ts`; the phone's copy is `lib/protocol/rtc_frames.dart`
+- **Frames are fragmented** (`rtc/frames.ts`; the phone's copy is `apps/mobile/core/src/lib.rs`
   and must stay byte-identical): one header byte (`LAST`, `BINARY`, `PING`, `PONG`, `CLOSE`),
   at most 16 KiB per message, control messages may fall between fragments. `ChannelSocket`
   (`rtc/channel-socket.ts`) dresses a data channel as the WebSocket-shaped `RemoteSocket` the
@@ -261,8 +261,8 @@ or signed out → signaling closes and every phone is dropped.
   so it keeps sending 16 KiB; receiving the desktop's larger fragments needs no change.
   64 KiB is not a step toward the 256 KiB both stacks negotiate: 128 was measured against 64
   on loopback (12 MB, real peers) and made no difference.
-- **The phone's side** (`apps/mobile_flutter`): the account (`lib/account/account.dart`: browser PKCE
-  sign-in through `flutter_web_auth_2`, `fastvibe://oauth/callback`, token in the Keychain/Keystore,
+- **The phone's side** (`apps/mobile`): the account (`lib/account/account.dart`: browser PKCE
+  sign-in through `native account bridge`, `fastvibe://oauth/callback`, token in the Keychain/Keystore,
   only ever sent to the site that issued it) and the account's computers (`official_devices.dart`),
   which live in the same saved list as manual ones with `kind: official` and origin
   `fastvibe-official://<device id>`. `RtcDialer` (`lib/protocol/rtc_connection.dart`) does the
@@ -399,12 +399,12 @@ or signed out → signaling closes and every phone is dropped.
 - **监听同时收 IPv4 和 IPv6，广播只带一个地址族。** 监听是 `::` 双栈，但记录只发一族：
   IPv4 只发 A（`disableIPv6: true`），IPv6 只发 AAAA。库没有 `disableIPv4`，所以在异步探测结束前包装
   `service.records()` 过滤 A；注册、应答、重发和撤销都使用同一套记录。`nsd_android` 2.2.0 只把
-  `NsdServiceInfo.host` 的一个地址交给 Dart，即便指定 `IpLookupType.any`，已有地址时也不会再查询；如果这个
+  `NsdServiceInfo.host` 的一个地址交给 Rust core，即便指定 `IpLookupType.any`，已有地址时也不会再查询；如果这个
   地址是 `fe80::`，手机过滤后连行都不显示——所以两族都发是不安全的。`syncDiscovery` 在这台电脑有 IPv4
   时选 IPv4，只有 IPv6 时才选 IPv6；同端口换族也必须重新广播。
-- **手机端用 `nsd` 原生浏览**（不是纯 Dart 的 `multicast_dns`：iOS 14+ 的原始多播需要苹果审批的 entitlement）。
+- **手机端用 `nsd` 原生浏览**（不是纯 Rust core 的 `multicast_dns`：iOS 14+ 的原始多播需要苹果审批的 entitlement）。
   iOS 要 `NSBonjourServices`，Android 要 `CHANGE_WIFI_MULTICAST_STATE`。发现不可用（拒绝本地网络、
-  网络过滤多播）时列表为空，扫码和手动输入照旧。原生手机客户端由 Flutter 实现。
+  网络过滤多播）时列表为空，扫码和手动输入照旧。原生手机客户端由 SwiftUI/Compose 实现，业务逻辑由 Rust core 统一提供。
 
 ### 手机读取输出文件（`workspace:read-file`）
 
@@ -1082,8 +1082,8 @@ on its own, so `lib/markdown-html.ts` is what decides what survives.
   recognised only by the character after its name, so `<https://example.com>` (an autolink) and
   `a < b` are not elements. An unterminated tag costs one big block, exactly the trade an
   unterminated fence already makes.
-- **Not affected:** the phone renders markdown with its own parser (`gpt_markdown` in
-  `apps/mobile_flutter`), so what a reply's HTML looks like there is that app's decision. No CSP
+- **Not affected:** the phone renders markdown with its own parser (`native Markdown renderer` in
+  `apps/mobile`), so what a reply's HTML looks like there is that app's decision. No CSP
   change either — nothing here is a script or an `innerHTML`; the elements are React's own, and
   a remote image from raw markup loads for the same reason a markdown image already does (React 19
   hoists a preload link for every `<img>`, raw or not).
@@ -1137,8 +1137,8 @@ No CSP change is needed.
 - **折叠看字数，不看渲染出来的行数。** `shouldFoldPastedText`（`lib/attachments.ts`）复用
   输入框那条 500 字的线：超过它才 `line-clamp-2` 并给出 展开/收起。旧规则是「超过两行就折」，
   于是 120 字的一句话也要点一下才读完。
-- **手机端同一判断**：`apps/mobile_flutter/lib/screens/transcript.dart` 的用户气泡用 `Text`
-  而不是 `MarkdownView`（`gpt_markdown` 的自动链接犯同样的错）。手机没有折叠，所以只改这一处。
+- **手机端同一判断**：`apps/mobile/screens/transcript.dart` 的用户气泡用 `Text`
+  而不是 `MarkdownView`（`native Markdown renderer` 的自动链接犯同样的错）。手机没有折叠，所以只改这一处。
 - 预览：`mock.html?prompt=1`（一条带 URL 的短提示 + 一条 1189 字的粘贴）。验证：
   `test/user-prompt-plain.test.ts`、`test/attachments.test.ts`。
 
@@ -1801,7 +1801,7 @@ engine is gone because the SDK never read them.
   **`FASTVIBE_SUGGEST_MODE=cache`**（同一前缀 + 追加一轮，`buildCacheContext`，必须是对话自己的模型）保留作实验：关思考后它没有比
   精简的新请求更快（Qwen 0.9–1.2s 对 0.3–0.9s），但它看得到整段对话，建议更贴题。默认仍是 `fresh`（精简的新请求）。
   每次请求在 `logs/main.log` 里有一行 `[suggest] mode=… model=… ms=… in=… cacheRead=… -> shown|stop=length|…`。
-- 预览：`mock.html?suggest=1`。手机端（Flutter）还不认 `reply_suggestion`，会忽略它。
+- 预览：`mock.html?suggest=1`。原生移动端还不认 `reply_suggestion`，会忽略它。
 
 ## 旁路请求与 pi 补上的「关闭思考」参数（`engine/thinking-off.ts`）
 
@@ -2097,114 +2097,20 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   tool touches it, because the OS only remembers its own folder dialog when the access
   came from there (`mac-folder-consent.ts`). Do not re-add a gate here without the
   user asking for one.
-- **Subagent** — `subagent/index.ts` registers a `subagent` tool that delegates a
-  self-contained task to a role defined by a markdown file under
-  `resources/extensions/subagent/agents/*.md`: `explorer`, `planner`, `worker`,
-  `reviewer` (user roles under `getAgentDir()/agents` are merged in). Because the
-  SDK omits custom tools from the system prompt unless they declare it, the tool sets
-  `promptSnippet` + `promptGuidelines` and lists the discovered roles in its
-  `description` — that is what makes the main agent aware it can delegate. Modes are
-  single / parallel (≤8) / chain (`{previous}`), and each spawned run gets an id of
-  `${toolCallId}:${index}`.
-  - **In-process runner, no child process.** The app embeds the SDK and excludes
-    `pi-coding-agent/dist/bundle` from the archive, and a second process would not
-    have the in-memory provider credentials either. So delegation runs on the
-    host's own engine: Main injects `runSubagent` on the extension UI context
-    (`FastVibeExtensionUIContext`, next to the `questions` bridge) and the tool
-    requires it — there is **no `spawn("pi")` fallback** (`runSingleAgent` fails
-    fast when the bridge is absent). `#runSubagent` creates a throwaway
-    `createAgentSession` (`SessionManager.inMemory`), with `noExtensions: true`
-    plus `folder-consent` as its only extension, appends the role's system
-    prompt through the resource loader, restricts tools to the agent's list, and
-    binds the parent conversation's UI context.
-  - **Model selection.** A delegated run uses the model its parent chat is on: it is
-    a tool call inside that conversation, and a run on a different gateway than the
-    one the user just proved works fails on its own — five parallel `reviewer` runs
-    on a rate-limited second provider came back `429` for every one of them, so
-    every subagent pane was empty. The parent's model reaches Main as
-    `request.fallbackModel`; next comes a role file's explicit `model:` line (the
-    built-in roles deliberately carry none), and the user's 「默认模型」
-    (设置 → 供应商, `readDefaultModel` → `settings.defaultModel`) is the last resort,
-    so a fresh install with no parent model still runs. Whichever spec wins,
-    `#resolveSubagentModel` only accepts it when `ModelRegistry.hasConfiguredAuth`
-    says this install can authenticate it — the catalog (`getAll()`) holds every
-    reseller's models, so a pinned `claude-sonnet-4-5` on a gateway with no
-    Anthropic key would otherwise win and fail with “No API key found”. Bare ids
-    resolve against `getAvailable()` **and** are re-checked for auth. A role may also
-    set `thinkingLevel:` (`minimal | low | medium | high | xhigh | max`) in its
-    frontmatter; absent or invalid values migrate to `medium` rather than inheriting
-    the parent run. Built-in role overrides live beside model overrides in
-    `subagents.json`, while custom roles persist the field in their Markdown template.
-    For user/built-in roles, the host reads the current saved reasoning preset before
-    the discovered template's value (discovery always supplies `medium` by default).
-    Project-local roles and DAG profiles keep their own declared value and never
-    borrow a same-named built-in role's reasoning override.
-  - **Renderer.** The sub-session's engine events are re-emitted as
-    `subagent_event` / `subagent_state` / `subagent_lifecycle` (see `#trackSubagentEvent`), which the
-    renderer folds into `session.subagents` + `subagentStreams`. Main and the renderer share
-    `shared/subagent-state.ts`: snapshots merge by run id and monotonic `revision`, never
-    replace the global registry with one conversation's list or overwrite newer events.
-    The lifecycle itself carries `conversationId` even when no parent tool-start was visible.
-    Tabs, the read-only composer and parent tool cards all read this registry; a missing row
-    is unknown, not completed, and cannot freeze the pane onto a cached mid-run transcript.
-    Retry, compaction and a parked prompt are explicit phases. Only the runner's final
-    lifecycle ends a run, after caching its transcript and final model/thinking/context state;
-    the parent tool's aggregate `isError` never overwrites individual sibling outcomes.
-    `mock.html?subagent=running|retrying|waiting|aborted|error` previews these states without
-    a provider or a real delegated run. `App.tsx` applies
-    them regardless of which conversation is focused, so a backgrounded run keeps
-    updating. **One run, one right-pane tab**: `registerSubagent` mints
-    `subagent:<toolCallId>:<index>` on lifecycle, tagged with the owning
-    `conversationId`, and `SidePane` only lists tabs belonging to the chat on
-    screen — parallel/chain runs and runs from different chats never share a view.
-    The tab is quiet: starting a run never un-collapses the pane, and switching back
-    to the chat does not either. The tool card's row (and the sidebar's sub-task row)
-    is what opens it.
-    A `subagent` tool card does not dump its parameters — it lists the spawned
-    runs (role · brief · status, the whole row opening that run's tab; no
-    「查看对话」 button). The collapsed row summarises the fan-out rather than
-    listing every run — at most two distinct roles plus a count (`explorer ×5`,
-    `explorer, planner 等 4 个`) — and expanding it reveals each run. A run's tab is
-    `SidePaneSubagent`: the same `MessageList` as the main thread (follow-the-bottom
-    included), plus the main composer in its read-only mode (below) — a delegated run
-    is not a conversation the user can steer, but it is one they can read and stop. The
-    delegated brief is the opening user message, pinned on the
-    tab as `subagentBrief`: the pane reads it from there, not from `subagents`,
-    because that list is replaced by every `getSubagents` snapshot and a brief
-    derived from it blanked the transcript mid-run. The cached transcript is read
-    only once the run is over, and the empty state is chosen by the pane rather than
-    by `MessageList`, so the scroller is never swapped for it mid-flight. The tab is
-    titled `role · 运行中/已完成/已终止/失败`.
-  - **The run's own composer, read-only.** `SidePaneSubagent` draws the main
-    thread's `Composer` with `readOnly`, and the stop button it keeps is what
-    terminates the run. A delegated run cannot be steered, but its state is worth
-    reading — which model it is on, how full its context window is — so the pane
-    keeps the context ring and its popover, the model and thinking chips (as plain
-    `StaticChip` labels, since `Chip` is a button with nothing behind it here), and
-    drops everything that would change the run (attach, the
-    model / thinking menus, send). `model` / `thinkingLevel` / `contextUsage` are
-    pushed as `subagent_state`: the engine holds them, the transcript does not, so
-    Main publishes them on `agent_start` / `turn_end` / `agent_settled` (the same
-    boundaries the main thread refreshes its ring on) and records them on the
-    `SubagentInfo` so a pane opened later gets them from the `getSubagents`
-    snapshot. `usagePercent` accepts just `{ contextUsage }` for this, since a
-    delegated run has no `EngineSessionState`.
-  - **Stopping one run notifies the main agent.** `abortSubagent` aborts the run's
-    own session, which settles the parent's `subagent` tool call: the tool returns
-    `isError` with `已被用户终止`, and that tool result is what the main agent reads as
-    the reason its delegation ended. The run's own lifecycle status is `aborted`
-    (已终止), distinct from `error` so a deliberate stop is not drawn as a failure.
-    A parked prompt is answered first *and scoped to this run* — the run
-    shares the parent conversation's UI context, so `#pendingUi` entries carry an
-    `owner` and `#resolvePendingUi(conversationId?, owner?)` filters on it; the
-    `tool_call` hook cannot observe the abort while it awaits a prompt, so leaving
-    it parked would hang the tool. Stop-a-chat still answers every prompt of that
-    conversation (its own and its runs'). `SubagentControl` also covers asynchronous setup:
-    an already-aborted request must never reach `prompt()` (the SDK resets its abort flag
-    there). Parent cancellation releases prompts scoped to the run before awaiting abort,
-    and late prompts after cancellation return their fallback. Setup and transcript-mapping
-    failures still produce a terminal lifecycle and release the session/control in cleanup.
+- **Agent Team / Codex-style collaboration** — `resources/extensions/subagent/index.ts` exposes the Codex collaboration actions `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent` and `list_agents`. `spawn_agent` creates a persistent `AgentThread`; it is the internal creation action behind the Agent Team UI, not a separate user-facing page.
+  - **Built-in roles follow Codex's current role model.** `explorer` is for narrow, facts-only codebase questions; `worker` is for owned implementation work and must be told its file/module ownership. FastVibe does not expose planner/reviewer as built-in child roles; review remains a parent-agent responsibility unless a user-installed role provides it. Role frontmatter accepts `model`, `thinkingLevel` and the Codex spelling `model_reasoning_effort`.
+  - **Child configuration inherits the parent by default.** A child receives the invoking conversation's model/provider fallback, reasoning level, working directory and runtime context. `fork_turns` accepts `all` or `none` and defaults to `all`; `all` seeds the child `SessionManager.inMemory` with the parent's current branch, while `none` starts with only the child task. Explicit model/reasoning overrides are validated through the configured model registry before the child starts.
+  - **Role overrides are bounded.** A role may choose its own model, reasoning level and tool list, but it does not silently escape the parent conversation's cwd or runtime authority. FastVibe has no separate Codex approval/sandbox policy, so the inherited authority is the current FastVibe tool boundary.
+  - **Persistent thread identity.** `AgentThreadStore` stores the thread tree, `taskName`, mailbox, status and revision in SQLite. Each thread gets a stable random display name and avatar seed. The Agent Team resource list, lifecycle events, side-pane tab and thread detail all use that identity.
+  - **In-process runner.** The app embeds the pi SDK and keeps provider credentials in Main, so child agents run through `SubagentTurnRunner` in the same Main process with a throwaway SDK session. The child has its own session and context; its streamed events are published under the thread's turn id and its final mailbox result is persisted.
+  - **Lifecycle and recovery.** `send_message` queues mailbox content without starting a turn; `followup_task` starts or resumes an idle thread; `interrupt_agent` stops the current turn while leaving the thread resumable; `wait_agent` waits for terminal statuses; `list_agents` returns the current parent/child tree. On process restart, active in-memory runs become persisted `interrupted` threads instead of remaining falsely `working`.
+  - **Renderer.** `agent_thread_changed` registers a quiet Agent Team tab. The resource panel shows parent indentation, the side pane shows the thread transcript and read-only runtime state, and the shared `subagent-state` reducer keeps live events scoped by conversation and monotonic revision. The thread's display name and avatar are persistent, local SVG data; no network avatar request is made.
 - **Computer use** downloads its engine the first time 设置 → 电脑操控 → 允许操作电脑 is turned on. The installer does not carry the `cua-driver` worker or the `@trycua/cua-driver-*` native library (together ~80 MB). The small JS bindings stay, so the platform package can be resolved from the data directory after the download. A dev tree still fetches the worker in `predev`. Do not put either artifact back into `electron-builder.yml`.
+- **CUA 观测和操作桥接**（`src/main/pi/cua-bridge.ts`、`resources/extensions/computer-use.ts`）必须把 SDK 的结果分成两条路径：模型通过 `content` 读取可行动文本和结构化结果，渲染层通过 `details` 读取完整元数据。`window_state` 保留旧的交互元素 `elements` 兼容形状，并在 `treeElements` 提供完整无障碍树、层级、截断/降级状态和截图实际尺寸；截图经过 bridge 的压缩后，快照里的尺寸、MIME 和 scale 必须对应压缩后的图片。动作结果的 effect、route、verification 和 evidence 枚举先转成人类可读值再交给模型。
+  - 工具流程是「定位应用 → 定位窗口 → 读取窗口树 → token 操作 → 验证结果」。`computer_verify_state` 用于点击、输入、拖动后的状态确认；`computer_batch` 只允许参数完整的 action 联合，最多 32 步，不能把半个窗口作用域静默降级到桌面作用域。
+  - CUA SDK 的 session、授权、运行时诊断和 cursor 主题配置属于宿主控制面，不注册成模型工具；模型可用的动作包括窗口观测、点击、输入、按键、滚动、拖动、移动指针、调整窗口、屏幕/指针观测、状态验证、菜单和剪贴板。
+  - 这条契约由 `test/cua-observation.test.ts`、`test/cua-driver-spec.test.ts` 和 computer-use extension 的 TypeScript 检查覆盖。新增 CUA SDK 字段时先更新 bridge 的 model-facing content，再更新 details 和测试，不能只扩展 Main 的内部类型。
+
 - **Browser use** — `browser-use.ts` is the tool surface for FastVibe's own side-pane
   `<webview>`; it holds no browser code. Every call crosses `browser:request` /`browser:response`
   (`src/main/pi/browser-bridge.ts`, one pending map keyed by request id, 30s default budget) into
@@ -3085,7 +2991,7 @@ Without the re-serve, switching away and back mid-compaction lost it until the s
   手机上照样看得见哪个文件夹有活。两个行共用一个 `size-6` 最右列，所以会话的圆点、会话的 spinner 和
   文件夹的标记读起来是一根对齐的柱子。
 - **预览**：`mock.html?unread=1`（未读圆点）、`mock.html?unread=1&running=1`（同一个文件夹两种标记）。
-- 手机端的行还没画这个字段（它随 catalog 已经到那边了，只是 Dart 侧不认识）。
+- 手机端的行还没画这个字段（它随 catalog 已经到那边了，只是 Rust core 侧不认识）。
 - **macOS Dock 角标**：`main/dock-badge.ts` 在 app ready 后读取 gateway 的聚合快照，并观察
   `workspace:changed` 广播，按 `unread === true` 的普通会话去重计数（本地与已绑定远程项目都包含）。
   打开、删除、移除远程绑定后随 catalog 自动减少，零用 `app.dock.setBadge("")` 清除；重启从持久化
@@ -3341,7 +3247,7 @@ into the row. Expanding the row shows the calls — 一批工具在 `ToolRow` �
   `{ collapseThinking, streaming }`, a run's `items` are calls *and* thoughts, and the settled
   line counts the thoughts as its own category (「已写入 App.tsx，运行 2 个命令，思考 1 次」 —
   still in order of first appearance, still one 「已」). It is a *renderer* preference, so the
-  phone (Flutter) has no equivalent yet and keeps its own transcript rules.
+  the native mobile client consumes the shared Rust core projection and keeps the same transcript rules.
 - **A thought only joins a batch that has a call in it.** The option folds thinking into the
   tool summary; two thoughts with no call around them have no summary to join, so they keep
   their own rows — otherwise the setting would hide reasoning behind a row that can only be
@@ -3423,8 +3329,8 @@ through by reference.
   `parts.slice(cut)` 里再没有 text——那一轮**根本没有「用时」折叠行**，整段过程摊在屏幕上。
   切点现在只跳过真正占一行的 part，`fold` 里「body 会不会是空的」那条检查也被同一个条件包含了。
 - **不在 Main 过滤。** `applyThinkingTimings` 按**内容顺序**把测到的时长配对给各个思考块，先在投影里丢掉空块
-  会让后面每一块各拿错一份时长。手机（Flutter）自己解析事件，这一行仍然会画——要一起收掉得去
-  `apps/mobile_flutter` 那边做同一条判断。
+  会让后面每一块各拿错一份时长。原生手机自己解析事件，这一行仍然会画——要一起收掉得去
+  `apps/mobile` 那边做同一条判断。
 - 预览：`mock.html?thinking=blank`（在真实思考前塞一个空格块，最后一轮末尾再塞一个）。
 
 ## 模型输出的空白不占一整屏（`lib/blank-output.ts`、`lib/chat/blank_output.dart`）
@@ -3445,13 +3351,13 @@ through by reference.
   `fold` 的「回复有没有答案」也改成要**看得见**的 text——否则一段纯空白的尾巴会假装那是答案。
 - **不改写转写，也不改发给模型的字节。** 跟检查点/压缩同一道理：磁盘上的东西是事实，界面是呈现。
   代价是那些空白 token 仍然计费，那是上游模型的问题，不是这里的。
-- **手机端是同一套规则的 Dart 版：`apps/mobile_flutter/lib/chat/blank_output.dart`。** 两边必须各写一份，
+- **手机端是同一套规则的 Rust core 版：`apps/mobile/chat/blank_output.dart`。** 两边必须各写一份，
   是因为两端用不同的引擎解析 Markdown：实测（`test/blank_output_test.dart` 量渲染高度，非猜）
-  `gpt_markdown` 把 `&nbsp;`、零宽字符刷成一屏（1120 / 866 px），但把全角空格 `U+3000` 当空行（66 px）——
+  `native Markdown renderer` 把 `&nbsp;`、零宽字符刷成一屏（1120 / 866 px），但把全角空格 `U+3000` 当空行（66 px）——
   正好和 `remark-parse` 相反（那边 U+3000 是内容，`&nbsp;` 在段内会被 HTML 折叠）。所以规则取**并集**，
   不按计划只修当前看得到的那几种；两个文件保持一致比削规则值钱。接入点同样只一处：
   `MarkdownView.build` 里 `collapseBlankRuns`，另加 `transcript.dart` 的 `_block` 用 `blankTakesRow(text, live && isLast)`
-  决是否占行（手机这端 `gpt_markdown` 还会在**软换行**处断行、并丢掉后面没有换行的内联 `<br>`，
+  决是否占行（手机这端 `native Markdown renderer` 还会在**软换行**处断行、并丢掉后面没有换行的内联 `<br>`，
   所以上述实测形状都带 `\n`）。
 - 验证：`test/blank-output.test.ts` 跑**真的** markdown 管线（与 `markdown-html.test.ts` 同一做法），
   钉住「`\n{40}` 本来就不渲染」这条前提，再钉住每种病态形状收敛以后的 `<br>` / `<p>` 个数。
@@ -3717,7 +3623,7 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
   去处是 设置 → 归档对话。撤销只还原本批 id，不碰以后新归档的。
 - **设置是 `autoArchiveDays`，默认 30，`0` 是永不；可选 3、7、14、30、90、180 或 365 天。** 选单在 设置 → 归档对话；手机写的
   `settings:set` 是部分快照，这个键不会被它清掉。
-- **不做的**：没有后台服务，应用没运行时什么都不会发生；手机端（Flutter）还没有这个设置项。
+- **不做的**：没有后台服务，应用没运行时什么都不会发生；原生移动端还没有这个设置项。
 
 ## 系统通知（设置 → 通用）
 

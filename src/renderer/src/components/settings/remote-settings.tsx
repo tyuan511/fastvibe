@@ -8,8 +8,7 @@ import { cleanError } from "@/lib/ipc-error";
 import type { RemoteServerState } from "@shared/ipc";
 import { deviceNameProblem } from "@shared/device-name";
 import { SettingsGroup, SettingsRow } from "./settings-group";
-import { RemoteOfficial } from "./remote-official";
-import { RemoteLan } from "./remote-lan";
+import { RemoteIroh } from "./remote-iroh";
 
 /**
  * 远程访问: let phones signed in to the same FastVibe account find and use this computer.
@@ -17,7 +16,7 @@ import { RemoteLan } from "./remote-lan";
  * One switch turns on two ways in. Phones signed in to the same account find this
  * computer on their own, with no address and no password (`RemoteOfficial`); and once a
  * LAN password is set, phones on the local network scan a code or find it by name
- * (`RemoteLan`). Neither is required for the other.
+ * The account-authenticated iroh transport is the single product connection path.
  *
  * State comes from `remote:state` pushes (`window.fastvibe.remote.onState`), the same
  * broadcast a second window would receive — so two settings panes cannot show the
@@ -81,8 +80,7 @@ export function RemoteSettings(): JSX.Element {
     if (next) setState(next);
   }
 
-  /** An error from the official connection has nothing to retry but the whole switch. */
-  async function retryOfficial(): Promise<void> {
+  async function retryIroh(): Promise<void> {
     await run(() => window.fastvibe.remote.stop());
     const next = await run(() => window.fastvibe.remote.start());
     if (next) setState(next);
@@ -156,14 +154,7 @@ export function RemoteSettings(): JSX.Element {
             />
           </SettingsGroup>
 
-          <RemoteOfficial
-            official={state.official}
-            enabled={state.enabled}
-            busy={busy}
-            onRetry={() => void retryOfficial()}
-          />
-
-          {state.enabled ? <RemoteLan state={state} busy={busy} run={run} onState={setState} /> : null}
+          <RemoteIroh state={state.iroh} busy={busy} onRetry={() => void retryIroh()} />
         </>
       )}
     </div>

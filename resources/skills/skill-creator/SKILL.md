@@ -34,8 +34,8 @@ Cool? Cool.
 This skill was written for Claude Code / Claude.ai. FastVibe is neither, so map the words above onto what actually exists here before you act on them.
 
 - **这是一个多轮流程，不是能扫一眼就放下的说明。** 上游把它写成一轮里有六步、还配一个 HTML 审阅界的流水线，而这里没有那个界面，所以流程要落到**对话**里：把产出直接贴在消息里（文件就存到磁盘上，告诉用户路径），然后**停下**问用户「这个怎么样，要改哪里」。用户回了话再进下一轮。不要一路跑到最后才让用户看见中间结果。
-- **"Claude" 指的就是你**，当前这个会话说的是 pi 引擎的模型。原文里 `claude -p` 那种命令行写法只在装了 Claude Code CLI 的机器上才有意义；在 FastVibe 里跑子任务用的是 `subagent` 工具（角色 `worker` / `explorer` / `reviewer` / `planner`），它**继承主会话的模型和供应商**——这是唯一能保证跑得通的方式，别去调一个用户没配过的供应商。
-- **原文里那些以 `agents/` 开头的文件是它自己的子 Agent 指令，FastVibe 里用不上。** 需要评测产物时，要么自己读、要么派一个 `reviewer` 子 Agent 过去，用 `subagent` 工具；不要试图加载 `agents/grader.md` 这套东西。
+- **"Claude" 指的就是你**，当前这个会话说的是 pi 引擎的模型。原文里 `claude -p` 那种命令行写法只在装了 Claude Code CLI 的机器上才有意义；在 FastVibe 里跑子任务用的是 `subagent` 工具（角色 `worker` / `explorer`），它**继承主会话的模型和供应商**——这是唯一能保证跑得通的方式，别去调一个用户没配过的供应商。
+- **原文里那些以 `agents/` 开头的文件是它自己的子 Agent 指令，FastVibe 里用不上。** 需要评测产物时，要么自己读、要么派一个 `worker` 子 Agent 过去，用 `subagent` 工具；不要试图加载 `agents/grader.md` 这套东西。
 - **这里没有 `present_files` 工具，也没有浏览器。** 凡是以它为条件的段落（打包成 `.skill`、`eval-viewer/generate_review.py` 起本地服务）都跳过；`scripts/` 下那些脚本仍然可以用，但用它们的 `--static` / 输出文件形态，把 HTML 写到磁盘上再告诉用户路径。"Cowork" 那一节可以当成「没有浏览器和显示的宿主」来读，条款和这里一致。
 - **Python 不一定装了，也可能没有 `yaml` 模块。** `scripts/*.py` 是锦上添花，不是必经之路：没装就跳过脚本那部分，用文件读写和对话把同一件事做完，并告诉用户少做了什么。作者、打包和改写技能这些核心工作不需要 Python。
 - **一次只推进一小步。** 把待办写进 todo 列表再动手；用户如果中途说「先这样」，就按他说的停。

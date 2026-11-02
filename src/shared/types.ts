@@ -698,7 +698,6 @@ export type ComputerRequest = {
   width?: number;
   height?: number;
   timeoutMs?: number;
-  session?: string;
   conversationId?: string;
 };
 

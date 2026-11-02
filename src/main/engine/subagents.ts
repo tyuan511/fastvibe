@@ -12,6 +12,7 @@ type Frontmatter = {
   tools?: unknown;
   model?: unknown;
   thinkingLevel?: unknown;
+  model_reasoning_effort?: unknown;
 };
 
 type StoredOverrides = {
@@ -20,7 +21,7 @@ type StoredOverrides = {
   thinkingLevels: Record<string, ThinkingLevel>;
 };
 
-const BUILTIN_IDS = ["explorer", "planner", "worker", "reviewer"] as const;
+const BUILTIN_IDS = ["explorer", "worker"] as const;
 const LEGACY_SCOUT_ID = "scout";
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MODEL_PATTERN = /^[^\s/]+\/[^\s]+$/;
@@ -41,7 +42,7 @@ function readMarkdown(filePath: string, source: "builtin" | "custom", id: string
       description: frontmatter.description,
       tools: parseTools(frontmatter.tools),
       model: typeof frontmatter.model === "string" && frontmatter.model.trim() ? frontmatter.model.trim() : undefined,
-      thinkingLevel: safeThinkingLevel(frontmatter.thinkingLevel) ?? "medium",
+      thinkingLevel: safeThinkingLevel(frontmatter.thinkingLevel ?? frontmatter.model_reasoning_effort) ?? "medium",
       systemPrompt: body.trim(),
       source,
     };

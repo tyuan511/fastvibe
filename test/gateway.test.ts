@@ -622,6 +622,7 @@ test("nested snapshot ids are namespaced; message ids are left alone", async () 
   assert.equal(opened.projects.some((item) => item.cwd === "/home/dev/app"), false);
   assert.equal(opened.conversations.some((item) => item.id === id), true);
   assert.equal(opened.conversations.some((item) => item.id === "local-c1"), true);
+  assert.equal(opened.activeId, "local-c1", "reading remotely must not change the desktop active conversation");
 
   const state = await instance.dispatch(Ipc.engineGetState, { conversationId: id }, {}) as { conversationId: string; cwd: string };
   assert.equal(state.conversationId, id);

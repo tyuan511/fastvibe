@@ -8,7 +8,7 @@
  *   node .agents/skills/release/scripts/release-notes.mjs --tag v0.2.0 --lang zh-CN
  *
  * An `app-v` tag drafts the phone app's note: the range starts at the previous `app-v`
- * tag and only commits touching `apps/mobile_flutter` are listed.
+ * tag and only commits touching `apps/mobile` are listed.
  *
  * Markdown goes to stdout (nothing else); the range being summarised goes to
  * stderr. The output is a *draft*: commit subjects and bodies are not translated.
@@ -132,7 +132,7 @@ const log = git([
   "--no-merges",
   "--pretty=%H%x1f%s%x1f%b%x1e",
   range,
-  ...(mobile ? ["--", "apps/mobile_flutter"] : []),
+  ...(mobile ? ["--", "apps/mobile"] : []),
 ]);
 const commits = log
   .split("\x1e")

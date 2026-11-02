@@ -90,7 +90,7 @@ test/                       35,906  (249 文件)  ← 25+ 用真 SDK，6 个用�
 
 **仓库外的强耦合面**（任何重写都要一起考虑）：
 
-- 手机端 `apps/mobile_flutter`：**80 个 `.dart` / 25,370 行**，说 App Protocol v1 + WebRTC 帧格式（`src/main/rtc/frames.ts` 与 `lib/protocol/rtc_frames.dart` 必须**字节一致**）
+- 手机端 `apps/mobile`：Rust core + SwiftUI/Compose 原生客户端；旧 Flutter 路径已在远程控制重写中移除。
 - 服务端 `fastvibe-services`（Go，**19,807 行**）：OAuth、设备注册、信令、TURN 计量、Bifrost 网关、计费
 
 ### 2.2 协议面
@@ -206,7 +206,7 @@ engine/logger.ts            engine/keep-awake.ts
 
 `src/main/server/`（1,604 行）与 `src/main/rtc/`（3,213 行）**文件头就写着 Electron-free**，以 `dispatch`/`subscribe` 为注入点。`docs/engine-utility-process.md` 已论证：从 `pi/process-manager.ts` 出发可达的 **116 个模块无一直接 `import "electron"`**。
 
-→ **「参考 codex 的 app-server 架构」这件事，FastVibe 已经做完了，而且做得更彻底**：codex 的 app-server 是 experimental、无版本号、协议周更；FastVibe 的 App Protocol v1 是手机端（25,370 行 Dart）的**生产协议**，有版本兼容检查、559 行文档、162/73 的远程策略分类与启动期覆盖检查。
+→ **「参考 codex 的 app-server 架构」这件事，FastVibe 已经做完了，而且做得更彻底**：codex 的 app-server 是 experimental、无版本号、协议周更；FastVibe 的 App Protocol v1 是手机端（25,370 行 Rust core）的**生产协议**，有版本兼容检查、559 行文档、162/73 的远程策略分类与启动期覆盖检查。
 
 **所以真正的问题不是「要不要 app-server 架构」，而是「内核用什么语言实现」—— 而这个问题可以在不动 UI、不动协议、不动手机端的前提下单独回答。**
 
@@ -490,7 +490,7 @@ mock 预览参数                 48 个（preview.ts 1,860 行 fixture 桥）
 |---|---|
 | 工作量 | **95–160 人月 ≈ 8–13 人年**（内核 135–223 减去「窗口/菜单/托盘/对话框/更新/媒体协议/图标协议」这些 Electron 保留部分约 25–40 人月，减去渲染层全部） |
 | 架构改动 | **零**。Rust 内核作为子进程说 **现有 App Protocol v1**，Electron 侧把 `dispatch`/`subscribe` 从「进程内调用引擎」换成「调用子进程」。这条缝项目已经量过：`docs/engine-utility-process.md` 记「桌面端直接调用引擎共 **137 个方法、168 处调用**」，远程网关的 `localDispatch`/`localSnapshot` 是现成单点入口 |
-| 保住什么 | 全部 56,235 行 React、24 主题、markdown/shiki/katex、**浏览器面板**、终端、recharts、dnd-kit、mock 预览 48 参数、249 个测试、**手机端 25,370 行 Dart 零改动**、`fastvibe-services` 零改动 |
+| 保住什么 | 全部 56,235 行 React、24 主题、markdown/shiki/katex、**浏览器面板**、终端、recharts、dnd-kit、mock 预览 48 参数、249 个测试、**手机端 25,370 行 Rust core 零改动**、`fastvibe-services` 零改动 |
 | 拿到什么 | 事件循环停顿的根治（把 82 MB 转写解析、`structuredClone`、git、SQLite、JSON 序列化移出 JS 主线程）；无头 Agent 变单二进制（删掉 `check-agent-runtime.mjs` 那套 import 图推断）；去 pi SDK 的 Node 供应链与 240–270 ms import 成本；内存中引擎部分下降 |
 | **拿不到什么** | 239 MB Chromium 仍在；渲染层 ~255 MB 仍在；UI 侧性能不变（但实测 UI 侧问题已修，见 §6.1） |
 | 可渐进 | ✅ 每一步可单独发布、单独回退（§7） |
@@ -592,7 +592,7 @@ Rust 内核覆盖：多会话生命周期、会话树与分支、compaction + �
 
 `server/`（1,604 行，Electron-free）与 `rtc/`（3,213 行，Electron-free，`peer.ts` 是唯一 native 胶水）移到 Rust。**这两块本来就是按「可脱离 Electron」写的**，是搬迁性价比最高的部分。WebRTC 用 `webrtc-rs`（纯 Rust）或继续 FFI libdatachannel。
 
-**硬约束**：`frames.ts` 与手机端 `lib/protocol/rtc_frames.dart` **必须字节一致**（1 字节头 `LAST/BINARY/PING/PONG/CLOSE/DEFLATE`、16 KiB / 直连 64 KiB 分片、`COMPRESS_MIN_BYTES=1024`、`ASYNC_COMPRESS_MIN_BYTES=64KiB`、level 3）。SCTP 调参（`SACK_DELAY_MS=5`、cwnd 10→64 MTU）在 `webrtc-rs` 上是否可调：**未查证**。
+**硬约束**：`frames.ts` 与手机端 `apps/mobile/core/src/lib.rs` **必须字节一致**（1 字节头 `LAST/BINARY/PING/PONG/CLOSE/DEFLATE`、16 KiB / 直连 64 KiB 分片、`COMPRESS_MIN_BYTES=1024`、`ASYNC_COMPRESS_MIN_BYTES=64KiB`、level 3）。SCTP 调参（`SACK_DELAY_MS=5`、cwnd 10→64 MTU）在 `webrtc-rs` 上是否可调：**未查证**。
 
 ### 阶段 5：默认切换
 
@@ -614,10 +614,10 @@ Rust 内核成为默认，TS 内核保留至少一个发布周期作回退。删
 |---|---|---|---|---|
 | R1 | **Rust 内核工作量被低估**（尤其扩展系统、compaction 语义、4 种 wire 协议的边角） | 高 | 高 | 阶段 0 用 2–4 周实测校准；§3.5 的估算按子系统拆分便于逐项复核 |
 | R2 | **两套内核并存期的行为漂移**（同一会话在 TS/Rust 内核对 `agent_settled`、`canResume`、`todoIsCurrent` 等语义判定不同） | 高 | 高 | 转写格式共用 pi v3；把 249 个测试里 25+ 个「用真 SDK」的改成「对两个内核都跑」的契约测试 |
-| R3 | **手机端协议破坏**（25,370 行 Dart，`ConversationSnapshot` / `slimStreamEvent` / `seq` / 帧格式） | 中 | 极高 | App Protocol v1 冻结；`isProtocolCompatible()` 已有；帧格式做字节级对拍测试 |
+| R3 | **手机端协议破坏**（25,370 行 Rust core，`ConversationSnapshot` / `slimStreamEvent` / `seq` / 帧格式） | 中 | 极高 | App Protocol v1 冻结；`isProtocolCompatible()` 已有；帧格式做字节级对拍测试 |
 | R4 | GPUI 分发路径变动（crates.io 已 12 个月未更新；`gpui_platform` 未发布；5 套 fork 类型不互通） | **已发生** | 高 | 只在路线 1 里存在 —— 这正是不推荐它的理由之一 |
 | R5 | 中文 IME / CJK 上游 bug 无法自修（Zed 不接受外部 PR） | 中（路线 1） | 极高 | 路线 2/3/4 规避 |
-| R6 | Rust 工程师招聘/上手成本（团队现有 TS/Go/Dart 栈；GPUI 官方建议「读 Zed 源码」） | 中 | 中 | 阶段 0/1 用 napi 侧车，TS 团队可参与；内核侧招 1–2 名有 Rust 系统编程经验的人 |
+| R6 | Rust 工程师招聘/上手成本（团队现有 TS/Go/Rust core 栈；GPUI 官方建议「读 Zed 源码」） | 中 | 中 | 阶段 0/1 用 napi 侧车，TS 团队可参与；内核侧招 1–2 名有 Rust 系统编程经验的人 |
 | R7 | 构建时间拖慢迭代（干净 debug 161 s、改一行 24 s、target 2.3 GB、709 个依赖包） | 高（路线 1/2） | 中 | workspace 拆分 + `sccache` + 增量编译；对比现在 `pnpm dev` 的秒级 HMR 是**确定的体验退化** |
 | R8 | 双内核期的包体积增加（Rust 二进制 + 现有 asar） | 高（过渡期） | 低 | 阶段 5 删 TS 内核后回落 |
 | R9 | 放弃 pi SDK 的持续上游收益（pi 1.3.0 在活跃演进；FastVibe 已多次「同步 pi SDK 更新」） | 中 | 中 | 明确取舍：自研内核换来协议自主权，失去上游免费功能。**这是产品决定，不是技术决定** |
@@ -640,7 +640,7 @@ Rust 内核成为默认，TS 内核保留至少一个发布周期作回退。删
 7. **Rust 内核对 pi v3 转写的读写兼容性**（尤其 `closeOrphanToolCalls`、relink、工具图片引用 `fastvibeImage` 字段）—— 阶段 0 的核心验证项
 8. **`quickjs-wasi` / `boa` / `deno_core` 承载 18 个内置扩展的可行性**（扩展用了 `ctx.ui.confirm/select/input/editor/questions`、`ctx.modelRegistry`、`pi.setSessionName`、`ctx.sendMessage` 等宿主桥）—— 阶段 3 的最大未知
 9. Zed 的商标使用政策（仓库与 `legal/terms.md` 里都没有明文条款）
-10. `apps/mobile_flutter` 与 `src/shared/*` 的字段级对应关系（本次只核对了 `frames.ts` ↔ `rtc_frames.dart` 与 `blank_output.dart` 两处明确注释的镜像）
+10. `apps/mobile` 与 `src/shared/*` 的字段级对应关系由 Rust core 的 App Protocol/消息模型测试覆盖。
 
 ---
 

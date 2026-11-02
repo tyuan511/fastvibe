@@ -40,6 +40,11 @@ function fixture(t: test.TestContext) {
   return new SubagentManager({ agentDir: dir, subagentsFile: join(dir, "subagents.json") } as FastVibePaths);
 }
 
+test("built-in roles match the Codex child-role set", (t) => {
+  const manager = fixture(t);
+  assert.deepEqual(manager.list().filter((agent) => agent.source === "builtin").map((agent) => agent.id), ["explorer", "worker"]);
+});
+
 test("saved builtin reasoning wins over the discovered template's default", (t) => {
   const manager = fixture(t);
   const discovered = discoverAgents(tmpdir(), "user").agents.find((agent) => agent.name === "worker")!;

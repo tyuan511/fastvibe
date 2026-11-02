@@ -34,10 +34,8 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
  * renderer and future schedulers can advertise capabilities without loading an
  * extension or starting a process. */
 export const BUILTIN_AGENTS = [
-  { id: "explorer", name: "Explorer", description: "Locate and organize codebase evidence only; leave analysis and planning to other roles.", tools: ["read", "grep", "find", "ls"] },
-  { id: "planner", name: "Planner", description: "Break a request into executable steps, risks and verification.", tools: ["read", "grep", "find", "ls"] },
-  { id: "worker", name: "Worker", description: "Make the code changes in an isolated context and run verification.", tools: ["read", "grep", "find", "ls", "edit", "write", "bash"] },
-  { id: "reviewer", name: "Reviewer", description: "Check the implementation, regression risk and test coverage; give actionable feedback.", tools: ["read", "grep", "find", "ls", "bash"] },
+  { id: "explorer", name: "Explorer", description: "Use for specific, well-scoped codebase questions; return fast, authoritative evidence for the parent agent.", tools: ["read", "grep", "find", "ls"] },
+  { id: "worker", name: "Worker", description: "Use for implementation and production work on a clearly owned set of files or modules.", tools: ["read", "grep", "find", "ls", "edit", "write", "bash"] },
 ] as const;
 
 function resourcesRoot(): string {

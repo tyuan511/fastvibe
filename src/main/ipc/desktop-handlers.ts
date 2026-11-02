@@ -253,8 +253,10 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
       reuseEmpty: payload?.reuseEmpty,
     });
   });
-  handle(Ipc.conversationsOpen, async (payload: { id: string }) => {
-    return engine.openConversation(payload.id);
+  handle(Ipc.conversationsOpen, async (payload: { id: string; activate?: boolean }, ctx: CallerContext) => {
+    // A phone reads a conversation into its own view. Main's catalog active id is the
+    // desktop's foreground conversation, so a remote open must not move it.
+    return engine.openConversation(payload.id, { activate: ctx.kind !== "remote" && payload.activate !== false });
   });
   handle(Ipc.conversationsRename, (payload: { id: string; title: string }) => {
     return engine.renameConversation(payload.id, payload.title);

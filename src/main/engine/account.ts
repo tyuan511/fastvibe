@@ -197,6 +197,30 @@ export class AccountService {
     return this.state();
   }
 
+  async setIrohEndpoint(deviceId: string, endpointId: string): Promise<void> {
+    const token = this.#stored?.token;
+    if (!token) throw new Error("account is signed out");
+    const response = await this.#call(`/api/devices/${encodeURIComponent(deviceId)}/iroh`, {
+      method: "PUT",
+      token,
+      body: { endpoint_id: endpointId },
+    });
+    if (!response.ok) throw new Error(`iroh endpoint registration failed: ${response.status}`);
+  }
+
+  async irohEndpointIds(): Promise<Set<string>> {
+    const token = this.#stored?.token;
+    if (!token) throw new Error("account is signed out");
+    const response = await this.#call("/api/devices", { method: "GET", token });
+    if (!response.ok) throw new Error(`device list request failed: ${response.status}`);
+    const body = (await response.json().catch(() => undefined)) as { devices?: unknown } | undefined;
+    const devices = Array.isArray(body?.devices) ? body.devices : [];
+    return new Set(devices.flatMap((device) => {
+      const endpointId = (device as { iroh_endpoint_id?: unknown })?.iroh_endpoint_id;
+      return typeof endpointId === "string" && endpointId ? [endpointId] : [];
+    }));
+  }
+
   async issueIrohRelay(deviceId: string, endpointId: string): Promise<IrohRelayConfig> {
     const token = this.#stored?.token;
     if (!token) throw new Error("account is signed out");

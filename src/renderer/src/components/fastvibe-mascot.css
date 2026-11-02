@@ -1,0 +1,203 @@
+.fv-mascot {
+  display: block;
+  overflow: visible;
+}
+
+/* Origins are in the 128 × 128 viewBox: the figure squashes from its feet, the eyes blink
+   around their centre line, and the sparkle turns around its own centre. */
+.fv-mascot-figure,
+.fv-mascot-torso {
+  transform-box: view-box;
+  transform-origin: 64px 112px;
+}
+
+.fv-mascot-ground {
+  transform-box: view-box;
+  transform-origin: 64px 117px;
+}
+
+.fv-mascot-eyes {
+  transform-box: view-box;
+  transform-origin: 64px 81px;
+}
+
+.fv-mascot-spark,
+.fv-mascot-glow {
+  transform-box: view-box;
+  transform-origin: 88px 22px;
+}
+
+.fv-mascot-mini,
+.fv-mascot-sweat {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* `--fv-mascot-delay` (a negative time) lets a row of mascots move out of step. */
+.fv-mascot:is([data-status="idle"], [data-status="working"], [data-status="waiting"]) .fv-mascot-eyes {
+  animation: fv-mascot-blink 4.8s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+
+/* 空闲：慢慢呼吸，闪光轻轻飘 */
+.fv-mascot[data-status="idle"] .fv-mascot-torso {
+  animation: fv-mascot-breathe 3.6s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="idle"] .fv-mascot-spark {
+  animation: fv-mascot-float 3.6s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+
+/* 思考：盯着闪光，闪光慢慢转 */
+.fv-mascot[data-status="thinking"] .fv-mascot-torso {
+  animation: fv-mascot-breathe 2.8s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="thinking"] .fv-mascot-spark {
+  animation: fv-mascot-spin 3.2s linear var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="thinking"] .fv-mascot-glow {
+  animation: fv-mascot-pulse 1.6s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+
+/* 执行：一蹦一蹦 */
+.fv-mascot[data-status="working"] .fv-mascot-figure {
+  animation: fv-mascot-hop 0.72s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="working"] .fv-mascot-torso {
+  animation: fv-mascot-squash 0.72s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="working"] .fv-mascot-ground {
+  animation: fv-mascot-ground-hop 0.72s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="working"] .fv-mascot-spark {
+  animation: fv-mascot-spin 1.1s linear var(--fv-mascot-delay, 0s) infinite;
+}
+
+/* 等你：晃着脑袋，闪光像信号灯一样闪 */
+.fv-mascot[data-status="waiting"] .fv-mascot-torso {
+  animation: fv-mascot-sway 2.4s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="waiting"] .fv-mascot-spark {
+  animation: fv-mascot-beacon 1.2s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+
+/* 完成：跳起来，闪光炸开 */
+.fv-mascot[data-status="success"] .fv-mascot-figure {
+  animation: fv-mascot-jump 1.5s cubic-bezier(0.3, 0.7, 0.4, 1) var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="success"] .fv-mascot-torso {
+  animation: fv-mascot-jump-squash 1.5s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="success"] .fv-mascot-ground {
+  animation: fv-mascot-ground-jump 1.5s cubic-bezier(0.3, 0.7, 0.4, 1) var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="success"] .fv-mascot-spark {
+  animation: fv-mascot-pop 1.5s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+.fv-mascot[data-status="success"] .fv-mascot-mini {
+  animation: fv-mascot-twinkle 1.5s ease-in-out var(--fv-mascot-delay, 0s) infinite;
+}
+
+/* 出错：塌下去，闪光暗掉、歪着掉下来 */
+.fv-mascot[data-status="error"] .fv-mascot-torso {
+  transform: scale(1.035, 0.955);
+}
+.fv-mascot[data-status="error"] .fv-mascot-spark {
+  transform: translate(-2px, 6px) rotate(28deg);
+}
+.fv-mascot[data-status="error"] .fv-mascot-sweat {
+  animation: fv-mascot-sweat 2.4s ease-in var(--fv-mascot-delay, 0s) infinite;
+}
+
+@keyframes fv-mascot-blink {
+  0%, 93%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.1); }
+}
+
+@keyframes fv-mascot-breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(1.02, 0.975); }
+}
+
+@keyframes fv-mascot-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-3px) rotate(10deg); }
+}
+
+@keyframes fv-mascot-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fv-mascot-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+@keyframes fv-mascot-hop {
+  0%, 100% { transform: translateY(0); }
+  45% { transform: translateY(-6px); }
+  75% { transform: translateY(0); }
+}
+
+@keyframes fv-mascot-squash {
+  0%, 75%, 100% { transform: scale(1.04, 0.95); }
+  20% { transform: scale(0.97, 1.04); }
+  45% { transform: scale(1, 1); }
+}
+
+@keyframes fv-mascot-ground-hop {
+  0%, 75%, 100% { transform: scale(1); opacity: 1; }
+  45% { transform: scale(0.82); opacity: 0.7; }
+}
+
+@keyframes fv-mascot-sway {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: rotate(4deg); }
+}
+
+@keyframes fv-mascot-beacon {
+  0%, 100% { transform: scale(0.86); opacity: 0.75; }
+  50% { transform: scale(1.14); opacity: 1; }
+}
+
+@keyframes fv-mascot-jump {
+  0%, 55%, 100% { transform: translateY(0); }
+  25% { transform: translateY(-11px); }
+}
+
+@keyframes fv-mascot-jump-squash {
+  0%, 30%, 52%, 68%, 100% { transform: scale(1, 1); }
+  8% { transform: scale(1.06, 0.93); }
+  18% { transform: scale(0.95, 1.06); }
+  58% { transform: scale(1.06, 0.93); }
+}
+
+@keyframes fv-mascot-ground-jump {
+  0%, 55%, 100% { transform: scale(1); opacity: 1; }
+  25% { transform: scale(0.7); opacity: 0.55; }
+}
+
+@keyframes fv-mascot-pop {
+  0%, 55%, 100% { transform: scale(1) rotate(0deg); }
+  25% { transform: scale(1.25) rotate(20deg); }
+}
+
+@keyframes fv-mascot-twinkle {
+  0%, 100% { opacity: 0; transform: scale(0.3); }
+  25%, 45% { opacity: 1; transform: scale(1); }
+  65% { opacity: 0; transform: scale(0.4); }
+}
+
+@keyframes fv-mascot-sweat {
+  0% { opacity: 0; transform: translateY(-2px); }
+  20%, 80% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(6px); }
+}
+
+.fv-mascot[data-motion="off"] * {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fv-mascot * {
+    animation: none !important;
+  }
+}

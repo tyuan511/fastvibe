@@ -1,8 +1,9 @@
 import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
 import type { ChatMessage, Conversation, ConversationOpenResult, ConversationQueueState, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, MessagePart, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus, RemoteServerState } from "@shared/ipc";
-import type { OfficialState } from "@shared/official";
+import type { IrohRemoteState } from "@shared/iroh-remote";
 import type { MemoryState } from "@shared/memory";
+import { DEFAULT_VIVI_SETTINGS, type ViviActor, type ViviMood, type ViviSettings, type ViviSnapshot } from "@shared/vivi";
 import {
   COMMANDS,
   CONVERSATIONS,
@@ -704,8 +705,65 @@ function sortEntries(list: DirEntry[]): void {
   list.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "directory" ? -1 : 1));
 }
 
+/** Vivi's browser fixture uses the same state transitions as the desktop bridge. */
+let viviSettings: ViviSettings = {
+  ...DEFAULT_VIVI_SETTINGS,
+  enabled: params.get("vivi") !== "off",
+};
+let viviVisible = viviSettings.enabled;
+let viviActors: ViviActor[] = [
+  { id: "vivi", label: "Vivi", mood: "working", palette: viviSettings.palette },
+];
+const viviListeners = new Set<(snapshot: ViviSnapshot & { uiLanguage?: string }) => void>();
+
+function viviSnapshot(): ViviSnapshot & { uiLanguage?: string } {
+  const failed = params.get("vivi") === "error";
+  return {
+    settings: { ...viviSettings },
+    actors: viviActors.map((actor) => ({ ...actor })),
+    visible: viviVisible,
+    ...(failed ? { error: "Preview error: Vivi could not reach the desktop companion." } : {}),
+    uiLanguage: websiteLanguage,
+  };
+}
+
+function emitVivi(): ViviSnapshot & { uiLanguage?: string } {
+  const next = viviSnapshot();
+  for (const listener of viviListeners) listener(next);
+  return next;
+}
+
+const vivi = {
+  getSettings: async () => ({ ...viviSettings }),
+  setSettings: async (patch: Partial<ViviSettings>) => {
+    if (params.get("vivi") === "error") throw new Error("Vivi preview failure");
+    viviSettings = { ...viviSettings, ...patch };
+    viviActors = viviActors.map((actor) => ({ ...actor, palette: viviSettings.palette }));
+    emitVivi();
+    return { ...viviSettings };
+  },
+  getSnapshot: async () => viviSnapshot(),
+  rendererState: async () => undefined,
+  setBubble: async () => undefined,
+  hitTest: async () => undefined,
+  onDragMotion: () => () => undefined,
+  onChanged: (listener: (snapshot: ViviSnapshot & { uiLanguage?: string }) => void) => {
+    viviListeners.add(listener);
+    return () => viviListeners.delete(listener);
+  },
+  show: async () => { viviVisible = true; emitVivi(); },
+  hide: async () => { viviVisible = false; emitVivi(); },
+  toggle: async () => { viviVisible = !viviVisible; emitVivi(); return viviVisible; },
+  previewMood: async (mood: ViviMood) => {
+    if (params.get("vivi") === "error") throw new Error("Vivi preview failure");
+    viviActors = viviActors.map((actor) => ({ ...actor, mood }));
+    emitVivi();
+  },
+};
+
 const api = {
   schedules: createScheduleFixture(params.get("tasks") === "sample"),
+  vivi,
   engine: {
     getStatus: async () => status,
     start: async () => status,
@@ -1264,7 +1322,7 @@ const api = {
     stop: async () => REMOTE_OFF,
     listDevices: async () => REMOTE_DEVICES,
     revokeDevice: async () => [],
-    officialDisconnect: async () => ({ ...REMOTE_STATE, official: { ...REMOTE_STATE.official, peers: [] } }),
+    officialDisconnect: async () => ({ ...REMOTE_STATE, iroh: { ...REMOTE_STATE.iroh, peers: [] } }),
     onState: () => () => undefined,
   },
   // The browser-use bridge is main-process driven: in the preview nothing ever
@@ -1361,13 +1419,7 @@ function computerStatus(): {
  * - `?remote=lan`: switched on with a LAN password and both IPv4 and IPv6, so the QR code has two to switch between.
  * - `?remote=nopassword`: switched on, but no LAN password yet, so the pane asks for one.
  */
-const OFFICIAL_OFF: OfficialState = {
-  enabled: false,
-  status: "off",
-  deviceId: null,
-  deviceName: "My-MacBook-Pro",
-  peers: [],
-};
+const IROH_OFF: IrohRemoteState = { enabled: false, status: "off", endpointId: null, peers: [] };
 
 const REMOTE_OFF: RemoteServerState = {
   enabled: false,
@@ -1380,7 +1432,7 @@ const REMOTE_OFF: RemoteServerState = {
   lanAddresses: { ipv4: "192.168.31.45", ipv6: null },
   clients: 0,
   failedLogins: 0,
-  official: OFFICIAL_OFF,
+  iroh: IROH_OFF,
 };
 
 const REMOTE_ONLINE: RemoteServerState = {
@@ -1391,36 +1443,24 @@ const REMOTE_ONLINE: RemoteServerState = {
   port: 7777,
   configured: true,
   clients: 1,
-  official: {
-    enabled: true,
-    status: "online",
-    deviceId: "6f1c0b52-4f0e-4a89-9a6d-1f4d0c2b7e11",
-    deviceName: "My-MacBook-Pro",
-    peers: [{ id: "call-1", name: "Ada's iPhone", platform: "ios", path: "direct" }],
-  },
+  iroh: { enabled: true, status: "online", endpointId: "endpoint-desktop", peers: [{ id: "peer-1", label: "Ada's iPhone", path: "direct" }] },
 };
 
 const REMOTE_STATES: Record<string, RemoteServerState> = {
   online: REMOTE_ONLINE,
   relay: {
     ...REMOTE_ONLINE,
-    official: { ...REMOTE_ONLINE.official, peers: [{ id: "call-1", name: "Ada's iPhone", platform: "ios", path: "relay" }] },
+    iroh: { ...REMOTE_ONLINE.iroh, peers: [{ id: "peer-1", label: "Ada's iPhone", path: "relay" }] },
   },
   signedout: {
     ...REMOTE_ONLINE,
     clients: 0,
-    official: { ...REMOTE_ONLINE.official, status: "signed-out", deviceId: null, peers: [] },
+    iroh: { ...REMOTE_ONLINE.iroh, status: "signed-out", endpointId: null, peers: [] },
   },
   error: {
     ...REMOTE_ONLINE,
     clients: 0,
-    official: {
-      ...REMOTE_ONLINE.official,
-      status: "error",
-      deviceId: null,
-      error: "账号下的设备已达上限，请先在控制台移除不用的设备",
-      peers: [],
-    },
+    iroh: { ...REMOTE_ONLINE.iroh, status: "error", endpointId: null, error: "账号下的设备已达上限，请先在控制台移除不用的设备", peers: [] },
   },
 };
 
@@ -1428,7 +1468,7 @@ REMOTE_STATES.lan = {
   ...REMOTE_ONLINE,
   lanAddresses: { ipv4: "192.168.31.45", ipv6: "fd00::45" },
   clients: 0,
-  official: { ...REMOTE_ONLINE.official, peers: [] },
+  iroh: { ...REMOTE_ONLINE.iroh, peers: [] },
 };
 REMOTE_STATES.nopassword = {
   ...REMOTE_ONLINE,

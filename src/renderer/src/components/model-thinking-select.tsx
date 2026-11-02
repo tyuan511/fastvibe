@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ProviderIcon } from "@/components/provider-icon";
+import { ThinkingEffortSlider } from "@/components/thinking-effort-slider";
 import { thinkingLabel, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { cn } from "@/lib/utils";
 import {
@@ -167,7 +168,7 @@ export function ModelThinkingSelect({
           </Button>
         }
       />
-      <DropdownMenuContent align="end" className="min-w-52">
+      <DropdownMenuContent align="end" className="min-w-64">
         {inheritModelLabel ? (
           <>
             <DropdownMenuCheckboxItem
@@ -221,35 +222,19 @@ export function ModelThinkingSelect({
           })
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger disabled={disabled}>
-            <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-              <span>{t("composer.thinking")}</span>
-              <span className="text-xs text-muted-foreground">{currentThinkingLabel}</span>
-            </span>
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent align="start" side="right" className="min-w-36">
-            {thinkingOptions.map((level) => (
-              <DropdownMenuCheckboxItem
-                key={level}
-                checked={level === selectedThinking}
-                disabled={disabled}
-                closeOnClick
-                onCheckedChange={() => {
-                  if (level !== selectedThinking) onThinkingChange(level);
-                }}
-              >
-                {level === "auto" ? thinkingMenuLabel("auto") : thinkingLabel(level)}
-              </DropdownMenuCheckboxItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
         {onManageModels ? (
           <>
-            <DropdownMenuSeparator />
             <DropdownMenuItem disabled={disabled} onClick={onManageModels}>{manageModelsLabel ?? t("composer.manageModels")}</DropdownMenuItem>
+            <DropdownMenuSeparator />
           </>
         ) : null}
+        <ThinkingEffortSlider
+          key={`${selected ?? "inherit"}:${thinkingOptions.join(",")}`}
+          options={thinkingOptions}
+          value={selectedThinking}
+          disabled={disabled}
+          onCommit={onThinkingChange}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   );

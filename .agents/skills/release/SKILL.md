@@ -235,9 +235,9 @@ note，设置 → 关于 → 更新日志显示当前安装版本的 note，都�
 那一行在 App 里隐藏）。
 
 ```bash
-node .agents/skills/release/scripts/release-notes.mjs --tag app-vX.Y.Z   # 从上一个 app-v tag 起，只列 apps/mobile_flutter 的提交
+node .agents/skills/release/scripts/release-notes.mjs --tag app-vX.Y.Z   # 从上一个 app-v tag 起，只列 apps/mobile 的提交
 node .agents/skills/release/scripts/release-notes.mjs --tag app-vX.Y.Z --lang zh-CN
-# 改写并保存两种语言的文件，pubspec.yaml 改成 X.Y.Z+BUILD；随版本提交一起提交
+# 更新 apps/mobile/core/Cargo.toml 与原生客户端版本，随版本提交一起提交
 node scripts/check-release-note.mjs --tag app-vX.Y.Z
 git tag -a app-vX.Y.Z -m "FastVibe Mobile app-vX.Y.Z" && git push origin app-vX.Y.Z
 ```

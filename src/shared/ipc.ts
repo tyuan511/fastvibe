@@ -1,4 +1,4 @@
-import type { OfficialState } from "./official";
+import type { IrohRemoteState } from "./iroh-remote";
 import type { MenuBindings, MenuCommandId } from "./menu-commands.ts";
 export const Ipc = {
   engineGetStatus: "engine:get-status",
@@ -329,6 +329,25 @@ export const Ipc = {
   remoteState: "remote:state",
   /** Drop every phone connected through the account, leaving the connection itself up. */
   remoteOfficialDisconnect: "remote:official-disconnect",
+  /** Vivi desktop pet: get/set settings, show/hide, toggle visibility. */
+  viviGetSettings: "vivi:get-settings",
+  viviSetSettings: "vivi:set-settings",
+  viviGetState: "vivi:get-state",
+  viviGetSnapshot: "vivi:get-snapshot",
+  viviRendererState: "vivi:renderer-state",
+  viviSetBubble: "vivi:set-bubble",
+  viviHitTest: "vivi:hit-test",
+  viviChanged: "vivi:changed",
+  viviDragMotion: "vivi:drag-motion",
+  viviShow: "vivi:show",
+  viviHide: "vivi:hide",
+  viviToggle: "vivi:toggle",
+  viviResetPosition: "vivi:reset-position",
+  viviPreviewMood: "vivi:preview-mood",
+  viviDragStart: "vivi:drag-start",
+  viviDragEnd: "vivi:drag-end",
+  viviOpenConversation: "vivi:open-conversation",
+  viviContextMenu: "vivi:context-menu",
 } as const;
 
 export type AppModelsDevInfo = {
@@ -507,15 +526,8 @@ export type RemoteServerState = {
   clients: number;
   /** Failed logins since the last success; the throttle grows with this. */
   failedLogins: number;
-  /**
-   * The official connection: reachable from phones signed in to this account.
-   * Its `deviceName` is the name the account's device list shows right now.
-   *
-   * Part of this state rather than its own channel: the pane draws one card out of the
-   * listener and this, and two broadcasts would let it show one as up while the other's
-   * push was still on its way.
-   */
-  official: OfficialState;
+  /** Unified iroh transport state shown by the remote-access pane. */
+  iroh: IrohRemoteState;
 };
 
 /** One client that has logged in, without anything secret. */

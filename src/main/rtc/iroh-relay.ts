@@ -3,6 +3,7 @@ import type { IrohRelayConfig, IrohRelayUsage } from "../../shared/iroh-relay.ts
 
 /** The account half needed by a native iroh transport. No Electron dependency. */
 export type IrohRelayLeaseAccount = {
+  setIrohEndpoint?: (deviceId: string, endpointId: string) => Promise<void>;
   issueIrohRelay: (deviceId: string, endpointId: string) => Promise<IrohRelayConfig>;
   reportIrohUsage: (input: {
     deviceId: string;
@@ -34,6 +35,7 @@ export type IrohRelayLeaseOptions = {
   reportIntervalMs?: number;
   now?: () => number;
   onUsage?: (usage: IrohRelayUsage) => void;
+  onConfig?: (config: IrohRelayConfig) => void;
   onError?: (error: unknown) => void;
 };
 
@@ -59,6 +61,7 @@ export class IrohRelayLease {
   readonly #reportIntervalMs: number;
   readonly #now: () => number;
   readonly #onUsage?: (usage: IrohRelayUsage) => void;
+  readonly #onConfig?: (config: IrohRelayConfig) => void;
   readonly #onError?: (error: unknown) => void;
   #config: IrohRelayConfig | null = null;
   #usage: IrohRelayUsage | null = null;
@@ -81,6 +84,7 @@ export class IrohRelayLease {
     this.#reportIntervalMs = positive(options.reportIntervalMs, DEFAULT_REPORT_INTERVAL_MS);
     this.#now = options.now ?? Date.now;
     this.#onUsage = options.onUsage;
+    this.#onConfig = options.onConfig;
     this.#onError = options.onError;
   }
 
@@ -92,6 +96,15 @@ export class IrohRelayLease {
       usage: this.#usage,
       reporting: this.#reportFlight !== null,
     };
+  }
+
+  /** Adopt a config issued by a separate identity handshake without issuing a second token. */
+  adopt(config: IrohRelayConfig): void {
+    if (this.#closed) throw new Error("relay lease is closed");
+    this.#config = config;
+    this.#onConfig?.(config);
+    this.#armRefreshTimer();
+    this.#armReportTimer();
   }
 
   /** Get a usable token, issuing or refreshing it as needed. */
@@ -160,6 +173,7 @@ export class IrohRelayLease {
     this.#refreshFlight = this.#account.issueIrohRelay(this.#deviceId, this.#endpointId).then((config) => {
       if (this.#closed) throw new Error("relay lease is closed");
       this.#config = config;
+      this.#onConfig?.(config);
       this.#armRefreshTimer();
       this.#armReportTimer();
       return config;

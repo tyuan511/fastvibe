@@ -7,7 +7,7 @@ import { Ipc } from "@shared/ipc";
 import type { AgentConfigSyncPayload } from "@shared/agent-config";
 import { broadcast } from "../main/ipc/broadcast";
 import { registerScheduleIpc } from "../main/ipc/schedule-handlers";
-import { handle, handlerChannels } from "../main/ipc/registry";
+import { handle, handlerChannels, type CallerContext } from "../main/ipc/registry";
 import type { PiProcessManager } from "../main/pi/process-manager";
 import { readFilePreview } from "../main/engine/file-preview";
 import { searchProjectFiles } from "../main/engine/project-files";
@@ -155,7 +155,9 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
     activate: payload?.activate !== false,
     reuseEmpty: payload?.reuseEmpty,
   }));
-  handle(Ipc.conversationsOpen, (payload: { id: string }) => engine.openConversation(payload.id));
+  handle(Ipc.conversationsOpen, (payload: { id: string; activate?: boolean }, ctx: CallerContext) =>
+    engine.openConversation(payload.id, { activate: ctx.kind !== "remote" && payload.activate !== false }),
+  );
   handle(Ipc.conversationsRename, (payload: { id: string; title: string }) => engine.renameConversation(payload.id, payload.title));
   handle(Ipc.conversationsDelete, (payload: { id: string }) => engine.deleteConversation(payload.id));
   handle(Ipc.conversationsRecordPrompt, (payload: { id: string; text: string }) => engine.recordPrompt(payload.id, payload.text));

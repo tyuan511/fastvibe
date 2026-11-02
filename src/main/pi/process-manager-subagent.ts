@@ -9,6 +9,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionUIContext,
+  type FileEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ChatMessage, ThinkingTiming } from "@shared/types";
 import { isAbortOutcome } from "@shared/abort";
@@ -44,6 +45,8 @@ export type SubagentHostRequest = {
   model?: string;
   fallbackModel?: string;
   thinkingLevel?: ThinkingLevel;
+  forkTurns?: "none" | "all";
+  initialEntries?: FileEntry[];
   cwd: string;
   signal?: AbortSignal;
 };
@@ -229,7 +232,7 @@ export class SubagentTurnRunner {
         cwd,
         agentDir: this.#paths.agentDir,
         modelRuntime: this.#runtime,
-        sessionManager: SessionManager.inMemory(cwd),
+        sessionManager: SessionManager.inMemory(cwd, undefined, request.initialEntries),
         settingsManager,
         resourceLoader: loader,
         tools,

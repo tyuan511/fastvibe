@@ -1,5 +1,6 @@
 import { Ipc } from "@shared/ipc";
 import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
+import type { ViviDragMotion, ViviSettings, ViviSnapshot, ViviState } from "./vivi";
 import type { BrowserLibrary, BrowserClearData, BrowserDownloadAction, BrowserShortcut } from "./browser-workspace";
 import type { SubmitPromptRequest } from "./prompt-submission";
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot } from "@shared/schedules";
@@ -389,8 +390,9 @@ export function createFastVibeApi(t: ApiTransport) {
           ...(options?.activate === false ? { activate: false } : {}),
           ...(options?.reuseEmpty === false ? { reuseEmpty: false } : {}),
         }),
-      open: (id: string): Promise<ConversationOpenResult> =>
-        t.invoke(Ipc.conversationsOpen, { id }),
+      /** Open a conversation; remote callers use `activate: false` to keep desktop navigation independent. */
+      open: (id: string, options?: { activate?: boolean }): Promise<ConversationOpenResult> =>
+        t.invoke(Ipc.conversationsOpen, { id, ...(options?.activate === false ? { activate: false } : {}) }),
       rename: (id: string, title: string): Promise<WorkspaceSnapshot> =>
         t.invoke(Ipc.conversationsRename, { id, title }),
       delete: (id: string): Promise<ConversationDeleteResult> =>
@@ -711,6 +713,26 @@ export function createFastVibeApi(t: ApiTransport) {
       respond: (payload: { id: string; ok: boolean; result?: unknown; error?: string }): void => {
         t.send(Ipc.browserResponse, payload);
       },
+    },
+    vivi: {
+      getSettings: (): Promise<ViviSettings> => t.invoke(Ipc.viviGetSettings),
+      setSettings: (settings: Partial<ViviSettings>): Promise<ViviSettings> => t.invoke(Ipc.viviSetSettings, settings),
+      getState: (): Promise<ViviState> => t.invoke(Ipc.viviGetState),
+      getSnapshot: (): Promise<ViviSnapshot> => t.invoke(Ipc.viviGetSnapshot),
+      setBubble: (height: number, composerHeight = 0, width?: number): Promise<void> => t.invoke(Ipc.viviSetBubble, { height, composerHeight, width }),
+      hitTest: (interactive: boolean): Promise<void> => t.invoke(Ipc.viviHitTest, { interactive }),
+      rendererState: (ready: boolean, error?: string): Promise<void> => t.invoke(Ipc.viviRendererState, { ready, error }),
+      onChanged: (listener: (snapshot: ViviSnapshot) => void): (() => void) => t.subscribe(Ipc.viviChanged, listener),
+      onDragMotion: (listener: (motion: ViviDragMotion) => void): (() => void) => t.subscribe(Ipc.viviDragMotion, listener),
+      show: (): Promise<void> => t.invoke(Ipc.viviShow),
+      hide: (): Promise<void> => t.invoke(Ipc.viviHide),
+      toggle: (): Promise<boolean> => t.invoke(Ipc.viviToggle),
+      resetPosition: (): Promise<ViviSettings> => t.invoke(Ipc.viviResetPosition),
+      previewMood: (mood: string): Promise<void> => t.invoke(Ipc.viviPreviewMood, { mood }),
+      dragStart: (): Promise<void> => t.invoke(Ipc.viviDragStart),
+      dragEnd: (): Promise<void> => t.invoke(Ipc.viviDragEnd),
+      openConversation: (conversationId?: string): Promise<void> => t.invoke(Ipc.viviOpenConversation, { conversationId }),
+      contextMenu: (): Promise<void> => t.invoke(Ipc.viviContextMenu),
     },
     /**
      * Disk path for a file picked in this window, or "" when this client has none

@@ -6,9 +6,10 @@ import { type AgentConfig, discoverAgents } from "./agents";
 
 type Host = {
   conversationId?: string;
-  spawnAgent?: (request: { parentId?: string; agent: string; task: string; systemPrompt: string; tools?: string[]; model?: string; fallbackModel?: string; thinkingLevel?: string; cwd: string }) => Promise<unknown>;
+  spawnAgent?: (request: { parentId?: string; taskName?: string; agent: string; task: string; systemPrompt: string; tools?: string[]; model?: string; fallbackModel?: string; thinkingLevel?: string; forkTurns?: "none" | "all"; cwd: string }) => Promise<unknown>;
   sendAgentMessage?: (request: { threadId: string; message: string; senderId: string }) => Promise<unknown>;
   followupAgent?: (request: { threadId: string; message: string; senderId: string; task?: string }) => Promise<unknown>;
+  forkTurns?: "none" | "all";
   waitAgents?: (request: { threadIds?: string[]; timeoutMs?: number }) => Promise<unknown[]>;
   interruptAgent?: (threadId: string) => Promise<void>;
   listAgentThreads?: () => Promise<unknown[]>;
@@ -34,11 +35,12 @@ export default function (pi: ExtensionAPI): void {
     description: "Create a persistent Codex-style agent thread and return immediately.",
     promptSnippet: "Create and coordinate persistent agent threads",
     parameters: Type.Object({
-      message: Type.String({ description: "The first task" }),
-      agent: Type.Optional(Type.String({ description: "Configured role name" })),
+      message: Type.String({ description: "Initial task for the new agent" }),
+      task_name: Type.String({ description: "Lowercase task name for the new agent" }),
+      agent_type: Type.Optional(Type.String({ description: "Optional Codex role override" })),
       model: Type.Optional(Type.String()),
       model_reasoning_effort: Type.Optional(Type.String()),
-      fork_turns: Type.Optional(StringEnum(["none", "recent", "all"] as const)),
+      fork_turns: Type.Optional(StringEnum(["none", "all"] as const)),
       parent: Type.Optional(Type.String()),
       cwd: Type.Optional(Type.String()),
       agentScope: Type.Optional(scope),
@@ -48,10 +50,10 @@ export default function (pi: ExtensionAPI): void {
       if (!h.spawnAgent) return fail("当前宿主不支持 Agent Team。");
       if (signal?.aborted) return fail("创建 Agent 已取消。");
       const found = discoverAgents(ctx.cwd, params.agentScope ?? "user").agents;
-      const selected = role(found, params.agent ?? "worker");
-      if (!selected) return fail(`找不到 Agent 角色「${params.agent ?? "worker"}」。可用角色：${roster(found)}`);
-      const thread = await h.spawnAgent({ parentId: params.parent, agent: selected.name, task: params.message, systemPrompt: selected.systemPrompt, tools: selected.tools, model: params.model ?? selected.model, fallbackModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinkingLevel: params.model_reasoning_effort ?? selected.thinkingLevel, cwd: params.cwd ?? ctx.cwd });
-      return { content: [{ type: "text", text: `已创建 Agent thread：${JSON.stringify(thread)}` }], details: { thread, forkTurns: params.fork_turns ?? "none" } };
+      const selected = role(found, params.agent_type ?? "worker");
+      if (!selected) return fail(`找不到 Agent 角色「${params.agent_type ?? "worker"}」。可用角色：${roster(found)}`);
+      const thread = await h.spawnAgent({ parentId: params.parent, taskName: params.task_name, agent: selected.name, task: params.message, systemPrompt: selected.systemPrompt, tools: selected.tools, model: params.model ?? selected.model, fallbackModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinkingLevel: params.model_reasoning_effort ?? selected.thinkingLevel, forkTurns: params.fork_turns === "none" ? "none" : "all", cwd: params.cwd ?? ctx.cwd });
+      return { content: [{ type: "text", text: `已创建 Agent thread：${JSON.stringify(thread)}` }], details: { thread, forkTurns: params.fork_turns === "none" ? "none" : "all" } };
     },
   });
 

@@ -714,7 +714,7 @@ export class RemoteGateway {
       ...result,
       ...snapshot,
       conversations,
-      activeId: openedId ?? snapshot.activeId,
+      activeId: snapshot.activeId,
       conversation,
       messages: result.messages,
       state,

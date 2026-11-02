@@ -210,6 +210,32 @@
     "errorDetailHide": "Hide details",
     "errorDetailCopy": "Copy error"
   },
+  "vivi": {
+    "sendFailed": "Could not send your message. Please retry.",
+    "newChat": "Start a new chat",
+    "followUp": "Follow up",
+    "send": "Send",
+    "dismiss": "Dismiss bubble",
+    "name": "Vivi",
+    "activeCount": "{{count}} tasks",
+    "pendingCount": "{{count}} pending",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "review": "Review request",
+    "openConversation": "Open conversation",
+    "connectionFailed": "Tasks are unavailable. I’ll retry shortly.",
+    "responseFailed": "Could not submit. Please try again.",
+    "answerReceived": "Got it. Your answer is with the agent.",
+    "tool": "Using {{tool}}",
+    "moods": {
+      "idle": "Right here with you.",
+      "thinking": "Thinking it through…",
+      "working": "Working on your task…",
+      "waiting": "Your confirmation or answer is needed.",
+      "success": "Task complete!",
+      "error": "Something went wrong. Open the conversation to check."
+    }
+  },
   "permission": {
     "needConfirm": "Confirmation needed",
     "needDecision": "Your decision is needed",

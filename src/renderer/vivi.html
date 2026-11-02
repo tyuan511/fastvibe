@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Vivi · FastVibe</title>
+  </head>
+  <body>
+    <canvas id="vivi-canvas" aria-label="Vivi"></canvas>
+    <div id="vivi-labels" aria-live="polite"></div>
+    <div id="vivi-bubble-root"></div>
+    <div id="vivi-error" role="alert">
+      <div class="vivi-error-card">
+        <h1 id="vivi-error-title"></h1>
+        <p id="vivi-error-detail"></p>
+        <button id="vivi-retry" type="button"></button>
+      </div>
+    </div>
+    <script type="module" src="./src/vivi/main.ts"></script>
+  </body>
+</html>

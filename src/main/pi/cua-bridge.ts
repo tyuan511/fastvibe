@@ -7,6 +7,7 @@ import { readComputerSettings } from "../engine/app-settings";
 import { unpackedPath } from "../engine/asar-unpacked";
 import { getFastVibePaths } from "../engine/paths";
 import { resolveComputerAvailability } from "@shared/computer-availability";
+import { normalizeCuaMetadata, modelCuaResultText, parseCuaJson } from "@shared/cua-result";
 import { serializeWindowState } from "@shared/cua-observation";
 import {
   cancelComputerComponent,
@@ -453,6 +454,9 @@ export async function requestComputer(request: ComputerRequest): Promise<Compute
     if (steps.length === 0) {
       throw new Error(uiText("批量操作为空", "The batch contains no steps"));
     }
+    if (steps.length > 32) {
+      throw new Error(uiText("批量操作最多包含 32 步", "A batch may contain at most 32 steps"));
+    }
     // Checked across the whole sequence before any of it runs: a batch that would be
     // refused halfway leaves the desktop in a state nobody asked for.
     if (!settings.clipboard && steps.some((step) => CLIPBOARD_ACTIONS.has(step.action))) {
@@ -626,14 +630,6 @@ function summarise(done: ComputerResult[], steps: ComputerRequest[]): string {
  * normal shape and the steps before it explain what the screenshot shows. Images are
  * concatenated in order for the same reason.
  */
-function parseStructured(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
 function merge(results: ComputerResult[], steps: ComputerRequest[]): ComputerResult {
   const text = results
     .map((result, index) => {
@@ -644,8 +640,8 @@ function merge(results: ComputerResult[], steps: ComputerRequest[]): ComputerRes
   const structuredSteps = results
     .map((result, index) => ({
       step: index + 1,
-      ...(result.structured !== undefined ? { structured: parseStructured(result.structured) } : {}),
-      ...(result.structuredMeta !== undefined ? { structuredMeta: parseStructured(result.structuredMeta) } : {}),
+      ...(result.structured !== undefined ? { structured: parseCuaJson(result.structured) } : {}),
+      ...(result.structuredMeta !== undefined ? { structuredMeta: parseCuaJson(result.structuredMeta) } : {}),
     }))
     .filter((step) => Object.keys(step).length > 1);
   return {
@@ -667,6 +663,12 @@ function merge(results: ComputerResult[], steps: ComputerRequest[]): ComputerRes
 function validateScope(request: ComputerRequest): void {
   const hasPid = request.pid !== undefined;
   const hasWindow = request.windowId !== undefined;
+  if (hasPid) {
+    const pid = request.pid;
+    if (!Number.isSafeInteger(pid) || pid! < 0) {
+      throw new Error(uiText(`pid 不是合法的进程号：${pid}`, `pid is not a valid process id: ${pid}`));
+    }
+  }
   if (hasPid !== hasWindow) {
     throw new Error(uiText("pid 和 windowId 必须同时提供，或同时省略。", "pid and windowId must be provided together or both omitted."));
   }
@@ -793,27 +795,6 @@ function budgetImages(images: Array<{ mimeType: string; data: string }>): Array<
   return images.map(budgetImage);
 }
 
-const CUA_ENUMS: Record<string, string[]> = {
-  effect: ["Confirmed", "Partial", "Unverifiable", "SuspectedNoop", "Refused"],
-  route: ["Accessibility", "SyntheticEvents", "GlobalInput", "SystemApi", "Dom", "TrustedInput"],
-  mode: ["Background", "Foreground", "NotApplicable", "Unknown"],
-  target: ["Pixel", "Foreground", "Page", "Session"],
-  reason: ["RouteUnavailable", "DeliveryFailed", "EffectUnconfirmed", "SuspectedNoop", "PermissionRequired"],
-  status: ["Satisfied", "Unsatisfied", "Unknown"],
-  unknownReason: ["InvalidPredicate", "UnsupportedPredicate", "UntrustedSource", "MultiMatch", "TargetMissing", "ObservationUnavailable", "StabilityUnproven"],
-  kind: ["ValueReadback", "WindowChange"],
-};
-
-function normalizeCuaMetadata(value: unknown, key?: string): unknown {
-  if (typeof value === "bigint") return value.toString();
-  if (Array.isArray(value)) return value.map((item) => normalizeCuaMetadata(item, key));
-  if (!value || typeof value !== "object") {
-    if (typeof value === "number" && key && CUA_ENUMS[key]?.[value] !== undefined) return CUA_ENUMS[key][value];
-    return value;
-  }
-  return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, normalizeCuaMetadata(item, name)]));
-}
-
 function toolResult(result: {
   text: string;
   images: Array<{ mimeType: string; dataBase64: string }>;
@@ -839,7 +820,12 @@ function toolResult(result: {
     result.degraded || result.errorCode || result.action !== undefined || result.verification !== undefined || result.rawJson,
   );
   return {
-    text: result.text,
+    text: modelCuaResultText(result.text, result.structuredJson, {
+      degraded: result.degraded,
+      errorCode: result.errorCode,
+      action: result.action,
+      verification: result.verification,
+    }),
     images: budgetImages(result.images.map((image) => ({ mimeType: image.mimeType, data: image.dataBase64 }))),
     structured: result.structuredJson,
     structuredMeta: hasMetadata ? JSON.stringify(metadata, replacer, 2) : undefined,
@@ -850,6 +836,22 @@ function requiredNumber(request: ComputerRequest, key: keyof ComputerRequest): n
   const value = request[key];
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(uiText(`电脑操作缺少有效参数：${String(key)}`, `Computer action requires a valid ${String(key)}`));
+  }
+  return value;
+}
+
+function requiredPid(request: ComputerRequest): number {
+  const pid = requiredNumber(request, "pid");
+  if (!Number.isSafeInteger(pid) || pid < 0) {
+    throw new Error(uiText(`pid 不是合法的进程号：${pid}`, `pid is not a valid process id: ${pid}`));
+  }
+  return pid;
+}
+
+function requiredPositiveNumber(request: ComputerRequest, key: keyof ComputerRequest): number {
+  const value = requiredNumber(request, key);
+  if (value <= 0) {
+    throw new Error(uiText(`电脑操作参数必须大于 0：${String(key)}`, `Computer action parameter must be greater than 0: ${String(key)}`));
   }
   return value;
 }
@@ -910,39 +912,18 @@ async function dispatch(
     case "list_apps": {
       const output = await active.listApps(module.ListAppsInput.new({}), opts);
       return {
-        text: JSON.stringify(
-          output.apps.map((item) => ({
-            pid: item.pid,
-            name: item.name,
-            active: item.active,
-            bundleId: item.bundleId,
-          })),
-          null,
-          2,
-        ),
+        text: JSON.stringify(output.apps, replacer, 2),
         images: [],
       };
     }
 
     case "list_windows": {
       const output = await active.listWindows(
-        module.ListWindowsInput.new({ pid: request.pid, onScreenOnly: request.onScreenOnly ?? true }),
+        module.ListWindowsInput.new({ pid: request.pid === undefined ? undefined : requiredPid(request), onScreenOnly: request.onScreenOnly ?? true }),
         opts,
       );
       return {
-        text: JSON.stringify(
-          output.windows.map((item) => ({
-            // Stringified on the way out for the same reason it is parsed on the way in.
-            windowId: item.windowId.toString(),
-            pid: item.pid,
-            appName: item.appName,
-            title: item.title,
-            bounds: item.bounds,
-            minimized: item.minimized,
-          })),
-          null,
-          2,
-        ),
+        text: JSON.stringify(output.windows, replacer, 2),
         images: [],
       };
     }
@@ -950,8 +931,8 @@ async function dispatch(
     case "window_state": {
       const output = await active.getWindowState(
         module.GetWindowStateInput.new({
-          pid: request.pid ?? 0,
-          windowId: windowId(request.windowId),
+          pid: requiredPid(request),
+          windowId: requiredWindowId(request),
           session: SESSION,
           query: request.query,
           includeAccessibilityTree: true,
@@ -1058,12 +1039,12 @@ async function dispatch(
       return toolResult(
         await active.setWindowFrame(
           module.SetWindowFrameInput.new({
-            pid: request.pid ?? 0,
+            pid: requiredPid(request),
             windowId: requiredWindowId(request),
             x: requiredNumber(request, "x"),
             y: requiredNumber(request, "y"),
-            width: requiredNumber(request, "width"),
-            height: requiredNumber(request, "height"),
+            width: requiredPositiveNumber(request, "width"),
+            height: requiredPositiveNumber(request, "height"),
             session: SESSION,
           }),
           opts,
@@ -1187,7 +1168,7 @@ async function dispatch(
       return toolResult(
         await active.invokeMenu(
           module.InvokeMenuInput.new({
-            pid: request.pid ?? 0,
+            pid: requiredPid(request),
             windowId: requiredWindowId(request),
             path: request.path ?? [],
             session: SESSION,

@@ -94,7 +94,7 @@ note, and Settings → About → Changelog shows the installed version's note. B
 including the link to Chinese; adding a translation does not change the app's language selection.
 
 Draft mobile notes with `--tag app-vX.Y.Z`. The range starts at the previous `app-v` tag and
-includes commits touching `apps/mobile_flutter`. Write for someone holding a phone, and state
+includes commits touching `apps/mobile`. Write for someone holding a phone, and state
 any required desktop-host version in both languages.
 
 The complete release workflow is in [the release skill](../../.agents/skills/release/SKILL.md).

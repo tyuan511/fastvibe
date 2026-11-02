@@ -18,6 +18,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionUIContext,
+  type FileEntry,
   type LoadExtensionsResult,
   type SessionStartEvent,
   type ToolDefinition,
@@ -288,6 +289,7 @@ type FastVibeExtensionUIContext = ExtensionUIContext & {
 type AgentSpawnRequest = {
   conversationId: string;
   parentId?: string;
+  taskName?: string;
   agent: string;
   task: string;
   systemPrompt: string;
@@ -295,6 +297,8 @@ type AgentSpawnRequest = {
   model?: string;
   fallbackModel?: string;
   thinkingLevel?: ThinkingLevel;
+  forkTurns?: "none" | "all";
+  initialEntries?: FileEntry[];
   cwd: string;
 };
 type AgentMessageRequest = { conversationId: string; threadId: string; message: string; senderId: string };
@@ -2094,10 +2098,11 @@ export class PiProcessManager {
   async spawnAgent(request: AgentSpawnRequest): Promise<AgentThread> {
     const id = `agent-${randomUUID()}`;
     const identity = agentIdentityForId(id);
-    const thread = this.#agentThreads.create({ id, conversationId: request.conversationId, parentId: request.parentId, agent: request.agent, name: identity.name, avatarSeed: identity.avatarSeed, task: request.task, cwd: request.cwd, systemPrompt: request.systemPrompt, tools: request.tools, fallbackModel: request.fallbackModel, status: "queued" });
+    const thread = this.#agentThreads.create({ id, conversationId: request.conversationId, parentId: request.parentId, taskName: request.taskName, agent: request.agent, name: identity.name, avatarSeed: identity.avatarSeed, task: request.task, cwd: request.cwd, systemPrompt: request.systemPrompt, tools: request.tools, fallbackModel: request.fallbackModel, status: "queued" });
     const runId = `${id}:turn:1`;
+    const initialEntries = request.forkTurns === "all" ? this.#sessions.get(request.conversationId)?.session.sessionManager.getBranch() : undefined;
     this.#agentThreadRunIds.set(id, runId);
-    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: request.agent, displayName: identity.name, avatarSeed: identity.avatarSeed, task: request.task, systemPrompt: request.systemPrompt, tools: request.tools, model: request.model, fallbackModel: request.fallbackModel, thinkingLevel: request.thinkingLevel, cwd: request.cwd });
+    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: request.agent, displayName: identity.name, avatarSeed: identity.avatarSeed, task: request.task, systemPrompt: request.systemPrompt, tools: request.tools, model: request.model, fallbackModel: request.fallbackModel, thinkingLevel: request.thinkingLevel, forkTurns: request.forkTurns ?? "all", initialEntries, cwd: request.cwd });
     this.#agentThreadRuns.set(id, run);
     const started = this.#agentThreads.setStatus(id, "working", { startedAt: Date.now(), currentTurn: 1 });
     if (started) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: started });
@@ -2198,6 +2203,7 @@ export class PiProcessManager {
     const pending = this.#pendingUi.get(payload.id);
     if (!pending) return;
     this.#pendingUi.delete(payload.id);
+    this.#emit({ type: "extension_ui_dismiss", id: payload.id, conversationId: pending.conversationId });
     const resolved = payload.cancelled
       ? pending.fallback
       : Array.isArray(payload.answers)
@@ -2264,16 +2270,17 @@ export class PiProcessManager {
       return this.#opened(updated, this.#messages(managed.session, conversation.id), state);
   }
 
-  async openConversation(id: string): Promise<ConversationOpenResult> {
+  async openConversation(id: string, options?: { activate?: boolean }): Promise<ConversationOpenResult> {
       const conversation = this.#catalog.get(id);
       if (!conversation) throw new Error("conversation not found");
-      const activation = this.#activationTicket.begin();
+      const activate = options?.activate !== false;
+      const activation = activate ? this.#activationTicket.begin() : undefined;
       await this.#ensureReady();
       // Loading a session is asynchronous. Only the newest foreground request may
       // publish the active id after that load completes; otherwise an older click can
       // finish late and yank the renderer back to its conversation.
       const managed = await this.#ensureSession(conversation);
-      if (this.#activationTicket.isCurrent(activation)) this.#activate(managed);
+      if (activate && this.#activationTicket.isCurrent(activation!)) this.#activate(managed);
       const state = this.#state(managed.session, id);
       const messages = this.#messages(managed.session, id);
       const updated = this.#catalog.update(id, { sessionFile: state.sessionFile, sessionId: state.sessionId }) ?? conversation;

@@ -27,7 +27,7 @@ export function previewResources(mode: string, attempt = 0): void {
     running: { ...store.running, [id]: mode !== "empty" },
     subagents: mode === "empty" ? [] : [
       { id: "resource-worker", conversationId: id, name: "worker", detail: "完成资源面板的数据接入", status: "completed" },
-      { id: "resource-reviewer", conversationId: id, name: "reviewer", detail: "检查会话切换与状态隔离", status: "running", phase: "working" },
+      { id: "resource-explorer", conversationId: id, name: "explorer", detail: "检查会话切换与状态隔离", status: "running", phase: "working" },
       { id: "resource-waiting", conversationId: id, name: "designer", detail: "确认产出文件的展示顺序", status: "running", phase: "waiting" },
       { id: "T-resource", conversationId: id, name: "tester", detail: "检查多仓库审查跳转", status: "running" },
       { id: "other-conversation", conversationId: "other", name: "must-not-appear", status: "running" },

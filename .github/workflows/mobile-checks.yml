@@ -1,52 +1,43 @@
-name: Mobile Flutter checks
+name: Native mobile checks
 
 on:
   push:
     branches: [main]
-    paths:
-      - "apps/mobile_flutter/**"
-      - ".github/workflows/mobile-*.yml"
-      - "test/flutter-release.test.ts"
+    paths: ["apps/mobile/**", ".github/workflows/mobile-*.yml"]
   pull_request:
-    paths:
-      - "apps/mobile_flutter/**"
-      - ".github/workflows/mobile-*.yml"
-      - "test/flutter-release.test.ts"
+    paths: ["apps/mobile/**", ".github/workflows/mobile-*.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: mobile-checks-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  check:
+  core:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path apps/mobile/core/Cargo.toml
+      - run: cargo check --manifest-path apps/mobile/core/Cargo.toml --no-default-features
+      - run: cargo check --manifest-path apps/mobile/core/Cargo.toml --no-default-features --features mobile-client
+      - run: cargo check --manifest-path apps/mobile/core/Cargo.toml --no-default-features --features iroh-transport
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: 22
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version-file: apps/mobile_flutter/pubspec.yaml
-          cache: true
-          pub-cache-key: flutter-pub-${{ runner.os }}-${{ hashFiles('apps/mobile_flutter/pubspec.lock') }}
-      - name: Verify release metadata and translations
-        run: |
-          bash apps/mobile_flutter/tool/check_release.sh
-          node --test test/flutter-release.test.ts
-          node apps/mobile_flutter/tool/gen_i18n.mjs --check
-      - name: Install Flutter dependencies
-        working-directory: apps/mobile_flutter
-        run: flutter pub get --enforce-lockfile
-      - name: Analyze
-        working-directory: apps/mobile_flutter
-        run: flutter analyze
-      - name: Test
-        working-directory: apps/mobile_flutter
-        run: flutter test
+          targets: aarch64-linux-android
+      - working-directory: apps/mobile/android
+        run: ./gradlew :app:testDebugUnitTest :native:testDebugUnitTest :app:assembleDebug
+  ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test --package-path apps/mobile/ios

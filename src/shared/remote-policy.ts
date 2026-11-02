@@ -52,6 +52,24 @@ const DENIED = new Map<string, string>([
   [Ipc.windowToggleMaximize, "\u8fdc\u7a0b\u5ba2\u6237\u7aef\u6ca1\u6709\u7a97\u53e3"],
   [Ipc.windowClose, "\u8fdc\u7a0b\u5ba2\u6237\u7aef\u6ca1\u6709\u7a97\u53e3"],
   [Ipc.windowIsMaximized, "\u8fdc\u7a0b\u5ba2\u6237\u7aef\u6ca1\u6709\u7a97\u53e3"],
+  // Vivi is a window and desktop pet owned by the computer running FastVibe. A phone
+  // must not create, move or control that host-side UI through the remote transport.
+  [Ipc.viviGetSettings, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviSetSettings, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviGetState, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviGetSnapshot, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviShow, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviHide, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviToggle, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviResetPosition, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviPreviewMood, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviDragStart, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviDragEnd, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviOpenConversation, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviContextMenu, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
+  [Ipc.viviSetBubble, "Vivi 桌面宠物只能在本机控制"],
+  [Ipc.viviHitTest, "Vivi 桌面宠物只能在本机控制"],
+  [Ipc.viviRendererState, "Vivi 桌面宠物只能在本机控制"],
   // The menu bar is this machine's desktop chrome. A phone's chord edits belong to its own
   // copy of 快捷键, and rewriting the Mac's menu from across the network is not something
   // anybody asked for — and a menu that answered a remote client would be one the person

@@ -1,33 +1,34 @@
 name: Mobile Android APK
 
-# A release is built on main, not on its tag. Actions caches are scoped by ref: a run
-# can restore what its own ref or the default branch saved, and nothing else. A build
-# on the tag therefore started cold every time (0 restored, 0 saved — 543 of 617 Gradle
-# tasks executed) and wrote a cache no later tag could read. So pushing `app-v*` only
-# hands the tag to a workflow_dispatch run on main, which reads and writes main's
-# Gradle and Flutter caches and checks out the tag's commit to build.
+# Release tags dispatch a build on main so Gradle caches stay reusable. The dispatched run
+# checks out the tag, builds the native Android project, uploads a draft release, and only
+# then promotes it after the expected signed asset and checksum are present.
 on:
   push:
+    paths: ["apps/mobile/**", ".github/workflows/mobile-android.yml"]
     tags:
       - "app-v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "app-v* tag to build and publish (empty: build main, publish nothing)"
+        description: "app-v* tag to build and publish (empty: build main only)"
         required: false
         default: ""
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: mobile-android-${{ inputs.tag || github.ref }}
   cancel-in-progress: true
 
+env:
+  RELEASE_TAG: ${{ inputs.tag || '' }}
+
 jobs:
   dispatch:
-    name: Hand the tag to a build on main
-    if: github.event_name == 'push'
+    name: Hand the release tag to a build on main
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/app-v')
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -38,14 +39,10 @@ jobs:
         run: gh workflow run mobile-android.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$GITHUB_REF_NAME"
 
   build:
-    name: Build Android APK ${{ inputs.tag }}
-    if: github.event_name == 'workflow_dispatch'
+    name: Build native Android APK ${{ inputs.tag || 'main' }}
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/app-v'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      # The tag being released, or empty for a plain build of main.
-      RELEASE_TAG: ${{ inputs.tag }}
-
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -57,9 +54,6 @@ jobs:
         with:
           node-version: 22
 
-      # The release body is docs/release/<tag>.md, written and committed with the version
-      # bump, and the app shows it as its 更新日志. Fail here, in seconds, rather than after
-      # the build has spent its fifteen minutes.
       - name: Check release note
         if: startsWith(inputs.tag, 'app-v')
         run: node scripts/check-release-note.mjs --tag "$RELEASE_TAG"
@@ -70,50 +64,20 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Rust Android target
+        uses: dtolnay/rust-toolchain@stable
         with:
-          channel: stable
-          flutter-version-file: apps/mobile_flutter/pubspec.yaml
-          cache: true
-          pub-cache-key: flutter-pub-${{ runner.os }}-${{ hashFiles('apps/mobile_flutter/pubspec.lock') }}
-
-      - name: Verify mobile release version
-        run: bash apps/mobile_flutter/tool/check_release.sh
-
-      - name: Verify generated translations
-        run: node apps/mobile_flutter/tool/gen_i18n.mjs --check
-
-      - name: Install Flutter dependencies
-        working-directory: apps/mobile_flutter
-        run: flutter pub get --enforce-lockfile
-
-      - name: Analyze mobile app
-        working-directory: apps/mobile_flutter
-        run: flutter analyze
-
-      - name: Test mobile app
-        working-directory: apps/mobile_flutter
-        run: flutter test
-
-      # The committed Flutter native project is built directly; cache keys follow its
-      # dependencies and Gradle configuration, with previous entries as a fallback.
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-disabled: true
-
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: flutter-gradle-${{ runner.os }}-${{ hashFiles('apps/mobile_flutter/pubspec.lock', 'apps/mobile_flutter/android/**/*.gradle.kts', 'apps/mobile_flutter/android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            flutter-gradle-${{ runner.os }}-
+          targets: aarch64-linux-android
 
       - name: Decode Android release keystore
+        if: startsWith(inputs.tag, 'app-v')
         env:
           FASTVIBE_ANDROID_KEYSTORE_BASE64: ${{ secrets.FASTVIBE_ANDROID_KEYSTORE_BASE64 }}
         run: |
@@ -123,12 +87,10 @@ jobs:
             | base64 --decode > "$RUNNER_TEMP/fastvibe-release.keystore"
           chmod 600 "$RUNNER_TEMP/fastvibe-release.keystore"
 
-      # A PKCS12 keystore (keytool's default) keys its entry with the store password,
-      # whatever -keypass said, so a separate key password fails at packageRelease after
-      # fifteen minutes of compiling. Find out up front which secret actually unlocks the
-      # key, with the same KeyStore.getKey call the Android Gradle plugin makes. Only the
-      # choice leaves this step; the passwords stay in the secrets.
+      # Resolve the PKCS12 key password exactly as the Android Gradle plugin does. The
+      # selected source is the only output; the password values stay in the environment.
       - name: Resolve release key password
+        if: startsWith(inputs.tag, 'app-v')
         id: signing
         env:
           FASTVIBE_ANDROID_STORE_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_STORE_PASSWORD }}
@@ -147,70 +109,130 @@ jobs:
             echo "key-password=key" >> "$GITHUB_OUTPUT"
           fi
 
-      # User Gradle properties outrank the project's local-build memory settings.
-      - name: Configure Gradle for CI
-        run: |
-          mkdir -p "$HOME/.gradle"
-          cat >> "$HOME/.gradle/gradle.properties" <<'EOF'
-          org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
-          org.gradle.caching=true
-          EOF
-
-      - name: Build signed arm64 APK
-        working-directory: apps/mobile_flutter
+      - name: Build signed native Android release
+        if: startsWith(inputs.tag, 'app-v')
+        working-directory: apps/mobile/android
         env:
           FASTVIBE_ANDROID_STORE_FILE: ${{ runner.temp }}/fastvibe-release.keystore
           FASTVIBE_ANDROID_STORE_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_STORE_PASSWORD }}
           FASTVIBE_ANDROID_KEY_ALIAS: ${{ secrets.FASTVIBE_ANDROID_KEY_ALIAS }}
           FASTVIBE_ANDROID_KEY_PASSWORD: ${{ steps.signing.outputs.key-password == 'store' && secrets.FASTVIBE_ANDROID_STORE_PASSWORD || secrets.FASTVIBE_ANDROID_KEY_PASSWORD }}
-        run: bash tool/build_release.sh
+        run: bash tool/build.sh --release --with-aar
 
-      # Stop the daemon before the cache step packs ~/.gradle, so it is not archiving
-      # files the daemon still holds open.
+      - name: Build unsigned debug native Android package
+        if: ${{ !startsWith(inputs.tag, 'app-v') }}
+        working-directory: apps/mobile/android
+        run: bash tool/build.sh
+
       - name: Stop Gradle daemon
-        if: always() && hashFiles('apps/mobile_flutter/android/gradlew') != ''
-        working-directory: apps/mobile_flutter/android
+        if: always()
+        working-directory: apps/mobile/android
         run: ./gradlew --stop
 
       - name: Name and verify APK
+        id: package
+        working-directory: apps/mobile/android
+        env:
+          FASTVIBE_ANDROID_STORE_PASSWORD: ${{ secrets.FASTVIBE_ANDROID_STORE_PASSWORD }}
         run: |
           set -euo pipefail
-          apk="FastVibe-${RELEASE_TAG:-main-${GITHUB_SHA::7}}-arm64-v8a.apk"
+          source tool/version.sh
+          load_android_version version.properties
+          if [[ -n "$RELEASE_TAG" ]]; then
+            apk_source="app/build/outputs/apk/release/app-release.apk"
+            apk="FastVibe-${RELEASE_TAG}-arm64-v8a.apk"
+            bash tool/verify-release.sh "$apk_source" \
+              --keystore "$RUNNER_TEMP/fastvibe-release.keystore" \
+              --alias "${{ secrets.FASTVIBE_ANDROID_KEY_ALIAS }}" \
+              --store-password-env FASTVIBE_ANDROID_STORE_PASSWORD
+          else
+            apk_source="app/build/outputs/apk/debug/app-debug.apk"
+            apk="FastVibe-main-${GITHUB_SHA::7}-arm64-v8a.apk"
+          fi
+          test -f "$apk_source"
+          cp "$apk_source" "$GITHUB_WORKSPACE/$apk"
+          (cd "$GITHUB_WORKSPACE" && sha256sum "$apk") > "$GITHUB_WORKSPACE/$apk.sha256"
+          echo "asset=$apk" >> "$GITHUB_OUTPUT"
           echo "APK=$apk" >> "$GITHUB_ENV"
-          cp apps/mobile_flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "$apk"
-          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
-          test -n "$apksigner"
-          "$apksigner" verify --verbose --print-certs "$apk"
-          sha256sum "$apk" > "$apk.sha256"
-          ls -lh "$apk" "$apk.sha256"
+          ls -lh "$GITHUB_WORKSPACE/$apk" "$GITHUB_WORKSPACE/$apk.sha256"
 
-      - name: Upload APK artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APK }}
+          name: ${{ steps.package.outputs.asset }}
           path: |
-            ${{ env.APK }}
-            ${{ env.APK }}.sha256
+            ${{ steps.package.outputs.asset }}
+            ${{ steps.package.outputs.asset }}.sha256
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish GitHub Release
-        if: startsWith(inputs.tag, 'app-v')
+      - name: Remove Android release keystore
+        if: always() && startsWith(inputs.tag, 'app-v')
+        run: rm -f "$RUNNER_TEMP/fastvibe-release.keystore"
+
+  draft:
+    name: Upload signed APK to draft release
+    needs: build
+    if: startsWith(inputs.tag, 'app-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: FastVibe-${{ inputs.tag }}-arm64-v8a.apk
+          path: release-assets
+      - name: Verify staged files
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          apk="release-assets/FastVibe-${RELEASE_TAG}-arm64-v8a.apk"
+          checksum="$apk.sha256"
+          test -s "$apk"
+          test -s "$checksum"
+          (cd release-assets && sha256sum --check "$(basename "$checksum")")
+      - name: Create or update draft release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
           name: FastVibe Mobile ${{ inputs.tag }}
           body_path: docs/release/${{ inputs.tag }}.md
-          draft: false
+          draft: true
           prerelease: false
           make_latest: false
           fail_on_unmatched_files: true
           files: |
-            ${{ env.APK }}
-            ${{ env.APK }}.sha256
+            release-assets/FastVibe-${{ inputs.tag }}-arm64-v8a.apk
+            release-assets/FastVibe-${{ inputs.tag }}-arm64-v8a.apk.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Remove Android release keystore
-        if: always()
-        run: rm -f "$RUNNER_TEMP/fastvibe-release.keystore"
+  publish:
+    name: Publish verified mobile release
+    needs: draft
+    if: startsWith(inputs.tag, 'app-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Verify draft assets before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          expected="FastVibe-${RELEASE_TAG}-arm64-v8a.apk"
+          assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,assets)"
+          test "$(jq -r '.isDraft' <<< "$assets")" = true
+          jq -e --arg apk "$expected" --arg sha "$expected.sha256" \
+            '[.assets[].name] | index($apk) and index($sha)' <<< "$assets" >/dev/null
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false

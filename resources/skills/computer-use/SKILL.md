@@ -57,7 +57,8 @@ computer_batch([
 - `computer_key` / `computer_hotkey`：单键（可带修饰键）和组合键。
 - `computer_menu`：走应用菜单，比点击屏幕上展开的菜单可靠，因为不依赖展开后的坐标。
 - `computer_scroll`：滚动。
-- `computer_verify_state`：等待一个窗口满足元素或窗口条件，适合点击、输入、拖动后的确认；多个条件会同时检查。
+- `computer_verify_state`：等待一个窗口满足元素或窗口条件，适合点击、输入、拖动后的确认；多个条件会同时检查，结果会直接返回给模型。
+- 动作返回会包含 CUA 的 effect、route、delivery 和 verification 结果；看到 `Partial`、`Unverifiable`、`Refused` 或 `Unknown` 时必须重新观测，不要当成成功继续。
 - `computer_drag`：拖动滑块、文件或窗口。坐标必须来自最新状态或截图，完成后再验证。
 - `computer_move_cursor`：移动可见的 Agent Cursor，不执行点击，用于定位或让用户看清动作位置。
 - `computer_set_window_frame`：移动或调整窗口大小；先读取窗口 bounds，完成后验证。

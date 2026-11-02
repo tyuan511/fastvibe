@@ -1,0 +1,221 @@
+import { join } from "node:path";
+import type { RemoteSocket } from "../server/server.ts";
+import { getFastVibePaths } from "../engine/paths.ts";
+import { IrohRelayLease, type IrohRelayLeaseAccount } from "./iroh-relay.ts";
+import { IrohSidecar, IrohSocket, type IrohSidecarEvent } from "./iroh-sidecar.ts";
+import type { IrohRemoteState, IrohPeerPath } from "../../shared/iroh-remote";
+
+export type IrohRemoteDeps = {
+  account: IrohRelayLeaseAccount;
+  deviceId: string | (() => string);
+  attach: (socket: RemoteSocket, peer: { id: string; label: string }) => void;
+  log: { info(message: string): void; warn(message: string, error?: unknown): void };
+  onChange?: () => void;
+  authorizePeer?: (endpointId: string) => Promise<boolean>;
+  identityFile?: string;
+};
+
+/**
+ * Makes the Rust iroh sidecar another authenticated input to the existing RemoteServer.
+ *
+ * The sidecar owns QUIC and iroh path selection. Main owns the Control-issued lease, byte
+ * checkpoint policy and App Protocol socket adapter. No Relay URL or token is embedded here.
+ */
+export class IrohRemoteConnection {
+  #deps: IrohRemoteDeps;
+  #sidecar = new IrohSidecar();
+  #lease: IrohRelayLease | null = null;
+  #sockets = new Map<string, IrohSocket>();
+  #paths = new Map<string, "connecting" | "direct" | "relay">();
+  #started = false;
+  #stopping = false;
+  #endpointId: string | null = null;
+  #error: string | undefined;
+  #signedOut = false;
+  #startFlight: Promise<void> | null = null;
+  #onEvent: (event: IrohSidecarEvent) => void;
+
+  constructor(deps: IrohRemoteDeps) {
+    this.#deps = deps;
+    this.#onEvent = (event) => this.#handle(event);
+    this.#sidecar.on("event", this.#onEvent);
+    this.#sidecar.on("log", (message: string) => this.#deps.log.warn(`iroh: ${message.trim()}`));
+    this.#sidecar.on("error", (error: Error) => {
+      this.#started = false;
+      this.#error = error.message;
+      this.#deps.onChange?.();
+    });
+    this.#sidecar.on("exit", () => {
+      this.#started = false;
+      if (!this.#error) this.#error = "iroh transport exited";
+
+      this.#sockets.clear();
+      this.#paths.clear();
+      this.#deps.onChange?.();
+    });
+  }
+
+  state(enabled: boolean): IrohRemoteState {
+    const status: IrohRemoteState["status"] = !enabled ? "off" : this.#signedOut ? "signed-out" : this.#error ? "error" : this.#started ? "online" : "connecting";
+    return {
+      enabled,
+      status,
+      endpointId: this.#endpointId,
+      ...(this.#error ? { error: this.#error } : {}),
+      peers: [...this.#sockets.keys()].map((id) => ({ id, label: id, path: (this.#paths.get(id) ?? "connecting") as IrohPeerPath })),
+      ...(this.#lease?.state().usage ? { usage: this.#lease.state().usage! } : {}),
+    };
+  }
+
+  get running(): boolean {
+    return this.#started;
+  }
+
+  setSignedOut(signedOut: boolean): void {
+    this.#signedOut = signedOut;
+    if (signedOut) this.#error = undefined;
+    this.#deps.onChange?.();
+  }
+
+  path(connectionId: string): "connecting" | "direct" | "relay" | null {
+    return this.#paths.get(connectionId) ?? null;
+  }
+
+  async start(): Promise<void> {
+    if (this.#started) return;
+    if (this.#startFlight) return this.#startFlight;
+    this.#startFlight = this.#startOnce().finally(() => { this.#startFlight = null; });
+    return this.#startFlight;
+  }
+
+  async #startOnce(): Promise<void> {
+    if (this.#started) return;
+    if (this.#stopping) throw new Error("iroh remote is stopping");
+    const paths = getFastVibePaths();
+    const identityFile = this.#deps.identityFile ?? join(paths.runtimeRoot, "iroh-endpoint.key");
+    const deviceId = typeof this.#deps.deviceId === "function" ? this.#deps.deviceId() : this.#deps.deviceId;
+    if (!deviceId) {
+      this.#signedOut = true;
+      this.#error = "official device is not registered";
+      this.#deps.onChange?.();
+      throw new Error(this.#error);
+    }
+    this.#signedOut = false;
+    try {
+      const endpointId = await this.#sidecar.identity(identityFile);
+      this.#endpointId = endpointId;
+      await this.#deps.account.setIrohEndpoint?.(deviceId, endpointId);
+      const lease = new IrohRelayLease({
+        account: this.#deps.account,
+        deviceId,
+        endpointId,
+        onConfig: (config) => {
+          if (this.#started) void this.#sidecar.refresh(config).catch((error: unknown) => this.#deps.log.warn("iroh relay credential refresh failed", error));
+        },
+        onError: (error) => this.#deps.log.warn("iroh relay lease failed", error),
+      });
+      const config = await this.#deps.account.issueIrohRelay(deviceId, endpointId);
+      lease.adopt(config);
+      this.#lease = lease;
+      await this.#sidecar.startLease(config);
+      this.#started = true;
+      this.#error = undefined;
+      this.#deps.log.info(`iroh remote endpoint ready: ${endpointId}`);
+      this.#deps.onChange?.();
+    } catch (error) {
+      this.#started = false;
+      this.#error = error instanceof Error ? error.message : String(error);
+      this.#lease?.close();
+      this.#lease = null;
+      await this.#sidecar.stop().catch((stopError: unknown) => this.#deps.log.warn("iroh sidecar cleanup failed", stopError));
+      this.#deps.onChange?.();
+      throw error;
+    }
+  }
+
+  disconnectPeers(): void {
+    for (const socket of this.#sockets.values()) socket.terminate();
+    this.#sockets.clear();
+    this.#paths.clear();
+    this.#deps.onChange?.();
+  }
+
+  async stop(): Promise<void> {
+    if (!this.#started && !this.#lease) return;
+    this.#stopping = true;
+    try {
+      await this.#lease?.flush().catch((error: unknown) => this.#deps.log.warn("iroh usage flush failed", error));
+      this.#lease?.close();
+      await this.#sidecar.stop();
+      for (const socket of this.#sockets.values()) socket.terminate();
+      this.#sockets.clear();
+      this.#paths.clear();
+      this.#started = false;
+      this.#lease = null;
+      this.#deps.onChange?.();
+    } finally {
+      this.#stopping = false;
+    }
+  }
+
+  async dispose(): Promise<void> {
+    this.#sidecar.off("event", this.#onEvent);
+    await this.stop();
+  }
+
+  async #socketFor(event: Extract<IrohSidecarEvent, { type: "connected" }>, socket: IrohSocket): Promise<IrohSocket | null> {
+    if (this.#deps.authorizePeer) {
+      let allowed = false;
+      try {
+        allowed = await this.#deps.authorizePeer(event.remoteId);
+      } catch (error) {
+        this.#deps.log.warn("iroh peer authorization failed", error);
+      }
+      if (!allowed) {
+        socket.terminate();
+        return null;
+      }
+    }
+    return socket;
+  }
+
+  #handle(event: IrohSidecarEvent): void {
+    if (event.type === "connected") {
+      void this.#accept(event);
+      return;
+    }
+    if (event.type === "path") {
+      this.#paths.set(event.connectionId, event.path);
+      this.#deps.onChange?.();
+      return;
+    }
+    if (event.type === "traffic") {
+      if (this.#paths.get(event.connectionId) !== "relay") return;
+      this.#lease?.recordTraffic(event.direction === "in" ? { bytesIn: event.bytes, bytesOut: 0 } : { bytesIn: 0, bytesOut: event.bytes });
+    }
+  }
+
+  async #accept(event: Extract<IrohSidecarEvent, { type: "connected" }>): Promise<void> {
+    const socket = new IrohSocket(this.#sidecar, event.connectionId, true);
+    this.#sockets.set(event.connectionId, socket);
+    this.#paths.set(event.connectionId, "connecting");
+    socket.once("close", () => {
+      this.#sockets.delete(event.connectionId);
+      this.#paths.delete(event.connectionId);
+      this.#deps.onChange?.();
+    });
+    const allowed = await this.#socketFor(event, socket);
+    if (!allowed || socket.readyState !== socket.OPEN || !this.#started || this.#stopping) {
+      socket.terminate();
+      return;
+    }
+    try {
+      this.#deps.attach(socket, { id: `iroh:${event.connectionId}`, label: `iroh ${event.remoteId.slice(0, 12)}` });
+      socket.resumeMessages();
+      this.#deps.onChange?.();
+    } catch (error) {
+      socket.terminate();
+      this.#deps.log.warn("iroh client attachment failed", error);
+    }
+  }
+}

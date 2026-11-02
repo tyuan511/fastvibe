@@ -1,0 +1,6 @@
+// Native mobile build outputs and local machine settings
+.gradle/
+local.properties
+build/
+.cxx/
+*.keystore

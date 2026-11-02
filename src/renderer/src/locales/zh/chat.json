@@ -210,6 +210,32 @@
     "errorDetailHide": "收起详情",
     "errorDetailCopy": "复制报错"
   },
+  "vivi": {
+    "sendFailed": "消息发送失败，请重试。",
+    "newChat": "开始新聊天",
+    "followUp": "继续跟进",
+    "send": "发送",
+    "dismiss": "关闭气泡",
+    "name": "Vivi",
+    "activeCount": "{{count}} 个任务",
+    "pendingCount": "{{count}} 项待处理",
+    "expand": "展开",
+    "collapse": "收起",
+    "review": "查看请求",
+    "openConversation": "打开对话",
+    "connectionFailed": "暂时无法读取任务，稍后会重试。",
+    "responseFailed": "提交失败，请重试。",
+    "answerReceived": "收到，已经把你的回答交给 Agent 了。",
+    "tool": "正在使用 {{tool}}",
+    "moods": {
+      "idle": "我在这里陪你。",
+      "thinking": "正在认真思考…",
+      "working": "正在帮你处理任务…",
+      "waiting": "需要你的确认或回答。",
+      "success": "任务完成啦！",
+      "error": "遇到一点问题，打开对话看看吧。"
+    }
+  },
   "permission": {
     "needConfirm": "需要确认",
     "needDecision": "需要你的决定",

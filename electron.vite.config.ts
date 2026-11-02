@@ -117,6 +117,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve("src/renderer/index.html"),
+          vivi: resolve("src/renderer/vivi.html"),
         },
       },
     },

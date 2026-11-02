@@ -20,6 +20,7 @@ import { createNodeDataChannelPeer, shutdownWebRtc } from "./rtc/peer";
 import { probePath, systemInterfaces } from "./rtc/netpath";
 import { PortMapper } from "./rtc/portmap";
 import { OfficialConnection } from "./rtc/official";
+import { IrohRemoteConnection } from "./rtc/iroh-remote";
 
 /**
  * Where remote access meets the desktop app.
@@ -42,12 +43,43 @@ import { OfficialConnection } from "./rtc/official";
 
 let server: RemoteServer | null = null;
 let official: OfficialConnection | null = null;
+let irohRemote: IrohRemoteConnection | null = null;
+let irohStartFlight: Promise<void> | null = null;
 let mdns: MdnsAdvertiser | null = null;
 /** Asks the router to forward a port to each official call, for the length of that call. */
 const portMapper = new PortMapper({ log: { info: (message) => log.info(message), warn: (message) => log.warn(message) } });
 
 /** Default port for the LAN listener. */
 const DEFAULT_PORT = 7777;
+
+async function reconcileIroh(account?: AccountService): Promise<void> {
+  if (!irohRemote || !account) return;
+  const enabled = readAppSettings(getFastVibePaths()).remoteEnabled === true;
+  const deviceId = official?.state().deviceId;
+  if (!enabled) {
+    await irohRemote.stop();
+    irohRemote.setSignedOut(false);
+    return;
+  }
+  if (!account.token() || !deviceId) {
+    await irohRemote.stop();
+    irohRemote.setSignedOut(true);
+    return;
+  }
+  if (irohRemote.running) return;
+  if (irohStartFlight) return irohStartFlight;
+  irohStartFlight = (async () => {
+    try {
+      await irohRemote.start();
+    } catch (error) {
+      log.warn("iroh remote transport unavailable", error);
+    } finally {
+      irohStartFlight = null;
+      announceFromServer();
+    }
+  })();
+  return irohStartFlight;
+}
 
 function instance(): RemoteServer {
   return (server ??= new RemoteServer({
@@ -166,7 +198,9 @@ function state(): RemoteServerState {
     lanAddresses: lanAddresses(),
     deviceName: readChosenName(),
     defaultDeviceName: computerName(),
-    official: official?.state() ?? OFFICIAL_OFF,
+    iroh: irohRemote?.state(readEnabled()) ?? {
+      enabled: readEnabled(), status: readEnabled() ? "connecting" : "off", endpointId: null, peers: [],
+    },
   };
 }
 
@@ -183,7 +217,7 @@ function announce(): RemoteServerState {
   const next = state();
   // Either way in is a reason not to sleep under a phone that is looking for this machine.
   setRemoteServing(next.running, "listener");
-  setRemoteServing(next.official.enabled && next.official.status === "online", "official");
+  setRemoteServing(next.iroh.enabled && next.iroh.status === "online", "official");
   syncDiscovery();
   broadcast(Ipc.remoteState, next);
   return next;
@@ -218,13 +252,24 @@ async function bringUp(): Promise<RemoteServerState> {
 }
 
 export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>) => Promise<void>, account: AccountService): void {
+  irohRemote = new IrohRemoteConnection({
+    account,
+    deviceId: () => official?.state().deviceId ?? "",
+    attach: (socket, peer) => instance().attachTransport(socket, peer),
+    log: { info: (message) => log.info(message), warn: (message, error) => log.warn(message, error) },
+    onChange: announceFromServer,
+    authorizePeer: async (endpointId) => (await account.irohEndpointIds()).has(endpointId),
+  });
   official = new OfficialConnection({
     account: { token: () => account.token(), origin: () => account.origin() },
     attach: (socket, peer) => instance().attachTransport(socket, peer),
     installFile: getFastVibePaths().rtcDeviceFile,
     deviceName,
     platform: process.platform,
-    onChange: () => announceFromServer(),
+    onChange: () => {
+      announceFromServer();
+      void reconcileIroh(account);
+    },
     createPeer: (iceServers, options) => createNodeDataChannelPeer(iceServers, (message) => log.warn(message), options),
     network: { probe: (servers) => probePath(servers), interfaces: systemInterfaces },
     portMap: portMapper,
@@ -232,7 +277,10 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
   });
   // Signing in or out, or a refresh finding the token revoked, decides whether there is
   // anyone to be reachable as.
-  account.subscribe(() => official?.accountChanged());
+  account.subscribe(() => {
+    official?.accountChanged();
+    void reconcileIroh(account);
+  });
 
   handle(Ipc.remoteGetState, () => state());
 
@@ -301,6 +349,7 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
 
   handle(Ipc.remoteStop, async () => {
     official?.setEnabled(false);
+    await irohRemote?.stop();
     await instance().stop();
     await queueSettingsWrite(async () => writeRemoteSettings({ remoteEnabled: false }));
     return announce();
@@ -323,6 +372,7 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
   /** Drop every phone connected through the account, leaving the connection itself up. */
   handle(Ipc.remoteOfficialDisconnect, () => {
     official?.disconnectPeers();
+    irohRemote?.disconnectPeers();
     return announce();
   });
 }
@@ -346,6 +396,7 @@ export async function restoreRemoteServer(): Promise<void> {
 
 export async function stopRemoteServer(): Promise<void> {
   official?.shutdown();
+  await irohRemote?.stop();
   // Closing the calls takes their forwarded ports down; this is for one still being asked for.
   void portMapper.close();
   shutdownWebRtc();

@@ -1,0 +1,9 @@
+Pods/
+DerivedData/
+xcuserdata/
+.build/
+.swiftpm/
+.native-build/
+.xcode-build/
+.xcode-sim-build/
+.xcode-final/

@@ -40,6 +40,7 @@ type AgentFrontmatter = {
 	tools?: unknown;
 	model?: unknown;
 	thinkingLevel?: unknown;
+	model_reasoning_effort?: unknown;
 };
 
 const THINKING_LEVELS = new Set<ThinkingLevel>(["minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -108,7 +109,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			description: frontmatter.description,
 			tools: parseToolList(frontmatter.tools),
 			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
-			thinkingLevel: parseAgentThinkingLevel(frontmatter.thinkingLevel),
+			thinkingLevel: parseAgentThinkingLevel(frontmatter.thinkingLevel ?? frontmatter.model_reasoning_effort),
 			systemPrompt: body,
 			source,
 			filePath,

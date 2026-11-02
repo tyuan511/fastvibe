@@ -42,6 +42,10 @@ afterPack: scripts/check-packaged-deps.cjs
 # Runtime assets are looked up under process.resourcesPath (src/main/index.ts,
 # src/main/engine/models-dev.ts), so they must live outside the asar archive.
 extraResources:
+  - from: resources/vivi
+    to: vivi
+  - from: resources/iroh
+    to: iroh
   - from: resources/models-dev
     to: models-dev
   # The vendored vscode-icons set: `file-icons.ts` reads `manifest.json` and serves `icons/` at

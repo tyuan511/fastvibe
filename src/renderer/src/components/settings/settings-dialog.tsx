@@ -41,6 +41,7 @@ import { ShortcutsSettings } from "./shortcuts-settings";
 import { AboutSettings } from "./about-settings";
 import { PersonalizationSettings } from "./personalization-settings";
 import { SubagentsSettings } from "./subagents-settings";
+import { ViviSettings } from "./vivi-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
 import {
   SETTINGS_SECTIONS,
@@ -436,6 +437,7 @@ export function SettingsDialog({
 
           {section === "personalization" ? <PersonalizationSettings /> : null}
           {section === "shortcuts" ? <ShortcutsSettings /> : null}
+          {section === "vivi" ? <ViviSettings /> : null}
           {section === "providers" ? <ProvidersSettings models={models} onChanged={() => onProvidersChanged?.()} /> : null}
           {section === "archived" ? <ArchivedSettings onDeleteConversations={onDeleteConversations} /> : null}
           {section === "usage" ? <UsageSettings /> : null}

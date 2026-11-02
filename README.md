@@ -27,7 +27,7 @@ Get the desktop app from [GitHub Releases](https://github.com/tyuan511/fastvibe/
 
 On macOS, open the DMG and drag FastVibe into Applications. On Windows, run the installer. On Linux, install the DEB or make the AppImage executable before launching it. The desktop app checks for updates; you choose when to download and restart.
 
-The [Android releases](https://github.com/tyuan511/fastvibe/releases?q=app-v&expanded=true) provide an arm64 APK for the companion app. iOS can be built from the [Flutter project](apps/mobile_flutter/README.md).
+The [Android client](apps/mobile/android) and [iOS client](apps/mobile/ios) are native Compose/SwiftUI apps backed by the shared Rust core.
 
 ## Get started
 
@@ -47,7 +47,7 @@ The [Android releases](https://github.com/tyuan511/fastvibe/releases?q=app-v&exp
 - **Your models and tools.** Configure providers and per-model protocols, connect MCP servers, and add skills or pi extensions. Track token usage and estimated cost across conversations.
 - **Browser and computer use.** Let the agent work in the embedded browser, or enable desktop control on macOS and Windows — one click, keystroke or scroll at a time, decided by your model.
 - **Optional long-term memory.** Let finished conversations inform future work through local Markdown notes. Memory is off by default and can be inspected or cleared in Settings.
-- **Work across devices.** Continue from the Flutter phone app, or connect the desktop to a headless Linux Agent over SSH. Chinese and English interfaces, themes, interface scaling, and configurable shortcuts are included.
+- **Work across devices.** Continue from the native mobile app, or connect the desktop to a headless Linux Agent over SSH. Chinese and English interfaces, themes, interface scaling, and configurable shortcuts are included.
 
 ## Use your phone
 
@@ -93,7 +93,8 @@ pnpm dev
 | `pnpm build` | Build the desktop app into `out/` |
 | `pnpm dist:mac` / `pnpm dist:win` / `pnpm dist:linux` | Package desktop installers |
 | `pnpm sync:models` | Refresh the models.dev snapshot |
-| `pnpm flutter:analyze` / `pnpm flutter:test` | Check the Flutter companion app |
+| `pnpm mobile:core:test` | Test the shared Rust mobile core |
+| `pnpm mobile:android` / `pnpm mobile:ios` | Build or test the native mobile clients |
 
 To preview the renderer in a browser:
 
@@ -111,7 +112,7 @@ src/preload/          Electron bridge
 src/shared/           Shared APIs, types, and App Protocol
 src/agent/            Headless Linux Agent
 resources/            Bundled extensions, skills, icons, and model metadata
-apps/mobile_flutter/  iOS and Android companion app
+apps/mobile/         Native iOS / Android clients and shared Rust core
 ```
 
-For deeper work, see the [architecture and repository conventions](AGENTS.md), [multi-folder projects](docs/multi-folder-projects.md), [Agent runtime releases](docs/agent-runtime.md), and [Flutter development guide](apps/mobile_flutter/README.md). Report problems through [GitHub Issues](https://github.com/tyuan511/fastvibe/issues), including your app version, operating system, and steps to reproduce.
+For deeper work, see the [architecture and repository conventions](AGENTS.md), [multi-folder projects](docs/multi-folder-projects.md), [Agent runtime releases](docs/agent-runtime.md), and [native mobile client](apps/mobile/README.md). Report problems through [GitHub Issues](https://github.com/tyuan511/fastvibe/issues), including your app version, operating system, and steps to reproduce.

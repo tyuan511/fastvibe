@@ -66,6 +66,9 @@ import {
 } from "./pi/cua-bridge";
 import { cancelGrantFlow } from "./pi/computer-grant-flow";
 import { syncScheduleTray, disposeScheduleTray } from "./schedule-tray";
+import { registerViviScheme, registerViviProtocol } from "./vivi/loader";
+import { getViviPetWindow, destroyViviPetWindow } from "./vivi/pet-window";
+import { registerViviIpc } from "./vivi/ipc-handlers";
 
 // Every static import above has been evaluated by now; the gap from process start is the cost of loading the bundle.
 markStartup("main-loaded");
@@ -95,6 +98,7 @@ const childEnvironment = applyShellPathAsync()
 
 // Privileged schemes must be declared before the app is ready.
 registerFileIconScheme();
+registerViviScheme();
 
 // A guest's popup must never become a second window — see `guardGuestPopups`. Registered
 // here, before any window exists, so no guest can be created ahead of it.
@@ -517,6 +521,7 @@ app.whenReady().then(async () => {
   registerMediaProtocol({
     remoteEndpoint: (serverInstanceId) => remoteConnections.mediaEndpoint(serverInstanceId),
   });
+  registerViviProtocol();
   // Every module that owns methods registers them first; the transport is attached
   // once, afterwards. Wiring inside `registerDesktopIpc` meant the updater's four methods —
   // registered on the next line — landed in the table after the loop had already run,
@@ -539,6 +544,13 @@ app.whenReady().then(async () => {
     () => windows,
     () => createWindow(),
   );
+  registerViviIpc({
+    queueSettingsWrite,
+    openConversation: async (conversationId) => {
+      openWindow();
+      if (conversationId) await gateway.dispatch(Ipc.conversationsOpen, { id: conversationId }, { window: [...windows][0] ?? null });
+    },
+  });
   const account = registerAccount(
     () => windows,
     () => createWindow(),
@@ -632,6 +644,22 @@ app.whenReady().then(async () => {
     if (event.type === "extension_ui_request") {
       void engine.handleExtensionUi(event);
     }
+    if (event.type === "conversation_running" || event.type === "extension_ui_request" || event.type === "extension_ui_dismiss" || event.type === "conversation_activity") {
+      const pet = getViviPetWindow();
+      const workspace = engine.listWorkspace();
+      const running = new Set(engine.getRunningConversations());
+      const pending = new Set(engine.getPendingUi().map((item) => typeof item.conversationId === "string" ? item.conversationId : ""));
+      pet.updateActors(workspace.conversations.filter((conversation) => running.has(conversation.id) || pending.has(conversation.id)).map((conversation) => ({
+        id: conversation.id,
+        label: conversation.title,
+        conversationId: conversation.id,
+        mood: pending.has(conversation.id) ? "waiting" : "working",
+        palette: pet.getSettings().palette,
+      })));
+      if (event.type === "conversation_activity") {
+        pet.setMood(event.status === "failed" ? "error" : "success", typeof event.conversationId === "string" ? event.conversationId : undefined);
+      }
+    }
     // 运行时保持唤醒: the engine broadcasts run start/end for every conversation,
     // active or not, so a background chat keeps the machine up too.
     if (event.type === "conversation_running") {
@@ -677,6 +705,9 @@ app.whenReady().then(async () => {
   });
   // Brought back only if it was running before, and never without a password.
   void restoreRemoteServer();
+
+  const viviWindow = getViviPetWindow();
+  viviWindow.create();
 
   app.on("activate", () => {
     if (shutdownPhase === "running" && BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -749,6 +780,11 @@ function requestShutdown(reason: string): void {
     stopBrowserCdp();
   } catch (error) {
     log.warn(`system browser cleanup failed: ${String(error)}`);
+  }
+  try {
+    destroyViviPetWindow();
+  } catch (error) {
+    log.warn(`vivi pet window cleanup failed: ${String(error)}`);
   }
   try {
     engine.flush();
@@ -986,5 +1022,6 @@ function notifyParkedPrompts(): void {
  * this only makes the other windows read it back.
  */
 function broadcastSettings(origin: string | undefined, settings: Record<string, unknown>): void {
+  getViviPetWindow().reloadSettings(settings);
   broadcast(Ipc.settingsChanged, settings, { except: origin });
 }

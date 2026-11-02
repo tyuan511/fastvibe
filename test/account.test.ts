@@ -54,6 +54,15 @@ async function cloud(): Promise<Cloud> {
       if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
       return state.meStatus === 200 ? send(200, { ...USER, login: "octocat-renamed" }) : send(state.meStatus, {});
     }
+    if (req.url === "/api/devices") {
+      if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
+      return send(200, { devices: [{ iroh_endpoint_id: "endpoint-a" }] });
+    }
+    if (req.url?.startsWith("/api/devices/") && req.url.endsWith("/iroh")) {
+      if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
+      await readJson(req);
+      return send(200, { device: { iroh_endpoint_id: "endpoint-a" } });
+    }
     if (req.url === "/api/relay/iroh/token") {
       if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
       return send(200, {
@@ -194,6 +203,10 @@ test("an account receives the iroh relay URL and can report cumulative bytes", a
   try {
     await r.service.login();
     await settled(r, "signed-in");
+    await r.service.setIrohEndpoint("00000000-0000-0000-0000-000000000001", "endpoint-a");
+    assert.ok(r.cloud.calls.includes("PUT /api/devices/00000000-0000-0000-0000-000000000001/iroh"));
+    const endpoints = await r.service.irohEndpointIds();
+    assert.deepEqual([...endpoints], ["endpoint-a"]);
     const issued = await r.service.issueIrohRelay("00000000-0000-0000-0000-000000000001", "endpoint-a");
     assert.equal(issued.relayId, "hk1");
     assert.equal(issued.url, "https://relay.example.test:8444");

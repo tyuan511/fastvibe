@@ -1,0 +1,227 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+body {
+  position: relative;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  transition: opacity 120ms ease;
+}
+
+#vivi-canvas,
+#vivi-labels,
+#vivi-error {
+  position: absolute;
+  inset: 0;
+}
+
+#vivi-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  opacity: var(--vivi-opacity, 1);
+  touch-action: none;
+}
+
+#vivi-labels {
+  z-index: 2;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.vivi-bubble {
+  position: absolute;
+  max-width: min(240px, 80vw);
+  transform: translate(-50%, -100%);
+  margin-top: -8px;
+  padding: 7px 11px;
+  border: 1px solid color-mix(in srgb, white 44%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, #192342 86%, transparent);
+  color: white;
+  font-size: 12px;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: vivi-bubble-in 140ms ease-out both;
+}
+
+#vivi-bubble-root {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.vivi-agent-bubble {
+  user-select: text;
+  -webkit-user-select: text;
+  touch-action: auto;
+  color: var(--popover-foreground);
+}
+
+.vivi-text-bubble,
+.vivi-composer {
+  border: 1px solid color-mix(in oklch, var(--border) 85%, transparent);
+  background: color-mix(in oklch, var(--popover) 96%, transparent);
+  border-radius: 999px;
+  box-shadow: 0 3px 14px color-mix(in oklch, var(--foreground) 3%, transparent), inset 0 1px 0 color-mix(in oklch, var(--background) 80%, transparent);
+}
+
+.vivi-text-bubble {
+  border-radius: 18px;
+}
+
+.vivi-bubble-text {
+  height: auto;
+  padding: 7px 12px;
+  border: 0;
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.25rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.vivi-bubble-measure {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: max-content;
+  max-width: 280px;
+  visibility: hidden;
+  pointer-events: none;
+  border: 1px solid transparent;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.vivi-text-bubble:not(.is-expanded) > div:first-child > button:first-child > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.vivi-text-bubble.is-expanded {
+  border-radius: 28px;
+}
+
+.vivi-composer {
+  min-width: 0;
+}
+
+.vivi-bubble-close {
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.vivi-text-bubble:hover .vivi-bubble-close,
+.vivi-text-bubble:focus-within .vivi-bubble-close {
+  opacity: 1;
+}
+
+.vivi-agent-bubble > div > div > .\@container\/composer {
+  padding: 0 8px 8px;
+}
+
+html,
+body {
+  background: transparent !important;
+}
+
+#vivi-canvas {
+  inset: auto;
+}
+
+#vivi-error {
+  z-index: 4;
+  display: none;
+  place-items: center;
+  padding: 18px;
+  background: color-mix(in srgb, #111a32 80%, transparent);
+  color: white;
+  text-align: center;
+  pointer-events: auto;
+}
+
+body.has-error #vivi-error {
+  display: grid;
+}
+
+.vivi-error-card {
+  width: min(280px, 100%);
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, white 22%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, #1b2748 94%, transparent);
+  box-shadow: 0 10px 35px color-mix(in srgb, #080e1f 44%, transparent);
+}
+
+.vivi-error-card h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.vivi-error-card p {
+  margin: 8px 0 14px;
+  color: #d6dcf0;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+#vivi-retry {
+  min-height: 30px;
+  padding: 5px 13px;
+  border: 1px solid color-mix(in srgb, white 30%, transparent);
+  border-radius: 8px;
+  background: #477ff5;
+  color: white;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#vivi-retry:hover {
+  background: #5a8cff;
+}
+
+#vivi-retry:focus-visible {
+  outline: 2px solid #bcd0ff;
+  outline-offset: 2px;
+}
+
+@keyframes vivi-bubble-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 4px)) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -100%) scale(1);
+  }
+}

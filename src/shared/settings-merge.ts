@@ -25,6 +25,7 @@ export function remoteSettingsOf(settings: Record<string, unknown>): Record<stri
  * launch (an update, usually) read the file and left remote access off.
  */
 export function mergeClientSettings(current: Record<string, unknown>, incoming: Record<string, unknown>): Record<string, unknown> {
-  const client = Object.fromEntries(Object.entries(incoming).filter(([key]) => !isRemoteKey(key)));
-  return { ...mergeSettingsPreservingProxy(current, client), ...remoteSettingsOf(current) };
+  const client = Object.fromEntries(Object.entries(incoming).filter(([key]) => !isRemoteKey(key) && !key.startsWith("vivi")));
+  const vivi = Object.fromEntries(Object.entries(current).filter(([key]) => key.startsWith("vivi")));
+  return { ...mergeSettingsPreservingProxy(current, client), ...remoteSettingsOf(current), ...vivi };
 }

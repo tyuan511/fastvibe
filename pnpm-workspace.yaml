@@ -1,6 +1,4 @@
-# No workspace packages: the website moved to tyuan511/fastvibe-services, and
-# apps/mobile_flutter is Flutter (no package.json). This file is kept for the settings
-# below, which pnpm reads whether or not anything is a workspace member.
+# Native mobile clients live under apps/mobile and use Cargo, Gradle, and SwiftPM.
 packages: []
 
 # Keep the default virtual store: electron-builder's pnpm collector resolves each
