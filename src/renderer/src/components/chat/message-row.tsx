@@ -28,7 +28,7 @@ import { useWorkspacePath } from "@/stores/session";
 import { AttachmentChip } from "./attachment-chip";
 import { SkillBadgeRow } from "./skill-badge";
 import { collectChangedFiles, TurnFileChips } from "./file-chips";
-import { InlinePreviews, InlineThumbStrip } from "./inline-preview";
+import { InlinePreviews } from "./inline-preview";
 import { MarkdownView } from "./markdown-view";
 import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
@@ -628,7 +628,6 @@ function ChatMessageRowImpl({
     // cut already promises a body with something in it — that is the same condition the old
     // 「a body that would render nothing」 check was spelling out by hand.
     if (cut === 0) return null;
-    if (!parts.slice(0, cut).some((part, index) => !(part.kind === "tool" && part.tool.name === "spawn_agent") && partTakesRow(part, index) && isProcessKind(part.kind))) return null;
     // No prose after the last tool call: the run wrote no answer, so there is nothing to
     // leave on screen and folding would hide its only output. A reply that ends in nothing
     // but line breaks is the same case wearing a tail — it takes no row either.
@@ -669,7 +668,7 @@ function ChatMessageRowImpl({
     const cutoff = Math.max(0, parts.length - MAX_VISIBLE_PROCESS_PARTS);
     const hidden = parts
       .map((part, index) => ({ part, index }))
-      .filter(({ part, index }) => index < cutoff && isProcessKind(part.kind) && !(part.kind === "tool" && part.tool.name === "spawn_agent") && partTakesRow(part, index));
+      .filter(({ part, index }) => index < cutoff && isProcessKind(part.kind) && partTakesRow(part, index));
     return hidden.length > 0 ? { hidden, firstIndex: hidden[0].index } : null;
   }, [fold, isUser, partTakesRow, parts]);
 
@@ -738,9 +737,8 @@ function ChatMessageRowImpl({
         ? part.group.tools.flatMap((tool) => inlinePreviews.get(tool.id) ?? [])
         : [];
 
-  // `withPreviews` is off for the parts inside 折叠运行过程: a picture the run made is its
-  // result, not its process, so it is drawn under the fold (see below) rather than hidden by it.
-  const renderPart = (part: RenderPart, index: number, withPreviews = true): JSX.Element | null => {
+  // Tool actions and their previews stay together in the process, including after settling.
+  const renderPart = (part: RenderPart, index: number): JSX.Element | null => {
     const isTail = index === parts.length - 1;
     if (part.kind === "thinking") {
       if (!partTakesRow(part, index)) return null;
@@ -775,7 +773,7 @@ function ChatMessageRowImpl({
       );
     }
     if (part.kind === "tool") {
-      const shown = withPreviews ? previewsOf(part) : [];
+      const shown = previewsOf(part);
       return (
         <Fragment key={`tool-${part.tool.id}`}>
           <PartSlot>
@@ -786,7 +784,7 @@ function ChatMessageRowImpl({
       );
     }
     if (part.kind === "group") {
-      const shown = withPreviews ? previewsOf(part) : [];
+      const shown = previewsOf(part);
       return (
         <Fragment key={part.group.id}>
           <PartSlot>
@@ -817,19 +815,13 @@ function ChatMessageRowImpl({
         {foldHead > 0 ? parts.slice(0, foldHead).map((part, index) => renderPart(part, index)) : null}
 
         {fold && foldHead < fold.cut ? (
-          <RunCollapse
-            durationMs={fold.durationMs}
-            trailing={<InlineThumbStrip items={parts.slice(foldHead, fold.cut).flatMap(previewsOf)} />}
-          >
+          <RunCollapse durationMs={fold.durationMs}>
             {parts
               .slice(foldHead, fold.cut)
-              .map((part, index) => part.kind === "tool" && part.tool.name === "spawn_agent" ? null : renderPart(part, foldHead + index, false))}
+              .map((part, index) => renderPart(part, foldHead + index))}
+            {changedFiles.length > 0 ? <TurnFileChips files={changedFiles} /> : null}
           </RunCollapse>
         ) : null}
-        {/* Created threads stay reachable in history after the run's process folds. */}
-        {fold && foldHead < fold.cut
-          ? parts.slice(foldHead, fold.cut).map((part, index) => part.kind === "tool" && part.tool.name === "spawn_agent" ? renderPart(part, foldHead + index, false) : null)
-          : null}
 
         {fold
           ? parts.slice(fold.cut).map((part, index) => renderPart(part, fold.cut + index))
@@ -854,7 +846,7 @@ function ChatMessageRowImpl({
          * grow as each write/edit lands, reflowing the thread over a half-finished
          * change set.
          */}
-        {!streaming && changedFiles.length > 0 ? (
+        {!streaming && !fold && changedFiles.length > 0 ? (
           <div className="w-full max-w-2xl pt-1">
             <TurnFileChips files={changedFiles} />
           </div>

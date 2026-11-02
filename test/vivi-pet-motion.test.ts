@@ -46,13 +46,16 @@ function fixture(platform = "darwin", create = true) {
     isFullScreen() { return this.fullScreen; }
     getPosition() { return [this.bounds.x, this.bounds.y]; }
     isDestroyed() { return this.destroyed; }
-    setPosition(x: number, y: number) { frameChanges.push({ x, y }); this.bounds = { ...this.bounds, x, y }; this.emit("move"); }
-    setBounds(bounds: typeof this.bounds) { frameChanges.push({ ...bounds }); this.bounds = { ...bounds }; this.emit("move"); }
+    setPosition(x: number, y: number) { this.changes.push({ x, y }); if (this === window) frameChanges.push({ x, y }); this.bounds = { ...this.bounds, x, y }; this.emit("move"); }
+    setBounds(bounds: typeof this.bounds) { this.changes.push({ ...bounds }); if (this === window) frameChanges.push({ ...bounds }); this.bounds = { ...bounds }; this.emit("move"); }
+    visible = false;
+    changes: Array<Record<string, number>> = [];
     ignored = false;
     setIgnoreMouseEvents(ignored: boolean) { this.ignored = ignored; }
     setAlwaysOnTop() {}
-    showInactive() { this.emit("show"); }
-    hide() { this.emit("hide"); }
+    isVisible() { return this.visible; }
+    showInactive() { this.visible = true; this.emit("show"); }
+    hide() { this.visible = false; this.emit("hide"); }
     destroy() { this.destroyed = true; this.emit("closed"); }
     loadURL() { return Promise.resolve(); }
     loadFile() { return Promise.resolve(); }
@@ -64,8 +67,9 @@ function fixture(platform = "darwin", create = true) {
     getDisplayNearestPoint: () => display,
   });
   let window: Window;
+  let notification: Window;
   const deps: Record<string, unknown> = {
-    electron: { BrowserWindow: class extends Window { constructor(options: ConstructorParameters<typeof Window>[0]) { super(options); window = this; } }, screen, Menu: {} },
+    electron: { BrowserWindow: class extends Window { constructor(options: ConstructorParameters<typeof Window>[0]) { super(options); if (!window) window = this; else notification = this; } }, screen, Menu: {} },
     "@shared/ipc": { Ipc },
     "../../shared/vivi": { normalizeViviSettings },
     "../engine/app-settings": { readAppSettings: () => ({ viviEnabled: true, viviPosition: "custom", viviX: 1000, viviY: 600 }) },
@@ -99,7 +103,7 @@ function fixture(platform = "darwin", create = true) {
   pet.setPersistence((settings) => { saves.push(settings); });
   if (create) pet.create();
   return {
-    pet, get window() { return window!; }, Window, screen, motions, snapshots, saves, frameChanges, timers, timeouts,
+    pet, get window() { return window!; }, get notification() { return notification!; }, Window, screen, motions, snapshots, saves, frameChanges, timers, timeouts,
     mouse(type: "mouseDown" | "mouseUp" | "mouseMove", pressed = false) {
       window.webContents.emit("before-mouse-event", {}, { type, button: "left", modifiers: pressed ? ["leftbuttondown"] : [] });
     },
@@ -130,7 +134,7 @@ test("macOS full screen attaches Vivi to the main Space and restores its desktop
   assert.ok(surface.window.x + surface.window.width <= 4640);
   assert.ok(surface.window.y >= 0);
   assert.ok(surface.window.y + surface.window.height <= 900);
-  f.pet.setBubble(f.window as never, 120, 0, 360);
+  f.pet.setBubble(f.notification as never, 120, 0, 360);
   f.mouse("mouseDown", true);
   f.pet.startDrag();
   f.tick(-5000, 2000);
@@ -298,13 +302,14 @@ test("workspace creation, focus, blur and close notify after the window collecti
 test("bubble expansion keeps the model anchored and does not contaminate saved coordinates", () => {
   const f = fixture();
   const before = f.pet.getState();
-  f.pet.setBubble(f.window as never, 460);
+  f.pet.setBubble(f.notification as never, 460);
   const expanded = f.pet.getSnapshot().surface!;
   assert.equal(f.pet.getState().x, before.x);
   assert.equal(f.pet.getState().y, before.y);
   assert.equal(expanded.window.x + expanded.pet.x, before.x);
   assert.equal(expanded.window.y + expanded.pet.y, before.y);
-  assert.ok(f.window.getBounds().height > expanded.pet.height);
+  assert.equal(f.window.getBounds().height, expanded.pet.height);
+  assert.ok(f.notification.getBounds().height > expanded.pet.height);
   f.pet.hitTest(f.window as never, false);
   assert.equal(f.window.ignored, true);
   f.pet.hitTest(f.window as never, true);
@@ -317,7 +322,7 @@ test("bubble expansion keeps the model anchored and does not contaminate saved c
   f.window.emit("blur");
   assert.equal(f.pet.getState().x, before.x + 20);
   assert.equal(f.pet.getSettings().x, before.x + 20);
-  f.pet.setBubble(f.window as never, 0);
+  f.pet.setBubble(f.notification as never, 0);
   const hidden = f.pet.getSnapshot().surface!;
   assert.equal(hidden.window.x + hidden.pet.x, before.x + 20);
   assert.equal(hidden.bubble, undefined);
@@ -329,16 +334,16 @@ test("new messages, remeasurement and dismissal never move or resize the native 
   const initial = f.pet.getSnapshot().surface!;
   f.frameChanges.length = 0;
   for (const [height, width] of [[36, 100], [76, 280], [0, 280], [56, 180], [0, 180], [120, 360]]) {
-    f.pet.setBubble(f.window as never, height, 0, width);
+    f.pet.setBubble(f.notification as never, height, 0, width);
     const next = f.pet.getSnapshot().surface!;
     assert.deepEqual(next.window, initial.window);
     assert.deepEqual(next.pet, initial.pet);
     assert.equal(Boolean(next.bubble), height > 0);
   }
   assert.deepEqual(f.frameChanges, [], "no native frame change may precede the renderer's canvas update");
-  f.pet.hitTest(f.window as never, true);
-  f.pet.setBubble(f.window as never, 0);
-  assert.equal(f.window.ignored, true, "closing a notice must immediately release the now-transparent hit area");
+  f.pet.hitTest(f.notification as never, true);
+  f.pet.setBubble(f.notification as never, 0);
+  assert.equal(f.notification.ignored, true, "closing a notice must immediately release the now-transparent hit area");
   assert.equal(f.saves.length, 0);
   f.pet.destroy();
 });
@@ -453,10 +458,118 @@ test("native blur, hiding, reload and display changes stop motion without throwi
   }
 });
 
+test("drag, throw and landing never resize or rebase the native model frame", () => {
+  const f = fixture();
+  f.pet.setBubble(f.notification as never, 76, 0, 280);
+  const size = f.window.getBounds().width;
+  f.frameChanges.length = 0;
+  f.mouse("mouseDown", true);
+  f.pet.startDrag();
+  for (let frame = 0; frame < 10; frame++) f.tick(20, -5);
+  f.mouse("mouseUp");
+  for (let frame = 0; frame < 250; frame++) f.tick();
+  assert.equal(f.timers.size, 0);
+  assert.ok(f.frameChanges.length > 0);
+  assert.ok(f.frameChanges.every((frame) => !("width" in (frame as object))), "moving only changes the pet's origin, never its frame size");
+  assert.equal(f.window.getBounds().width, size);
+  assert.equal(f.window.getBounds().x, f.pet.getState().x);
+  assert.equal(f.window.getBounds().y, f.pet.getState().y);
+  f.pet.destroy();
+});
+
+test("messages wait for the current model's settled acknowledgement and hide synchronously on drag", () => {
+  const f = fixture();
+  f.pet.rendererState(f.window as never, true);
+  f.pet.rendererState(f.notification as never, true);
+  f.pet.setBubble(f.notification as never, 76, 0, 280);
+  assert.equal(f.notification.isVisible(), true);
+  f.mouse("mouseDown", true);
+  f.pet.startDrag();
+  assert.equal(f.notification.isVisible(), false);
+  const old = f.motions.at(-1)!.at;
+  f.tick(20);
+  f.window.emit("blur");
+  const last = f.motions.at(-1)!.at;
+  f.mouse("mouseMove", false);
+  assert.equal(f.motions.at(-1)!.at, last, "unheld cursor movement must not keep restarting the landing wait");
+  assert.ok(last > old);
+  assert.equal(f.pet.getSnapshot().moving, true, "native release is not visual rest");
+  f.pet.setBubble(f.notification as never, 36, 0, 180);
+  assert.equal(f.notification.isVisible(), false, "a new message during the landing spring stays hidden");
+  f.pet.motionSettled(f.window as never, old);
+  f.pet.motionSettled(f.notification as never, last);
+  assert.equal(f.notification.isVisible(), false, "stale and wrong-window acknowledgements cannot reveal text");
+  f.pet.motionSettled(f.window as never, last);
+  assert.equal(f.pet.getSnapshot().moving, false);
+  assert.equal(f.notification.isVisible(), true);
+  const layout = f.pet.getSnapshot().surface!;
+  assert.deepEqual(f.notification.getBounds(), layout.window);
+  assert.equal(layout.window.x + layout.pet.x, f.window.getBounds().x);
+  f.pet.setAppFocused(true);
+  assert.equal(f.notification.isVisible(), false);
+  f.pet.hide();
+  assert.equal(f.notification.isVisible(), false);
+  f.pet.destroy();
+  assert.equal(f.notification.isDestroyed(), true);
+});
+
+test("cross-display dragging and notification updates retain physical pet coordinates", () => {
+  const f = fixture();
+  const left = { workArea: { x: -1920, y: -500, width: 1920, height: 1080 } };
+  const right = { workArea: { x: 0, y: 24, width: 3000, height: 1800 } };
+  f.screen.getDisplayMatching = ((bounds: { x: number }) => bounds.x < 0 ? left : right) as typeof f.screen.getDisplayMatching;
+  f.screen.getDisplayNearestPoint = ((point: { x: number }) => point.x < 0 ? left : right) as typeof f.screen.getDisplayNearestPoint;
+  f.mouse("mouseDown", true);
+  f.pet.startDrag();
+  f.tick(-1600, -700);
+  const before = f.window.getBounds();
+  assert.ok(before.x < 0 && before.y < 0);
+  f.pet.setBubble(f.notification as never, 76, 0, 280);
+  assert.deepEqual(f.window.getBounds(), before);
+  f.window.emit("blur");
+  assert.deepEqual(f.window.getBounds(), before);
+  f.pet.motionSettled(f.window as never, f.motions.at(-1)!.at);
+  assert.deepEqual(f.window.getBounds(), before);
+  assert.equal(f.pet.getSettings().x, before.x);
+  assert.equal(f.pet.getSettings().y, before.y);
+  f.pet.destroy();
+});
+
+test("reloading during motion does not strand notifications behind an unacknowledgeable sample", () => {
+  const f = fixture();
+  f.mouse("mouseDown", true);
+  f.pet.startDrag();
+  f.tick(20);
+  f.window.webContents.emit("did-start-loading");
+  assert.equal(f.pet.getSnapshot().moving, false);
+  f.pet.rendererState(f.notification as never, true);
+  f.pet.rendererState(f.window as never, true);
+  f.pet.setBubble(f.notification as never, 36, 0, 180);
+  assert.equal(f.notification.isVisible(), true);
+  f.pet.destroy();
+});
+
+test("a failed notification renderer is recreated on re-enable without replacing the pet", () => {
+  const f = fixture();
+  const model = f.window;
+  const old = f.notification;
+  old.webContents.emit("render-process-gone");
+  assert.equal(old.isDestroyed(), true);
+  f.pet.hide();
+  f.pet.show();
+  assert.equal(f.window, model);
+  assert.notEqual(f.notification, old);
+  f.pet.rendererState(f.window as never, true);
+  f.pet.rendererState(f.notification as never, true);
+  f.pet.setBubble(f.notification as never, 36, 0, 180);
+  assert.equal(f.notification.isVisible(), true);
+  f.pet.destroy();
+  assert.equal(f.notification.isDestroyed(), true);
+});
+
 test("dragging into the edge publishes impact feedback and never leaves the work area", () => {
   const f = fixture();
-  const offset = f.pet.getSnapshot().surface!.pet;
-  f.window.setPosition(2855 - offset.x, 600 - offset.y);
+  f.window.setPosition(2855, 600);
   f.mouse("mouseDown", true);
   f.pet.startDrag();
   f.tick(100);

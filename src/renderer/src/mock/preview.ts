@@ -744,6 +744,7 @@ const vivi = {
   },
   getSnapshot: async () => viviSnapshot(),
   rendererState: async () => undefined,
+  motionSettled: async () => undefined,
   setBubble: async () => undefined,
   hitTest: async () => undefined,
   onDragMotion: () => () => undefined,

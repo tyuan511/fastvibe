@@ -185,6 +185,7 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "vivi:get-state",
     "vivi:hide",
     "vivi:hit-test",
+    "vivi:motion-settled",
     "vivi:open-conversation",
     "vivi:preview-mood",
     "vivi:renderer-state",

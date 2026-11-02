@@ -11,7 +11,7 @@ import { broadcast } from "../ipc/broadcast";
 import { ViviStateStore } from "./state";
 import { clampViviBounds, viviBoundsFor, VIVI_BASE_SIZE } from "./bounds";
 import { ViviFlight, ViviThrowVelocity } from "./throw-motion";
-import { viviNotificationSurfaceLayout, viviSurfaceLayout } from "./panel-bounds";
+import { viviNotificationSurfaceLayout } from "./panel-bounds";
 import type { ViviSurfaceLayout } from "../../shared/vivi";
 
 type PersistSettings = (settings: ViviSettings) => void;
@@ -19,6 +19,10 @@ const SUCCESS_DURATION_MS = 5_000;
 
 export class ViviPetWindow {
   private window: BrowserWindow | null = null;
+  private notificationWindow: BrowserWindow | null = null;
+  private notificationReady = false;
+  private moving = false;
+  private lastMotionAt = -Infinity;
   private mainWindow: BrowserWindow | null = null;
   private desktopBounds: Electron.Rectangle | undefined;
   private readonly onFullScreenChanged = (): void => this.syncFullScreenParent();
@@ -90,31 +94,41 @@ export class ViviPetWindow {
     this.window = window;
     window.setIgnoreMouseEvents(true, { forward: true });
     this.surface = undefined;
+    this.createNotificationWindow();
     this.syncFullScreenParent();
     this.setWindowBounds(this.petBounds());
     screen.on("display-added", this.onDisplaysChanged);
     screen.on("display-removed", this.onDisplaysChanged);
     screen.on("display-metrics-changed", this.onDisplaysChanged);
     window.on("move", () => { if (!this.updatingSurface && !this.dragOrigin && !this.flight) this.keepOnScreen(); });
-    window.on("blur", () => { this.mouseHeld = false; this.stopDrag(false); });
+    window.on("blur", () => {
+      this.mouseHeld = false;
+      if (this.dragOrigin) this.stopDrag(false);
+      else if (this.moving && !this.flight) this.publishDragMotion(false);
+    });
     window.webContents.on("before-mouse-event", (_event, mouse) => {
       if (mouse.type === "mouseDown" && mouse.button === "left") {
         this.mouseHeld = true;
         this.stopFlight();
       } else if ((mouse.type === "mouseUp" && mouse.button === "left")
         || (mouse.type === "mouseMove" && mouse.modifiers !== undefined && !mouse.modifiers.includes("leftbuttondown"))) {
+        const wasHeld = this.mouseHeld;
         this.mouseHeld = false;
-        this.stopDrag();
+        if (this.dragOrigin) this.stopDrag();
+        else if (wasHeld && this.moving && !this.flight) this.publishDragMotion(false);
       }
     });
-    window.on("show", () => { this.store.setVisible(true); this.publish(); });
-    window.on("hide", () => { this.store.setVisible(false); this.publish(); });
+    window.on("show", () => { this.store.setVisible(true); this.syncNotificationVisibility(); this.publish(); });
+    window.on("hide", () => { this.store.setVisible(false); this.syncNotificationVisibility(); this.publish(); });
     window.on("closed", () => {
       screen.removeListener("display-added", this.onDisplaysChanged);
       screen.removeListener("display-removed", this.onDisplaysChanged);
       screen.removeListener("display-metrics-changed", this.onDisplaysChanged);
       this.cancelMotion();
       this.window = null;
+      this.notificationWindow?.destroy();
+      this.notificationWindow = null;
+      this.notificationReady = false;
       this.modelReady = false;
       this.showRequested = false;
       this.store.setVisible(false);
@@ -122,10 +136,16 @@ export class ViviPetWindow {
     });
     window.webContents.on("did-start-loading", () => {
       this.cancelMotion();
+      this.moving = false;
       this.modelReady = false;
       window.hide();
     });
-    window.webContents.on("render-process-gone", () => this.cancelMotion());
+    window.webContents.on("render-process-gone", () => {
+      this.cancelMotion();
+      this.moving = false;
+      this.modelReady = false;
+      window.hide();
+    });
     window.webContents.once("did-finish-load", () => {
       if (this.disposed || window.isDestroyed()) return;
       this.publish();
@@ -139,6 +159,60 @@ export class ViviPetWindow {
       log.error(`Failed to load Vivi window: ${String(error)}`);
       this.publish();
     });
+  }
+
+  /** A notice must never resize or rebase the pet's native frame. */
+  private createNotificationWindow(): void {
+    if (this.disposed || !this.window || this.notificationWindow) return;
+    this.notificationReady = false;
+    this.bubbleHeight = 0;
+    this.bubbleWidth = undefined;
+    const window = new BrowserWindow({
+      ...this.petBounds(), title: "Vivi", frame: false, transparent: true,
+      backgroundColor: "#00000000", hasShadow: false, resizable: false,
+      fullscreenable: false, maximizable: false, minimizable: false,
+      movable: false, focusable: false, skipTaskbar: true,
+      alwaysOnTop: this.getSettings().alwaysOnTop, show: false,
+      webPreferences: {
+        preload: join(__dirname, "../preload/index.mjs"), sandbox: false,
+        contextIsolation: true, nodeIntegration: false, backgroundThrottling: false,
+      },
+    });
+    this.notificationWindow = window;
+    window.setParentWindow(this.window.getParentWindow());
+    window.setIgnoreMouseEvents(true, { forward: true });
+    window.webContents.on("did-start-loading", () => { this.notificationReady = false; window.hide(); });
+    window.webContents.on("render-process-gone", () => {
+      this.notificationReady = false;
+      window.destroy();
+    });
+    window.on("closed", () => {
+      if (this.notificationWindow === window) { this.notificationWindow = null; this.notificationReady = false; }
+    });
+    const loaded = process.env.ELECTRON_RENDERER_URL
+      ? window.loadURL(new URL("vivi.html?notification=1", process.env.ELECTRON_RENDERER_URL).href)
+      : window.loadFile(join(__dirname, "../renderer/vivi.html"), { query: { notification: "1" } });
+    void loaded.catch((error) => log.warn(`Vivi notification failed to load: ${String(error)}`));
+  }
+
+  private syncNotificationVisibility(): void {
+    const window = this.notificationWindow;
+    if (!window || window.isDestroyed()) return;
+    const settings = this.getSettings();
+    const show = this.notificationReady && this.modelReady && this.store.state().visible
+      && settings.enabled && settings.messages && !this.appFocused && !this.moving && this.bubbleHeight > 0;
+    if (show && !window.isVisible()) window.showInactive();
+    else if (!show && window.isVisible()) window.hide();
+  }
+
+  /** The model renderer acknowledges its own spring settling, not just mouse release. */
+  motionSettled(window: BrowserWindow | null, at: number): void {
+    if (this.disposed || !window || window !== this.window || !Number.isFinite(at) || at !== this.lastMotionAt
+      || this.dragOrigin || this.flight || this.mouseHeld || !this.moving) return;
+    this.moving = false;
+    if (this.window && !this.window.isDestroyed()) this.setWindowBounds(this.petBounds());
+    this.syncNotificationVisibility();
+    this.publish();
   }
 
   /** Keep the desktop pet independent normally, but auxiliary to our own full-screen Space. */
@@ -178,6 +252,7 @@ export class ViviPetWindow {
     if (!parent) this.desktopBounds = undefined;
     // fullscreenable:false gives this window FullScreenAuxiliary on macOS. Parenting
     // puts it in FastVibe's Space without exposing it over every other full-screen app.
+    this.notificationWindow?.setParentWindow(parent);
     window.setParentWindow(parent);
     const settings = this.getSettings();
     const desktop = restore ? viviBoundsFor({ ...settings, position: "custom", x: restore.x, y: restore.y }, screen.getDisplayMatching(restore).workArea) : bounds;
@@ -187,13 +262,20 @@ export class ViviPetWindow {
   show(): void {
     if (!this.getSettings().enabled || this.disposed) return;
     this.create();
+    this.createNotificationWindow();
     this.keepOnScreen();
     this.showRequested = true;
     if (this.modelReady && this.window && !this.window.isDestroyed()) this.window.showInactive();
   }
 
   rendererState(window: BrowserWindow | null, ready: boolean, error?: string): void {
-    if (this.disposed || !window || window !== this.window || window.isDestroyed()) return;
+    if (this.disposed || !window || window.isDestroyed()) return;
+    if (window === this.notificationWindow) {
+      this.notificationReady = ready;
+      this.syncNotificationVisibility();
+      return;
+    }
+    if (window !== this.window) return;
     this.modelReady = ready;
     this.error = error;
     if (!ready) window.hide();
@@ -204,6 +286,7 @@ export class ViviPetWindow {
   hide(): void {
     this.showRequested = false;
     this.cancelMotion();
+    this.moving = false;
     if (this.window && !this.window.isDestroyed()) this.window.hide();
   }
 
@@ -212,6 +295,8 @@ export class ViviPetWindow {
     this.cancelMotion();
     this.setMainWindow(null);
     this.disposed = true;
+    this.notificationWindow?.destroy();
+    this.notificationWindow = null;
     if (this.window && !this.window.isDestroyed()) this.window.destroy();
     this.window = null;
   }
@@ -249,12 +334,13 @@ export class ViviPetWindow {
   setAppFocused(focused: boolean): void {
     if (this.disposed || this.appFocused === focused) return;
     this.appFocused = focused;
+    this.syncNotificationVisibility();
     this.publish();
   }
 
   getSnapshot(): ViviSnapshot {
     const settings = readAppSettings(getFastVibePaths());
-    return { ...this.store.snapshot(), appFocused: this.appFocused, surface: this.surface, uiLanguage: settings.uiLanguage === "en" ? "en" : "zh", ...(this.error ? { error: this.error } : {}) };
+    return { ...this.store.snapshot(), moving: this.moving, appFocused: this.appFocused, surface: this.surface, uiLanguage: settings.uiLanguage === "en" ? "en" : "zh", ...(this.error ? { error: this.error } : {}) };
   }
 
   updateActors(actors: ViviActor[]): void {
@@ -352,6 +438,10 @@ export class ViviPetWindow {
   private publishDragMotion(dragging: boolean, impact?: ViviImpact): void {
     if (this.disposed || !this.window || this.window.isDestroyed()) return;
     const bounds = this.petBounds();
+    const wasMoving = this.moving;
+    this.moving = true;
+    this.syncNotificationVisibility();
+    this.lastMotionAt = Math.max(performance.now(), this.lastMotionAt + 0.001);
     const motion: ViviDragMotion = {
       dragging,
       flying: Boolean(this.flight?.active),
@@ -359,9 +449,10 @@ export class ViviPetWindow {
       x: bounds.x,
       y: bounds.y,
       size: bounds.width,
-      at: performance.now(),
+      at: this.lastMotionAt,
     };
     broadcast(Ipc.viviDragMotion, motion);
+    if (!wasMoving) this.publish();
   }
 
   private moveDrag(): void {
@@ -427,6 +518,8 @@ export class ViviPetWindow {
       if (settings.position === "custom") this.savePosition();
     }
     this.window.setAlwaysOnTop(settings.alwaysOnTop);
+    this.notificationWindow?.setAlwaysOnTop(settings.alwaysOnTop);
+    this.syncNotificationVisibility();
     if (!previous.enabled) this.show();
   }
 
@@ -437,18 +530,13 @@ export class ViviPetWindow {
   }
 
   setBubble(window: BrowserWindow | null, height: number, composerHeight = 0, width?: number): void {
-    if (!window || window !== this.window || window.isDestroyed() || !Number.isFinite(height) || !Number.isFinite(composerHeight) || (width !== undefined && !Number.isFinite(width))) return;
+    if (!window || window !== this.notificationWindow || window.isDestroyed() || !Number.isFinite(height) || !Number.isFinite(composerHeight) || (width !== undefined && !Number.isFinite(width))) return;
     const next = Math.max(0, Math.min(460, Math.round(height)));
     const controls = Math.max(0, Math.min(120, Math.round(composerHeight)));
     const measuredWidth = width === undefined ? undefined : Math.max(1, Math.min(360, Math.ceil(width)));
     if (next === this.bubbleHeight && controls === this.composerHeight && measuredWidth === this.bubbleWidth) return;
     const bounds = this.petBounds();
-    if (next === 0 && this.bubbleHeight > 0) {
-      const cursor = screen.getCursorScreenPoint();
-      if (cursor.x < bounds.x || cursor.x >= bounds.x + bounds.width || cursor.y < bounds.y || cursor.y >= bounds.y + bounds.height) {
-        this.window.setIgnoreMouseEvents(true, { forward: true });
-      }
-    }
+    if (next === 0 && this.bubbleHeight > 0) window.setIgnoreMouseEvents(true, { forward: true });
     this.bubbleHeight = next;
     this.composerHeight = controls;
     this.bubbleWidth = measuredWidth;
@@ -457,32 +545,37 @@ export class ViviPetWindow {
   }
 
   hitTest(window: BrowserWindow | null, interactive: boolean): void {
-    if (!window || window !== this.window || window.isDestroyed()) return;
+    if (!window || (window !== this.window && window !== this.notificationWindow) || window.isDestroyed()) return;
     window.setIgnoreMouseEvents(!interactive, { forward: true });
   }
 
   private petBounds(): Electron.Rectangle {
-    const bounds = this.window!.getBounds();
-    const pet = this.surface?.pet;
-    return pet ? { x: bounds.x + pet.x, y: bounds.y + pet.y, width: pet.width, height: pet.height } : bounds;
+    return this.window!.getBounds();
   }
 
   private setWindowBounds(bounds: Electron.Rectangle): void {
     if (!this.window || this.window.isDestroyed()) return;
-    const moving = Boolean(this.dragOrigin || this.flight);
     const area = this.movementArea(bounds);
     bounds = clampViviBounds(bounds, area);
-    const surface = moving ? viviSurfaceLayout(bounds, area, 0)
-      : viviNotificationSurfaceLayout(bounds, area, this.bubbleHeight, this.bubbleWidth);
+    const surface = viviNotificationSurfaceLayout(bounds, area, this.bubbleHeight, this.bubbleWidth);
     const previous = this.surface;
     this.surface = surface;
     const current = this.window.getBounds();
     this.updatingSurface = true;
     try {
-      if (current.width !== surface.window.width || current.height !== surface.window.height) this.window.setBounds(surface.window, false);
-      else if (current.x !== surface.window.x || current.y !== surface.window.y) this.window.setPosition(surface.window.x, surface.window.y, false);
+      if (current.width !== bounds.width || current.height !== bounds.height) this.window.setBounds(bounds, false);
+      else if (current.x !== bounds.x || current.y !== bounds.y) this.window.setPosition(bounds.x, bounds.y, false);
+      // The text surface may change sides at an edge. It owns no model canvas, so
+      // its frame and layout can change without moving the pet for an IPC round trip.
+      const notice = this.notificationWindow;
+      if (notice && !notice.isDestroyed() && !this.moving) {
+        const frame = notice.getBounds();
+        if (frame.width !== surface.window.width || frame.height !== surface.window.height) notice.setBounds(surface.window, false);
+        else if (frame.x !== surface.window.x || frame.y !== surface.window.y) notice.setPosition(surface.window.x, surface.window.y, false);
+      }
     } finally { this.updatingSurface = false; }
-    if (JSON.stringify(previous?.pet) !== JSON.stringify(surface.pet) || JSON.stringify(previous?.bubble) !== JSON.stringify(surface.bubble) || JSON.stringify(previous?.composer) !== JSON.stringify(surface.composer)) this.publish();
+    this.syncNotificationVisibility();
+    if (JSON.stringify(previous?.pet) !== JSON.stringify(surface.pet) || JSON.stringify(previous?.bubble) !== JSON.stringify(surface.bubble)) this.publish();
   }
 
   private boundsFor(settings: ViviSettings, display: Electron.Display): Electron.Rectangle {

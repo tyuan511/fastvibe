@@ -2109,7 +2109,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   - **Lifecycle and recovery.** `send_message` queues mailbox content without starting a turn; `followup_task` starts or resumes an idle thread; `interrupt_agent` stops the current turn while leaving the thread resumable; `wait_agent` wakes when a selected result arrives (other threads may still be running), when all selected threads have ended, on timeout, or on cancellation; `list_agents` returns the current parent/child tree. A completed runner releases its slot before waking waiters so an immediate follow-up cannot be swallowed. On process restart, active in-memory runs become persisted `interrupted` threads instead of remaining falsely `working`.
   - **Verification.** `test/agent-team-context.test.ts` uses the real SDK and a scripted model for request visibility, Continue, reload, compaction, tool pairing and durable deduplication. `test/agent-thread-mailbox.test.ts`, `test/agent-team-lifecycle.test.ts` and `test/subagent-team-prompt.test.ts` cover transactions, scoped waits, cancellation and collaboration guidance.
   - **Renderer.** `agent_thread_changed` registers a quiet Agent Team tab. The resource panel shows parent indentation, the side pane shows the thread transcript and read-only runtime state, and the shared `subagent-state` reducer keeps live events scoped by conversation and monotonic revision. The thread's display name and avatar are persistent, local SVG data; no network avatar request is made.
-  - **Creation stays visible in history.** `spawn_agent` is a standalone agent action, showing the persisted result's name and avatar; clicking the name opens its thread. It stays outside the settled run fold and process overflow. Resources merge creation results, persisted threads and live `<threadId>:turn:<n>` runs under the thread id, with the latest turn owning live status; the avatar stays at the front while the running mark sits beside the trailing status. Thread tabs read the current turn's stream/cache and adopt revisioned thread updates, including a follow-up's start. Preview: `mock.html?resources=agents&lang=zh`.
+  - **Creation stays visible in history.** `spawn_agent` is a standalone agent action, showing the persisted result's name and avatar; clicking the name opens its thread. It stays in the settled run fold and process overflow with the other operations; expand the process to reach its clickable identity. Resources merge creation results, persisted threads and live `<threadId>:turn:<n>` runs under the thread id, with the latest turn owning live status; the avatar stays at the front while the running mark sits beside the trailing status. Thread tabs read the current turn's stream/cache and adopt revisioned thread updates, including a follow-up's start. Preview: `mock.html?resources=agents&lang=zh`.
   - **Agent tool actions share one identity format.** `AgentActionCard` renders create / wait / send / follow-up / interrupt / list as translated action sentences, without raw tool names or an extra "agent" noun. Avatar and name are one clickable button that opens that thread; each target in a multi-target action has its own button. Identity comes from preceding persisted creation results, the call's structured result and the conversation-scoped run registry (`lib/agent-tool.ts`), with no per-row request. The details trigger is a sibling so it never nests buttons. A finished wait says it ended waiting, because it may have timed out while a target still runs. Preview: `mock.html?resources=agent-actions&lang=zh|en`; tests: `test/agent-tool-presentation.test.ts`.
 - **Computer use** downloads its engine the first time 设置 → 电脑操控 → 允许操作电脑 is turned on. The installer does not carry the `cua-driver` worker or the `@trycua/cua-driver-*` native library (together ~80 MB). The small JS bindings stay, so the platform package can be resolved from the data directory after the download. A dev tree still fetches the worker in `predev`. Do not put either artifact back into `electron-builder.yml`.
 - **CUA 观测和操作桥接**（`src/main/pi/cua-bridge.ts`、`resources/extensions/computer-use.ts`）必须把 SDK 的结果分成两条路径：模型通过 `content` 读取可行动文本和结构化结果，渲染层通过 `details` 读取完整元数据。`window_state` 保留旧的交互元素 `elements` 兼容形状，并在 `treeElements` 提供完整无障碍树、层级、截断/降级状态和截图实际尺寸；截图经过 bridge 的压缩后，快照里的尺寸、MIME 和 scale 必须对应压缩后的图片。动作结果的 effect、route、verification 和 evidence 枚举先转成人类可读值再交给模型。
@@ -2355,15 +2355,15 @@ Word / Excel / PowerPoint 的预览和智能体编辑都走随安装包发布的
   可展示；https 链接必须以图片/视频扩展名结尾；不收 data URL（让模型把 base64 写进参数是浪费 token）。结果
   `details.items` 记下 `{ref, title, ok, error}`，渲染层只画 `ok` 的。扩展不能 import `@shared`，所以扩展名
   清单在两处各一份，`test/inline-media.test.ts` 把它们对齐。
-- **消息里不画大图，只画名字。** 回复里的预览是行内文件名（图标 + 名字，和路径链接同一个观感；一次调用的多项同一行换行排列；markdown 的 `![]()` 同样），**折叠运行过程后**被折叠的产物在「用时 …」那一行右端收成最多 3 个缩略图（`InlineThumbStrip`，多于 3 个是「更多（n）」）。视频缩略图就是一个不播放的 `<video>`（`#t=0.1`，让浏览器自己画出片头后一点的那一帧），帧上叠一个小播放标，解码失败才整格退回播放图标。点名字或缩略图都打开**查看器**（`Viewer`）：全窗口深色遮罩，一次一项，图片 / 视频 / HTML 都支持，底部「‹ 第 i 项，共 n 项 ›」，← / → 在**同一批**里切换，左下是名字，右上是「在侧栏中打开」和 ⋮（在文件夹中显示 / 复制路径或链接 / 在浏览器中打开）与关闭。点遮罩空白处也关。猜出来的本地路径用 `filesExist` 核对，不存在就不画名字（`useMissingGuesses`）；明确要求展示的不核对，打不开时查看器里写「无法加载」。
-- **位置。** 预览紧跟产生它的工具卡；折叠运行过程时它是**结果**不是过程，画在折叠行之下、正文之上（和 DAG 图一样
-  不被收进“用时 …”）。`shared/media-preview.ts` 不能用 `node:path`：渲染层也 import 它，浏览器构建里 `extname`
+- **消息里不画大图，只画名字。** 回复里的预览是行内文件名（图标 + 名字，和路径链接同一个观感；一次调用的多项同一行换行排列；markdown 的 `![]()` 同样）。工具产生的预览随工具一起进入「用时 …」，不再提取缩略图到折叠标题；展开过程后点名字打开**查看器**（`Viewer`）：全窗口深色遮罩，一次一项，图片 / 视频 / HTML 都支持，底部「‹ 第 i 项，共 n 项 ›」，← / → 在**同一批**里切换，左下是名字，右上是「在侧栏中打开」和 ⋮（在文件夹中显示 / 复制路径或链接 / 在浏览器中打开）与关闭。点遮罩空白处也关。猜出来的本地路径用 `filesExist` 核对，不存在就不画名字（`useMissingGuesses`）；明确要求展示的不核对，打不开时查看器里写「无法加载」。
+- **位置。** 预览紧跟产生它的工具卡，随运行过程一起折叠；最终回复区只保留最后输出的正文，不额外提取智能体操作、工具产物或文件变更卡。
+  `shared/media-preview.ts` 不能用 `node:path`：渲染层也 import 它，浏览器构建里 `extname`
   是 `undefined`，第一次展示文件就会抛。
 - **Markdown 里的 `![]()`** 也走同一套：绝对路径、`file://`、相对路径按会话目录解析成媒体 URL，扩展名是视频就
   画 `<video>`、是 `.html` 就画页面（`lib/markdown-media.ts`）。`react-markdown` 默认会丢掉 `file:` / `data:`，所以
   `urlTransform` 放行 `file://`、`data:image|video` 和路径链接插件的 `fvpath:`。内联项的根是 `span`（`display:block`），
   因为它会出现在 `<p>` 里。
-- **预览**：`mock.html?inline=1`（浏览器里没有 `fastvibe-media://`，HTML 框架是空的，只能看版式）；`mock.html?inline=office` 是同一行「用时」里的**文档**缩略图——没有画面可拍，只有 vscode-icons 的品牌图形，`size-5` 装在 `h-9` 的框里（曾经 24px，填满框就显重）。
+- **预览**：`mock.html?inline=1`（浏览器里没有 `fastvibe-media://`，HTML 框架是空的，只能看版式）；`mock.html?inline=office` 可展开「用时」查看文档产物。
 
 ### TODO: remaining TUI→GUI gaps
 
@@ -3187,6 +3187,7 @@ timestamps always show.
   notation — a compact `3m41s` beside a `3 分钟 41 秒` was two spellings of the same unit. The
   compact formatter it replaced is gone, and `formatDuration` returns `""` for a null span, so
   the statistics popover spells out its own `—`.
+- **All operations stay in the process.** Creating agents, task graphs, presented files and the turn's changed-file card are not extracted beneath the fold or into its header. Expanding the process restores those controls in place; the final answer contains only the text written after the last process part.
 - **Collapsed by default, and entirely the reader's afterwards** — nothing re-folds it under
   them. Every transcript draws it the same way: the main thread, 辅助对话, and 子 Agent.
 - **展开之后仍然限高，过程在折叠块内部滚动。** 一个长运行的过程可以有几十段思考与上百张工具卡，
@@ -3731,7 +3732,7 @@ FastVibe 是一个窗口、一个进程：`app.requestSingleInstanceLock()` 在�
   `#resumeWanted` 处理停止尚未收尾时的恢复，再次 Stop 以最后一次停止为准。
 - **校验整批原子执行。** 每批最多 30、每图最多 100，验证引用、工具、时限与重试、层级和环后才分配节点。
   图节点对外返回深拷贝；完整输出保存成功后才发布完成。删会话同时停图、清产物和转写。
-- **展示。** `dag_add_tasks` 原位画本批内联图，留在运行过程折叠之外；最大化显示整张图。
+- **展示。** `dag_add_tasks` 原位画本批内联图，随运行过程一起折叠；最大化显示整张图。
   节点详情展示父子任务、验收、结论、证据和分页结果。执行页复用 `SidePaneSubagent`，用 `dagRunStatus` 映射终态。
   DAG 运行不自动打开标签页；侧栏子任务行按需打开所属会话里的执行页。
   - **内联图默认收起成一行**（`dag/dag-inline.tsx`），点标题行才展开画布：三个任务就是一屏的点阵和卡片，
@@ -3826,6 +3827,14 @@ locale charmap        →   US-ASCII
 - 已知未修：渲染层在 `terminalStart` 的 invoke 回来之前收到的输出会被丢掉（监听器按 `sessionId` 过滤，
   而 id 那时还不知道）。Main 的 16ms 合帧通常让回复先到，所以实践中罕见；真发生时表现是「终端空白/少了前几行」，
   不是乱码。彻底修需要客户端自带 id（要过 SSH Agent 的版本偏差），暂不做。
+
+## Vivi 桌面宠物
+
+`main/vivi/pet-window.ts` 管理两个独立透明窗口：模型窗口始终只有宠物大小，通知窗口只装文字。`surface` 的坐标属于通知窗口；模型 canvas 始终位于自己窗口的 `(0, 0)`。不要再为气泡扩缩模型窗口：原生 frame 更新和渲染进程 canvas 偏移是两次绘制，拖动开始、落地以及屏幕边缘换侧时会瞬间跳位。通知窗口跟随相同的全屏父窗口，移动期间隐藏，销毁时独立清理。
+
+`ViviSnapshot.moving` 包含拖动、抛掷与落地弹簧回弹。模型 renderer 在 `ViviDragPhysics` 不再 active 且连续稳定 120ms 后，通过 `vivi:motion-settled` 回传最后一个运动样本的 `at`；Main 核对来源窗口、最新时间戳及鼠标/拖动/飞行状态后才恢复文字。移动期间暂停通知的五秒寿命，新消息等停稳后再完整展示。重复的 actors/visible 快照不得触发布局或立即重绘。
+
+通知只由 `conversation_activity: completed` 触发读取最终回复；不轮询，不展示过程文字、工具状态、思考、等待、错误或点击闲话。`ViviCompletionState` 丢弃新运行开始前或较新完成事件之前发起的迟到读取，失败/中断/工具结尾不回退展示之前的过程文字。文字和点击目标来自同一条完成记录，点击始终打开其 `conversationId`。验证见 `test/vivi-pet-motion.test.ts`、`test/vivi-completion.test.ts`、`test/vivi-notification.test.ts`。
 
 ## 测试
 

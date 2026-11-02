@@ -5,7 +5,6 @@ import type { ReactNode } from "react";
 import type { ChatMessage, ToolCallBlock } from "@shared/types";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Spinner } from "@/components/ui/spinner";
 import { agentToolAction, agentToolTargets } from "@/lib/agent-tool";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
@@ -44,7 +43,7 @@ export function AgentActionCard({ tool, showIcon, children }: {
     <Collapsible className="group/agent-action w-full">
       <ToolRow
         persistKey={tool.id}
-        icon={phase === "running" ? <Spinner className="size-3" /> : <HugeiconsIcon icon={BotIcon} className="size-3.5" />}
+        icon={<HugeiconsIcon icon={BotIcon} className="size-3.5" />}
         label={<Trans ns="common" i18nKey={`tool.agentAction.${action}.${phase}`} components={{ agents: <span>{identities}</span> }} />}
         running={phase === "running"}
         error={phase === "error" ? tool.result ?? t("tool.failed") : undefined}

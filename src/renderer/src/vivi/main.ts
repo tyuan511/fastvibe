@@ -1,4 +1,4 @@
-import { mountViviBubble, updateViviBubble, setViviBubbleMoving, showViviClickFeedback, noteViviMotion, noteViviHover } from "./agent-bubble";
+import { mountViviBubble, updateViviBubble, setViviBubbleMoving } from "./agent-bubble";
 import "./main.css";
 import type { ViviDragMotion, ViviSnapshot } from "@shared/vivi";
 import { initializeViviScene, type ViviScene } from "../lib/vivi-renderer";
@@ -8,6 +8,7 @@ type ViviApi = {
   rendererState: (ready: boolean, error?: string) => Promise<void>;
   onChanged: (listener: (snapshot: ViviSnapshot) => void) => () => void;
   onDragMotion: (listener: (motion: ViviDragMotion) => void) => () => void;
+  motionSettled: (at: number) => Promise<void>;
   dragStart: () => Promise<void>;
   dragEnd: () => Promise<void>;
   openConversation: (conversationId?: string) => Promise<void>;
@@ -44,7 +45,9 @@ const errorDetail = errorDetailElement;
 const retryButton = retryButtonElement;
 
 const api = (window as ViviWindow).fastvibe.vivi;
-const unmountBubble = mountViviBubble();
+const notificationOnly = new URLSearchParams(window.location.search).get("notification") === "1";
+const unmountBubble = notificationOnly ? mountViviBubble() : undefined;
+if (notificationOnly) canvas.style.display = "none";
 let scene: ViviScene | undefined;
 let unsubscribe: (() => void) | undefined;
 let unsubscribeMotion: (() => void) | undefined;
@@ -97,8 +100,10 @@ function setActors(snapshot: ViviSnapshot): void {
   if (!activeScene) return;
   const bounds = snapshot.surface?.pet;
   if (bounds) {
-    canvas.style.left = `${bounds.x}px`;
-    canvas.style.top = `${bounds.y}px`;
+    // The model has its own native frame; notification offsets belong only to
+    // the text window and must never rebase this canvas after a native move.
+    canvas.style.left = "0px";
+    canvas.style.top = "0px";
     canvas.style.width = `${bounds.width}px`;
     canvas.style.height = `${bounds.height}px`;
   }
@@ -106,7 +111,6 @@ function setActors(snapshot: ViviSnapshot): void {
   activeScene.setClickable(snapshot.settings.clickable);
   activeScene.setVisible(snapshot.visible && snapshot.settings.enabled !== false);
   document.body.style.setProperty("--vivi-opacity", String(Math.max(0, Math.min(1, snapshot.settings.opacity))));
-  updateViviBubble(snapshot);
   renderLabels(snapshot);
 }
 
@@ -177,7 +181,6 @@ function handlePointerMove(event: PointerEvent): void {
   const actorId = actorAt(event);
   if (actorId !== hoveredActorId) {
     hoveredActorId = actorId;
-    noteViviHover(Boolean(actorId));
     notifyHitTest(Boolean(actorId || pointer));
     renderLabels();
   }
@@ -219,7 +222,6 @@ function handlePointerUp(event: PointerEvent): void {
     return;
   }
   scene?.poke(current.actorId);
-  showViviClickFeedback();
 }
 
 function handlePointerCancel(event: PointerEvent): void {
@@ -234,7 +236,6 @@ function handlePointerLeave(): void {
   if (pointer) return;
   if (hoveredActorId !== null) {
     hoveredActorId = null;
-    noteViviHover(false);
     notifyHitTest(false);
     renderLabels();
   }
@@ -252,6 +253,11 @@ function onWindowBlur(): void {
 async function applySnapshot(snapshot: ViviSnapshot): Promise<void> {
   if (destroyed) return;
   latestSnapshot = snapshot;
+  if (notificationOnly) {
+    setViviBubbleMoving(snapshot.moving === true);
+    updateViviBubble(snapshot);
+    return;
+  }
   setError(snapshot.error);
   setActors(snapshot);
   if (snapshot.error) console.error("Vivi reported an error", snapshot.error);
@@ -267,7 +273,16 @@ async function load(): Promise<void> {
   scene = undefined;
   try {
     await api.rendererState(false);
-    const nextScene = await initializeViviScene(canvas);
+    if (notificationOnly) {
+      // Subscribe before the read, and do not apply a stale read over a live push.
+      let received = false;
+      unsubscribe = api.onChanged((snapshot) => { received = true; void applySnapshot(snapshot); });
+      const snapshot = await api.getSnapshot();
+      if (!received) await applySnapshot(snapshot);
+      await api.rendererState(true);
+      return;
+    }
+    const nextScene = await initializeViviScene(canvas, (at) => safeCall(() => api.motionSettled(at)));
     if (destroyed) {
       nextScene.cleanup();
       return;
@@ -275,8 +290,6 @@ async function load(): Promise<void> {
     scene = nextScene;
     unsubscribeMotion = api.onDragMotion((motion) => {
       scene?.setDragMotion(motion);
-      setViviBubbleMoving(motion.dragging || motion.flying === true);
-      noteViviMotion(motion);
     });
     const snapshot = await api.getSnapshot();
     unsubscribe?.();
@@ -324,7 +337,7 @@ window.addEventListener("beforeunload", () => {
   unsubscribeMotion?.();
   unsubscribeMotion = undefined;
   if (bubbleTimer) clearTimeout(bubbleTimer);
-  unmountBubble();
+  unmountBubble?.();
   finishPointer();
   scene?.cleanup();
   scene = undefined;

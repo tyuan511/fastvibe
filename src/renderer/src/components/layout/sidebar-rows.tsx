@@ -509,7 +509,11 @@ function SessionHoverCard({ item, open, running }: { item: Conversation; open: b
     void load();
     return () => { cancelled = true; clearTimeout(timer); };
   }, [item.id, item.updatedAt, open, running]);
-  const count = (value: number | undefined) => value == null ? "—" : value.toLocaleString(i18n.language, {
+  const count = (value: number | undefined, compact = false) => value == null ? "—" : value.toLocaleString(compact ? "en-US" : i18n.language, compact && value >= 1_000 ? {
+    notation: "compact",
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  } : {
     maximumFractionDigits: 0,
   });
   const tokens = stats?.tokens;
@@ -518,8 +522,8 @@ function SessionHoverCard({ item, open, running }: { item: Conversation; open: b
   // and each label names its own scope, so there is no footnote to explain them.
   const metrics = [
     ["rounds", count(stats?.rounds)],
-    ["tokens", count(tokens?.total)],
-    ["output", count(tokens?.output)],
+    ["tokens", count(tokens?.total, true)],
+    ["output", count(tokens?.output, true)],
   ];
   const directory = isRemoteRef(item.cwd) ? displayRemotePath(item.cwd) : item.cwd;
   return (

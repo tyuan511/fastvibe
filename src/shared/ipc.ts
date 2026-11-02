@@ -335,6 +335,7 @@ export const Ipc = {
   viviGetState: "vivi:get-state",
   viviGetSnapshot: "vivi:get-snapshot",
   viviRendererState: "vivi:renderer-state",
+  viviMotionSettled: "vivi:motion-settled",
   viviSetBubble: "vivi:set-bubble",
   viviHitTest: "vivi:hit-test",
   viviChanged: "vivi:changed",

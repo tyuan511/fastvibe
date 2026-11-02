@@ -145,7 +145,7 @@ function clonedFootMaterial(source: THREE.Material | THREE.Material[], color: st
  * AnimationMixer, body color buffer, body material, and feet materials while all other
  * geometry and materials remain shared with the loaded asset.
  */
-export async function initializeViviScene(canvas: HTMLCanvasElement): Promise<ViviScene> {
+export async function initializeViviScene(canvas: HTMLCanvasElement, onMotionSettled?: (at: number) => void): Promise<ViviScene> {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
@@ -231,6 +231,9 @@ export async function initializeViviScene(canvas: HTMLCanvasElement): Promise<Vi
   let animationFrame: number | undefined;
   let lastRenderTime = -Infinity;
   let activeUntil = 0;
+  let pendingMotion: ViviDragMotion | undefined;
+  let settledSince: number | undefined;
+  let canvasSize = "";
 
   function applyPalette(instance: ActorInstance, paletteId: ViviPalette): void {
     const palette = VIVI_PALETTES[paletteId] ?? VIVI_PALETTES.sky;
@@ -401,7 +404,11 @@ export async function initializeViviScene(canvas: HTMLCanvasElement): Promise<Vi
   function resize(): void {
     const width = Math.max(1, canvas.clientWidth || canvas.getBoundingClientRect().width || 1);
     const height = Math.max(1, canvas.clientHeight || canvas.getBoundingClientRect().height || 1);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP));
+    const dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
+    const size = `${width}:${height}:${dpr}`;
+    if (size === canvasSize) return;
+    canvasSize = size;
+    renderer.setPixelRatio(dpr);
     renderer.setSize(width, height, false);
     layout();
     if (visible && !document.hidden) renderer.render(scene, camera);
@@ -421,6 +428,14 @@ export async function initializeViviScene(canvas: HTMLCanvasElement): Promise<Vi
         instance.dragRig.apply(dragPose, instance.activity.step(delta, dragPose.active));
       }
       renderer.render(scene, camera);
+      if (pendingMotion && !pendingMotion.dragging && !pendingMotion.flying && !dragPose.active) {
+        settledSince ??= now;
+        if (now - settledSince >= 120) {
+          const at = pendingMotion.at;
+          pendingMotion = undefined;
+          onMotionSettled?.(at);
+        }
+      } else settledSince = undefined;
       lastRenderTime = now;
     }
     animationFrame = requestAnimationFrame(renderFrame);
@@ -465,6 +480,7 @@ export async function initializeViviScene(canvas: HTMLCanvasElement): Promise<Vi
 
   function setActors(nextActors: readonly ViviActor[]): void {
     if (!alive) return;
+    let membershipChanged = false;
     const nextIds = new Set<string>();
     for (const input of nextActors) {
       const actor = copyActor(input);
@@ -472,6 +488,7 @@ export async function initializeViviScene(canvas: HTMLCanvasElement): Promise<Vi
       nextIds.add(actor.id);
       const existing = actors.get(actor.id);
       if (!existing) {
+        membershipChanged = true;
         actors.set(actor.id, createInstance(actor));
       } else {
         existing.actor = actor;
@@ -481,16 +498,20 @@ export async function initializeViviScene(canvas: HTMLCanvasElement): Promise<Vi
     }
     for (const [id, instance] of actors) {
       if (nextIds.has(id)) continue;
+      membershipChanged = true;
       disposeInstance(instance);
       actors.delete(id);
     }
-    interactiveMeshes.length = 0;
-    for (const instance of actors.values()) interactiveMeshes.push(...instance.hitMeshes);
-    layout();
+    if (membershipChanged) {
+      interactiveMeshes.length = 0;
+      for (const instance of actors.values()) interactiveMeshes.push(...instance.hitMeshes);
+      layout();
+    }
     if (visible) startLoop();
   }
 
   function setVisible(nextVisible: boolean): void {
+    if (visible === nextVisible) return;
     visible = nextVisible;
     world.visible = visible;
     if (visible) {
@@ -511,7 +532,9 @@ export async function initializeViviScene(canvas: HTMLCanvasElement): Promise<Vi
   }
 
   function setDragMotion(motion: ViviDragMotion): void {
-    if (!alive || !visible) return;
+    if (!alive || !visible || (pendingMotion && motion.at <= pendingMotion.at)) return;
+    pendingMotion = motion;
+    settledSince = undefined;
     dragPhysics.sample(motion);
     dragActive = true;
     activeUntil = performance.now() + 500;

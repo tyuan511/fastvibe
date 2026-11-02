@@ -70,6 +70,7 @@ const DENIED = new Map<string, string>([
   [Ipc.viviSetBubble, "Vivi 桌面宠物只能在本机控制"],
   [Ipc.viviHitTest, "Vivi 桌面宠物只能在本机控制"],
   [Ipc.viviRendererState, "Vivi 桌面宠物只能在本机控制"],
+  [Ipc.viviMotionSettled, "Vivi 桌面宠物只能在本机控制"],
   // The menu bar is this machine's desktop chrome. A phone's chord edits belong to its own
   // copy of 快捷键, and rewriting the Mac's menu from across the network is not something
   // anybody asked for — and a menu that answered a remote client would be one the person

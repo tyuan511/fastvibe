@@ -490,7 +490,7 @@ export const ToolCard = memo(function ToolCard({
   // the doorway to that run's tab (see SubagentPanel).
   return (
     <ToolRow
-      icon={running ? <Spinner className="size-3" /> : view.icon}
+      icon={view.icon}
       label={view.label}
       subject={view.subject}
       context={view.context}

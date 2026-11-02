@@ -58,7 +58,7 @@ async function fixture(deferStart = false) {
     openConversation: async () => { calls.push("open"); },
     contextMenu: async () => undefined,
   };
-  const win = Object.assign(new Element(), { fastvibe: { vivi: api } });
+  const win = Object.assign(new Element(), { location: { search: "" }, fastvibe: { vivi: api } });
   const scene = {
     setActors() {}, setClickable() {}, setVisible() {}, setDragMotion() {}, prepareFrame() {}, cleanup() {},
     hitTest: () => "vivi", getActorScreenPosition: () => null, poke: () => { calls.push("poke"); },

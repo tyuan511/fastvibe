@@ -23,6 +23,59 @@ test("notices expire after five seconds and polling never renews them", () => {
   assert.equal(notice.remaining, 5000);
 });
 
+test("movement hides a notice without consuming its five-second lifetime", () => {
+  const { notice, at } = fixture();
+  notice.update("chat:a", "reply:1", false);
+  notice.setMoving(true);
+  at(10000);
+  assert.equal(notice.visible, false);
+  notice.setMoving(false);
+  assert.equal(notice.visible, true);
+  assert.equal(notice.remaining, 5000);
+  at(15000);
+  assert.equal(notice.visible, false);
+});
+
+test("a completion arriving midway through movement gets five seconds after settling", () => {
+  const { notice, at } = fixture();
+  notice.setMoving(true);
+  at(4000);
+  notice.update("chat:a", "reply", false);
+  at(20000);
+  notice.update("chat:a", "reply", false);
+  assert.equal(notice.visible, false);
+  notice.setMoving(false);
+  assert.equal(notice.remaining, 5000);
+  assert.equal(notice.visible, true);
+});
+
+test("movement resumes only remaining time and never resurrects an expired notice", () => {
+  const { notice, at } = fixture();
+  notice.update("chat:a", "reply", false);
+  at(2000);
+  notice.setMoving(true);
+  at(10000);
+  notice.setMoving(false);
+  assert.equal(notice.remaining, 3000);
+  at(13000);
+  assert.equal(notice.visible, false);
+  notice.setMoving(true);
+  at(20000);
+  notice.setMoving(false);
+  assert.equal(notice.visible, false);
+});
+
+test("foreground suppression while moving still consumes the notice", () => {
+  const { notice, at } = fixture();
+  notice.setMoving(true);
+  notice.update("chat:a", "reply", false);
+  at(10000);
+  notice.update("chat:a", "reply", true);
+  notice.setMoving(false);
+  notice.update("chat:a", "reply", false);
+  assert.equal(notice.visible, false);
+});
+
 test("hover retains an expired notice until the pointer leaves", () => {
   const { notice, at } = fixture();
   notice.update("chat:a", "reply", false);

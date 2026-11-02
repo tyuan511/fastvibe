@@ -722,6 +722,7 @@ export function createFastVibeApi(t: ApiTransport) {
       setBubble: (height: number, composerHeight = 0, width?: number): Promise<void> => t.invoke(Ipc.viviSetBubble, { height, composerHeight, width }),
       hitTest: (interactive: boolean): Promise<void> => t.invoke(Ipc.viviHitTest, { interactive }),
       rendererState: (ready: boolean, error?: string): Promise<void> => t.invoke(Ipc.viviRendererState, { ready, error }),
+      motionSettled: (at: number): Promise<void> => t.invoke(Ipc.viviMotionSettled, { at }),
       onChanged: (listener: (snapshot: ViviSnapshot) => void): (() => void) => t.subscribe(Ipc.viviChanged, listener),
       onDragMotion: (listener: (motion: ViviDragMotion) => void): (() => void) => t.subscribe(Ipc.viviDragMotion, listener),
       show: (): Promise<void> => t.invoke(Ipc.viviShow),

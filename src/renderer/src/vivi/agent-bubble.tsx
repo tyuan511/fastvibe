@@ -5,172 +5,95 @@ import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { applyUiLanguage } from "@/lib/i18n";
 import { applyThemePreferences } from "@/lib/themes";
-import { ViviAgentActivity, viviClickFeedback } from "@/lib/vivi-agent-activity";
-import { viviLatestReply } from "@/lib/vivi-chat";
+import { ViviCompletionState } from "@/lib/vivi-completion";
 import { ViviNotificationLifetime } from "@/lib/vivi-notification";
 import { engine } from "@/lib/engine-client";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
-import { ViviChatter } from "@/lib/vivi-chatter";
-import type { ViviDragMotion, ViviSnapshot } from "@shared/vivi";
+import type { ViviSnapshot } from "@shared/vivi";
 import "../index.css";
 
-const activity = new ViviAgentActivity();
 const api = window.fastvibe;
-
-type SurfaceState = { snapshot?: ViviSnapshot; feedback?: string; feedbackId: number; moving: boolean };
-let surface: SurfaceState = { moving: false, feedbackId: 0 };
+let surface: { snapshot?: ViviSnapshot; moving: boolean } = { moving: false };
 const listeners = new Set<() => void>();
-let clickIndex = 0;
-const chatter = new ViviChatter();
-let interactionBusy = false;
+const lifetime = new ViviNotificationLifetime();
 
-function displayFeedback(feedback: string): void {
-  surface = { ...surface, feedback, feedbackId: surface.feedbackId + 1 };
-  for (const listener of listeners) listener();
-}
-
-function maybeSpeak(): void {
-  const snapshot = surface.snapshot;
-  const blocked = !snapshot?.visible || !snapshot.settings.enabled || snapshot.settings.messages === false || snapshot.appFocused === true || interactionBusy || Boolean(surface.feedback)
-    || snapshot.actors.some((actor) => actor.mood !== "idle")
-    || activity.requests.length > 0 || activity.agents.some((agent) => agent.mood !== "idle");
-  const line = chatter.next(snapshot?.uiLanguage ?? "zh", blocked);
-  if (line) displayFeedback(line);
-}
-
-export function noteViviMotion(motion: ViviDragMotion): void {
-  chatter.motion(motion);
-  maybeSpeak();
-}
-
-export function noteViviHover(inside: boolean): void { chatter.hover(inside); }
+function notify(): void { for (const listener of listeners) listener(); }
 
 export function updateViviBubble(snapshot: ViviSnapshot): void {
   surface = { ...surface, snapshot };
   applyUiLanguage(snapshot.uiLanguage ?? "zh");
-  for (const listener of listeners) listener();
+  notify();
 }
 
 export function setViviBubbleMoving(moving: boolean): void {
   if (surface.moving === moving) return;
   surface = { ...surface, moving };
-  for (const listener of listeners) listener();
-}
-
-export function showViviClickFeedback(): void {
-  if (surface.snapshot?.settings.messages === false) return;
-  chatter.interacted();
-  displayFeedback(viviClickFeedback(surface.snapshot?.uiLanguage ?? "zh", clickIndex++));
+  lifetime.setMoving(moving);
+  notify();
 }
 
 function ViviBubble(): JSX.Element | null {
   const { t } = useTranslation("chat");
   const [, redraw] = useState(0);
-  const [error, setError] = useState("");
   const [hovered, setHovered] = useState(false);
   const [visible, setVisible] = useState(false);
-  const lifetime = useRef(new ViviNotificationLifetime());
-  const replyLoading = useRef(new Set<string>());
+  const completions = useRef(new ViviCompletionState());
   const measurement = useRef<HTMLSpanElement>(null);
   const [textSize, setTextSize] = useState<{ width: number; height: number }>();
-  const lastLayout = useRef<ViviSnapshot["surface"]>(undefined);
-  const refreshInFlight = useRef(false);
-  const refreshAgain = useRef(false);
-  const alive = useRef(true);
   const change = useCallback(() => redraw((value) => value + 1), []);
-  const loadReply = useCallback(async (id: string) => {
-    if (surface.snapshot?.settings.messages === false || replyLoading.current.has(id)) return;
-    replyLoading.current.add(id);
-    const revision = activity.agents.find((agent) => agent.id === id)?.replyRevision ?? 0;
-    try {
-      const { messages } = await engine.getSnapshot(id, 2);
-      if (!alive.current) return;
-      const reply = viviLatestReply(messages);
-      if (activity.setReply(id, reply, revision)) change();
-    } catch { /* Keep the live status when a transcript is unavailable. */ }
-    finally { replyLoading.current.delete(id); }
-  }, [change]);
-  const refresh = useCallback(async () => {
-    if (refreshInFlight.current) { refreshAgain.current = true; return; }
-    refreshInFlight.current = true;
-    try {
-      do {
-        refreshAgain.current = false;
-        const revision = activity.revision;
-        const [pending, running, workspace] = await Promise.all([api.engine.getPendingUi(), api.engine.getRunning(), api.conversations.list()]);
-        if (!alive.current) return;
-        activity.setCatalog(workspace.conversations);
-        if (!activity.restore(pending, running, revision)) refreshAgain.current = true;
-        setError("");
-        change();
-      } while (refreshAgain.current && alive.current);
-    } catch { if (alive.current) setError(t("vivi.connectionFailed")); }
-    finally { refreshInFlight.current = false; }
-  }, [change, t]);
 
   useEffect(() => {
-    alive.current = true;
+    let alive = true;
     listeners.add(change);
     const off = api.engine.onEvent((event) => {
-      if (activity.event(event)) change();
-      if (event.type === "conversation_activity" && typeof event.conversationId === "string") void loadReply(event.conversationId);
-      if (event.type === "extension_ui_request" || event.type === "extension_ui_dismiss" || event.type === "conversation_running") void refresh();
+      const previous = completions.current.completion;
+      const request = completions.current.event(event);
+      if (previous !== completions.current.completion) change();
+      if (!request) return;
+      const snapshot = surface.snapshot;
+      // Foreground/disabled completions are consumed where they arrive, even if
+      // focus changes while the transcript read would have been in flight.
+      if (!snapshot?.visible || !snapshot.settings.enabled || snapshot.settings.messages === false || snapshot.appFocused === true) return;
+      void engine.getSnapshot(request.conversationId, 2).then((snapshot) => {
+        if (alive && completions.current.accept(request, snapshot)) change();
+      }).catch(() => {
+        // An unreadable completion produces no notice, never a progress/error message.
+      });
     });
-    const catalog = api.conversations.onChanged(() => void refresh());
-    const timer = setInterval(() => { void refresh(); }, 2000);
     const theme = api.settings.onChanged((settings) => applyThemePreferences(settings as Parameters<typeof applyThemePreferences>[0]));
-    void refresh();
-    return () => { alive.current = false; listeners.delete(change); off(); catalog(); theme(); clearInterval(timer); };
-  }, [change, refresh, loadReply]);
+    return () => { alive = false; listeners.delete(change); off(); theme(); };
+  }, [change]);
 
-  const snapshot = surface.snapshot;
-  const request = activity.requests[0];
-  const agents = activity.agents;
-  const selected = agents.find((agent) => agent.id === request?.conversationId)
-    ?? agents.find((agent) => agent.id === snapshot?.actors[0]?.conversationId)
-    ?? agents.find((agent) => agent.mood !== "idle");
-  const selectedId = request?.conversationId ?? selected?.id;
-  const mood = request ? "waiting" : selected?.mood ?? snapshot?.actors[0]?.mood ?? "idle";
-  const content = error || surface.feedback || request?.message || request?.questions?.[0]?.question
-    || (request ? t("vivi.moods.waiting") : mood === "thinking" ? t("vivi.moods.thinking") : selected?.tool ? t("vivi.tool", { tool: selected.tool }) : selected?.reply || t(`vivi.moods.${mood}`));
-  const source = error ? "error" : surface.feedback ? "feedback" : request ? `request:${request.id}` : `agent:${selectedId ?? "vivi"}`;
-  // A mood returning to idle must not replay the reply that already timed out.
-  const identity = `${surface.feedback ? surface.feedbackId : request?.id ?? selected?.replyRevision ?? ""}:${content}`;
-  const suppressed = !snapshot?.visible || !snapshot.settings.enabled || snapshot.settings.messages === false || snapshot.appFocused === true
-    || !Boolean(error || surface.feedback || request || selected?.reply || mood !== "idle");
-  const show = visible && !suppressed;
+  const { snapshot, moving } = surface;
+  const completion = completions.current.completion;
+  const content = completion?.text ?? "";
+  const source = completion ? `chat:${completion.conversationId}` : "none";
+  const identity = completion ? String(completion.revision) : "none";
+  const suppressed = !snapshot?.visible || !snapshot.settings.enabled || snapshot.settings.messages === false
+    || snapshot.appFocused === true || !completion;
+  const show = visible && !suppressed && !moving;
 
-  useEffect(() => {
-    const notice = lifetime.current;
-    notice.update(source, identity, suppressed);
-    notice.hover(hovered);
+  useLayoutEffect(() => {
+    lifetime.update(source, identity, suppressed);
+    lifetime.hover(hovered && !moving);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const sync = (): void => {
-      const showing = notice.visible;
+      const showing = lifetime.visible;
       setVisible(showing);
-      if (showing && !hovered) timer = setTimeout(sync, notice.remaining);
-      if (!showing) {
-        setHovered(false);
-        if (source === "feedback") {
-          surface = { ...surface, feedback: undefined };
-          change();
-        }
-      }
+      if (showing && !hovered) timer = setTimeout(sync, lifetime.remaining);
+      if (!showing) setHovered(false);
     };
     sync();
     return () => clearTimeout(timer);
-  }, [source, identity, suppressed, hovered, change]);
-
-  useEffect(() => {
-    interactionBusy = show && hovered;
-    return () => { interactionBusy = false; };
-  }, [show, hovered]);
+  }, [source, identity, suppressed, hovered, moving]);
 
   useLayoutEffect(() => {
     const node = measurement.current;
     if (!node || !show) return;
+    let alive = true;
     const measure = (): void => {
+      if (!alive) return;
       const rect = node.getBoundingClientRect();
       const next = { width: Math.ceil(rect.width), height: Math.ceil(rect.height) };
       if (next.width <= 0 || next.height <= 0) return;
@@ -180,38 +103,26 @@ function ViviBubble(): JSX.Element | null {
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     void document.fonts.ready.then(measure);
-    return () => observer.disconnect();
+    return () => { alive = false; observer.disconnect(); };
   }, [content, show]);
+
   const height = show ? textSize?.height ?? 0 : 0;
   const width = textSize?.width;
   useEffect(() => { void api.vivi.setBubble(height, 0, width).catch(() => undefined); }, [height, width]);
-  useEffect(() => {
-    if (!selectedId) return;
-    void loadReply(selectedId);
-    const timer = setInterval(() => { void loadReply(selectedId); }, 2500);
-    return () => clearInterval(timer);
-  }, [selectedId, loadReply]);
-  if (snapshot?.surface) lastLayout.current = snapshot.surface;
-  const layout = snapshot?.surface ?? (surface.moving ? lastLayout.current : undefined);
-  const bubble = layout?.bubble;
+  const bubble = snapshot?.surface?.bubble;
   return <>
     <span ref={measurement} className="vivi-bubble-measure vivi-bubble-text" aria-hidden="true">{content}</span>
-    {show && bubble && bubble.height > 0 ? <div
+    {show && completion && bubble && bubble.height > 0 ? <div
       className="vivi-agent-bubble vivi-text-bubble pointer-events-auto"
-      style={{ position: "absolute", visibility: surface.moving ? "hidden" : "visible", left: bubble.x, top: bubble.y, width: bubble.width, height: bubble.height }}
+      style={{ position: "absolute", left: bubble.x, top: bubble.y, width: bubble.width, height: bubble.height }}
       onPointerEnter={() => { setHovered(true); void api.vivi.hitTest(true); }}
-      onPointerLeave={() => setHovered(false)}>
+      onPointerLeave={() => { setHovered(false); void api.vivi.hitTest(false); }}>
       <Button variant="ghost" className="vivi-bubble-text h-full w-full min-w-0 justify-start rounded-[inherit] text-left hover:bg-transparent"
-        title={t("vivi.openConversation")} onClick={() => void api.vivi.openConversation(selectedId)}>
+        title={t("vivi.openConversation")} onClick={() => void api.vivi.openConversation(completion.conversationId)}>
         <span className="vivi-notification-content block w-full text-sm font-normal leading-5">{content}</span>
       </Button>
       <Button variant="secondary" size="icon-xs" className="vivi-bubble-close absolute -left-2.5 -top-2.5 size-6 rounded-full border border-border" aria-label={t("vivi.dismiss")}
-        onClick={() => {
-          lifetime.current.dismiss();
-          setVisible(false);
-          setHovered(false);
-          if (source === "feedback") { surface = { ...surface, feedback: undefined }; change(); }
-        }}><HugeiconsIcon icon={Cancel01Icon} className="size-3.5" /></Button>
+        onClick={() => { lifetime.dismiss(); setVisible(false); setHovered(false); }}><HugeiconsIcon icon={Cancel01Icon} className="size-3.5" /></Button>
     </div> : null}
   </>;
 }
@@ -222,6 +133,5 @@ export function mountViviBubble(): () => void {
   if (!element) throw new Error("Vivi bubble root is missing");
   const root = createRoot(element);
   root.render(<TooltipProvider><ViviBubble /></TooltipProvider>);
-  const chatterTimer = setInterval(maybeSpeak, 750);
-  return () => { clearInterval(chatterTimer); root.unmount(); };
+  return () => root.unmount();
 }

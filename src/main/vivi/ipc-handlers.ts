@@ -29,6 +29,7 @@ export function registerViviIpc(options: ViviIpcOptions): void {
   handle(Ipc.viviRendererState, (payload: { ready?: boolean; error?: string }, ctx) => {
     pet.rendererState(ctx.window, payload?.ready === true, typeof payload?.error === "string" ? payload.error : undefined);
   });
+  handle(Ipc.viviMotionSettled, (payload: { at?: number }, ctx) => pet.motionSettled(ctx.window, payload?.at ?? NaN));
   handle(Ipc.viviSetBubble, (payload: { height?: number; composerHeight?: number; width?: number }, ctx) => pet.setBubble(ctx.window, payload?.height ?? 0, payload?.composerHeight ?? 0, payload?.width));
   handle(Ipc.viviHitTest, (payload: { interactive?: boolean }, ctx) => pet.hitTest(ctx.window, payload?.interactive === true));
   const setEnabled = (enabled: boolean): Promise<void> => options.queueSettingsWrite(async () => { pet.setSettings({ enabled }); });

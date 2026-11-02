@@ -65,6 +65,8 @@ export type ViviSnapshot = {
   visible: boolean;
   /** Whether a FastVibe workspace window is focused; the pet itself is excluded. */
   appFocused?: boolean;
+  /** Native movement and the model's remaining landing spring animation. */
+  moving?: boolean;
   surface?: ViviSurfaceLayout;
   uiLanguage?: "zh" | "en";
   error?: string;
