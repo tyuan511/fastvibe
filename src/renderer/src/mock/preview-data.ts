@@ -763,6 +763,12 @@ export const PROMPT_MESSAGES: ChatMessage[] = [
     id: "msg-prompt-u2",
     role: "user",
     text: PASTED_PROMPT,
+    attachments: [{
+      id: "paste:log",
+      kind: "file",
+      name: "server dev: TypeScript diagnostics",
+      text: `${PASTED_PROMPT}\nserver dev: src/${"generated/".repeat(24)}controller.ts(17,3): error TS2305: Module has no exported member 'BatchSetRateLimitRequest'.`,
+    }],
     tools: [],
     parts: [{ kind: "text", text: PASTED_PROMPT }],
     createdAt: NOW - 4 * MINUTE,

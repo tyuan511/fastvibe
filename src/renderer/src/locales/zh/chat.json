@@ -165,7 +165,9 @@
     "close": "关闭通知"
   },
   "attach": {
-    "remove": "移除 {{name}}"
+    "remove": "移除 {{name}}",
+    "pastedContent": "粘贴内容",
+    "characters": "{{count}} 字符"
   },
   "turns": {
     "nav": "轮次导航",

@@ -17,6 +17,7 @@ import { localeTag } from "@/lib/language";
 import { groupParts, mergeAssistantRun, resolveParts, type RenderPart } from "@/lib/group-parts";
 import { isProcessKind, thinkingTakesRow } from "@/lib/thinking-row";
 import { PROCESS_BODY_CAP } from "@/lib/process-body";
+import { useTwoLineClamp } from "@/lib/use-two-line-clamp";
 import { blankTakesRow, isBlankOutput } from "@/lib/blank-output";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatMessage, MessagePart, PromptDraft } from "@shared/types";
@@ -298,33 +299,7 @@ function UserPromptBubble({ text: raw }: { text: string }): JSX.Element {
   // block never reaches the bubble — the engine's copy keeps it, and stripping it
   // here is what makes the live row and a re-read transcript agree.
   const text = stripAttachmentBlock(raw);
-  const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
-
-  useLayoutEffect(() => {
-    setExpanded(false);
-  }, [text]);
-
-  useLayoutEffect(() => {
-    const node = bodyRef.current;
-    if (!node) return;
-
-    const measure = (): void => {
-      if (expanded) {
-        const lineHeight = Number.parseFloat(getComputedStyle(node).lineHeight);
-        const cap = (Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 24) * 2;
-        setOverflows(node.scrollHeight > cap + 1);
-        return;
-      }
-      setOverflows(node.scrollHeight > node.clientHeight + 1);
-    };
-
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [text, expanded]);
+  const { expanded, setExpanded, overflows, bodyRef } = useTwoLineClamp(text);
 
   const toggle = (
     <button

@@ -1,9 +1,11 @@
-import { useState, type JSX } from "react";
+import { useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AttachmentIcon, Cancel01Icon } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PROCESS_BODY_CAP } from "@/lib/process-body";
+import { useTwoLineClamp } from "@/lib/use-two-line-clamp";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
 import { ImagePreview } from "@/components/image-preview";
@@ -31,6 +33,7 @@ export function AttachmentChip({
 }): JSX.Element {
   const { t } = useTranslation("chat");
   const [previewOpen, setPreviewOpen] = useState(false);
+  const textPreviewPinned = useRef(false);
 
   if (item.kind === "image" && item.dataUrl) {
     return (
@@ -90,24 +93,91 @@ export function AttachmentChip({
     className,
   );
 
-  const content = item.text ?? item.name;
+  // Pasted text has its own preview; a native title would stack a second popup over it.
+  const title = item.text ? undefined : item.name;
   const chip = onOpen ? (
-    <button type="button" className={shell} title={content} onClick={onOpen}>
+    <button type="button" className={shell} title={title} onClick={onOpen}>
       {body}
     </button>
   ) : (
-    <span className={shell} title={content}>
+    <span className={shell} title={title}>
       {body}
     </span>
   );
 
   if (!item.text) return chip;
   return (
-    <Tooltip>
-      <TooltipTrigger render={chip} />
-      <TooltipContent side="top" align="start" className="max-h-64 max-w-96 overflow-auto">
-        <div className="whitespace-pre-wrap break-words text-sm">{item.text}</div>
-      </TooltipContent>
-    </Tooltip>
+    <HoverCard
+      onOpenChange={(open, details) => {
+        // Expanding can flip the popup to the other side of its chip, away from the
+        // pointer. After an explicit interaction keep it open until outside press / Escape.
+        if (!open && details.reason === "trigger-hover" && textPreviewPinned.current) {
+          details.cancel();
+        } else if (!open) {
+          textPreviewPinned.current = false;
+        }
+      }}
+    >
+      <HoverCardTrigger render={chip} delay={300} />
+      <HoverCardContent
+        side="top"
+        align="start"
+        alignOffset={0}
+        sideOffset={8}
+        className="overlay-surface flex max-h-[var(--available-height)] w-md max-w-[min(28rem,calc(100vw-2rem),var(--available-width))] flex-col overflow-hidden rounded-xl p-0 shadow-none ring-0"
+      >
+        <div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border/60 px-4 py-3">
+          <HugeiconsIcon icon={AttachmentIcon} strokeWidth={1.5} className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium">{t("attach.pastedContent")}</span>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {t("attach.characters", { count: item.text.length })}
+          </span>
+        </div>
+        <PastedTextPreview text={item.text} onInteract={() => { textPreviewPinned.current = true; }} />
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+// Mounted with the popup, so every new hover begins with a fresh two-line preview.
+function PastedTextPreview({ text, onInteract }: { text: string; onInteract: () => void }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const { expanded, setExpanded, overflows, bodyRef } = useTwoLineClamp(text);
+
+  return (
+    <div className="flex min-h-0 flex-col">
+      <div
+        data-process-body={expanded ? "" : undefined}
+        className={cn(
+          "min-h-0 overscroll-contain py-3 pl-4 pr-3",
+          expanded ? PROCESS_BODY_CAP : "overflow-x-hidden overflow-y-hidden [scrollbar-gutter:stable]",
+        )}
+      >
+        <div
+          ref={bodyRef}
+          className={cn(
+            "whitespace-pre-wrap wrap-anywhere font-mono text-sm leading-6 text-popover-foreground/90",
+            !expanded && "line-clamp-2",
+          )}
+        >
+          {text}
+        </div>
+      </div>
+      {overflows ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 w-full shrink-0 justify-start rounded-none px-4 text-xs font-normal text-muted-foreground hover:text-foreground"
+          aria-expanded={expanded}
+          onClick={() => {
+            onInteract();
+            setExpanded((value) => !value);
+          }}
+        >
+          {expanded ? t("message.collapse") : t("message.expand")}
+        </Button>
+      ) : null}
+    </div>
   );
 }

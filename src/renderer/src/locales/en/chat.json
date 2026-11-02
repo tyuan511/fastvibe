@@ -165,7 +165,9 @@
     "close": "Dismiss"
   },
   "attach": {
-    "remove": "Remove {{name}}"
+    "remove": "Remove {{name}}",
+    "pastedContent": "Pasted content",
+    "characters": "{{count}} characters"
   },
   "turns": {
     "nav": "Turn navigation",

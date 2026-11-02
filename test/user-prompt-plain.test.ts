@@ -23,6 +23,11 @@ const SOURCE = readFileSync(
   "utf8",
 );
 
+const CLAMP_SOURCE = readFileSync(
+  new URL("../src/renderer/src/lib/use-two-line-clamp.ts", import.meta.url),
+  "utf8",
+);
+
 /** Everything from `UserPromptBubble` to the next top-level function. */
 function promptBubble(): string {
   const start = SOURCE.indexOf("function UserPromptBubble");
@@ -48,7 +53,8 @@ test("a prompt over two rendered lines folds and the expanded body stays scrolla
 
   assert.match(bubble, /: "line-clamp-2"/, "every prompt is measured against the two-line cap");
   assert.match(bubble, /PROCESS_BODY_CAP/, "expanded prompts use the shared transcript height cap");
-  assert.match(bubble, /const observer = new ResizeObserver\(measure\)/, "the cap is remeasured when the layout changes");
+  assert.match(bubble, /useTwoLineClamp\(text\)/, "prompts share the measured folding rule with pasted previews");
+  assert.match(CLAMP_SOURCE, /const observer = new ResizeObserver\(measure\)/, "the cap is remeasured when the layout changes");
   assert.match(bubble, /overflows \? toggle : null/, "the expand control follows actual rendered overflow");
   assert.match(bubble, /expanded \? cn\(PROCESS_BODY_CAP, "px-3 py-2"\)/);
 });
