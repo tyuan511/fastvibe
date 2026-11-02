@@ -21,7 +21,7 @@ import { officeWatches } from "../engine/office-watch";
 import { searchProjectFiles } from "../engine/project-files";
 import { createWorkspaceEntry, deleteWorkspaceEntry, readWorkspaceDir, renameWorkspaceEntry, writeWorkspaceTextFile } from "../engine/workspace-fs";
 import { existingFiles } from "../engine/path-exists";
-import { conversationCwd, readFileForPayload, resolveReadPath } from "../engine/file-chunk";
+import { readFileForPayload, resolveReadPath } from "../engine/file-chunk";
 import { loadModelsDev, type ModelsDevStats } from "../engine/models-dev";
 import {
   applyNativeTheme,
@@ -368,7 +368,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   // An Office file's own page. The preview above only names the format; this is the call that
   // runs the renderer, and it is the one place the bundled OfficeCLI is asked to do anything.
   const officePath = (payload: { path?: unknown; conversationId?: unknown }): string =>
-    resolveReadPath(payload?.path, conversationCwd(engine.listWorkspace(), payload?.conversationId));
+    resolveReadPath(payload?.path, engine.conversationCwd(payload?.conversationId));
   const watches = officeWatches({
     onState: (state) => broadcast(Ipc.officeWatchState, state),
   });
@@ -425,7 +425,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   });
   // A phone cannot reach `fastvibe-media://`, so a file it opens or saves arrives in slices.
   handle(Ipc.workspaceReadFile, (payload: { path?: unknown; conversationId?: unknown; offset?: unknown; length?: unknown }) =>
-    readFileForPayload(payload, () => conversationCwd(engine.listWorkspace(), payload?.conversationId)),
+    readFileForPayload(payload, () => engine.conversationCwd(payload?.conversationId)),
   );
   handle(Ipc.workspaceGitStatus, async (payload: { cwd: string }): Promise<GitStatus> => {
     const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
@@ -560,7 +560,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
    */
   handle(Ipc.modelsDevUpdate, () => refreshModelsDev());
   handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => {
-    return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d", engine.listWorkspace().conversations);
+    return collectUsageStats(getFastVibePaths(), payload?.range ?? "30d", engine.usageConversations());
   });
   handle(Ipc.windowNew, () => {
     // FastVibe is a single-window app: every push, and every method that acts on "the

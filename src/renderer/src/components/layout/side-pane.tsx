@@ -40,7 +40,8 @@ import { useSettingsStore } from "@/stores/settings";
 import { useSessionStore } from "@/stores/session";
 import { subagentStatusText } from "@/lib/subagent-status";
 import { useSidePanel } from "@/lib/use-resizable-panel";
-import { MIN_WIDTH, useSidePaneStore, type SidePaneTab, sidePaneTabTitle, subagentTabName } from "@/stores/side-pane";
+import { SidePaneBotTask, SidePaneBotTasks } from "@/components/bot/side-pane-bot";
+import { MIN_WIDTH, VIVI_PANE_SCOPE, useSidePaneStore, type SidePaneTab, sidePaneTabTitle, subagentTabName } from "@/stores/side-pane";
 import { releaseBrowser, SidePaneBrowser } from "./side-pane-browser";
 import { SidePaneChat } from "./side-pane-chat";
 import { SidePaneFiles } from "./side-pane-files";
@@ -84,7 +85,7 @@ function PaneTabTitle({ tab }: { tab: SidePaneTab }): JSX.Element {
   return <>{tab.type === "subagent" ? `${info?.name ?? subagentTabName(tab)} · ${subagentStatusText(info, tab.subagentStatus)}` : sidePaneTabTitle(tab)}</>;
 }
 
-function CollapseButton(): JSX.Element {
+function CollapseButton({ narrow = false }: { narrow?: boolean }): JSX.Element {
   const { t } = useTranslation("sidepane");
   const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
   const shortcut = useShortcutLabel("toggleSidePane");
@@ -93,8 +94,8 @@ function CollapseButton(): JSX.Element {
       size="icon-sm"
       variant="ghost"
       className="no-drag shrink-0 text-muted-foreground"
-      label={t("pane.collapse")}
-      shortcut={shortcut}
+      label={narrow ? t("bot.back") : t("pane.collapse")}
+      shortcut={narrow ? undefined : shortcut}
       onClick={() => setCollapsed(true)}
     >
       <HugeiconsIcon strokeWidth={2} icon={PanelRightCloseIcon} />
@@ -156,7 +157,7 @@ function MaximizeButton(): JSX.Element {
 }
 
 function tabIcon(type: SidePaneTab["type"]) {
-  if (type === "subagent") return BotIcon;
+  if (type === "subagent" || type === "bot-task" || type === "bot-tasks") return BotIcon;
   if (type === "git") return GitCompareIcon;
   if (type === "terminal") return TerminalIcon;
   if (type === "browser") return ChromeIcon;
@@ -190,6 +191,7 @@ function BrowserTabIcon({ src }: { src?: string | null }): JSX.Element {
  * a reply arriving. Its callback props are stabilised by the caller (`useStable`).
  */
 export const SidePane = memo(function SidePane({
+  narrow = false,
   cwd,
   project,
   workspace,
@@ -198,6 +200,7 @@ export const SidePane = memo(function SidePane({
   onNewChat,
   onError,
 }: {
+  narrow?: boolean;
   cwd?: string;
   project?: string;
   workspace?: Project;
@@ -212,7 +215,7 @@ export const SidePane = memo(function SidePane({
   const maximized = useSidePaneStore((state) => state.maximized);
   const sidebarCollapsed = useSettingsStore((state) => state.settings.sidebarCollapsed ?? false);
   const width = useSidePaneStore((state) => state.width);
-  const leadWithSidebarChrome = maximized && sidebarCollapsed;
+  const leadWithSidebarChrome = !narrow && maximized && sidebarCollapsed;
   const tabs = useSidePaneStore((state) => state.tabs);
   const activeTabId = useSidePaneStore((state) => state.activeTabId);
   const setCollapsed = useSidePaneStore((state) => state.setCollapsed);
@@ -252,6 +255,7 @@ export const SidePane = memo(function SidePane({
       tabs.filter((item) => {
         // Aux chats and delegated runs belong to the chat on screen: a parent's
         // tab bar must not list another conversation's subagents.
+        if (item.type === "bot-tasks" || item.type === "bot-task") return parentId === VIVI_PANE_SCOPE && item.parentId === VIVI_PANE_SCOPE;
         if (item.type === "selection-side-chat") return Boolean(parentId && item.parentSessionId === parentId);
         if (item.type === "subagent") return !parentId || item.subagentConversationId === parentId;
         return true;
@@ -329,6 +333,7 @@ export const SidePane = memo(function SidePane({
   }
 
   const cards = [
+    parentId === VIVI_PANE_SCOPE ? { id: "bot-tasks", label: t("tabs.bot-tasks"), icon: BotIcon, onOpen: () => useSidePaneStore.getState().openBotTasks() } : null,
     canSideChat && parentId
       ? {
           id: "selection-side-conversation",
@@ -353,16 +358,10 @@ export const SidePane = memo(function SidePane({
     },
   ].filter((item): item is NonNullable<typeof item> => item !== null);
 
-  return (
-    <ResizablePanel {...panePanel}>
-    {/* Maximised beside an open sidebar, the conversation column is gone and
-        the two 8px insets would stack. The frame shifts left by one inset and
-        the panel clips it — see the floating-panes block in index.css. The
-        sidebar is left alone: its width is a preference, and growing it here
-        would jump the moment the pane is maximised. */}
+  const content = (
     <aside
-      data-slot="panel-frame"
-      data-against-sidebar={maximized && !sidebarCollapsed ? "" : undefined}
+      data-slot={narrow ? undefined : "panel-frame"}
+      data-against-sidebar={!narrow && maximized && !sidebarCollapsed ? "" : undefined}
       className={cn(
         "relative flex h-full min-h-0 w-full flex-col bg-background",
         // Maximized, the conversation column is gone and this pane sits against
@@ -444,6 +443,7 @@ export const SidePane = memo(function SidePane({
               <HugeiconsIcon strokeWidth={2} icon={Add01Icon} />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
+              {parentId === VIVI_PANE_SCOPE ? <DropdownMenuItem onClick={() => useSidePaneStore.getState().openBotTasks()}><HugeiconsIcon strokeWidth={2} icon={BotIcon} />{t("tabs.bot-tasks")}</DropdownMenuItem> : null}
               {canSideChat && parentId ? (
                 <DropdownMenuItem onClick={() => openSideChat(parentId, nextSideChatOrdinal(parentId))}>
                   <HugeiconsIcon strokeWidth={2} icon={MessageSquareIcon} />
@@ -475,8 +475,8 @@ export const SidePane = memo(function SidePane({
             </DropdownMenuContent>
           </DropdownMenu>
           </div>
-          <MaximizeButton />
-          <CollapseButton />
+          {!narrow ? <MaximizeButton /> : null}
+          <CollapseButton narrow={narrow} />
         </div>
       ) : (
         <div
@@ -489,8 +489,8 @@ export const SidePane = memo(function SidePane({
         >
           {leadWithSidebarChrome ? <SidebarCollapsedChrome onNewChat={onNewChat} /> : null}
           <div className="flex items-center gap-0.5">
-            <MaximizeButton />
-            <CollapseButton />
+            {!narrow ? <MaximizeButton /> : null}
+            <CollapseButton narrow={narrow} />
           </div>
         </div>
       )}
@@ -521,6 +521,8 @@ export const SidePane = memo(function SidePane({
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
+          {active?.type === "bot-tasks" ? <SidePaneBotTasks /> : null}
+          {visibleTabs.filter((tab) => tab.type === "bot-task").map((tab) => <div key={tab.id} hidden={tab.id !== active?.id} className="flex min-h-0 flex-1 flex-col"><SidePaneBotTask tab={tab} /></div>)}
           {active?.type === "git" ? (
             <SidePaneGit
               cwd={cwd}
@@ -558,6 +560,6 @@ export const SidePane = memo(function SidePane({
         </div>
       )}
     </aside>
-    </ResizablePanel>
   );
+  return narrow ? content : <ResizablePanel {...panePanel}>{content}</ResizablePanel>;
 });

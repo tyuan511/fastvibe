@@ -14,6 +14,7 @@ export class ViviStateStore {
   #mood: ViviMood = "idle";
   #conversationId: string | undefined;
   #visible = false;
+  #actors: ViviActor[] = [];
 
   constructor(settings: Record<string, unknown>) {
     this.#settings = normalizeViviSettings(settings);
@@ -37,8 +38,14 @@ export class ViviStateStore {
     this.#conversationId = conversationId;
   }
 
-  follow(actors: readonly ViviActor[]): void {
-    const actor = actors.find((item) => item.mood === "waiting") ?? actors[0];
+  follow(actors: readonly ViviActor[], preserveCompletion = false): void {
+    this.#actors = actors.map((actor) => ({ ...actor }));
+    if (preserveCompletion && !actors.some((actor) => actor.mood === "waiting")) return;
+    this.restoreActivity();
+  }
+
+  restoreActivity(): void {
+    const actor = this.#actors.find((item) => item.mood === "waiting") ?? this.#actors[0];
     this.setMood(actor?.mood ?? "idle", actor?.conversationId);
   }
 

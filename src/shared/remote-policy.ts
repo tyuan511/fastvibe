@@ -192,7 +192,17 @@ const ALLOWED = new Set<string>([
   Ipc.memorySetConfig,
   Ipc.memoryRun,
   Ipc.memoryClear,
-  // 图和它的操作都在同一台机器上，手机能看、能取消、能重试，和桌面一样。
+  // Vivi 工作会话使用会话中心 API；这些方法与桌面端共享同一调用表。
+  Ipc.botGetActivity,
+  Ipc.botGetWorkSnapshot,
+  Ipc.botSubmit,
+  Ipc.botCreateWork,
+  Ipc.botReport,
+  Ipc.botAsk,
+  Ipc.botAnswer,
+  Ipc.botStopConversation,
+  Ipc.botContinueConversation,
+  Ipc.botStopAll,
   Ipc.scheduleList,
   Ipc.scheduleCreate,
   Ipc.scheduleUpdate,

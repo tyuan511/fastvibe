@@ -292,7 +292,9 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
         }
         return;
       }
-      if (conversationId && currentId && conversationId !== currentId) {
+      if (conversationId && conversationId !== currentId) {
+        // A background Vivi/side conversation must not become the draft transcript
+        // when there is no ordinary conversation selected at all.
         useSidePaneStore.getState().applyConversationEvent(conversationId, event);
         return;
       }

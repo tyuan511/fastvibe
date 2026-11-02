@@ -2,7 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, rm, unlink } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, basename } from "node:path";
+import { BotStore } from "../bot/bot-store";
+import { BotRuntime } from "../bot/bot-runtime";
+import { botRole, botSessionExtension } from "../bot/bot-session-extension";
+import { runBotSession } from "../bot/bot-engine-host";
+import type { BotExecutionOutcome } from "../../shared/bot";
+import { Ipc } from "../../shared/ipc";
+import { broadcast } from "../ipc/broadcast";
 import { InMemoryModelsStore, type AssistantMessage, type AuthPrompt } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
@@ -687,6 +694,7 @@ export class PiProcessManager {
   #memory: MemoryHost;
   readonly #promptPreparations = new PromptPreparations();
   #subagentManager: SubagentManager;
+  readonly bot: BotRuntime;
   readonly #scheduledTasks: ScheduledTaskManager;
   /** Live subagent registry and bounded transcript cache. */
   #subagents = new Map<string, SubagentInfo>();
@@ -754,6 +762,15 @@ export class PiProcessManager {
       (task, run) => void this.#announceScheduleResult(task, run),
       { legacyFile: this.#paths.schedulesFile },
     );
+    this.bot = new BotRuntime(new BotStore(this.#db), {
+      createConversation: async ({ kind, key, project }) => ({ conversationId: await this.#createBotConversation(kind, key, project) }),
+      execute: ({ conversationId, text, signal }) => this.#executeBotConversation(conversationId, text, signal),
+      snapshot: (id) => this.getSnapshot(id),
+      messages: (id) => this.getConversationMessages(id),
+      abort: (id) => this.abort(id),
+      resolveProject: (project) => this.#resolveBotProject(project),
+      changed: (event) => broadcast(Ipc.botChanged, event),
+    });
     this.#memory.attach({
       conversations: () => this.#catalog.list(),
       loadBranch: (file, cwd) => loadConversationTranscriptBranch(file, cwd),
@@ -773,6 +790,62 @@ export class PiProcessManager {
   get memory(): MemoryHost { return this.#memory; }
 
   listWorkspace(): WorkspaceSnapshot { return this.#catalog.snapshot(); }
+  /** Usage attribution includes persistent Bot workers hidden from ordinary navigation. */
+  usageConversations(): Conversation[] { return this.#catalog.listAll(); }
+  conversationCwd(id: unknown): string | undefined { return typeof id === "string" ? this.#catalog.get(id)?.cwd : undefined; }
+  isBotConversation(id: string): boolean { const item = this.#catalog.get(id); return Boolean(item && botRole(item)); }
+
+  #resolveBotProject(project?: string): string {
+    if (project) {
+      const known = this.#catalog.listProjects().find((item) => item.cwd === project && item.kind !== "remote");
+      if (!known || !statSync(known.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error(uiText("Vivi 的项目目录不可用，请重新选择", "Vivi's project is unavailable; choose it again"));
+      return realpathSync(known.cwd);
+    }
+    const cwd = join(this.#paths.runtimeRoot, "vivi", "outputs");
+    mkdirSync(cwd, { recursive: true });
+    return cwd;
+  }
+
+  async #createBotConversation(role: "router" | "worker", key: string, cwd?: string): Promise<string> {
+    await this.#ensureReady();
+    const botKey = `${role}:${key}`;
+    let conversation = this.#catalog.listAll().find((item) => item.botKey === botKey && item.kind === `bot-${role}`);
+    if (!conversation) {
+      const directory = cwd ?? this.#resolveBotProject();
+      const project = this.#catalog.listProjects().find((item) => {
+        if (item.kind === "remote") return false;
+        try { return realpathSync(item.cwd) === directory; } catch { return false; }
+      })?.cwd;
+      conversation = this.#catalog.create(project, { cwd: directory }, { activate: false, kind: role === "router" ? "bot-router" : "bot-worker", botKey, title: role === "router" ? "Vivi" : "Vivi task", preview: "Vivi" });
+      this.#catalog.update(conversation.id, { titleManual: true });
+      this.#catalog.flush();
+    }
+    const managed = await this.#ensureSession(conversation);
+    this.#catalog.update(conversation.id, { sessionFile: managed.session.sessionManager.getSessionFile(), sessionId: managed.session.sessionManager.getSessionId() });
+    this.#catalog.flush();
+    return conversation.id;
+  }
+
+  async #executeBotConversation(id: string, text: string, signal: AbortSignal): Promise<BotExecutionOutcome> {
+    await this.#ensureReady();
+    const conversation = this.#catalog.get(id);
+    if (!conversation || !botRole(conversation)) throw new Error("Unknown Vivi conversation");
+    const managed = await this.#ensureSession(conversation);
+    if (!managed.session.model || managed.session.model.provider === "unknown") throw new Error(uiText("还没有可用的模型", "No model is available"));
+    try {
+      return await runBotSession(managed.session, text, {
+        signal,
+        timeoutMs: botRole(conversation) === "router" ? 120_000 : 3_600_000,
+        abort: () => this.abort(id),
+        prepare: async () => {
+          await this.#waitForBackgroundCompaction(id);
+          await this.#awaitMcp();
+          this.#beginTurn(id);
+          await this.#flushModelRebind(id);
+        },
+      });
+    } finally { this.#persist(managed.session); }
+  }
   searchConversations(query: string): Promise<ConversationSearchHit[]> {
     return searchConversationContent(query, this.#catalog.list());
   }
@@ -1048,6 +1121,7 @@ export class PiProcessManager {
       this.#setStatus({ state: "ready", cwd: this.#cwd });
       markStartup("engine-ready");
       this.#scheduledTasks.start();
+      await this.bot.start();
       // Durable work belongs to every conversation, not only whichever chat happened
       // to be active when Main restarted. Drains lazily create background sessions.
       for (const conversationId of this.#messageQueue.conversationIds()) this.#scheduleQueueDrain(conversationId);
@@ -1057,6 +1131,7 @@ export class PiProcessManager {
   }
 
   async stop(): Promise<void> {
+    await this.bot.stop().catch((error) => console.error("[bot] shutdown failed; continuing engine cleanup", error));
     this.#promptPreparations.cancel();
     this.#queueShutdown = true;
     this.#scheduledTasks.stop();
@@ -2263,7 +2338,7 @@ export class PiProcessManager {
    * by 新对话 as the blank draft — a new chat opening on an old conversation's messages.
    */
   #healPreview(conversation: Conversation): boolean {
-    if (conversation.preview || conversation.kind === "side-chat") return false;
+    if (conversation.preview || conversation.kind) return false;
     const live = this.#sessions.get(conversation.id)?.session;
     const found = live
       ? transcriptPrompt(live.sessionManager.getBranch())
@@ -2476,7 +2551,7 @@ export class PiProcessManager {
    */
   #adoptPromptPreview(id: string, text: string | undefined): void {
     const conversation = this.#catalog.get(id);
-    if (!conversation || conversation.preview || conversation.kind === "side-chat") return;
+    if (!conversation || conversation.preview || conversation.kind) return;
     if (!text?.trim()) return;
     this.#writePromptPreview(id, text);
   }
@@ -4066,6 +4141,7 @@ export class PiProcessManager {
       phases.push([name, now - mark]);
       mark = now;
     };
+    const bot = botRole(conversation);
     const settingsManager = SettingsManager.create(cwd, this.#paths.agentDir);
     // A loader we own lets us splice in FastVibe's built-in extensions
     // (`goal`, `todo`, session-title, web-search) alongside whatever the user installed. `createAgentSession`
@@ -4074,7 +4150,10 @@ export class PiProcessManager {
       cwd,
       agentDir: this.#paths.agentDir,
       settingsManager,
-      additionalExtensionPaths: builtinExtensionPaths(),
+      noExtensions: Boolean(bot),
+      additionalExtensionPaths: bot ? builtinExtensionPaths().filter((path) =>
+        (bot === "router" ? ["folder-consent.ts", "output-language.ts"] : ["folder-consent.ts", "output-language.ts", "browser-use.ts", "computer-use.ts", "web-search.ts", "present.ts", "todo.ts"]).includes(basename(path)),
+      ) : builtinExtensionPaths(),
       additionalSkillPaths: builtinSkillPaths(),
       extensionFactories: [{
         name: "fastvibe-memory",
@@ -4141,7 +4220,19 @@ export class PiProcessManager {
             return addition ? { content: addition } : undefined;
           },
         }),
-      }],
+      }, ...(bot ? [{
+        name: "fastvibe-bot-role",
+        hidden: true,
+        factory: botSessionExtension({ role: bot, conversationId: conversation.id, service: {
+          contextFor: (id) => this.bot.contextFor(id),
+          submit: (input) => this.bot.submit(input),
+          createWork: (input) => this.bot.createWork(input),
+          report: (input) => this.bot.report(input),
+          ask: (input) => this.bot.ask(input),
+          stopConversation: (input) => this.bot.stopConversation(input),
+          continueConversation: (input) => this.bot.continueConversation(input),
+        }, projects: () => this.#catalog.listProjects().filter((project) => project.kind !== "remote") }),
+      }] : [])],
     });
     // browser-use and computer-use both close over the conversation id at factory time,
     // which is this reload. Nested rather than merged: each bridge owns its own global
@@ -4345,7 +4436,7 @@ export class PiProcessManager {
       const settledVerdict = event.type === "agent_settled" ? this.#interruptedRuns.get(conversation.id) : undefined;
       // The offer was for the reply before this one; a new run makes it stale.
       if (event.type === "agent_start") this.#dropSuggestion(conversation.id);
-      const suggestible = conversation.kind !== "side-chat" && !conversation.scheduledTaskId;
+      const suggestible = !conversation.kind && !conversation.scheduledTaskId;
       // Start guessing the moment the reply that ends the turn is complete, not when the whole run
       // has settled — settling can wait on a compaction or a retry. Only the `fresh` path can: it
       // needs nothing but the reply itself, where `cache` reads the agent's state. A run that goes
@@ -4460,7 +4551,7 @@ export class PiProcessManager {
       // Focused desktop windows suppress their own native notice in `raiseNotification`.
       // 立即 cuts the reply short on purpose, and so does the repetition guard: neither
       // is 「任务完成」 or 「任务出错」.
-      const activity = event.type === "agent_settled" && conversation.kind !== "side-chat" && verdictAnnouncesActivity(settledVerdict)
+      const activity = event.type === "agent_settled" && !conversation.kind && verdictAnnouncesActivity(settledVerdict)
         ? {
             type: "conversation_activity",
             conversationId: conversation.id,
@@ -4477,7 +4568,7 @@ export class PiProcessManager {
       if (activity && activity.status === "completed" && this.#activeId !== conversation.id) {
         this.#catalog.markUnread(conversation.id);
       }
-      if (this.#activeId === conversation.id || conversation.kind === "side-chat") {
+      if (this.#activeId === conversation.id || conversation.kind === "side-chat" || bot) {
         this.#emit(payload);
         if (activity) this.#emit(activity);
         return;
@@ -4520,7 +4611,7 @@ export class PiProcessManager {
   #deliverStreamPayload(conversation: Conversation, payload: Record<string, unknown>): void {
     this.#stamp(payload);
     this.#retain(conversation.id, payload, RETAIN_FROM_STREAM);
-    if (this.#activeId === conversation.id || conversation.kind === "side-chat") this.#emit(payload);
+    if (this.#activeId === conversation.id || conversation.kind === "side-chat" || botRole(conversation)) this.#emit(payload);
     else this.#publishWatched(conversation.id, payload);
   }
 

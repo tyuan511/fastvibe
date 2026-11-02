@@ -53,7 +53,6 @@ export type BotResult = {
 };
 export type BotDelivery = {
   id: string;
-  runId?: string;
   conversationId: string;
   targetConversationId: string;
   status: BotDeliveryStatus;
@@ -71,7 +70,7 @@ export type WorkSnapshot = {
   error?: string;
 };
 export type BotActivity = { running: boolean; waiting: boolean; conversationId?: string };
-export type BotChanged = { revision: number; conversationId?: string; activity?: BotActivity; delivery?: BotDelivery };
+export type BotChanged = { revision: number; conversationId?: string; activity?: BotActivity; delivery?: Pick<BotDelivery, "id" | "conversationId" | "text"> };
 export type BotExecutionOutcome = { status: "completed" | "failed" | "interrupted"; text: string; error?: string };
 
 export type BotSubmitRequest = {
@@ -81,7 +80,6 @@ export type BotSubmitRequest = {
   project?: string;
   images?: unknown[];
   behavior?: string;
-  taskId?: string;
 };
 export type BotReportRequest = {
   conversationId: string;
@@ -93,8 +91,8 @@ export type BotReportRequest = {
 };
 
 export type BotHost = {
-  createConversation: (...args: any[]) => Promise<{ conversationId: string } | string>;
-  execute: (...args: any[]) => Promise<BotExecutionOutcome>;
+  createConversation(input: { kind: BotConversationRole; key: string; project?: string }): Promise<{ conversationId: string }>;
+  execute(input: { conversationId: string; requestId: string; text: string; epoch: number; signal: AbortSignal }): Promise<BotExecutionOutcome>;
   snapshot(conversationId: string): Promise<ConversationSnapshot>;
   messages(conversationId: string): Promise<ChatMessage[]>;
   abort(conversationId: string): Promise<void>;
@@ -103,55 +101,23 @@ export type BotHost = {
 };
 
 export interface BotApi {
-  getWorkSnapshot?(): Promise<any>;
-  submit(input: BotSubmitRequest): Promise<any>;
-  createWork?(input: { requestId: string; title: string; text: string; project?: string }): Promise<any>;
-  report?(input: BotReportRequest): Promise<any>;
-  ask?(input: { conversationId: string; requestId?: string; question: string }): Promise<any>;
-  /** Migration-only compatibility surface. New code must use getWorkSnapshot/stopConversation. */
-  getSnapshot?(): Promise<any>;
-  getTask?(input: { taskId: string; attemptId?: string }): Promise<any>;
-  stopTask?(input: { taskId: string }): Promise<any>;
-  retryTask?(input: { taskId: string }): Promise<any>;
-  retryRun?(input: { runId: string }): Promise<any>;
-  answer(input: { attentionId?: string; questionId?: string; answer: string }): Promise<any>;
-
-  stopConversation(input: { conversationId: string; callerConversationId?: string }): Promise<any>;
-  continueConversation(input: { conversationId: string }): Promise<any>;
-  stopAll(): Promise<any>;
+  getWorkSnapshot(): Promise<WorkSnapshot>;
+  submit(input: BotSubmitRequest): Promise<WorkSnapshot>;
+  createWork(input: { requestId: string; title: string; text: string; project?: string }): Promise<BotConversationMeta>;
+  report(input: BotReportRequest): Promise<BotResult>;
+  ask(input: { conversationId: string; requestId?: string; question: string }): Promise<BotAttention>;
+  answer(input: { attentionId: string; answer: string }): Promise<WorkSnapshot>;
+  stopConversation(input: { conversationId: string; callerConversationId?: string }): Promise<WorkSnapshot>;
+  continueConversation(input: { conversationId: string }): Promise<WorkSnapshot>;
+  stopAll(): Promise<WorkSnapshot>;
   getActivity(): Promise<BotActivity>;
   onChanged(listener: (event: BotChanged) => void): () => void;
-  onNavigate(listener: (target: { conversationId?: string; runId?: string }) => void): () => void;
-};
-
-export type BotReport = LegacyBotReport;
-export type BotCreateTask = LegacyBotCreateTask;
-export type BotQuestion = LegacyBotQuestion;
-export type BotTask = LegacyBotTask;
-export type BotRun = LegacyBotRun;
-export type BotAttempt = LegacyBotAttempt;
-export type BotSnapshot = LegacyBotSnapshot;
-export type BotTaskDetail = LegacyBotTaskDetail;
+  onNavigate(listener: (target: { conversationId?: string }) => void): () => void;
+}
 
 export type BotContext = {
   role: BotConversationRole;
+  conversationId: string;
   active: boolean;
   phase: "running" | "reported" | "waiting" | "inactive";
-  conversationId?: string;
-  runId?: string;
-  taskId?: string;
-  attemptId?: string;
-  tasks?: LegacyBotTask[];
-  questions?: LegacyBotQuestion[];
 };
-
-
-export type LegacyBotTask = { id: string; runId: string; title: string; status: string; report?: LegacyBotReport; conversationId?: string; [key: string]: unknown };
-export type LegacyBotRun = { id: string; [key: string]: unknown };
-export type LegacyBotAttempt = { id: string; taskId: string; conversationId?: string; [key: string]: unknown };
-export type LegacyBotQuestion = { id: string; taskId: string; question: string; status?: string; [key: string]: unknown };
-export type LegacyBotSnapshot = { revision: number; [key: string]: unknown };
-export type LegacyBotTaskDetail = { task: LegacyBotTask; [key: string]: unknown };
-export type LegacyBotReport = { outcome: "completed" | "blocked" | "failed"; summary: string; evidence: string[]; artifacts: string[] };
-export type LegacyBotCreateTask = { title: string; objective: string; acceptance: string; project?: string; dependsOn?: string[] };
-export type LegacyBotExecutionOutcome = BotExecutionOutcome;

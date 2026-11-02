@@ -4,7 +4,8 @@ import { toast } from "sonner";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { resolvePath } from "@/lib/workspace-path";
-import { useSessionStore, useWorkspacePath } from "@/stores/session";
+import { useSessionStore } from "@/stores/session";
+import { useWorkspacePath } from "@/lib/workspace-path-context";
 
 /**
  * The actions every path in the app offers: preview it, show it in the file manager,

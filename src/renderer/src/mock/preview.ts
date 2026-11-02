@@ -36,6 +36,7 @@ import {
 } from "./preview-data";
 import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
 import { setTranscriptDisplay } from "@/lib/transcript-display";
+import { createBotFixture } from "./bot-fixture";
 import { createScheduleFixture } from "./schedule-fixture";
 import { gitTreeFixture } from "./git-tree-fixture";
 import { gitHistoryFixture } from "./git-history-fixture";
@@ -96,6 +97,7 @@ function transcriptFixture() {
 if (website && websiteScene === "models") window.location.hash = "#/settings/providers";
 if (website && websiteScene === "market") window.location.hash = "#/plugins";
 if (params.get("tasks") === "sample") window.location.hash = "#/tasks";
+if (params.has("vivi")) window.location.hash = "#/vivi";
 const theme = params.get("theme");
 const pane = params.get("pane");
 const scroll = params.get("scroll");
@@ -763,6 +765,7 @@ const vivi = {
 };
 
 const api = {
+  bot: createBotFixture(PREVIEW_CWD, params.get("lang") === "en", params.get("vivi") === "empty"),
   schedules: createScheduleFixture(params.get("tasks") === "sample"),
   vivi,
   engine: {

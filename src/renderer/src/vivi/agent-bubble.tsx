@@ -61,14 +61,20 @@ function ViviBubble(): JSX.Element | null {
         // An unreadable completion produces no notice, never a progress/error message.
       });
     });
+    const offBot = api.bot.onChanged((event) => {
+      if (!event.delivery) return;
+      const snapshot = surface.snapshot;
+      const eligible = Boolean(snapshot?.visible && snapshot.settings.enabled && snapshot.settings.messages !== false && snapshot.appFocused !== true);
+      if (completions.current.deliver(event.delivery, eligible)) change();
+    });
     const theme = api.settings.onChanged((settings) => applyThemePreferences(settings as Parameters<typeof applyThemePreferences>[0]));
-    return () => { alive = false; listeners.delete(change); off(); theme(); };
+    return () => { alive = false; listeners.delete(change); off(); offBot(); theme(); };
   }, [change]);
 
   const { snapshot, moving } = surface;
   const completion = completions.current.completion;
   const content = completion?.text ?? "";
-  const source = completion ? `chat:${completion.conversationId}` : "none";
+  const source = completion ? completion.runId ? `bot:${completion.runId}` : `chat:${completion.conversationId}` : "none";
   const identity = completion ? String(completion.revision) : "none";
   const suppressed = !snapshot?.visible || !snapshot.settings.enabled || snapshot.settings.messages === false
     || snapshot.appFocused === true || !completion;
@@ -118,7 +124,7 @@ function ViviBubble(): JSX.Element | null {
       onPointerEnter={() => { setHovered(true); void api.vivi.hitTest(true); }}
       onPointerLeave={() => { setHovered(false); void api.vivi.hitTest(false); }}>
       <Button variant="ghost" className="vivi-bubble-text h-full w-full min-w-0 justify-start rounded-[inherit] text-left hover:bg-transparent"
-        title={t("vivi.openConversation")} onClick={() => void api.vivi.openConversation(completion.conversationId)}>
+        title={t("vivi.openConversation")} onClick={() => void api.vivi.openConversation(completion.conversationId, completion.runId)}>
         <span className="vivi-notification-content block w-full text-sm font-normal leading-5">{content}</span>
       </Button>
       <Button variant="secondary" size="icon-xs" className="vivi-bubble-close absolute -left-2.5 -top-2.5 size-6 rounded-full border border-border" aria-label={t("vivi.dismiss")}

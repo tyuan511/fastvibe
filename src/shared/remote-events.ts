@@ -34,6 +34,9 @@ export type RemotePushKind = "catalog" | "engine" | "terminal" | "drop" | "unkno
  */
 export function classifyRemotePush(channel: string): RemotePushKind {
   if (
+    channel === Ipc.botNavigate ||
+    // Bot workspaces belong to the connected host; SSH project binding does not aggregate them.
+    channel === Ipc.botChanged ||
     channel === Ipc.settingsChanged ||
     channel === Ipc.status ||
     channel === Ipc.sshState ||

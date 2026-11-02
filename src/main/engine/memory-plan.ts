@@ -83,7 +83,7 @@ export function pickCandidates(
 ): Candidate[] {
   const out: Candidate[] = [];
   for (const conversation of conversations) {
-    if (conversation.kind === "side-chat" || !conversation.sessionFile) continue;
+    if (conversation.kind === "side-chat" || conversation.kind === "bot-router" || conversation.kind === "bot-worker" || !conversation.sessionFile) continue;
     if (running.has(conversation.id)) continue;
     const sourceUpdatedAt = mtimes.get(conversation.id);
     if (sourceUpdatedAt === undefined) continue;

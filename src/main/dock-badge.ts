@@ -11,7 +11,7 @@ export function watchUnreadBadge(initial: WorkspaceSnapshot, setBadge: (text: st
   let previous: string | undefined;
   const update = (snapshot: WorkspaceSnapshot): void => {
     const unread = new Set(snapshot.conversations
-      .filter((conversation) => conversation.kind !== "side-chat" && conversation.unread === true)
+      .filter((conversation) => conversation.kind !== "side-chat" && conversation.kind !== "bot-router" && conversation.kind !== "bot-worker" && conversation.unread === true)
       .map((conversation) => conversation.id));
     const text = unread.size > 0 ? String(unread.size) : "";
     if (text === previous) return;

@@ -100,7 +100,7 @@ export class ConversationCatalog {
   }
 
   list(): Conversation[] {
-    return this.#items.filter((item) => item.kind !== "side-chat").sort(byCreatedDesc);
+    return this.#items.filter((item) => !item.kind).sort(byCreatedDesc);
   }
 
   listAll(): Conversation[] {
@@ -114,7 +114,7 @@ export class ConversationCatalog {
     const ids = new Set(removed.map((item) => item.id));
     this.#items = this.#items.filter((item) => !ids.has(item.id));
     if (this.#activeId && ids.has(this.#activeId)) {
-      this.#activeId = this.#items[0]?.id;
+      this.#activeId = this.list()[0]?.id;
     }
     this.#write();
     return removed;
@@ -136,7 +136,7 @@ export class ConversationCatalog {
   /** The one unfinished conversation reserved for a project, if it exists. */
   findEmpty(project?: string | null): Conversation | undefined {
     const bound = normalizeProject(project);
-    return this.#items.find((item) => item.kind !== "side-chat" && !item.preview && item.project === bound);
+    return this.#items.find((item) => !item.kind && !item.preview && item.project === bound);
   }
 
   get activeId(): string | undefined {
@@ -165,7 +165,7 @@ export class ConversationCatalog {
    */
   markUnread(id: string): void {
     const item = this.#items.find((entry) => entry.id === id);
-    if (!item || item.kind === "side-chat" || item.unread === true) return;
+    if (!item || item.kind || item.unread === true) return;
     item.unread = true;
     this.#write();
   }
@@ -307,7 +307,7 @@ export class ConversationCatalog {
     this.#items = this.#items.filter((item) => item.project !== cwd);
     this.#projects = this.#projects.filter((item) => item.cwd !== cwd);
     if (this.#activeId && removed.some((item) => item.id === this.#activeId)) {
-      this.#activeId = this.#items[0]?.id;
+      this.#activeId = this.list()[0]?.id;
     }
     this.#write();
     return removed;
@@ -316,7 +316,7 @@ export class ConversationCatalog {
   create(
     project: string | undefined,
     session?: { sessionFile?: string; sessionId?: string; cwd?: string; worktree?: { path: string; branch: string } },
-    options?: { activate?: boolean; kind?: Conversation["kind"]; title?: string; parentId?: string; preview?: string; scheduledTaskId?: string },
+    options?: { activate?: boolean; kind?: Conversation["kind"]; botKey?: string; title?: string; parentId?: string; preview?: string; scheduledTaskId?: string },
   ): Conversation {
     const id = session?.sessionId || randomUUID();
     const bound = normalizeProject(project);
@@ -333,6 +333,7 @@ export class ConversationCatalog {
       createdAt: now,
       updatedAt: now,
       kind: options?.kind,
+      botKey: options?.botKey,
       parentId: options?.parentId,
       scheduledTaskId: options?.scheduledTaskId,
       preview: options?.preview?.trim() || (options?.kind === "side-chat" ? options.title?.trim() || uiText("辅助对话", "Side chat") : undefined),
@@ -404,8 +405,8 @@ export class ConversationCatalog {
     if (!found) return undefined;
     this.#items = this.#items.filter((item) => item.id !== id);
     if (this.#activeId === id) {
-      const sibling = this.#items.find((item) => item.project === found.project);
-      this.#activeId = sibling?.id ?? this.#items[0]?.id;
+      const sibling = this.#items.find((item) => !item.kind && item.project === found.project);
+      this.#activeId = sibling?.id ?? this.list()[0]?.id;
     }
     this.#write();
     return found;
@@ -433,7 +434,7 @@ export class ConversationCatalog {
       // v0: a bare array; every non-empty cwd was a project.
       this.#items = parsed.filter(isConversation).map((item) => this.#migrateLegacy(item));
       this.#projects = projectsFromConversations(this.#items).sort(byProjectCreatedDesc);
-      this.#activeId = this.#items[0]?.id;
+      this.#activeId = this.#items.find((item) => !item.kind)?.id;
       this.#isolateScratch();
       return;
     }
@@ -467,7 +468,7 @@ export class ConversationCatalog {
       }
     }
     if (needsProjectMigration) this.#projects.sort(byProjectCreatedDesc);
-    this.#activeId = typeof parsed.activeId === "string" ? parsed.activeId : this.#items[0]?.id;
+    this.#activeId = typeof parsed.activeId === "string" && !this.get(parsed.activeId)?.kind ? parsed.activeId : this.list()[0]?.id;
     // One chat per scratch directory: a filesystem migration, so it belongs to the file it
     // came from and runs exactly once, inside this import.
     this.#isolateScratch();
@@ -649,7 +650,8 @@ export class ConversationCatalog {
     this.#activeIdStored = this.#db.get<{ value: string }>("SELECT value FROM catalog_meta WHERE key = 'activeId'")?.value ?? null;
     // An absent row is a catalog that never recorded one — the same 「fall back to the newest
     // chat」 the file reader did. An empty value is the opposite: 没有人打开任何会话.
-    this.#activeId = this.#activeIdStored === null ? this.#items[0]?.id : this.#activeIdStored || undefined;
+    this.#activeId = this.#activeIdStored === null ? this.list()[0]?.id : this.#activeIdStored || undefined;
+    if (this.#activeId && this.get(this.#activeId)?.kind) this.#activeId = this.list()[0]?.id;
   }
 
   /**

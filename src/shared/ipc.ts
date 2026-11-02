@@ -1,6 +1,18 @@
 import type { IrohRemoteState } from "./iroh-remote";
 import type { MenuBindings, MenuCommandId } from "./menu-commands.ts";
 export const Ipc = {
+  botGetActivity: "bot:get-activity",
+  botGetWorkSnapshot: "bot:get-work-snapshot",
+  botSubmit: "bot:submit",
+  botCreateWork: "bot:create-work",
+  botReport: "bot:report",
+  botAsk: "bot:ask",
+  botAnswer: "bot:answer",
+  botStopConversation: "bot:stop-conversation",
+  botContinueConversation: "bot:continue-conversation",
+  botStopAll: "bot:stop-all",
+  botChanged: "bot:changed",
+  botNavigate: "bot:navigate",
   engineGetStatus: "engine:get-status",
   engineGetPiEngine: "engine:get-pi-engine",
   engineSwitchPiEngine: "engine:switch-pi-engine",

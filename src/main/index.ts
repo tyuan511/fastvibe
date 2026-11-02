@@ -2,7 +2,9 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, safeSto
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
-import { broadcast } from "./ipc/broadcast";
+import { broadcast, observe } from "./ipc/broadcast";
+import type { BotChanged } from "../shared/bot";
+import { registerBotIpc } from "./ipc/bot-handlers";
 import { dispatch, handle, handlerChannels, observeSlowCalls, type CallerContext } from "./ipc/registry";
 import { registerRemoteIpc, restoreRemoteServer, stopRemoteServer } from "./remote";
 import { runAppConfig } from "./app-config";
@@ -69,6 +71,7 @@ import { syncScheduleTray, disposeScheduleTray } from "./schedule-tray";
 import { registerViviScheme, registerViviProtocol } from "./vivi/loader";
 import { getViviPetWindow, destroyViviPetWindow } from "./vivi/pet-window";
 import { registerViviIpc } from "./vivi/ipc-handlers";
+import { BotAttentionNotices } from "./vivi/bot-notifications";
 
 // Every static import above has been evaluated by now; the gap from process start is the cost of loading the bundle.
 markStartup("main-loaded");
@@ -283,7 +286,9 @@ const gateway = new RemoteGateway({
   broadcast,
 });
 const windows = new Set<BrowserWindow>();
-function createWindow(): void {
+let stopBotObservation: (() => void) | undefined;
+const botAttention = new BotAttentionNotices();
+function createWindow(initialHash?: string): void {
   // Leaving the app is when a question raised while the user was watching first needs
   // saying out loud — see notifyParkedPrompts.
   createDesktopWindow(windows, scheduleParkedPromptNotice, () => {
@@ -291,7 +296,8 @@ function createWindow(): void {
     const pet = getViviPetWindow();
     pet.setMainWindow([...windows].find((window) => !window.isDestroyed()) ?? null);
     pet.setAppFocused([...windows].some((window) => !window.isDestroyed() && window.isFocused()));
-  });
+    void notifyBotAttention();
+  }, initialHash);
 }
 function openWindow(): void {
   const existing = [...windows].find((window) => !window.isDestroyed());
@@ -302,6 +308,55 @@ function openWindow(): void {
 }
 
 
+
+function openViviWindow(runId?: string): void {
+  const existing = [...windows].find((window) => !window.isDestroyed());
+  const hash = runId ? `/vivi?run=${encodeURIComponent(runId)}` : "/vivi";
+  if (!existing) { createWindow(hash); return; }
+  openWindow();
+  // Desktop navigation is addressed to the workspace window, not remote clients or the pet.
+  existing.webContents.send(Ipc.botNavigate, runId ? { runId } : {});
+}
+
+function syncViviActivity(): void {
+  const pet = getViviPetWindow();
+  const workspace = engine.listWorkspace();
+  const running = new Set(engine.getRunningConversations());
+  const pending = new Set(engine.getPendingUi().map((item) => typeof item.conversationId === "string" ? item.conversationId : ""));
+  const bot = engine.bot.activity();
+  pet.updateActors([
+    ...(bot.running || bot.waiting ? [{
+      id: "vivi-bot", label: "Vivi", conversationId: bot.conversationId,
+      mood: bot.waiting ? "waiting" as const : "working" as const, palette: pet.getSettings().palette,
+    }] : []),
+    ...workspace.conversations.filter((conversation) => running.has(conversation.id) || pending.has(conversation.id)).map((conversation) => ({
+      id: conversation.id, label: conversation.title, conversationId: conversation.id,
+      mood: pending.has(conversation.id) ? "waiting" as const : "working" as const,
+      palette: pet.getSettings().palette,
+    })),
+  ]);
+}
+
+function notifyBotAttention(): void {
+  if (shutdownPhase !== "running") return;
+  const focused = [...windows].find((window) => !window.isDestroyed() && window.isFocused());
+  void engine.bot.getWorkSnapshot().then((snapshot) => {
+    const notices = botAttention.take(snapshot, {
+      enabled: notificationEnabled(readNotificationSettings(), "notifyApproval"),
+      focused: Boolean(focused), viewingVivi: Boolean(focused?.webContents.getURL().includes("#/vivi")),
+    });
+    for (const notice of notices) presentNotification({
+      setting: notice.kind === "question" ? "notifyApproval" : "notifyError",
+      title: notice.kind === "question" ? uiText("Vivi 需要你回答", "Vivi needs your answer") : uiText("Vivi 工作会话需要处理", "Vivi work needs attention"),
+      body: `${notice.title}\n${notice.text}`.slice(0, 400), conversationId: notice.conversationId,
+    }, { windows: () => windows, createWindow: () => createWindow(`/vivi?conversation=${encodeURIComponent(notice.conversationId)}`), openConversation: async (conversationId) => openViviWindow(conversationId) });
+  }).catch((error) => log.warn(`bot attention snapshot failed: ${String(error)}`));
+}
+
+function backgroundWorkEnabled(): boolean {
+  const activity = engine.bot.activity();
+  return engine.hasEnabledSchedules() || activity.running || activity.waiting;
+}
 
 function broadcastStatus(): void {
   broadcast(Ipc.status, engine.status);
@@ -545,15 +600,17 @@ app.whenReady().then(async () => {
     refreshModelsDev,
   });
   registerScheduleIpc(engine);
+  registerBotIpc(engine);
   registerUpdater(
     () => windows,
     () => createWindow(),
   );
   registerViviIpc({
     queueSettingsWrite,
-    openConversation: async (conversationId) => {
+    openConversation: async (conversationId, runId) => {
+      if (!conversationId || runId) { openViviWindow(runId); return; }
       openWindow();
-      if (conversationId) await gateway.dispatch(Ipc.conversationsOpen, { id: conversationId }, { window: [...windows][0] ?? null });
+      await gateway.dispatch(Ipc.conversationsOpen, { id: conversationId }, { window: [...windows][0] ?? null });
     },
   });
   const account = registerAccount(
@@ -595,17 +652,34 @@ app.whenReady().then(async () => {
   });
   scheduleUpdateCheck(startupSettings.autoCheckUpdates !== false);
 
+  stopBotObservation = observe(({ channel, payload }) => {
+    if (channel !== Ipc.botChanged || shutdownPhase !== "running") return;
+    syncViviActivity();
+    setConversationRunning("vivi:background", engine.bot.activity().running);
+    syncScheduleTray(backgroundWorkEnabled(), openWindow, () => app.quit());
+    const event = payload as BotChanged;
+    notifyBotAttention();
+    if (event.delivery) {
+      const delivery = event.delivery;
+      getViviPetWindow().setMood("success", delivery.conversationId);
+      if (![...windows].some((window) => !window.isDestroyed() && window.isFocused()) && notificationEnabled(readNotificationSettings(), "notifyDone")) {
+        presentNotification({ setting: "notifyDone", title: uiText("Vivi 已完成任务", "Vivi finished your task"), body: delivery.text.slice(0, 400), conversationId: delivery.conversationId }, {
+          windows: () => windows, createWindow: () => createWindow(`/vivi?conversation=${encodeURIComponent(delivery.conversationId)}`), openConversation: async (conversationId) => openViviWindow(conversationId),
+        });
+      }
+    }
+  });
   engine.onStatus(() => {
     broadcastStatus();
-    syncScheduleTray(engine.hasEnabledSchedules(), openWindow, () => app.quit());
+    syncScheduleTray(backgroundWorkEnabled(), openWindow, () => app.quit());
   });
   engine.onSchedulesChanged(() => {
-    syncScheduleTray(engine.hasEnabledSchedules(), openWindow, () => app.quit());
+    syncScheduleTray(backgroundWorkEnabled(), openWindow, () => app.quit());
     void gateway.scheduleSnapshot().then((all) => broadcast(Ipc.scheduleChanged, all)).catch((error) => log.warn(`schedule push failed: ${String(error)}`));
     // The claim of a one-off briefly disables it before its run is installed.
     // Check after that synchronous transition, not from the intermediate snapshot.
     if (windows.size === 0 && process.platform !== "darwin") queueMicrotask(() => {
-      if (!engine.hasEnabledSchedules() && shutdownPhase === "running") app.quit();
+      if (!backgroundWorkEnabled() && shutdownPhase === "running") app.quit();
     });
   });
   engine.memory.onChange((state) => broadcast(Ipc.memoryChanged, state));
@@ -651,16 +725,7 @@ app.whenReady().then(async () => {
     }
     if (event.type === "conversation_running" || event.type === "extension_ui_request" || event.type === "extension_ui_dismiss" || event.type === "conversation_activity") {
       const pet = getViviPetWindow();
-      const workspace = engine.listWorkspace();
-      const running = new Set(engine.getRunningConversations());
-      const pending = new Set(engine.getPendingUi().map((item) => typeof item.conversationId === "string" ? item.conversationId : ""));
-      pet.updateActors(workspace.conversations.filter((conversation) => running.has(conversation.id) || pending.has(conversation.id)).map((conversation) => ({
-        id: conversation.id,
-        label: conversation.title,
-        conversationId: conversation.id,
-        mood: pending.has(conversation.id) ? "waiting" : "working",
-        palette: pet.getSettings().palette,
-      })));
+      syncViviActivity();
       if (event.type === "conversation_activity") {
         pet.setMood(event.status === "failed" ? "error" : "success", typeof event.conversationId === "string" ? event.conversationId : undefined);
       }
@@ -726,7 +791,7 @@ app.on("will-quit", () => {
 app.on("window-all-closed", () => {
   // The engine and the resident schedule timer remain alive after the last window.
   // A tray menu (when schedules exist) is the explicit path back or to Quit.
-  if (engine.hasEnabledSchedules()) return;
+  if (backgroundWorkEnabled()) return;
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -760,6 +825,8 @@ function requestShutdown(reason: string): void {
   devParentWatch = undefined;
   stopModelsDevRefresh?.();
   stopModelsDevRefresh = undefined;
+  stopBotObservation?.();
+  stopBotObservation = undefined;
   // Establish the deadline before calling any cleanup owner. A synchronous failure
   // must not strand the process in the cleaning phase either.
   shutdownDeadline = setTimeout(() => finishShutdown(true), SHUTDOWN_TIMEOUT_MS);

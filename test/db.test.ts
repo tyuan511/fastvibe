@@ -174,9 +174,17 @@ test("the schema is applied in order and the version records it", () => {
 test("schema 8 advances past the reserved version 9 without changing existing data", () => {
   const file = join(tempDir(), "fastvibe.db");
   const db = openDatabase(file);
+  // Build the actual old schema, not merely an old version number over today's
+  // tables. New migrations may legitimately use CREATE TABLE without IF NOT EXISTS.
+  db.exec("PRAGMA foreign_keys = OFF");
+  for (const row of db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")) {
+    db.exec(`DROP TABLE "${row.name.replaceAll('"', '""')}"`);
+  }
+  db.exec("PRAGMA foreign_keys = ON");
+  for (const migrate of MIGRATIONS.slice(0, 8)) db.transaction(() => migrate(db));
+  db.userVersion(8);
   withRows(db);
   db.run("INSERT INTO widget (id, data) VALUES (?, ?)", "keep", "{\"value\":42}");
-  db.userVersion(8);
   db.close();
 
   const upgraded = openDatabase(file);

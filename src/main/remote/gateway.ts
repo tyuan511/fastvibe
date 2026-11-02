@@ -199,6 +199,12 @@ export class RemoteGateway {
    * that do not declare them ignore them.
    */
   async dispatch(method: string, payload: unknown, ctx: unknown): Promise<unknown> {
+    // Bot task identities belong to this host. A remote project must not dispatch the
+    // first submit elsewhere while every later task/question command stays local.
+    if (method.startsWith("bot:")) {
+      if (resolveServerScope(payload)) throw new Error("Vivi 暂不支持 SSH 项目，请选择本机项目");
+      return this.#deps.localDispatch(method, payload, ctx);
+    }
     if (method === Ipc.projectsAddRemote) return this.#addRemote(payload, ctx);
     if (method === Ipc.projectsRename) return this.#renameProject(payload, ctx);
     if (method === Ipc.projectsRemove) return this.#removeProject(payload, ctx);

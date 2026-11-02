@@ -1,5 +1,20 @@
 {
+  "bot": {
+    "active": "进行中 · {{count}}",
+    "finished": "已结束 · {{count}}",
+    "back": "返回 Vivi",
+    "conversations": "工作会话",
+    "empty": "还没有工作会话",
+    "emptyConversation": "这条工作会话还没有消息",
+    "workspace": "工作区",
+    "recovery": "可以继续",
+    "continue": "继续",
+    "stop": "停止",
+    "supplement": "补充要求…"
+  },
   "tabs": {
+    "bot-tasks": "工作会话",
+    "bot-task": "任务详情",
     "git": "变更",
     "terminal": "终端",
     "browser": "浏览器",

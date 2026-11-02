@@ -20,7 +20,9 @@ export class BotRuntime {
   #scheduled = false;
   #recovered = false;
   #error: string | undefined;
-  constructor(readonly store: BotStore, readonly host: BotHost) {}
+  readonly store: BotStore;
+  readonly host: BotHost;
+  constructor(store: BotStore, host: BotHost) { this.store = store; this.host = host; }
 
   start(): void {
     if (!this.#recovered) { this.store.recover(); this.#recovered = true; }
@@ -65,6 +67,7 @@ export class BotRuntime {
   async submit(input: BotSubmitRequest): Promise<WorkSnapshot> {
     const requestId = textOf(input.requestId, "请求标识", 200);
     const text = textOf(input.text, "消息");
+    if (input.project !== undefined) this.host.resolveProject(input.project);
     let meta = input.conversationId ? this.#meta(input.conversationId) : undefined;
     if (!meta) {
       const routerId = this.store.routerConversationId;
@@ -129,7 +132,13 @@ export class BotRuntime {
 
   async stopConversation(input: { conversationId: string; callerConversationId?: string }): Promise<WorkSnapshot> {
     const meta = this.#meta(input.conversationId);
-    this.#change(() => { this.store.putConversation({ ...meta, epoch: meta.epoch + 1, paused: true, updatedAt: Date.now() }); for (const item of this.store.inputs(meta.conversationId)) if (item.status === "queued") this.store.putInput({ ...item, status: "canceled" }); });
+    this.#change(() => {
+      this.store.putConversation({ ...meta, epoch: meta.epoch + 1, paused: true, updatedAt: Date.now() });
+      for (const item of this.store.inputs(meta.conversationId)) {
+        if (item.status === "queued") this.store.putInput({ ...item, status: "canceled" });
+        else if (item.status === "running") this.store.putInput({ ...item, status: "uncertain", error: "会话已停止，请核对现场后继续" });
+      }
+    });
     const active = this.#active.get(meta.conversationId);
     active?.controller.abort();
     if (active && input.callerConversationId !== meta.conversationId) await this.host.abort(meta.conversationId);
@@ -137,23 +146,22 @@ export class BotRuntime {
   }
   async continueConversation(input: { conversationId: string }): Promise<WorkSnapshot> {
     const meta = this.#meta(input.conversationId);
-    this.#change(() => this.store.putConversation({ ...meta, paused: false, epoch: meta.epoch + 1, updatedAt: Date.now() }));
+    this.#change(() => {
+      this.store.putConversation({ ...meta, paused: false, epoch: meta.epoch + 1, updatedAt: Date.now() });
+      const next = this.#meta(meta.conversationId);
+      this.store.putInput({ id: `resume:${next.conversationId}:${next.epoch}`, conversationId: next.conversationId, epoch: next.epoch, source: "resume", text: "Continue the unfinished work from the current conversation.", status: "queued", createdAt: Date.now() });
+    });
     this.#kick();
     return this.getWorkSnapshot();
   }
   async stopAll(): Promise<WorkSnapshot> { await Promise.all(this.store.conversations().map((item) => this.stopConversation({ conversationId: item.conversationId }))); return this.getWorkSnapshot(); }
 
-  /** Migration adapter only. New callers must use conversation methods above. */
-  contextFor(conversationId: string): import("../../shared/bot.ts").BotContext { const meta = this.store.conversation(conversationId); return { role: meta?.role ?? "worker", conversationId, active: Boolean(meta && !meta.paused), phase: meta && !meta.paused ? "running" : "inactive" }; }
-  createTask(_input: import("../../shared/bot.ts").BotCreateTask): never { throw new Error("旧 Task API 已移除，请使用 createWork"); }
-  reportTask(_conversationId: string, _report: import("../../shared/bot.ts").BotReport): never { throw new Error("旧 Task API 已移除，请使用 report"); }
-  askTask(_conversationId: string, _question: string): never { throw new Error("旧 Task API 已移除，请使用 ask"); }
-  /** Compatibility aliases are deliberately non-functional until integration switches. */
-  getSnapshot(): Promise<WorkSnapshot> { return this.getWorkSnapshot(); }
-  getTask(_taskId: string, _attemptId?: string): never { throw new Error("旧 Task API 已移除，请通过 engine snapshot 读取会话内容"); }
-  stopTask(_taskId: string, _callerConversationId?: string): never { throw new Error("旧 Task API 已移除，请使用 stopConversation"); }
-  retryTask(_taskId: string): never { throw new Error("旧 Task API 已移除，请使用 continueConversation"); }
-  retryRun(_runId: string): never { throw new Error("旧 Run API 已移除，请使用 continueConversation"); }
+  contextFor(conversationId: string): import("../../shared/bot.ts").BotContext {
+    const meta = this.store.conversation(conversationId);
+    return { role: meta?.role ?? "worker", conversationId, active: Boolean(meta && !meta.paused), phase: meta && !meta.paused ? "running" : "inactive" };
+  }
+
+  #emitDelivery(delivery: import("../../shared/bot.ts").BotDelivery): void { try { this.host.changed({ revision: this.store.revision, delivery: { id: delivery.id, conversationId: delivery.conversationId, text: delivery.text } }); } catch (error) { this.#error = error instanceof Error ? error.message : String(error); } }
 
   #meta(id: string): BotConversationMeta { const value = this.store.conversation(id); if (!value) throw new Error("找不到 Vivi 会话"); return value; }
   #change(fn: () => void): void { this.store.transaction(() => { fn(); this.store.bumpRevision(); }); this.#emit(); }
@@ -161,6 +169,19 @@ export class BotRuntime {
   #kick(): void { if (!this.#enabled || this.#scheduled) return; this.#scheduled = true; queueMicrotask(() => { this.#scheduled = false; this.#pump(); }); }
   #pump(): void {
     if (!this.#enabled) return;
+    const routerId = this.store.routerConversationId;
+    if (routerId) {
+      for (const delivery of this.store.deliveries("pending")) {
+        const router = this.store.conversation(routerId);
+        if (!router || router.paused || delivery.targetConversationId !== routerId) continue;
+        if (!this.store.input(delivery.id)) {
+          this.#change(() => {
+            this.store.putInput({ id: delivery.id, conversationId: routerId, epoch: router.epoch, source: "report", text: delivery.text, status: "queued", createdAt: Date.now() });
+            this.store.updateDelivery({ ...delivery, status: "injected" });
+          });
+        }
+      }
+    }
     for (const meta of this.store.conversations()) {
       if (meta.paused || this.#active.has(meta.conversationId)) continue;
       const input = this.store.inputs(meta.conversationId).find((item) => item.status === "queued" && item.epoch === meta.epoch);
@@ -179,8 +200,16 @@ export class BotRuntime {
     const current = this.store.conversation(active.meta.conversationId);
     const input = this.store.input(active.inputId);
     if (!current || !input || current.epoch !== active.meta.epoch || input.status === "canceled") return;
-    this.#change(() => this.store.putInput({ ...input, status: outcome.status === "completed" ? "completed" : outcome.status === "interrupted" ? "uncertain" : "failed", error: outcome.error }));
+    const delivery = this.store.delivery(active.inputId);
+    this.#change(() => {
+      this.store.putInput({ ...input, status: outcome.status === "completed" ? "completed" : outcome.status === "interrupted" ? "uncertain" : "failed", error: outcome.error });
+      if (outcome.status !== "completed") this.store.putResult({ id: `result:${active.inputId}`, conversationId: active.meta.conversationId, inputId: active.inputId, epoch: active.meta.epoch, status: outcome.status === "interrupted" ? "uncertain" : "failed", summary: outcome.error, createdAt: Date.now() });
+      if (delivery && outcome.status === "completed") this.store.updateDelivery({ ...delivery, status: "delivered" });
+      if (delivery && outcome.status !== "completed") this.store.updateDelivery({ ...delivery, status: "failed" });
+    });
+    if (outcome.status === "completed") this.#error = undefined;
     if (outcome.status !== "completed") this.#error = outcome.error ?? "Vivi 会话执行未完成";
+    if (delivery && outcome.status === "completed") this.#emitDelivery({ ...delivery, status: "delivered" });
     // A normal SDK stop without a structured report is idle/uncertain, never an automatic failure result.
     if (outcome.status === "completed" && outcome.text.trim()) await this.report({ conversationId: active.meta.conversationId, requestId: active.inputId, summary: outcome.text, outcome: "idle" });
   }

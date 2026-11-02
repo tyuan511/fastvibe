@@ -17,6 +17,7 @@ import { FLoader } from "@/components/f-loader";
 import { stripAttachmentBlock } from "@/lib/attachments";
 import { groupMessageRowsIncremental, type MessageRowsProjection, type MessageRow } from "@/lib/group-parts";
 import { ChatMessageRow } from "./message-row";
+import { WorkspacePathContext } from "@/lib/workspace-path-context";
 import { TranscriptConversationContext } from "./conversation-context";
 import { cn } from "@/lib/utils";
 import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
@@ -460,6 +461,7 @@ export function MessageList({
   messages,
   streaming,
   conversationId,
+  cwd,
   loading = false,
   loadingReplaces = false,
   onRetry,
@@ -473,6 +475,8 @@ export function MessageList({
   streaming: boolean;
   /** Stable owner of the transcript; required to reset scroll when its first row is reused. */
   conversationId?: string | null;
+  /** Explicit directory for transcripts outside the ordinary conversation catalog. */
+  cwd?: string | null;
   loading?: boolean;
   /** Replace the current transcript with the loader, instead of only covering an empty one. */
   loadingReplaces?: boolean;
@@ -780,6 +784,7 @@ export function MessageList({
 
   return (
     <TranscriptConversationContext.Provider value={conversationId ?? null}>
+      <WorkspacePathContext.Provider value={cwd}>
     <MessageScrollerProvider autoScroll={false}>
       <VirtualMessageScrollerProvider value={virtualScrollController}>
         <MessageRevealProvider reveal={reveal}>
@@ -863,6 +868,7 @@ export function MessageList({
         </MessageRevealProvider>
       </VirtualMessageScrollerProvider>
     </MessageScrollerProvider>
+      </WorkspacePathContext.Provider>
     </TranscriptConversationContext.Provider>
   );
 }

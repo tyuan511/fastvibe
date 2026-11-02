@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
 import { collectChangedFiles, type ChangedFile } from "@/lib/changed-files";
 import { DiffStatBadge } from "@/components/chat/diff-stat";
 import { useSidePaneStore } from "@/stores/side-pane";
-import { useSessionStore, useWorkspacePath } from "@/stores/session";
+import { useSessionStore } from "@/stores/session";
+import { useWorkspacePath } from "@/lib/workspace-path-context";
 import { FileIcon } from "@/components/file-icon";
 import { displayProjectPath, projectFolderPaths } from "@shared/project-folders";
 import { displayPath, resolvePath } from "@/lib/workspace-path";
@@ -58,10 +59,7 @@ function FileRow({
   const { t } = useTranslation("chat");
   const label = fileLabel(file.path, cwd);
   const { name, directory } = splitLabel(label);
-  const absolute = (): string => {
-    const { conversations, activeId } = useSessionStore.getState();
-    return resolvePath(file.path, conversations.find((item) => item.id === activeId)?.cwd);
-  };
+  const absolute = (): string => resolvePath(file.path, cwd);
   const reveal = async (): Promise<void> => {
     const result = await window.fastvibe.workspace.reveal(absolute());
     if (result && result.ok === false) toast.error(t("preview.pathMissing"));

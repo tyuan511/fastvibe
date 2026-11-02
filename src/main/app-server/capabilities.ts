@@ -2,6 +2,7 @@ import { APP_CAPABILITIES, intersectCapabilities, type AppCapability } from "../
 import { remotePolicy } from "../../shared/remote-policy.ts";
 
 function capabilityOf(method: string): AppCapability | null {
+  if (method.startsWith("bot:")) return "engine";
   if (method.startsWith("engine:")) return "engine";
   if (method.startsWith("conversations:")) return "conversations";
   if (method.startsWith("projects:")) return "conversations";
@@ -102,7 +103,7 @@ export function authorize(method: string, options: PolicyOptions): PolicyVerdict
 
 export function authorizePush(channel: string, options: PolicyOptions): boolean {
   if (options.caller === "window") return true;
-  if (isAdministrative(channel)) return false;
+  if (isAdministrative(channel) || channel === "bot:navigate") return false;
   const capability = capabilityOf(channel);
   if (!capability) return false;
   return effectiveCapabilities(options).includes(capability);

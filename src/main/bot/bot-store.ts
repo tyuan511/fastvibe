@@ -7,7 +7,8 @@ const many = <T>(rows: Row[]): T[] => rows.map((row) => JSON.parse(row.data) as 
 
 /** Durable conversation facts. Transcript content remains owned by the engine. */
 export class BotStore {
-  constructor(private readonly db: Db) {}
+  private readonly db: Db;
+  constructor(db: Db) { this.db = db; }
   transaction<T>(fn: () => T): T { return this.db.transaction(fn); }
   get revision(): number { return Number(this.meta("revision") ?? 0); }
   bumpRevision(): number { const next = this.revision + 1; this.setMeta("revision", String(next)); return next; }
@@ -34,10 +35,7 @@ export class BotStore {
   delivery(id: string): BotDelivery | undefined { return one<BotDelivery>(this.db.get<Row>("SELECT data FROM bot_outbox WHERE id=?", id)); }
   deliveries(status?: BotDelivery["status"]): BotDelivery[] { return many(this.db.all<Row>(status ? "SELECT data FROM bot_outbox WHERE status=? ORDER BY created_at,id" : "SELECT data FROM bot_outbox ORDER BY created_at,id", ...(status ? [status] : []))); }
   putDelivery(value: BotDelivery): boolean { return this.db.run("INSERT INTO bot_outbox(id,conversation_id,target_conversation_id,status,created_at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", value.id, value.conversationId, value.targetConversationId, value.status, value.createdAt, JSON.stringify(value)).changes > 0; }
-
-  /** Temporary schema-11 readers for the migration adapter; never used by the new scheduler. */
-  tasks(): import("../../shared/bot.ts").LegacyBotTask[] { return []; }
-  questions(): import("../../shared/bot.ts").LegacyBotQuestion[] { return []; }
+  updateDelivery(value: BotDelivery): void { this.db.run("UPDATE bot_outbox SET status=?, data=? WHERE id=?", value.status, JSON.stringify(value), value.id); }
 
   recover(): void {
     this.transaction(() => {
@@ -45,6 +43,7 @@ export class BotStore {
       for (const input of this.inputs()) if (input.status === "running" || input.status === "accepted") { this.putInput({ ...input, status: "uncertain", error: "应用在执行期间退出，请核对现场后继续" }); changed = true; }
       for (const meta of this.conversations()) {
         if (!this.inputs(meta.conversationId).some((input) => input.status === "uncertain")) continue;
+        if (meta.paused) continue;
         this.putConversation({ ...meta, paused: true, updatedAt: Date.now() });
         changed = true;
       }

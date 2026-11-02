@@ -356,7 +356,7 @@ test("completion celebrates for five seconds then returns to idle", () => {
   f.tick(0, 0, 1);
   assert.equal(f.pet.getSnapshot().actors[0].mood, "idle");
   assert.equal(f.pet.getState().mood, "idle");
-  assert.equal(f.pet.getSnapshot().actors[0].conversationId, "finished-chat");
+  assert.equal(f.pet.getSnapshot().actors[0].conversationId, undefined);
   f.pet.destroy();
 });
 
@@ -375,7 +375,8 @@ test("new activity cancels completion expiry and another completion gets its own
   f.tick(0, 0, 2000);
   assert.equal(f.pet.getState().mood, "success");
   f.tick(0, 0, 3000);
-  assert.equal(f.pet.getState().mood, "idle");
+  assert.equal(f.pet.getState().mood, "waiting");
+  assert.equal(f.pet.getState().conversationId, "new");
   f.pet.setMood("success");
   f.pet.destroy();
   assert.equal(f.timeouts.size, 0);

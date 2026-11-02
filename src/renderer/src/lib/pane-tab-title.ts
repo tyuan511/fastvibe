@@ -31,7 +31,7 @@ export type PaneTabTitleInput = {
 };
 
 /** Tabs whose `title` is always data: a run's role or a side conversation. */
-const DATA_TITLE_TYPES = new Set(["subagent", "selection-side-chat"]);
+const DATA_TITLE_TYPES = new Set(["bot-task", "subagent", "selection-side-chat"]);
 
 /**
  * Whether a tab's stored `title` is what it should display.
