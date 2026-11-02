@@ -3842,7 +3842,7 @@ locale charmap        →   US-ASCII
 
 `ViviSnapshot.moving` 包含拖动、抛掷与落地弹簧回弹。模型 renderer 在 `ViviDragPhysics` 不再 active 且连续稳定 120ms 后，通过 `vivi:motion-settled` 回传最后一个运动样本的 `at`；Main 核对来源窗口、最新时间戳及鼠标/拖动/飞行状态后才恢复文字。移动期间暂停通知的五秒寿命，新消息等停稳后再完整展示。重复的 actors/visible 快照不得触发布局或立即重绘。
 
-通知只由 `conversation_activity: completed` 触发读取最终回复；不轮询，不展示过程文字、工具状态、思考、等待、错误或点击闲话。`ViviCompletionState` 丢弃新运行开始前或较新完成事件之前发起的迟到读取，失败/中断/工具结尾不回退展示之前的过程文字。文字和点击目标来自同一条完成记录，点击始终打开其 `conversationId`。验证见 `test/vivi-pet-motion.test.ts`、`test/vivi-completion.test.ts`、`test/vivi-notification.test.ts`。
+通知只由 `conversation_activity: completed` 触发读取最终回复；不轮询，不展示过程文字、工具状态、思考、等待、错误或点击闲话。`ViviCompletionState` 丢弃新运行开始前或较新完成事件之前发起的迟到读取，失败/中断/工具结尾不回退展示之前的过程文字。文字和点击目标来自同一条完成记录，点击始终打开其 `conversationId`。Bot 的 Router/Worker 由 `openPetConversation` 分流到 Vivi 工作台，不经普通聊天的 `conversationsOpen`，不能改变普通聊天的 `activeId` 或绕开 BotRuntime；普通会话仍走原聊天导航。验证见 `test/bot-pet.test.ts`、`test/vivi-pet-motion.test.ts`、`test/vivi-completion.test.ts`、`test/vivi-notification.test.ts`。
 
 ## 测试
 

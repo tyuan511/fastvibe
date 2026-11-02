@@ -299,7 +299,6 @@ export function Composer({
   focusSignal,
   className,
   readOnly = false,
-  textOnly = false,
 }: {
   value: string;
   disabled: boolean;
@@ -396,14 +395,12 @@ export function Composer({
    * plain labels, and the stop button while the run is in flight.
    */
   readOnly?: boolean;
-  /** Text submission only: no engine commands, attachments, or configuration controls. */
-  textOnly?: boolean;
 }): JSX.Element {
   const { t } = useTranslation("chat");
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [typedValue, setTypedValue] = useState<string | null>(null);
-  const draft = textOnly ? { text: value, skill: undefined } : skillDraftOf(value, commands, typedValue === value);
+  const draft = skillDraftOf(value, commands, typedValue === value);
   const inputValue = draft.text;
   const [dragging, setDragging] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -423,7 +420,7 @@ export function Composer({
    * to a conversation, so it is the caller's `conversationId` — not the chat on screen.
    */
   const handoff = useExtensionStatusValue(conversationId, "handoff");
-  const notice = readOnly || textOnly ? undefined : handoff;
+  const notice = readOnly ? undefined : handoff;
   const locked = disabled || Boolean(notice);
   const suggested =
     suggestion && !value && !streaming && !readOnly && !locked && attachments.length === 0 ? suggestion : undefined;
@@ -436,7 +433,7 @@ export function Composer({
   // The ring reads the active conversation's usage. A side chat passes its own id
   // but that same usage, so compacting there would shrink the wrong transcript.
   const activeId = useSessionStore((state) => state.activeId);
-  const showCompact = !textOnly && !readOnly && conversationId != null && conversationId === activeId;
+  const showCompact = !readOnly && conversationId != null && conversationId === activeId;
   const histDraft = useRef("");
   const sendBinding = useSettingsStore((state) => resolveBinding("send", state.settings.shortcuts));
   const sendShortcut = useShortcutLabel("send");
@@ -487,7 +484,7 @@ export function Composer({
   }, [value]);
 
   const slash = useMemo(() => {
-    if (textOnly || draft.skill || slashDismissed || !/^\/[^\s]*$/.test(value)) return [];
+    if (draft.skill || slashDismissed || !/^\/[^\s]*$/.test(value)) return [];
     const q = value.slice(1).toLowerCase();
     return commands
       .filter((item) => {
@@ -495,7 +492,7 @@ export function Composer({
         return !q || hay.includes(q);
       })
       .slice(0, 8);
-  }, [commands, textOnly, draft.skill?.name, slashDismissed, value]);
+  }, [commands, draft.skill?.name, slashDismissed, value]);
 
   useEffect(() => {
     setSlashIndex(0);
@@ -506,7 +503,7 @@ export function Composer({
   // menu stays closed while the caret remains in that same token, so Escape can leave
   // a literal `@query` in the draft.
   const mentionToken = fileMentionAtCaret(inputValue, caret);
-  const mention = !textOnly && !readOnly && !locked && project && slash.length === 0 && mentionToken && mentionDismissed !== mentionToken.start
+  const mention = !readOnly && !locked && project && slash.length === 0 && mentionToken && mentionDismissed !== mentionToken.start
     ? mentionToken
     : null;
   const fileHitRef = useRef<HTMLButtonElement>(null);
@@ -753,7 +750,7 @@ export function Composer({
   const git = gitStatus?.isRepository && gitStatus.branch ? gitStatus : null;
   // Project/branch chips only belong to an empty conversation. Once a message
   // has been sent the top bar carries the title, so the chips are dropped.
-  const showWorkspace = !textOnly && Boolean(newSession);
+  const showWorkspace = Boolean(newSession);
   const showProjectPicker = showWorkspace && !hideProjectPicker;
 
   const contextUsed = contextUsage?.tokens ?? (
@@ -788,7 +785,7 @@ export function Composer({
   }
 
   async function addFiles(list: FileList | File[]): Promise<void> {
-    if (textOnly || readOnly || locked) return;
+    if (readOnly || locked) return;
     const next = await filesToAttachments([...list]);
     if (next.length === 0) return;
     onAttachmentsChange([...attachments, ...next]);
@@ -801,7 +798,6 @@ export function Composer({
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>): void {
-    if (textOnly) return;
     const files = [...event.clipboardData.files];
     if (files.length > 0) {
       event.preventDefault();
@@ -855,7 +851,7 @@ export function Composer({
       className={cn("@container/composer mx-auto w-full max-w-3xl px-6 pb-5", className)}
       onDragOver={(event) => {
         event.preventDefault();
-        setDragging(!textOnly && !readOnly && !locked);
+        setDragging(!readOnly && !locked);
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
@@ -1111,7 +1107,7 @@ export function Composer({
         </div>
 
         <div className="flex items-center gap-1 px-2.5 pb-2.5">
-          {readOnly || textOnly ? null : (
+          {readOnly ? null : (
             <IconButton
               size="icon-sm"
               variant="ghost"
@@ -1124,7 +1120,7 @@ export function Composer({
             </IconButton>
           )}
 
-          {readOnly || textOnly ? null : <ExtensionStatusBadges disabled={working} />}
+          {readOnly ? null : <ExtensionStatusBadges disabled={working} />}
 
           <div className="flex-1" />
 
@@ -1157,7 +1153,7 @@ export function Composer({
             </span>
           ) : null}
 
-          {!textOnly ? <ModelThinkingSelect
+          <ModelThinkingSelect
             models={models}
             model={model}
             thinkingLevel={thinkingLevel}
@@ -1170,7 +1166,7 @@ export function Composer({
             onThinkingChange={(level) => {
               if (level !== "auto") onThinkingChange(level);
             }}
-          /> : null}
+          />
 
           {/* A run and a compaction are stopped the same way, so the mark that decides
               whether there is something to stop is `working`, not `streaming`: a manual

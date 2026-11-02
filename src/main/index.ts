@@ -72,6 +72,7 @@ import { registerViviScheme, registerViviProtocol } from "./vivi/loader";
 import { getViviPetWindow, destroyViviPetWindow } from "./vivi/pet-window";
 import { registerViviIpc } from "./vivi/ipc-handlers";
 import { BotAttentionNotices } from "./vivi/bot-notifications";
+import { openPetConversation } from "./vivi/conversation-navigation";
 
 // Every static import above has been evaluated by now; the gap from process start is the cost of loading the bundle.
 markStartup("main-loaded");
@@ -607,11 +608,14 @@ app.whenReady().then(async () => {
   );
   registerViviIpc({
     queueSettingsWrite,
-    openConversation: async (conversationId, runId) => {
-      if (!conversationId || runId) { openViviWindow(runId); return; }
-      openWindow();
-      await gateway.dispatch(Ipc.conversationsOpen, { id: conversationId }, { window: [...windows][0] ?? null });
-    },
+    openConversation: (conversationId, runId) => openPetConversation({
+      isBotConversation: (id) => engine.isBotConversation(id),
+      openVivi: openViviWindow,
+      openChat: async (id) => {
+        openWindow();
+        await gateway.dispatch(Ipc.conversationsOpen, { id }, { window: [...windows][0] ?? null });
+      },
+    }, conversationId, runId),
   });
   const account = registerAccount(
     () => windows,

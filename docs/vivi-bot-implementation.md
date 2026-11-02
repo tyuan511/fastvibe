@@ -29,6 +29,8 @@ Vivi 现在采用“长期 Router 会话 + 持久 Worker 会话 + 薄持久编�
 - 工作会话详情复用标准 `MessageList` 与完整 `Composer`，支持附件、模型、队列、停止和继续。关闭面板不会停止会话，切换会话不会丢失草稿。
 - 不再提供任务详情、Attempt 选择或任务弹窗。问题卡片和结果状态引用持久编排记录，但内容仍回到对应真实会话。
 - 宠物只呈现聚合活动和最终交付通知，不拥有执行状态。通知目标使用 `conversationId`，不依赖已删除的 Run/Task 标识。
+- 点击宠物完成气泡时，通过引擎识别 Router/Worker，进入 Vivi 工作台并定位该会话，不写普通聊天的 `activeId`；普通聊天的完成气泡仍打开原聊天。`conversation-navigation.ts` 是这两条导航的统一分流入口，回归测试从真实 Bot completion 的点击目标验证这条边界。
+- 共用 Composer 不保留没有调用方的 `textOnly` 模式；工作会话继续使用完整输入框。
 
 ## 协议边界
 
@@ -45,7 +47,7 @@ node --test test/bot-engine.test.ts test/bot-runtime.test.ts test/bot-store.test
 FASTVIBE_IROH_BIN=/Users/yuantang/code/fastvibe/resources/iroh/fastvibe-iroh pnpm test
 ```
 
-当前结果：完整测试 **2177 项通过，0 失败，0 跳过**；类型检查、注入脚本检查和 Electron/Vite 构建通过。新增回归覆盖停止后的 Router 接单与 Worker 保持暂停、图片持久化与真实 SDK 图片请求、逐条输入的项目选择，以及真实 SDK Router 向原 Worker 投递补充要求。
+首轮 review 修复后的验证基线：完整测试 **2177 项通过，0 失败，0 跳过**；类型检查、注入脚本检查和 Electron/Vite 构建通过。新增回归覆盖停止后的 Router 接单与 Worker 保持暂停、图片持久化与真实 SDK 图片请求、逐条输入的项目选择，以及真实 SDK Router 向原 Worker 投递补充要求。
 
 工作会话详情只在提前返回之前调用一次 `useBotSnapshot`，会话与结果共享同一份快照。无头 Chromium 在亮色、暗色下均通过延迟 Worker snapshot 的「加载中 → 完成」检查，没有 React Hook 顺序错误。
 
