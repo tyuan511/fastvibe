@@ -49,6 +49,12 @@ export type AccountDeps = {
   log?: (message: string) => void;
 };
 
+export type AccountIrohDevice = {
+  id: string;
+  name: string;
+  platform: string;
+};
+
 type StoredAccount = {
   version: number;
   /** The site the token was issued by; it is never sent anywhere else. */
@@ -208,17 +214,31 @@ export class AccountService {
     if (!response.ok) throw new Error(`iroh endpoint registration failed: ${response.status}`);
   }
 
-  async irohEndpointIds(): Promise<Set<string>> {
+  /** Account-owned device metadata, keyed by the endpoint identity proved by QUIC. */
+  async irohDevices(): Promise<Map<string, AccountIrohDevice>> {
     const token = this.#stored?.token;
     if (!token) throw new Error("account is signed out");
     const response = await this.#call("/api/devices", { method: "GET", token });
     if (!response.ok) throw new Error(`device list request failed: ${response.status}`);
     const body = (await response.json().catch(() => undefined)) as { devices?: unknown } | undefined;
-    const devices = Array.isArray(body?.devices) ? body.devices : [];
-    return new Set(devices.flatMap((device) => {
-      const endpointId = (device as { iroh_endpoint_id?: unknown })?.iroh_endpoint_id;
-      return typeof endpointId === "string" && endpointId ? [endpointId] : [];
-    }));
+    if (this.#stored?.token !== token) throw new Error("account changed during device authorization");
+    const devices = new Map<string, AccountIrohDevice>();
+    for (const value of Array.isArray(body?.devices) ? body.devices : []) {
+      if (!value || typeof value !== "object") continue;
+      const device = value as Record<string, unknown>;
+      const endpointId = device.iroh_endpoint_id;
+      if (typeof endpointId !== "string" || !endpointId.trim()) continue;
+      devices.set(endpointId, {
+        id: typeof device.id === "string" ? device.id : "",
+        name: typeof device.name === "string" ? device.name.trim() : "",
+        platform: typeof device.platform === "string" ? device.platform : "",
+      });
+    }
+    return devices;
+  }
+
+  async irohEndpointIds(): Promise<Set<string>> {
+    return new Set((await this.irohDevices()).keys());
   }
 
   async issueIrohRelay(deviceId: string, endpointId: string): Promise<IrohRelayConfig> {

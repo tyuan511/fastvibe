@@ -3,6 +3,13 @@ use flate2::Compression;
 use flate2::write::DeflateEncoder;
 use std::io::Write;
 
+#[cfg(feature = "mobile-client")]
+use std::io::{BufRead, BufReader};
+#[cfg(feature = "mobile-client")]
+use std::net::TcpListener;
+#[cfg(feature = "mobile-client")]
+use std::thread;
+
 #[cfg(feature = "iroh-transport")]
 #[test]
 fn connection_failure_survives_poll_and_late_failure_cannot_undo_cancel() {
@@ -141,6 +148,85 @@ fn mobile_response_aliases_decode_server_snake_case() {
     })).unwrap();
     assert_eq!(relay.quic_port, 7842);
     assert_eq!(relay.usage.unwrap().remaining_bytes, 1);
+}
+
+#[cfg(feature = "mobile-client")]
+#[test]
+fn devices_command_projects_desktop_computers_from_full_registry() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let body = serde_json::json!({
+        "devices": [
+            {"id":"mac-1","name":"Mac offline","platform":"darwin","online":false,"iroh_endpoint_id":"mac-endpoint"},
+            {"id":"win-1","name":"Windows","platform":"win32","online":true},
+            {"id":"linux-1","name":"Linux","platform":"linux"},
+            {"id":"android-1","name":"Phone","platform":"android","online":true,"iroh_endpoint_id":"phone-endpoint"},
+            {"id":"ios-1","name":"iPhone","platform":"ios","online":false},
+            {"id":"unknown-1","name":"Unknown","platform":"unknown"},
+            {"id":"macos-1","name":"Legacy Mac spelling","platform":"macos"}
+        ]
+    })
+    .to_string();
+    let server = thread::spawn(move || {
+        for _ in 0..4 {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(&stream);
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                request.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            assert!(request.starts_with("GET /api/devices HTTP/1.1\r\n"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer account-token\r\n")
+            );
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        }
+    });
+
+    let core = CoreHandle::new();
+    let mut client = mobile_client::AccountClient::new(origin).unwrap();
+    client.token = Some("account-token".into());
+    let registry = core.runtime.block_on(client.devices()).unwrap();
+    assert_eq!(registry.len(), 7);
+    assert_eq!(
+        registry
+            .iter()
+            .find(|device| device.id == "android-1")
+            .unwrap()
+            .iroh_endpoint_id
+            .as_deref(),
+        Some("phone-endpoint")
+    );
+    *lock(&core.account) = Some(client);
+
+    // Desktop registration passes process.platform through unchanged (remote.ts → official.ts).
+    let expected = serde_json::json!([
+        {"id":"mac-1","name":"Mac offline","platform":"darwin","irohEndpointId":"mac-endpoint","online":false},
+        {"id":"win-1","name":"Windows","platform":"win32","online":true},
+        {"id":"linux-1","name":"Linux","platform":"linux"}
+    ]);
+    for action in ["devices", "listDevices", "list_devices"] {
+        let response = core.command(serde_json::json!({"action":action}));
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(response["result"], expected);
+    }
+    server.join().unwrap();
 }
 
 #[cfg(feature = "iroh-transport")]

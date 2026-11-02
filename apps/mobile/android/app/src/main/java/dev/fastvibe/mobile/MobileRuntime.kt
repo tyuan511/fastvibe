@@ -135,7 +135,9 @@ internal class MobileRuntimeController(
     private var selectedDevice: DeviceView? = null
     private var expectedLoginState: String? = null
     private var authenticated = false
-    private var accountGeneration = 0L
+    @Volatile private var accountGeneration = 0L
+    // Accessed only on CoreRuntime's serial executor; failed updates are retried next refresh.
+    private var registeredLocalDevice: Triple<Long, String, String>? = null
     private var started = false
     private var catalogLoading = false
     private var connectionAttempt: DeviceView? = null
@@ -255,7 +257,7 @@ internal class MobileRuntimeController(
         val generation = accountGeneration
         loginPending = true
         core.command("loginUrl", JSONObject().put("origin", accountServiceOrigin)
-            .put("redirectUri", OAUTH_REDIRECT_URI).put("deviceName", "FastVibe Android").put("platform", "android")) { response ->
+            .put("redirectUri", OAUTH_REDIRECT_URI).put("deviceName", mobileDeviceName(appContext)).put("platform", "android")) { response ->
             if (generation != accountGeneration) return@command
             loginPending = false
             if (!response.optBoolean("ok")) { showError(response); return@command }
@@ -367,7 +369,30 @@ internal class MobileRuntimeController(
             busy = false
             if (!response.optBoolean("ok")) { showError(response); return@command }
             devices = parseDevices(response.optJSONArray("result") ?: response.optJSONObject("result")?.arrayOrNull("devices"))
+            // Refresh remains usable if updating the phone's own registry record fails.
+            core.sequence({ session ->
+                if (generation == accountGeneration) registerLocalDevice(session, generation)
+            }) { failure ->
+                if (generation == accountGeneration && failure != null) {
+                    Log.w(TAG, "Local device name update failed (${failure.javaClass.simpleName})")
+                }
+            }
         }
+    }
+
+    private fun registerLocalDevice(session: CoreRuntime.CommandSession, generation: Long = accountGeneration): String {
+        val name = mobileDeviceName(appContext)
+        registeredLocalDevice?.takeIf { it.first == generation && it.second == name }?.let { return it.third }
+        val installId = preferences.getString("installId", null) ?: UUID.randomUUID().toString().also {
+            check(preferences.edit().putString("installId", it).commit()) { "无法保存设备标识。" }
+        }
+        val registered = session.command("registerDevice", JSONObject().put("installId", installId)
+            .put("name", name).put("platform", "android")).requireResult()
+        val id = registered.stringOrNull("deviceId", "id")
+            ?: registered.optJSONObject("device")?.stringOrNull("id")
+            ?: error("账号服务未返回手机标识。")
+        if (generation == accountGeneration) registeredLocalDevice = Triple(generation, name, id)
+        return id
     }
 
     fun cancelConnection() {
@@ -417,14 +442,7 @@ internal class MobileRuntimeController(
             val identity = session.command("identity").requireResult()
             secureStore.put("identity", identity.getString("secretKey"))
             val localEndpoint = identity.getString("endpointId")
-            val installId = preferences.getString("installId", null) ?: UUID.randomUUID().toString().also {
-                check(preferences.edit().putString("installId", it).commit()) { "无法保存设备标识。" }
-            }
-            val registered = session.command("registerDevice", JSONObject().put("installId", installId)
-                .put("name", "FastVibe Android").put("platform", "android")).requireResult()
-            val localDeviceId = registered.stringOrNull("deviceId", "id")
-                ?: registered.optJSONObject("device")?.stringOrNull("id")
-                ?: error("账号服务未返回手机标识。")
+            val localDeviceId = registerLocalDevice(session)
             session.command("registerEndpoint", JSONObject().put("deviceId", localDeviceId)
                 .put("endpointId", localEndpoint)).requireResult()
             val relay = session.command("relayToken", JSONObject().put("deviceId", device.id)
