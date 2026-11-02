@@ -9,16 +9,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,6 +29,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.ui.unit.sp
 
 @Composable
@@ -40,12 +45,17 @@ internal fun AccountLoginScreen(controller: MobileRuntimeController, callback: O
 
 @Composable
 internal fun AccountLoginContent(loginPending: Boolean, error: String?, onLogin: () -> Unit) {
+    CompositionLocalProvider(LocalTextStyle provides LocalTextStyle.current.copy(
+        fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+        letterSpacing = 0.sp,
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+    )) {
     GlassBackground {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding(),
+                .mobileStatusBarsPadding()
+                .mobileNavigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(
@@ -56,15 +66,23 @@ internal fun AccountLoginContent(loginPending: Boolean, error: String?, onLogin:
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Image(
-                    painter = painterResource(R.drawable.fastvibe_login_logo),
-                    contentDescription = "FastVibe",
-                    modifier = Modifier.size(96.dp),
-                )
+                Box(Modifier.size(96.dp), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier.size(88.dp).offset(y = 14.dp)
+                            .blur(24.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                            .background(Color(0xFF285AFF).copy(alpha = .32f), RoundedCornerShape(24.dp)),
+                    )
+                    Image(
+                        painter = painterResource(R.drawable.fastvibe_login_logo),
+                        contentDescription = "FastVibe",
+                        modifier = Modifier.size(96.dp),
+                    )
+                }
                 Spacer(Modifier.height(14.dp))
                 Text(
                     text = "FastVibe",
                     fontSize = 30.sp,
+                    lineHeight = 44.1.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = (-0.6).sp,
                 )
@@ -131,5 +149,6 @@ internal fun AccountLoginContent(loginPending: Boolean, error: String?, onLogin:
                 )
             }
         }
+    }
     }
 }

@@ -89,6 +89,10 @@ struct NativeTranscriptMessage: View {
     let waiting: Bool
     let canContinue: Bool
     let onContinue: () -> Void
+    var initiallyExpandedThinking: Bool? = nil
+    var initiallyExpandedTools: Bool? = nil
+    var initiallyExpandedToolIDs: Set<String>? = nil
+    var referenceNow: Int64? = nil
     @Environment(\.colorScheme) private var scheme
     private var palette: MobilePalette { MobilePalette(scheme: scheme) }
 
@@ -102,7 +106,8 @@ struct NativeTranscriptMessage: View {
                     switch block {
                     case .part(_, let part): partView(part)
                     case .tools(_, let calls, let missing):
-                        NativeTranscriptTools(tools: calls, missing: missing, waiting: waiting && isRunning)
+                        NativeTranscriptTools(tools: calls, missing: missing, waiting: waiting && isRunning,
+                                              initiallyExpanded: initiallyExpandedTools, initiallyExpandedToolIDs: initiallyExpandedToolIDs)
                     }
                 }
                 if let retry = message.retry, retry != .null {
@@ -113,7 +118,7 @@ struct NativeTranscriptMessage: View {
                 }
                 if let stop = message.stop {
                     notice(icon: "stop", color: palette.secondary,
-                           text: stop == "length" ? "回复已达到输出长度上限。" : "这次回复已停止。",
+                           text: stop == "length" ? "回复已达到输出长度上限。" : "你停止了这次回复。",
                            continuation: canContinue)
                 }
                 if message.deferredContent == true {
@@ -124,7 +129,7 @@ struct NativeTranscriptMessage: View {
                    let end = message.completedAt, end >= start {
                     NativeTranscriptElapsed(start: start, end: end, prefix: "已处理")
                 } else if isRunning, let start = message.runStartedAt ?? (message.createdAt > 0 ? message.createdAt : nil) {
-                    NativeTranscriptElapsed(start: start, end: nil, prefix: "已处理")
+                    NativeTranscriptElapsed(start: start, end: referenceNow, prefix: "已处理")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,11 +140,12 @@ struct NativeTranscriptMessage: View {
         switch part {
         case .text(let text): NativeTranscriptMarkdown(text: text)
         case .thinking(let text, let start, let end):
-            NativeTranscriptThinking(text: text, startedAt: start, endedAt: end, running: isRunning && end == nil)
+            NativeTranscriptThinking(text: text, startedAt: start, endedAt: end, running: isRunning && end == nil,
+                                     initiallyExpanded: initiallyExpandedThinking, referenceNow: referenceNow)
         case .model(let from, let to):
             HStack(spacing: 10) {
                 Rectangle().fill(palette.secondary.opacity(0.2)).frame(height: 0.5)
-                Image(systemName: "cpu").font(.system(size: 14))
+                MobileGlyph(systemName: "cpu").frame(width: 14, height: 14)
                 Text("模型已切换至 \(to.model)")
                     .font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel(from.map { "模型从 \($0.model) 切换至 \(to.model)" } ?? "模型已切换至 \(to.model)")
@@ -155,7 +161,7 @@ struct NativeTranscriptMessage: View {
     private func notice(icon: String, color: Color, text: String, continuation: Bool) -> some View {
         MobileGlassPanel(radius: 22) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: icon).font(.system(size: 18)).foregroundStyle(color)
+                MobileGlyph(systemName: icon).frame(width: 20, height: 20).foregroundStyle(color)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(verbatim: text).font(.system(size: 14)).textSelection(.enabled)
                     if continuation {
@@ -193,15 +199,21 @@ private struct NativeUserMessage: View {
     let text: String
     @State private var availableWidth: CGFloat = 0
     @Environment(\.colorScheme) private var scheme
+    private var bubbleWidth: CGFloat {
+        let measured = ceil(MobileTypography.textWidth(text, size: 16)) + 28
+        return availableWidth > 0 ? min(availableWidth * 0.84, measured) : measured
+    }
     var body: some View {
         HStack(spacing: 0) {
             Spacer(minLength: 0)
             Text(verbatim: text)
-                .font(.system(size: 16)).lineSpacing(3.5)
+                .font(MobileTypography.system(size: 16))
+                .mobileLineHeight(fontSize: 16, lineHeight: 23.52)
                 .foregroundStyle(.white).textSelection(.enabled)
+                .frame(width: max(0, bubbleWidth - 28), alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.vertical, 10).padding(.horizontal, 14)
                 .background { MobileAccentSurface(shape: NativeUserBubbleShape(), userBubble: true) }
-                .frame(maxWidth: availableWidth > 0 ? availableWidth * 0.84 : nil, alignment: .trailing)
         }
         .frame(maxWidth: .infinity)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
@@ -225,6 +237,7 @@ struct NativeTranscriptElapsed: View {
     private func elapsedLabel(at instant: Int64) -> some View {
         Label("\(prefix) \(Self.duration(milliseconds: max(0, instant - start)))", systemImage: "clock")
             .font(.system(size: 13)).monospacedDigit()
+            .mobileLineHeight(fontSize: 13, lineHeight: 19.11)
             .foregroundStyle(MobilePalette(scheme: scheme).secondary)
     }
 
@@ -241,12 +254,14 @@ private struct NativeTranscriptThinking: View {
     let startedAt: Int64?
     let endedAt: Int64?
     let running: Bool
+    let referenceNow: Int64?
     @State private var expanded: Bool
     @Environment(\.colorScheme) private var scheme
 
-    init(text: String, startedAt: Int64?, endedAt: Int64?, running: Bool) {
+    init(text: String, startedAt: Int64?, endedAt: Int64?, running: Bool, initiallyExpanded: Bool? = nil, referenceNow: Int64? = nil) {
         self.text = text; self.startedAt = startedAt; self.endedAt = endedAt; self.running = running
-        self._expanded = State(initialValue: running)
+        self.referenceNow = referenceNow
+        self._expanded = State(initialValue: initiallyExpanded ?? running)
     }
 
     var body: some View {
@@ -254,12 +269,12 @@ private struct NativeTranscriptThinking: View {
         VStack(alignment: .leading, spacing: 4) {
             Button { expanded.toggle() } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "brain").font(.system(size: 16))
+                    MobileGlyph(systemName: "brain").frame(width: 16, height: 16)
                     if let start = startedAt, endedAt != nil || running {
-                        NativeTranscriptElapsed(start: start, end: endedAt, prefix: running ? "正在思考" : "思考了")
+                        NativeTranscriptElapsed(start: start, end: endedAt ?? referenceNow, prefix: running ? "正在思考" : "思考了")
                             .labelStyle(.titleOnly)
                     } else { Text(running ? "正在思考…" : "思考").font(.system(size: 14)) }
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 12))
+                    MobileGlyph(systemName: expanded ? "chevron.down" : "chevron.right").frame(width: 16, height: 16)
                 }
                 .foregroundStyle(palette.secondary)
                 .frame(minHeight: 36).padding(.horizontal, 2)
@@ -271,7 +286,8 @@ private struct NativeTranscriptThinking: View {
             if expanded {
                 HStack(alignment: .top, spacing: 0) {
                     (Text(verbatim: text) + Text(running ? " ▍" : "").foregroundColor(palette.accent))
-                        .font(.system(size: 14)).lineSpacing(3)
+                        .font(MobileTypography.system(size: 14))
+                        .mobileLineHeight(fontSize: 14, lineHeight: 20.58)
                         .foregroundStyle(palette.secondary).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.leading, 14).padding(.vertical, 2)
@@ -338,15 +354,17 @@ private struct NativeTranscriptTools: View {
     let tools: [MobileToolCall]
     let missing: [String]
     let waiting: Bool
+    let initiallyExpandedToolIDs: Set<String>?
     @State private var expanded: Bool
     @Environment(\.colorScheme) private var scheme
     private var palette: MobilePalette { MobilePalette(scheme: scheme) }
     private var running: Bool { tools.contains { $0.ntRunning } }
     private var failures: Int { tools.filter { $0.ntFailed }.count }
 
-    init(tools: [MobileToolCall], missing: [String], waiting: Bool) {
+    init(tools: [MobileToolCall], missing: [String], waiting: Bool, initiallyExpanded: Bool? = nil, initiallyExpandedToolIDs: Set<String>? = nil) {
         self.tools = tools; self.missing = missing; self.waiting = waiting
-        self._expanded = State(initialValue: tools.contains { $0.ntRunning || $0.ntEdit } || tools.count + missing.count == 1)
+        self.initiallyExpandedToolIDs = initiallyExpandedToolIDs
+        self._expanded = State(initialValue: initiallyExpanded ?? (tools.contains { $0.ntRunning || $0.ntEdit } || tools.count + missing.count == 1))
     }
 
     var body: some View {
@@ -354,16 +372,16 @@ private struct NativeTranscriptTools: View {
             VStack(spacing: 0) {
                 Button { expanded.toggle() } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "checklist").font(.system(size: 16))
+                        MobileGlyph(systemName: "checklist").frame(width: 16, height: 16)
                         Text("\(running ? "正在执行" : "执行了") \(tools.count + missing.count) 个步骤")
                             .font(.system(size: 14, weight: .semibold))
-                            .frame(maxWidth: .infinity, alignment: .leading)
                         if failures > 0 {
                             Text("\(failures) 个失败").font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(palette.danger).padding(.horizontal, 8).padding(.vertical, 3)
                                 .background(palette.danger.opacity(0.12), in: Capsule())
                         }
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 12))
+                        Spacer(minLength: 0)
+                        MobileGlyph(systemName: expanded ? "chevron.down" : "chevron.right").frame(width: 16, height: 16)
                     }
                     .foregroundStyle(palette.secondary)
                     .padding(.horizontal, 14).frame(minHeight: 44).contentShape(Rectangle())
@@ -373,7 +391,9 @@ private struct NativeTranscriptTools: View {
                 if expanded {
                     ForEach(tools) { tool in
                         Rectangle().fill(palette.secondary.opacity(0.15)).frame(height: 0.5)
-                        NativeTranscriptTool(tool: tool, waiting: waiting && tool.ntRunning)
+                        NativeTranscriptTool(tool: tool, waiting: waiting && tool.ntRunning,
+                                             initiallyExpanded: initiallyExpandedToolIDs.map { $0.contains(tool.id) })
+                            .id(tool.id)
                     }
                     ForEach(missing, id: \.self) { id in
                         Text("工具详情尚未载入 · \(id)")
@@ -435,9 +455,9 @@ private struct NativeTranscriptTool: View {
     @State private var expanded: Bool
     @Environment(\.colorScheme) private var scheme
     private var palette: MobilePalette { MobilePalette(scheme: scheme) }
-    init(tool: MobileToolCall, waiting: Bool) {
+    init(tool: MobileToolCall, waiting: Bool, initiallyExpanded: Bool? = nil) {
         self.tool = tool; self.waiting = waiting
-        self._expanded = State(initialValue: tool.ntEdit)
+        self._expanded = State(initialValue: initiallyExpanded ?? tool.ntEdit)
     }
 
     private var visibleDetails: String? {
@@ -453,14 +473,14 @@ private struct NativeTranscriptTool: View {
         VStack(alignment: .leading, spacing: 0) {
             Button { expanded.toggle() } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: tool.ntIcon).font(.system(size: 18)).foregroundStyle(palette.secondary)
+                    MobileGlyph(systemName: tool.ntIcon).frame(width: 20, height: 20).foregroundStyle(palette.secondary)
                     Text(tool.ntLabel).font(.system(size: 15, weight: .semibold))
                     Text(verbatim: tool.ntSummary).font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(palette.secondary).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     status
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 12)).foregroundStyle(palette.secondary)
+                    MobileGlyph(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .frame(width: 16, height: 16).foregroundStyle(palette.secondary)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 6)
                 .frame(minHeight: 48).contentShape(Rectangle())
@@ -487,13 +507,13 @@ private struct NativeTranscriptTool: View {
     }
 
     @ViewBuilder private var status: some View {
-        if waiting {
+        if ["waiting", "waiting_for_input", "awaiting_confirmation"].contains(tool.status.lowercased()) {
             Text("等待操作").font(.system(size: 12, weight: .semibold)).foregroundStyle(palette.warning)
                 .padding(.horizontal, 7).padding(.vertical, 3).background(palette.warning.opacity(0.14), in: Capsule())
         } else if tool.ntRunning {
             ProgressView().controlSize(.small).tint(palette.accent).frame(width: 18, height: 18)
         } else if tool.ntFailed {
-            Image(systemName: "xmark.circle").foregroundStyle(palette.danger).font(.system(size: 18))
+            MobileGlyph(systemName: "xmark.circle").frame(width: 18, height: 18).foregroundStyle(palette.danger)
         } else if ["done", "success", "completed", "complete", "ok"].contains(tool.status.lowercased()) {
             if let diff = tool.ntDiff {
                 let lines = diff.components(separatedBy: "\n")
@@ -502,7 +522,7 @@ private struct NativeTranscriptTool: View {
                 Text("+\(plus) −\(minus)").font(.system(size: 12, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(palette.success).padding(.horizontal, 7).padding(.vertical, 3)
                     .background(palette.success.opacity(0.14), in: Capsule())
-            } else { Image(systemName: "checkmark").foregroundStyle(palette.success).font(.system(size: 18)) }
+            } else { MobileGlyph(systemName: "checkmark").frame(width: 18, height: 18).foregroundStyle(palette.success) }
         } else {
             Text(tool.status).font(.system(size: 11)).foregroundStyle(palette.secondary).lineLimit(1)
         }
@@ -521,7 +541,8 @@ struct NativeTranscriptCode: View {
                     .foregroundStyle(MobilePalette(scheme: scheme).secondary)
             }
             Text(verbatim: text)
-                .font(.system(size: 12.5, design: .monospaced)).lineSpacing(3)
+                .font(.system(size: 12.5, design: .monospaced))
+                .mobileLineHeight(fontSize: 12.5, lineHeight: 19.375, design: .monospaced)
                 .foregroundStyle(error ? MobilePalette(scheme: scheme).danger : MobilePalette(scheme: scheme).text)
                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12).padding(.vertical, 10)
@@ -540,10 +561,11 @@ struct NativeTranscriptDiff: View {
                 let added = line.hasPrefix("+") && !line.hasPrefix("+++")
                 let removed = line.hasPrefix("-") && !line.hasPrefix("---")
                 Text(verbatim: line.isEmpty ? " " : line)
-                    .font(.system(size: 12.5, design: .monospaced)).lineSpacing(3)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .mobileLineHeight(fontSize: 12.5, lineHeight: 19.375, design: .monospaced)
                     .foregroundStyle(line.hasPrefix("@@") ? palette.secondary : palette.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.vertical, line.hasPrefix("@@") ? 4 : 1)
+                    .padding(.horizontal, 12).padding(.vertical, line.hasPrefix("@@") ? 4 : 0)
                     .background(added ? palette.success.opacity(0.14) : (removed ? palette.danger.opacity(0.12) : .clear))
             }
         }
@@ -557,6 +579,9 @@ struct NativeTranscriptDiff: View {
 /// Inline emphasis and links are parsed by Foundation. User messages never enter this view.
 struct NativeTranscriptMarkdown: View {
     let text: String
+    var fontSize: CGFloat = 16
+    var textColor: Color? = nil
+    var showsCodeLanguage = true
     @Environment(\.colorScheme) private var scheme
     private struct Block: Identifiable {
         let id: Int
@@ -597,19 +622,45 @@ struct NativeTranscriptMarkdown: View {
             ForEach(blocks) { block in
                 if let language = block.language {
                     if language.lowercased() == "diff" { NativeTranscriptDiff(text: block.text) }
-                    else { NativeTranscriptCode(title: language.isEmpty ? nil : language, text: block.text) }
+                    else { NativeTranscriptCode(title: !showsCodeLanguage || language.isEmpty ? nil : language, text: block.text) }
                 } else {
-                    Text(inline(block.text))
-                        .font(.system(size: block.heading > 0 ? (block.heading == 1 ? 22 : 18) : 16, weight: block.heading > 0 ? .semibold : .regular))
-                        .lineSpacing(3.5).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Group {
+                        if block.heading > 0 {
+                            Text(Self.inline(block.text, size: block.heading == 1 ? 22 : 18, heading: true))
+                                .font(.system(size: block.heading == 1 ? 22 : 18, weight: .semibold))
+                                .lineSpacing(3.5)
+                        } else {
+                            Text(Self.inline(block.text, size: fontSize))
+                                .font(MobileTypography.system(size: fontSize))
+                                .mobileLineHeight(fontSize: fontSize, lineHeight: fontSize * 1.47)
+                        }
+                    }
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
-        .foregroundStyle(MobilePalette(scheme: scheme).text)
+        .foregroundStyle(textColor ?? MobilePalette(scheme: scheme).text)
     }
-    private func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    static func inline(_ text: String, size: CGFloat, heading: Bool = false) -> AttributedString {
+        var attributed = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        // Headings retain their existing system font and Foundation trait handling.
+        guard !heading else { return attributed }
+        for run in Array(attributed.runs) {
+            let intent = run.inlinePresentationIntent ?? []
+            attributed[run.range].font = MobileTypography.system(
+                size: intent.contains(.code) ? size * 13.5 / 16 : size,
+                weight: intent.contains(.stronglyEmphasized) ? .bold : .regular,
+                italic: intent.contains(.emphasized),
+                design: intent.contains(.code) ? .monospaced : .default
+            )
+            // These traits are now in the explicit font. Applying them a second
+            // time would derive another descriptor and drop its Chinese cascade.
+            let remaining = intent.subtracting([.stronglyEmphasized, .emphasized, .code])
+            attributed[run.range].inlinePresentationIntent = remaining.isEmpty ? nil : remaining
+        }
+        return attributed
     }
 }
 
@@ -633,7 +684,7 @@ struct NativeTranscriptQueue: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 if let id = item.ntString("id") {
                                     Button { onRemove(id) } label: {
-                                        Image(systemName: "xmark").font(.system(size: 16))
+                                        MobileGlyph(systemName: "xmark").frame(width: 20, height: 20)
                                             .foregroundStyle(palette.secondary).frame(width: 44, height: 44)
                                             .contentShape(Rectangle())
                                     }
@@ -683,6 +734,11 @@ struct NativePendingOperationSheet: View {
     private var method: String { request.ntString("method") ?? "" }
     private var options: [NativePendingOption] { NativePendingOption.parse(request.ntField("options"), details: request.ntField("optionDetails")) }
     private var questions: [MobileJSONValue] { request.ntField("questions")?.ntArray ?? [] }
+    private var messageParts: (summary: String, body: String?) {
+        let message = request.ntString("message") ?? ""
+        guard let fence = message.range(of: "```") ?? message.range(of: "~~~") else { return (message, nil) }
+        return (String(message[..<fence.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines), String(message[fence.lowerBound...]))
+    }
 
     init(request: MobileJSONValue, count: Int, context: String, maximumHeight: CGFloat, onRespond: @escaping (MobileJSONValue) -> Void) {
         self.request = request; self.count = count; self.context = context; self.maximumHeight = maximumHeight; self.onRespond = onRespond
@@ -709,16 +765,16 @@ struct NativePendingOperationSheet: View {
             Capsule().fill(palette.secondary.opacity(0.35)).frame(width: 36, height: 5)
                 .frame(maxWidth: .infinity).padding(.bottom, 4).accessibilityHidden(true)
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: method == "confirm" ? "checkmark.shield" : (method == "select" ? "checklist" : "character.cursor.ibeam"))
-                    .font(.system(size: 21)).foregroundStyle(palette.warning)
+                MobileGlyph(systemName: method == "confirm" ? "checkmark.shield" : (method == "select" ? "checklist" : "character.cursor.ibeam"))
+                    .frame(width: 20, height: 20).foregroundStyle(palette.warning)
                     .frame(width: 44, height: 44)
                     .background(palette.warning.opacity(0.16), in: RoundedRectangle(cornerRadius: 14))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(request.ntString("title") ?? "需要你的操作")
                         .font(.system(size: 18, weight: .bold))
                         .accessibilityAddTraits(.isHeader).accessibilityFocused($titleFocused)
-                    if let message = request.ntString("message"), !message.isEmpty {
-                        Text(verbatim: message).font(.system(size: 14)).foregroundStyle(palette.secondary).textSelection(.enabled)
+                    if !messageParts.summary.isEmpty {
+                        NativeTranscriptMarkdown(text: messageParts.summary, fontSize: 14, textColor: palette.secondary)
                     }
                     if count > 1 {
                         Text("等待操作 · 还有 \(count - 1) 项")
@@ -726,6 +782,9 @@ struct NativePendingOperationSheet: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let body = messageParts.body {
+                NativeTranscriptMarkdown(text: body, fontSize: 14, showsCodeLanguage: false)
             }
             if let command = request.ntString("command"), !command.isEmpty {
                 NativeTranscriptCode(text: command)

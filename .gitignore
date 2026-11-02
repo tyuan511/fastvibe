@@ -37,6 +37,7 @@ resources/models-dev/**
 /rust/target/
 apps/mobile/android/.gradle/
 apps/mobile/android/local.properties
+apps/mobile/.visual-review/
 apps/mobile/android/**/build/
 apps/mobile/ios/DerivedData/
 apps/mobile/ios/Pods/

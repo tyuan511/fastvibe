@@ -9,9 +9,11 @@ public struct MobileDevice: Codable, Hashable, Identifiable, Sendable {
     public let platform: String
     public let irohEndpointId: String?
     public let online: Bool
+    public let path: String?
+    public let lastOnline: Double?
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, platform, irohEndpointId, online
+        case id, name, platform, irohEndpointId, online, path, lastOnline, lastSeenAt
     }
 
     public init(
@@ -19,13 +21,17 @@ public struct MobileDevice: Codable, Hashable, Identifiable, Sendable {
         name: String,
         platform: String,
         irohEndpointId: String? = nil,
-        online: Bool = false
+        online: Bool = false,
+        path: String? = nil,
+        lastOnline: Double? = nil
     ) {
         self.id = id
         self.name = name
         self.platform = platform
         self.irohEndpointId = irohEndpointId
         self.online = online
+        self.path = path
+        self.lastOnline = lastOnline
     }
 
     public init(from decoder: Decoder) throws {
@@ -35,6 +41,21 @@ public struct MobileDevice: Codable, Hashable, Identifiable, Sendable {
         platform = try values.decodeIfPresent(String.self, forKey: .platform) ?? "unknown"
         irohEndpointId = try values.decodeIfPresent(String.self, forKey: .irohEndpointId)
         online = try values.decodeIfPresent(Bool.self, forKey: .online) ?? false
+        path = try values.decodeIfPresent(String.self, forKey: .path)
+        lastOnline = (try? values.decodeIfPresent(Double.self, forKey: .lastOnline))
+            ?? (try? values.decodeIfPresent(Double.self, forKey: .lastSeenAt))
+            ?? (try? values.decodeIfPresent(String.self, forKey: .lastOnline)).flatMap(Double.init)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(name, forKey: .name)
+        try values.encode(platform, forKey: .platform)
+        try values.encodeIfPresent(irohEndpointId, forKey: .irohEndpointId)
+        try values.encode(online, forKey: .online)
+        try values.encodeIfPresent(path, forKey: .path)
+        try values.encodeIfPresent(lastOnline, forKey: .lastOnline)
     }
 }
 

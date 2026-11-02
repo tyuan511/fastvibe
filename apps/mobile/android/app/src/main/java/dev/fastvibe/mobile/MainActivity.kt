@@ -17,6 +17,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,6 +74,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.CornerRadius
@@ -128,7 +131,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class AppPage { COMPUTERS, CONVERSATIONS, SETTINGS }
+internal enum class AppPage { COMPUTERS, CONVERSATIONS, SETTINGS }
 
 private val lightFastVibeColors = lightColorScheme(
     primary = Color(0xFF007AFF), onPrimary = Color.White, secondary = Color(0xFF4AA3FF),
@@ -148,6 +151,10 @@ internal fun FastVibeTheme(darkTheme: Boolean, content: @Composable () -> Unit) 
         fontFamily = FontFamily.SansSerif,
         letterSpacing = 0.sp,
         platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+        lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+            androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+            androidx.compose.ui.text.style.LineHeightStyle.Trim.None,
+        ),
     )
     val typography = base.copy(
         bodyLarge = type(base.bodyLarge).copy(fontSize = 16.sp, lineHeight = 23.5.sp),
@@ -159,7 +166,21 @@ internal fun FastVibeTheme(darkTheme: Boolean, content: @Composable () -> Unit) 
     )
     val colors = if (darkTheme) darkFastVibeColors else lightFastVibeColors
     MaterialTheme(colors, typography = typography) {
-        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides colors.onSurface, content = content)
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.material3.LocalContentColor provides colors.onSurface,
+            androidx.compose.material3.LocalTextStyle provides androidx.compose.ui.text.TextStyle(
+                fontFamily = FontFamily.SansSerif,
+                fontSize = 17.sp,
+                lineHeight = 24.99.sp,
+                letterSpacing = 0.sp,
+                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+                lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+                    androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+                    androidx.compose.ui.text.style.LineHeightStyle.Trim.None,
+                ),
+            ),
+            content = content,
+        )
     }
 }
 
@@ -288,6 +309,7 @@ private fun FastVibeApp(callback: OAuthCallback?, notificationConversationId: St
                     onDismissDetail = { detailId = null },
                     onError = { showError = it },
                     onCheckUpdates = { updateController.check(true) },
+                    promptPresented = pendingPrompt != null,
                 )
             }
     
@@ -325,7 +347,7 @@ private fun FastVibeApp(callback: OAuthCallback?, notificationConversationId: St
 }
 
 @Composable
-private fun ProductShell(
+internal fun ProductShell(
     controller: MobileRuntimeController,
     page: AppPage,
     detailId: String?,
@@ -342,6 +364,7 @@ private fun ProductShell(
     onDismissDetail: () -> Unit,
     onError: (String) -> Unit,
     onCheckUpdates: () -> Unit,
+    promptPresented: Boolean = false,
 ) {
     var conversationFilter by remember(controller.selectedDeviceId()) { mutableStateOf(ConversationCatalogFilter()) }
     var showConversationFilter by remember { mutableStateOf(false) }
@@ -353,8 +376,8 @@ private fun ProductShell(
             onDismiss = { showConversationFilter = false },
         )
         Box(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                if (detailId != null) ThreadHeader(controller, detailId, onDismissDetail, onModel)
+            Column(Modifier.fillMaxSize().mobileStatusBarsPadding()) {
+                if (detailId != null) ThreadHeader(controller, detailId, onDismissDetail, onModel, promptPresented)
                 else MainHeader(
                     page, controller,
                     onBack = { onPageChange(AppPage.COMPUTERS) },
@@ -363,20 +386,28 @@ private fun ProductShell(
                     onFilter = { showConversationFilter = true },
                     filterActive = conversationFilter != ConversationCatalogFilter(),
                 )
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    if (detailId != null) ThreadScreen(controller, detailId, onAttach, attachments, onRemoveAttachment, onError)
-                    else when (page) {
-                        AppPage.COMPUTERS -> ComputersScreen(controller, onOffline) { device ->
-                            if (controller.state.connection == "connected" && controller.selectedDeviceId() == device.id) onPageChange(AppPage.CONVERSATIONS)
-                            else controller.connect(device)
+                Box(Modifier.weight(1f).fillMaxWidth().testTag("page-content").clipToBounds()
+                    .mobileNavigationBarsPadding(minimum = if (detailId != null) 30.dp else 36.dp)) {
+                    Box(Modifier.fillMaxSize().then(if (detailId == null) Modifier.glassPageSource() else Modifier)) {
+                        if (detailId != null) ThreadScreen(controller, detailId, onAttach, attachments, onRemoveAttachment, onError, promptPresented = promptPresented)
+                        else when (page) {
+                            AppPage.COMPUTERS -> ComputersHomeContent(
+                                controller.devices, controller.state.accountUser,
+                                controller.catalogLoadingState || controller.busy && controller.devices.isEmpty(),
+                                controller.selectedDeviceId(), controller.busy, controller::refreshDevices, onOffline,
+                                onConnect = { device ->
+                                    if (controller.state.connection == "connected" && controller.selectedDeviceId() == device.id) onPageChange(AppPage.CONVERSATIONS)
+                                    else controller.connect(device)
+                                },
+                            )
+                            AppPage.CONVERSATIONS -> ConversationCatalogScreen(controller, onOpen, onCreate, filter = conversationFilter)
+                            AppPage.SETTINGS -> MobileSettingsScreen(controller, themeKey, onTheme, onCheckUpdates)
                         }
-                        AppPage.CONVERSATIONS -> ConversationCatalogScreen(controller, onOpen, onCreate, filter = conversationFilter)
-                        AppPage.SETTINGS -> MobileSettingsScreen(controller, themeKey, onTheme, onCheckUpdates)
                     }
                 }
             }
             if (detailId == null && page == AppPage.CONVERSATIONS) {
-                Box(Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 16.dp, bottom = 8.dp)) {
+                Box(Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 16.dp, bottom = 6.dp)) {
                     NewConversationFab(onCreate)
                 }
             }
@@ -395,7 +426,7 @@ private fun MainHeader(
     filterActive: Boolean,
 ) {
     val title = when (page) { AppPage.COMPUTERS -> "电脑"; AppPage.CONVERSATIONS -> "会话"; AppPage.SETTINGS -> "设置" }
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth().testTag("main-header")) {
         Row(
             Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -426,57 +457,16 @@ private fun MainHeader(
 }
 
 @Composable
-private fun ThreadHeader(controller: MobileRuntimeController, id: String, onBack: () -> Unit, onModel: () -> Unit) {
+private fun ThreadHeader(controller: MobileRuntimeController, id: String, onBack: () -> Unit, onModel: () -> Unit, promptPresented: Boolean = false) {
     val conversation = controller.state.workspace.conversations.firstOrNull { it.id == id }
-    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().testTag("thread-header").height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(IconId.Back, "返回", onBack)
         Column(Modifier.weight(1f).padding(horizontal = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(conversation?.title ?: "会话", fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             val computer = controller.devices.firstOrNull { it.id == controller.selectedDeviceId() }?.name
             Text(listOfNotNull(conversation?.projectName, computer).joinToString(" · "), fontSize = 11.5.sp, lineHeight = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        IconButton(IconId.More, "更多", onModel)
-    }
-}
-
-@Composable
-private fun ComputersScreen(controller: MobileRuntimeController, onOffline: (DeviceView) -> Unit, onConnect: (DeviceView) -> Unit) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 36.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { AccountSummary(controller) }
-        if (controller.catalogLoadingState || controller.busy && controller.devices.isEmpty()) item { GlassCard { LoadingRow("正在查找你的电脑…") } }
-        else if (controller.devices.isEmpty()) item { EmptyState(IconId.Computer, "还没有找到电脑", "在电脑端打开 FastVibe 并登录同一个账号。", "重新查找") { controller.refreshDevices() } }
-        else items(controller.devices, key = { it.id }) { device -> DeviceRow(device, controller.selectedDeviceId() == device.id, controller.busy, onClick = { if (device.online) onConnect(device) else onOffline(device) }) }
-    }
-}
-
-@Composable
-private fun AccountSummary(controller: MobileRuntimeController) {
-    Row(Modifier.padding(start = 4.dp, end = 4.dp, bottom = 4.dp).heightIn(min = 56.dp), verticalAlignment = Alignment.Top) {
-        Avatar(controller.state.accountUser?.take(1)?.uppercase() ?: "F", 40.dp)
-        Column(Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(controller.state.accountUser ?: "FastVibe 账号", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text("${controller.devices.count { it.online }} 台在线 · ${controller.devices.count { !it.online }} 台离线", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun DeviceRow(device: DeviceView, selected: Boolean, busy: Boolean, onClick: () -> Unit) {
-    GlassPanel(Modifier.fillMaxWidth().glassClick(onClick = onClick)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            val laptop = device.name.contains("mbp", true) || device.name.contains("book", true) || device.platform.contains("windows", true)
-            IconTile(if (laptop) IconId.Laptop else IconId.Computer, device.online)
-            Column(Modifier.weight(1f).padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(device.name, fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.alpha(if (device.online) 1f else .55f))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    StatusDot(device.online)
-                    val platform = when (device.platform.lowercase()) { "darwin", "macos" -> "macOS"; "windows", "win32" -> "Windows"; "linux" -> "Linux"; else -> device.platform }
-                    Text(if (device.online) "在线 · $platform" else "离线 · ${device.lastOnline ?: "最近未在线"}", fontSize = 13.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            if (busy && selected) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            else Icon(IconId.Chevron, Modifier.size(18.dp), MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        if (promptPresented) Spacer(Modifier.size(44.dp)) else IconButton(IconId.More, "更多", onModel)
     }
 }
 
@@ -488,6 +478,8 @@ private fun ThreadScreen(
     attachments: List<ImageAttachment>,
     onRemoveAttachment: (ImageAttachment) -> Unit,
     onError: (String) -> Unit,
+    contentTop: androidx.compose.ui.unit.Dp = 0.dp,
+    promptPresented: Boolean = false,
 ) {
     val context = LocalContext.current
     var draft by remember(id) { mutableStateOf(controller.draft(id)) }
@@ -521,11 +513,11 @@ private fun ThreadScreen(
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, top = 4.dp, end = 16.dp, bottom = composerHeight + 12.dp),
+            modifier = Modifier.fillMaxSize().glassPageSource(),
+            contentPadding = PaddingValues(start = 16.dp, top = contentTop + if (controller.state.loadingHistory) 52.dp else 4.dp, end = 16.dp, bottom = composerHeight + 46.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            snapshot?.historyBeforeEntryId?.let { item { HistoryButton(snapshot, controller) } }
+            snapshot?.historyBeforeEntryId?.takeIf { !controller.state.loadingHistory }?.let { item { HistoryButton(snapshot, controller) } }
             if (controller.snapshotError != null) item {
                 EmptyState(IconId.Chat, "会话读取失败", controller.snapshotError!!, "重试") { controller.openConversation(id) }
             }
@@ -533,48 +525,68 @@ private fun ThreadScreen(
                 EmptyState(IconId.Chat, "正在读取会话", "正在从电脑读取会话内容。", null)
             }
             else if (messages.isEmpty()) item {
-                Column(Modifier.fillMaxWidth().padding(top = 120.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    IconTile(IconId.Chat, true)
-                    Text("开始新会话", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Column(
+                    Modifier.fillParentMaxHeight().fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 64.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+                ) {
+                    Box(Modifier.padding(bottom = 8.dp)) { IconTile(IconId.Chat, true) }
+                    Text("开始新会话", fontSize = 22.sp, lineHeight = 32.34.sp, fontWeight = FontWeight.Bold)
                     val conversation = controller.state.workspace.conversations.firstOrNull { it.id == id }
-                    Text(conversation?.projectName ?: "未归属项目", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("发送第一条消息，开始这次任务。", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(conversation?.projectName ?: "未归属项目", fontSize = 15.sp, lineHeight = 22.05.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("发送第一条消息，开始这次任务。", fontSize = 15.sp, lineHeight = 22.05.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            items(messages, key = { it.id }) { message -> ConversationMessage(message) { output -> controller.readFile(output) { uri -> shareUri(context, uri) } } }
+            items(messages, key = { it.id }) { message ->
+                ConversationMessage(
+                    message,
+                    streaming = snapshot?.running == true && message.id == messages.lastOrNull { it.role == "assistant" }?.id,
+                    onContinue = if (snapshot?.canResume == true && message.id == messages.lastOrNull { it.role == "assistant" }?.id) ({ controller.continueTurn() }) else null,
+                ) { output -> controller.readFile(output) { uri -> shareUri(context, uri) } }
+            }
             snapshot?.turnEvents?.forEachIndexed { index, event -> item(key = "event:$index") { Text(event, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         }
-        Column(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().imePadding()
-                .onSizeChanged { composerHeight = with(density) { it.height.toDp() } }
-                .padding(bottom = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            snapshot?.queue?.takeIf { it.items.isNotEmpty() }?.let { QueuePanel(it, controller) }
-            val sending = controller.isSubmitting(id)
-            ConversationComposer(
-                value = draft,
-                enabled = controller.state.connection == "connected" && !sending,
-                running = snapshot?.running == true,
-                attachments = attachments,
-                onChange = { draft = it; controller.saveDraft(id, it) },
-                onAttach = onAttach,
-                onRemove = onRemoveAttachment,
-                onStop = { controller.abort() },
-                onSend = { text, images ->
-                    sentDraft = text
-                    sentAttachments = images.toList()
-                    controller.sendPrompt(text, images) {
-                        if (draft == sentDraft) {
-                            draft = ""
-                            controller.clearDraft(id)
-                        }
-                        sentAttachments.forEach { image -> if (image in attachments) onRemoveAttachment(image) }
-                        sentDraft = null
-                        sentAttachments = emptyList()
-                    }
-                },
+        if (controller.state.loadingHistory && snapshot != null) {
+            Box(Modifier.align(Alignment.TopCenter).padding(top = contentTop + 4.dp)) {
+                HistoryButton(snapshot, controller)
+            }
+        }
+        if (!promptPresented) {
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(composerHeight + 24.dp)
+                    .glassChromeBackdrop(bottom = true),
             )
+            Column(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().imePadding()
+                    .onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                snapshot?.queue?.takeIf { it.items.isNotEmpty() }?.let { QueuePanel(it, controller) }
+                val sending = controller.isSubmitting(id)
+                ConversationComposer(
+                    value = draft,
+                    enabled = controller.state.connection == "connected" && !sending,
+                    running = snapshot?.running == true,
+                    attachments = attachments,
+                    onChange = { draft = it; controller.saveDraft(id, it) },
+                    onAttach = onAttach,
+                    onRemove = onRemoveAttachment,
+                    onStop = { controller.abort() },
+                    onSend = { text, images ->
+                        sentDraft = text
+                        sentAttachments = images.toList()
+                        controller.sendPrompt(text, images) {
+                            if (draft == sentDraft) {
+                                draft = ""
+                                controller.clearDraft(id)
+                            }
+                            sentAttachments.forEach { image -> if (image in attachments) onRemoveAttachment(image) }
+                            sentDraft = null
+                            sentAttachments = emptyList()
+                        }
+                    },
+                )
+            }
         }
     }
 }
@@ -586,28 +598,44 @@ private fun HistoryButton(snapshot: SnapshotView, controller: MobileRuntimeContr
             Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (controller.state.loadingHistory) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
                 else Icon(IconId.ChevronUp, Modifier.size(16.dp), MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(if (controller.state.loadingHistory) "正在加载更早消息…" else "加载更早消息", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (controller.state.loadingHistory) "正在加载更早的消息…" else "加载更早的消息", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun QueuePanel(queue: QueueView, controller: MobileRuntimeController) {
     GlassPanel(Modifier.fillMaxWidth().padding(horizontal = 12.dp), RoundedCornerShape(22.dp)) {
         Column(Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)) {
-            Text(if (queue.paused) "排队已暂停" else "排队中 · 回复结束后发送", Modifier.padding(top = 6.dp), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (queue.paused) "排队已暂停" else "排队中 · 回复结束后发送", Modifier.padding(top = 6.dp), fontSize = 12.sp, lineHeight = 17.64.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Column(Modifier.heightIn(max = 150.dp).verticalScroll(rememberScrollState())) {
                 queue.items.forEachIndexed { index, item ->
-                    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(item.text.ifBlank { "图片消息" }, Modifier.weight(1f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (index > 0) Box(Modifier.size(36.dp).glassClick {
-                            val ids = queue.items.map { it.id }.toMutableList()
-                            java.util.Collections.swap(ids, index, index - 1)
-                            controller.queueReorder(ids)
-                        }, contentAlignment = Alignment.Center) { Icon(IconId.ChevronUp, Modifier.size(16.dp), MaterialTheme.colorScheme.onSurfaceVariant) }
-                        Box(Modifier.size(36.dp).semantics { contentDescription = "立即发送" }.glassClick { controller.queueSendNow(item.id) }, contentAlignment = Alignment.Center) { Icon(IconId.Send, Modifier.size(16.dp), MaterialTheme.colorScheme.primary) }
-                        Box(Modifier.size(36.dp).semantics { contentDescription = "取消排队" }.glassClick { controller.queueCancel(item.id) }, contentAlignment = Alignment.Center) { Icon(IconId.Close, Modifier.size(16.dp), MaterialTheme.colorScheme.onSurfaceVariant) }
+                    var showActions by remember(item.id) { mutableStateOf(false) }
+                    Box {
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = 44.dp).combinedClickable(
+                                interactionSource = remember(item.id) { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = null,
+                                onClick = { showActions = true },
+                                onLongClick = { showActions = true },
+                            ),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(item.text.ifBlank { "图片消息" }, Modifier.weight(1f), fontSize = 14.sp, lineHeight = 20.58.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Box(Modifier.size(36.dp).semantics { contentDescription = "取消排队" }.glassClick { controller.queueCancel(item.id) }, contentAlignment = Alignment.Center) { Icon(IconId.Close, Modifier.size(16.dp), MaterialTheme.colorScheme.onSurfaceVariant) }
+                        }
+                        androidx.compose.material3.DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
+                            androidx.compose.material3.DropdownMenuItem(text = { Text("立即发送") }, onClick = { showActions = false; controller.queueSendNow(item.id) })
+                            if (index > 0) androidx.compose.material3.DropdownMenuItem(text = { Text("上移") }, onClick = {
+                                showActions = false
+                                val ids = queue.items.map { it.id }.toMutableList()
+                                java.util.Collections.swap(ids, index, index - 1)
+                                controller.queueReorder(ids)
+                            })
+                        }
                     }
                 }
             }
@@ -618,8 +646,10 @@ private fun QueuePanel(queue: QueueView, controller: MobileRuntimeController) {
 
 @Composable
 private fun NewConversationFab(onClick: () -> Unit) {
-    AccentPanel(Modifier.size(64.dp).glassClick(onClick = onClick), CircleShape) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(IconId.Plus, Modifier.size(24.dp), Color.White) }
+    AccentPanel(Modifier.size(64.dp).semantics { contentDescription = "新建会话" }.glassClick(onClick = onClick), CircleShape) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            androidx.compose.foundation.Image(painterResource(R.drawable.fv_square_pen), null, Modifier.size(24.dp), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White))
+        }
     }
 }
 

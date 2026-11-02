@@ -1,15 +1,14 @@
 package dev.fastvibe.mobile
 
-import android.content.pm.PackageInfo
+import android.os.Build
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,15 +17,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,21 +38,31 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material3.ExperimentalMaterial3Api
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -62,12 +73,17 @@ internal fun MobileSettingsScreen(
     themeKey: String,
     onTheme: (String) -> Unit,
     onCheckUpdates: () -> Unit,
+    contentTop: Dp = 0.dp,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val packageInfo = remember(context) {
         context.packageManager.getPackageInfo(context.packageName, 0)
     }
-    val versionCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
+    val deviceName = remember(context) {
+        runCatching { android.provider.Settings.Global.getString(context.contentResolver, "device_name") }
+            .getOrNull()?.takeIf(String::isNotBlank) ?: Build.MODEL
+    }
+    val versionCode = if (Build.VERSION.SDK_INT >= 28) {
         packageInfo.longVersionCode
     } else {
         @Suppress("DEPRECATION")
@@ -76,106 +92,74 @@ internal fun MobileSettingsScreen(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 36.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(start = 16.dp, top = contentTop, end = 16.dp, bottom = 36.dp),
     ) {
         item {
-            GlassPanel(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MobileSettingsAvatar(controller.state.accountUser)
-                    Column(
-                        modifier = Modifier.padding(start = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
+            GlassPanel(Modifier.fillMaxWidth(), RoundedCornerShape(24.dp)) {
+                Column(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth().defaultMinSize(minHeight = 52.dp)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text(
-                            controller.state.accountUser ?: "已登录账号",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        MobileSettingsAvatar(controller.state.accountUser)
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                controller.state.accountUser ?: "已登录账号",
+                                fontSize = 16.sp,
+                                lineHeight = 23.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            controller.state.accountEmail?.takeIf(String::isNotBlank)?.let { email ->
+                                Text(email, fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
                     }
+                    MobileSettingsDivider()
+                    // This is the phone's own name, not the currently connected computer.
+                    MobileSettingsRow("本机名称", deviceName)
                 }
             }
+            Spacer(Modifier.height(22.dp))
         }
-
         item { MobileSettingsSectionLabel("外观") }
         item {
-            GlassPanel(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-            ) {
+            GlassPanel(Modifier.fillMaxWidth(), RoundedCornerShape(24.dp)) {
                 MobileThemeSegment(themeKey, onTheme)
             }
+            Spacer(Modifier.height(22.dp))
         }
-
-        item { MobileSettingsSectionLabel("此手机") }
-        item {
-            GlassPanel(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-            ) {
-                MobileSettingsRow(
-                    label = "本机连接标识",
-                    value = controller.state.endpointId?.let { mobileTruncate(it, 20) } ?: "尚未建立",
-                    mono = true,
-                )
-            }
-        }
-
         item { MobileSettingsSectionLabel("关于") }
         item {
-            GlassPanel(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-            ) {
+            GlassPanel(Modifier.fillMaxWidth(), RoundedCornerShape(24.dp)) {
                 Column(Modifier.fillMaxWidth()) {
-                    MobileSettingsRow(
-                        label = "版本",
-                        value = "${packageInfo.versionName} ($versionCode)",
-                    )
+                    MobileSettingsRow("版本", "${packageInfo.versionName} ($versionCode)")
                     MobileSettingsDivider()
-                    MobileSettingsRow(
-                        label = "更新",
-                        value = "检查新版本",
-                        onClick = onCheckUpdates,
-                    )
+                    MobileSettingsRow("更新", "检查新版本", onClick = onCheckUpdates)
                 }
             }
+            Spacer(Modifier.height(22.dp))
         }
-
         item {
-            GlassPanel(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-            ) {
+            GlassPanel(Modifier.fillMaxWidth(), RoundedCornerShape(24.dp)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .defaultMinSize(minHeight = 52.dp)
-                        .glassClick(onClick = { controller.logout() }),
-                    horizontalArrangement = Arrangement.Center,
+                    Modifier.fillMaxWidth().defaultMinSize(minHeight = 52.dp)
+                        .glassClick(onClick = { controller.logout() })
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    MobileSettingsIcon(
-                        resourceId = R.drawable.fv_log_out,
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.error,
-                    )
+                    MobileSettingsIcon(R.drawable.fv_log_out, Modifier.size(20.dp), MaterialTheme.colorScheme.error)
                     Text(
-                        text = "退出登录",
-                        modifier = Modifier.padding(start = 8.dp),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.error,
+                        "退出登录", fontSize = 16.sp, lineHeight = 23.5.sp,
+                        fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.error,
                     )
                 }
             }
+            Spacer(Modifier.height(22.dp))
         }
     }
 }
@@ -185,7 +169,7 @@ private fun MobileSettingsAvatar(accountUser: String?) {
     val initial = accountUser?.trim()?.firstOrNull()?.uppercaseChar()?.toString() ?: "F"
     AccentPanel(Modifier.size(40.dp), CircleShape) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(initial, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(initial, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -193,12 +177,9 @@ private fun MobileSettingsAvatar(accountUser: String?) {
 @Composable
 private fun MobileThemeSegment(themeKey: String, onTheme: (String) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth()
-            .padding(10.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = .09f))
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)
+            .clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(3.dp).selectableGroup(),
     ) {
         MobileThemeOption("跟随系统", "auto", themeKey, onTheme, Modifier.weight(1f))
         MobileThemeOption("浅色", "light", themeKey, onTheme, Modifier.weight(1f))
@@ -214,24 +195,17 @@ private fun MobileThemeOption(
     onSelect: (String) -> Unit,
     modifier: Modifier,
 ) {
-    val selectedColor = if (MaterialTheme.colorScheme.background.red < .1f) {
-        Color.White.copy(alpha = .20f)
-    } else {
-        Color.White
-    }
+    val active = selected == value
+    val selectedColor = if (MaterialTheme.colorScheme.background.red < .1f) Color.White.copy(alpha = .20f) else Color.White
     Box(
-        modifier = modifier
-            .clip(CircleShape)
-            .then(if (selected == value) Modifier.background(selectedColor) else Modifier)
-            .glassClick(onClick = { onSelect(value) })
-            .heightIn(min = 40.dp),
+        modifier.then(if (active) Modifier.shadow(2.dp, CircleShape).background(selectedColor, CircleShape) else Modifier)
+            .clip(CircleShape).selectable(active, role = Role.RadioButton, onClick = { onSelect(value) })
+            .heightIn(min = 38.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            label,
-            fontSize = 15.sp,
-            fontWeight = if (selected == value) FontWeight.SemiBold else FontWeight.Normal,
-            color = MaterialTheme.colorScheme.onSurface,
+            label, fontSize = 14.sp, lineHeight = 20.5.sp, fontWeight = FontWeight.SemiBold,
+            color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -239,72 +213,44 @@ private fun MobileThemeOption(
 @Composable
 private fun MobileSettingsSectionLabel(text: String) {
     Text(
-        text = text,
-        modifier = Modifier.padding(start = 18.dp, top = 8.dp, bottom = 0.dp),
-        fontSize = 13.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        text, Modifier.padding(start = 18.dp, bottom = 8.dp), fontSize = 13.sp,
+        lineHeight = 19.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
 
 @Composable
-private fun MobileSettingsRow(
-    label: String,
-    value: String,
-    mono: Boolean = false,
-    onClick: (() -> Unit)? = null,
-) {
+private fun MobileSettingsRow(label: String, value: String, onClick: (() -> Unit)? = null) {
     Row(
-        modifier = Modifier.fillMaxWidth()
-            .defaultMinSize(minHeight = 52.dp)
+        Modifier.fillMaxWidth().defaultMinSize(minHeight = 52.dp)
             .then(if (onClick == null) Modifier else Modifier.glassClick(onClick = onClick))
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(text = label, modifier = Modifier.weight(1f), fontSize = 16.sp)
+        Text(label, Modifier.weight(1f), fontSize = 16.sp, lineHeight = 23.5.sp)
         Text(
-            text = value,
-            fontSize = 15.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            value, Modifier.weight(1f), fontSize = 15.sp, lineHeight = 22.sp, textAlign = TextAlign.End,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
 @Composable
 private fun MobileSettingsDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(start = 16.dp),
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = .09f),
-    )
+    HorizontalDivider(Modifier.padding(start = 16.dp), thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 @Composable
 private fun MobileSettingsIcon(resourceId: Int, modifier: Modifier, tint: Color) {
-    androidx.compose.foundation.Image(
-        painter = painterResource(resourceId),
-        contentDescription = null,
-        modifier = modifier,
-        colorFilter = ColorFilter.tint(tint),
-    )
+    androidx.compose.foundation.Image(painterResource(resourceId), null, modifier, colorFilter = ColorFilter.tint(tint))
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun MobileModelPickerSheet(
-    controller: MobileRuntimeController,
-    onDismiss: () -> Unit,
-) {
+internal fun MobileModelPickerSheet(controller: MobileRuntimeController, onDismiss: () -> Unit) {
     var models by remember { mutableStateOf(controller.state.models) }
     LaunchedEffect(Unit) { controller.loadModels { models = it } }
-
     MobileModelPickerContent(
-        models = models,
-        currentModel = controller.state.snapshot?.model,
-        selectedThinking = controller.state.snapshot?.thinkingLevel,
-        onDismiss = onDismiss,
+        models, controller.state.snapshot?.model, controller.state.snapshot?.thinkingLevel, onDismiss,
         onSelect = { controller.setModel(it, onDismiss) },
         onThinking = { controller.setThinking(it, onDismiss) },
     )
@@ -325,9 +271,9 @@ internal fun MobileModelPickerContent(
     val thinkingLevels = selectedModel?.thinkingLevels.orEmpty()
     val maxHeight = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * .65f).coerceAtMost(560f).dp
     GlassBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 18.dp, bottom = 22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("模型", Modifier.weight(1f), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text("模型", Modifier.weight(1f), fontSize = 18.sp, lineHeight = 26.5.sp, fontWeight = FontWeight.Bold)
                 GlassIconButton(R.drawable.fv_x, "关闭模型选择", onDismiss)
             }
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = maxHeight), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -340,13 +286,13 @@ internal fun MobileModelPickerContent(
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .semantics { stateDescription = if (expanded) "已展开" else "已收起" }
                                 .glassClick { expandedProvider = if (expanded) null else provider }
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                                .defaultMinSize(minHeight = 56.dp).padding(horizontal = 14.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Text(provider, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (selectedModel?.provider == provider) Text("当前：${selectedModel.name}", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Column(Modifier.weight(1f)) {
+                                Text(provider, fontSize = 16.sp, lineHeight = 23.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (selectedModel?.provider == provider) Text("当前：${selectedModel.name}", fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             Text("${providerModels.size}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             MobileSettingsIcon(if (expanded) R.drawable.fv_chevron_down else R.drawable.fv_chevron_right, Modifier.size(16.dp), MaterialTheme.colorScheme.onSurfaceVariant)
@@ -365,7 +311,6 @@ internal fun MobileModelPickerContent(
                     }
                 }
             }
-            Spacer(Modifier.height(10.dp))
         }
     }
 }
@@ -373,27 +318,13 @@ internal fun MobileModelPickerContent(
 @Composable
 private fun MobileModelRow(model: ModelView, selected: Boolean, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth()
-            .heightIn(min = 52.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .13f)
-                else MaterialTheme.colorScheme.onSurface.copy(alpha = .08f),
-            )
-            .glassClick(onClick = onClick)
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        Modifier.mobileOption(selected, onClick).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        MobileSettingsIcon(R.drawable.fv_cpu, Modifier.size(18.dp), MaterialTheme.colorScheme.primary)
-        Column(Modifier.weight(1f).padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(model.name, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                model.provider,
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        MobileSettingsIcon(R.drawable.fv_cpu, Modifier.size(20.dp), MaterialTheme.colorScheme.primary)
+        Column(Modifier.weight(1f)) {
+            Text(model.name, fontSize = 16.sp, lineHeight = 23.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(model.provider, fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         MobileRadioDot(selected)
     }
@@ -401,269 +332,205 @@ private fun MobileModelRow(model: ModelView, selected: Boolean, onClick: () -> U
 
 @Composable
 private fun MobilePickerOption(label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth()
-            .heightIn(min = 52.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .13f)
-                else MaterialTheme.colorScheme.onSurface.copy(alpha = .08f),
-            )
-            .glassClick(onClick = onClick)
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, Modifier.weight(1f), fontSize = 16.sp)
+    Row(Modifier.mobileOption(selected, onClick).padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(label, Modifier.weight(1f), fontSize = 16.sp, lineHeight = 23.5.sp)
         MobileRadioDot(selected)
     }
+}
+
+@Composable
+private fun Modifier.mobileOption(selected: Boolean, onClick: () -> Unit): Modifier {
+    val shape = RoundedCornerShape(18.dp)
+    val primary = MaterialTheme.colorScheme.primary
+    return fillMaxWidth().clip(shape)
+        .background(if (selected) primary.copy(alpha = .13f) else MaterialTheme.colorScheme.surfaceVariant)
+        .then(if (selected) Modifier.border(1.5.dp, primary.copy(alpha = .55f), shape) else Modifier)
+        .selectable(selected, role = Role.RadioButton, onClick = onClick).defaultMinSize(minHeight = 56.dp)
 }
 
 @Composable
 private fun MobileRadioDot(selected: Boolean) {
+    val dark = MaterialTheme.colorScheme.background.red < .1f
     Box(
-        modifier = Modifier.size(20.dp).border(
-            width = 1.dp,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            shape = CircleShape,
-        ),
+        Modifier.size(22.dp).border(1.5.dp, if (selected) MaterialTheme.colorScheme.primary else if (dark) Color(0xFF48484A) else Color(0xFFC7C7CC), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        if (selected) {
-            Box(Modifier.size(10.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
-        }
+        if (selected) Box(Modifier.size(12.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun MobilePendingUiSheet(
-    controller: MobileRuntimeController,
-    request: PendingUiView,
-    onDismiss: () -> Unit,
-) {
+internal fun MobilePendingUiSheet(controller: MobileRuntimeController, request: PendingUiView, onDismiss: () -> Unit) {
     var value by remember(request.id) { mutableStateOf(request.initialValue) }
     var selected by remember(request.id) { mutableStateOf(request.options.firstOrNull()?.value) }
     val answers = remember(request.id) { mutableStateMapOf<String, String>() }
+    val type = request.type.lowercase(Locale.US)
+    // A command belongs to the request message. Keep its Markdown intact rather than inventing metadata.
+    val fence = request.message.indexOf("```")
+    val description = if (fence >= 0) request.message.substring(0, fence).trimEnd() else request.message
+    val markdown = if (fence >= 0) request.message.substring(fence) else null
 
     GlassBottomSheet(onDismissRequest = {}) {
         Column(
-            modifier = Modifier.verticalScroll(rememberScrollState())
-                .padding(horizontal = 22.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(start = 22.dp, end = 22.dp, top = 18.dp, bottom = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text(request.title, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            if (request.message.isNotBlank()) {
-                Text(
-                    request.message,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            when (request.type.lowercase(Locale.US)) {
-                "confirm" -> {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        MobileSheetButton(
-                            text = "取消",
-                            modifier = Modifier.weight(1f),
-                            accent = false,
-                            onClick = {
-                                controller.respondPending(
-                                    request,
-                                    JSONObject().put("confirmed", false),
-                                    onDismiss,
-                                )
-                            },
-                        )
-                        MobileSheetButton(
-                            text = "确认",
-                            modifier = Modifier.weight(1f),
-                            onClick = {
-                                controller.respondPending(
-                                    request,
-                                    JSONObject().put("confirmed", true),
-                                    onDismiss,
-                                )
-                            },
-                        )
-                    }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+                MobilePendingTile(type)
+                Column(Modifier.weight(1f)) {
+                    Text(request.title, fontSize = 18.sp, lineHeight = 26.5.sp, fontWeight = FontWeight.Bold)
+                    if (description.isNotBlank()) Text(description, fontSize = 14.sp, lineHeight = 20.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                "select" -> {
+            }
+            if (markdown != null) {
+                val command = remember(markdown) {
+                    Regex("\\A```[^\\r\\n]*\\r?\\n([\\s\\S]*?)\\r?\\n```\\s*\\z").matchEntire(markdown)?.groupValues?.get(1)
+                }
+                if (command != null) Text(
+                    command, Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    fontFamily = FontFamily.Monospace, fontSize = 12.5.sp, lineHeight = 19.375.sp,
+                ) else ReplyMarkdown(markdown, Modifier.fillMaxWidth())
+            }
+            when (type) {
+                "select" -> Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     request.options.forEach { option ->
-                        MobilePendingOption(
-                            option = option,
-                            selected = selected == option.value,
-                            onClick = { selected = option.value },
+                        MobilePendingOption(option, selected == option.value) { selected = option.value }
+                    }
+                }
+                "input", "editor" -> MobilePendingTextField(
+                    value, { value = it }, request.placeholder ?: "请输入",
+                    request.multiline || type == "editor",
+                )
+                "questions" -> request.questions.forEach { question ->
+                    Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(question.label, fontSize = 16.sp, lineHeight = 23.5.sp, fontWeight = FontWeight.Medium)
+                        question.options.forEach { option ->
+                            MobilePendingOption(option, answers[question.id] == option.value) { answers[question.id] = option.value }
+                        }
+                        if (question.options.isEmpty() || question.allowOther) MobilePendingTextField(
+                            answers[question.id].orEmpty(), { answers[question.id] = it }, question.placeholder ?: "请输入",
+                            question.type.equals("editor", ignoreCase = true),
                         )
                     }
-                    MobileSheetButton(
-                        text = "继续",
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = selected != null,
-                        onClick = {
-                            selected?.let {
-                                controller.respondPending(request, JSONObject().put("value", it), onDismiss)
-                            }
-                        },
-                    )
                 }
-                "input", "editor" -> {
-                    MobilePendingTextField(
-                        value = value,
-                        onValueChange = { value = it },
-                        placeholder = request.placeholder ?: "请输入",
-                        multiline = request.multiline || request.type.equals("editor", ignoreCase = true),
-                    )
-                    MobileSheetButton(
-                        text = "提交",
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            controller.respondPending(request, JSONObject().put("value", value), onDismiss)
-                        },
-                    )
-                }
-                "questions" -> {
-                    request.questions.forEach { question ->
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(question.label, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                            question.options.forEach { option ->
-                                MobilePendingOption(
-                                    option = option,
-                                    selected = answers[question.id] == option.value,
-                                    onClick = { answers[question.id] = option.value },
-                                )
-                            }
-                            if (question.options.isEmpty() || question.allowOther) {
-                                MobilePendingTextField(
-                                    value = answers[question.id].orEmpty(),
-                                    onValueChange = { answers[question.id] = it },
-                                    placeholder = question.placeholder ?: "请输入",
-                                    multiline = question.type.equals("editor", ignoreCase = true),
-                                )
-                            }
-                        }
-                    }
-                    MobileSheetButton(
-                        text = "提交",
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            controller.respondPending(
-                                request,
-                                JSONObject().put("answers", JSONArray().apply {
-                                    request.questions.forEach { question ->
-                                        put(answers[question.id]?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
-                                    }
-                                }),
-                                onDismiss,
-                            )
-                        },
-                    )
-                }
-                else -> {
-                    Text(
-                        "暂不支持的请求类型：${request.type}",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                "confirm" -> Unit
+                else -> Text("暂不支持的请求类型：${request.type}", fontSize = 14.sp, color = MaterialTheme.colorScheme.error)
             }
-            if (!request.type.equals("confirm", ignoreCase = true)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MobileSheetButton(
-                    text = "取消",
-                    modifier = Modifier.fillMaxWidth(),
-                    accent = false,
+                    text = when (type) { "confirm" -> "拒绝"; "select" -> "跳过"; else -> "取消" },
+                    modifier = Modifier.weight(1f), accent = false,
                     onClick = {
-                        controller.respondPending(request, JSONObject().put("cancelled", true), onDismiss)
+                        controller.respondPending(request, if (type == "confirm") JSONObject().put("confirmed", false) else JSONObject().put("cancelled", true), onDismiss)
+                    },
+                )
+                if (type in setOf("confirm", "select", "input", "editor", "questions")) MobileSheetButton(
+                    text = when (type) { "confirm" -> "允许"; "select" -> "确定"; else -> "提交" },
+                    modifier = Modifier.weight(1f), enabled = type != "select" || selected != null,
+                    onClick = {
+                        val response = when (type) {
+                            "confirm" -> JSONObject().put("confirmed", true)
+                            "select" -> JSONObject().put("value", selected)
+                            "questions" -> JSONObject().put("answers", JSONArray().apply {
+                                request.questions.forEach { put(answers[it.id]?.takeIf(String::isNotBlank) ?: JSONObject.NULL) }
+                            })
+                            else -> JSONObject().put("value", value)
+                        }
+                        controller.respondPending(request, response, onDismiss)
                     },
                 )
             }
-            Spacer(Modifier.height(10.dp))
         }
     }
 }
 
 @Composable
-private fun MobilePendingOption(
-    option: PendingOptionView,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth()
-            .heightIn(min = 52.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .13f)
-                else MaterialTheme.colorScheme.onSurface.copy(alpha = .08f),
-            )
-            .glassClick(onClick = onClick)
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+private fun MobilePendingTile(type: String) {
+    val dark = MaterialTheme.colorScheme.background.red < .1f
+    val warning = if (dark) Color(0xFFFF9F0A) else Color(0xFFFF9500)
+    val shape = RoundedCornerShape(14.dp)
+    Box(
+        Modifier.size(44.dp).background(warning.copy(alpha = .16f), shape)
+            .border(.5.dp, Color.Black.copy(alpha = if (dark) .5f else .06f), shape),
+        contentAlignment = Alignment.Center,
     ) {
-        MobileRadioDot(selected)
-        Column(Modifier.weight(1f).padding(start = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(option.label, fontSize = 16.sp)
-            option.detail?.let {
-                Text(it, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (type == "select" || type == "questions") MobileSettingsIcon(R.drawable.fv_list_checks, Modifier.size(20.dp), warning)
+        else Canvas(Modifier.size(20.dp)) {
+            scale(size.width / 24f, size.height / 24f, pivot = androidx.compose.ui.geometry.Offset.Zero) {
+                val path = Path().apply {
+                    if (type == "confirm") {
+                        moveTo(20f, 13f); cubicTo(20f, 18f, 16.5f, 20.5f, 12.34f, 21.95f)
+                        cubicTo(12.12f, 22.03f, 11.88f, 22.03f, 11.67f, 21.94f)
+                        cubicTo(7.5f, 20.5f, 4f, 18f, 4f, 13f); lineTo(4f, 6f)
+                        quadraticTo(4f, 5f, 5f, 5f); cubicTo(7f, 5f, 9.5f, 3.8f, 11.24f, 2.28f)
+                        quadraticTo(12f, 1.7f, 12.76f, 2.28f); cubicTo(14.51f, 3.81f, 17f, 5f, 19f, 5f)
+                        quadraticTo(20f, 5f, 20f, 6f); close()
+                        moveTo(9f, 12f); lineTo(11f, 14f); lineTo(15f, 10f)
+                    } else {
+                        moveTo(12f, 20f); lineTo(11f, 20f); quadraticTo(9f, 20f, 9f, 18f)
+                        quadraticTo(9f, 20f, 7f, 20f); lineTo(6f, 20f)
+                        moveTo(13f, 8f); lineTo(20f, 8f); quadraticTo(22f, 8f, 22f, 10f)
+                        lineTo(22f, 14f); quadraticTo(22f, 16f, 20f, 16f); lineTo(13f, 16f)
+                        moveTo(5f, 16f); lineTo(4f, 16f); quadraticTo(2f, 16f, 2f, 14f)
+                        lineTo(2f, 10f); quadraticTo(2f, 8f, 4f, 8f); lineTo(5f, 8f)
+                        moveTo(6f, 4f); lineTo(7f, 4f); quadraticTo(9f, 4f, 9f, 6f)
+                        quadraticTo(9f, 4f, 11f, 4f); lineTo(12f, 4f); moveTo(9f, 6f); lineTo(9f, 18f)
+                    }
+                }
+                drawPath(path, warning, style = Stroke(1.5f, cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
         }
     }
 }
 
 @Composable
-private fun MobilePendingTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    multiline: Boolean,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth(),
-        placeholder = { Text(placeholder, fontSize = 15.sp) },
-        minLines = if (multiline) 4 else 1,
+private fun MobilePendingOption(option: PendingOptionView, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.mobileOption(selected, onClick).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        MobileRadioDot(selected)
+        Column(Modifier.weight(1f)) {
+            Text(option.label, fontSize = 16.sp, lineHeight = 23.5.sp)
+            option.detail?.takeIf(String::isNotBlank)?.let {
+                Text(it, fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobilePendingTextField(value: String, onValueChange: (String) -> Unit, placeholder: String, multiline: Boolean) {
+    BasicTextField(
+        value, onValueChange,
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant).heightIn(min = 96.dp)
+            .padding(horizontal = 14.dp, vertical = 12.dp).semantics { contentDescription = "回答" },
+        textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp, lineHeight = 23.5.sp, fontFamily = FontFamily.SansSerif),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        singleLine = !multiline,
         maxLines = if (multiline) 8 else 1,
-        keyboardOptions = KeyboardOptions(
-            keyboardType = if (multiline) KeyboardType.Text else KeyboardType.Text,
-            imeAction = if (multiline) ImeAction.Default else ImeAction.Done,
-        ),
-        shape = RoundedCornerShape(18.dp),
+        keyboardOptions = KeyboardOptions(imeAction = if (multiline) ImeAction.Default else ImeAction.Done),
+        decorationBox = { inner ->
+            Box {
+                if (value.isEmpty()) Text(placeholder, fontSize = 16.sp, lineHeight = 23.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                inner()
+            }
+        },
     )
 }
 
 @Composable
-private fun MobileSheetButton(
-    text: String,
-    modifier: Modifier,
-    onClick: () -> Unit,
-    accent: Boolean = true,
-    enabled: Boolean = true,
-) {
-    val shape = CircleShape
-    if (accent) {
-        AccentPanel(
-            modifier = modifier.heightIn(min = 52.dp)
-                .clip(shape)
-                .glassClick(enabled = enabled, onClick = onClick),
-            shape = shape,
-        ) {
-            Box(Modifier.fillMaxWidth().heightIn(min = 52.dp), contentAlignment = Alignment.Center) {
-                Text(text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-            }
-        }
-    } else {
-        GlassPanel(
-            modifier = modifier.heightIn(min = 52.dp)
-                .glassClick(enabled = enabled, onClick = onClick),
-            shape = shape,
-            high = true,
-        ) {
-            Box(Modifier.fillMaxWidth().heightIn(min = 52.dp), contentAlignment = Alignment.Center) {
-                Text(text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            }
+private fun MobileSheetButton(text: String, modifier: Modifier, onClick: () -> Unit, accent: Boolean = true, enabled: Boolean = true) {
+    val buttonModifier = modifier.heightIn(min = 52.dp).alpha(if (enabled) 1f else .4f)
+        .clip(CircleShape).glassClick(enabled = enabled, onClick = onClick)
+    val content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {
+        Box(Modifier.fillMaxWidth().heightIn(min = 52.dp), contentAlignment = Alignment.Center) {
+            Text(text, fontSize = 16.sp, lineHeight = 23.5.sp, fontWeight = FontWeight.SemiBold, color = if (accent) Color.White else MaterialTheme.colorScheme.onSurface)
         }
     }
+    if (accent) AccentPanel(buttonModifier, CircleShape, content = content)
+    else GlassPanel(buttonModifier, CircleShape, high = true, content = content)
 }
-
-private fun mobileTruncate(value: String, max: Int): String =
-    if (value.length <= max) value else value.take(max) + "…"

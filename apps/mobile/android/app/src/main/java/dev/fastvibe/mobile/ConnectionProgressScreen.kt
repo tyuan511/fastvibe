@@ -21,6 +21,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.ui.unit.sp
 
 @Composable
@@ -44,8 +47,13 @@ internal fun ConnectionProgressContent(
     onRetry: (() -> Unit)? = null,
 ) {
     val dark = MaterialTheme.colorScheme.background.red < .1f
+    CompositionLocalProvider(LocalTextStyle provides LocalTextStyle.current.copy(
+        fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+        letterSpacing = 0.sp,
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+    )) {
     GlassBackground {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        Column(Modifier.fillMaxSize().mobileStatusBarsPadding().mobileNavigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassIconButton(R.drawable.fv_chevron_left, "返回电脑列表", onBack)
             }
@@ -106,6 +114,7 @@ internal fun ConnectionProgressContent(
                 }
             }
         }
+    }
     }
 }
 

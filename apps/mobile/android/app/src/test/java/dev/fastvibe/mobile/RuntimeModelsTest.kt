@@ -11,6 +11,63 @@ import java.time.Instant
 
 class RuntimeModelsTest {
     @Test
+    fun preservesMeasuredThinkingCompactionAndTerminalMetadata() {
+        val messages = parseMessages(JSONArray("""
+            [{
+              "id":"reply","role":"assistant","text":"done",
+              "createdAt":1000,"completedAt":99000,"runStartedAt":1000,
+              "kind":"message","stop":"aborted","stopCause":"repetition",
+              "compact":{"status":"done","reason":"threshold","tokensBefore":182000,"tokensAfter":56000},
+              "parts":[
+                {"kind":"thinking","text":"reasoning","startedAt":2000,"endedAt":14000},
+                {"kind":"compact","text":"summary","compact":{"status":"cancelled","reason":"manual","error":"cancelled"}},
+                {"kind":"model","from":{"provider":"p","model":"old"},"to":{"provider":"p","model":"new"}}
+              ]
+            }]
+        """.trimIndent())).single()
+
+        assertEquals(1000L, messages.runStartedAt)
+        assertEquals(99000L, messages.completedAt)
+        assertEquals("message", messages.kind)
+        assertEquals("aborted", messages.stop)
+        assertEquals("repetition", messages.stopCause)
+        assertEquals(2000L, messages.parts[0].startedAt)
+        assertEquals(14000L, messages.parts[0].endedAt)
+        assertEquals(CompactView("done", "threshold", 182000L, 56000L), messages.compact)
+        assertEquals(CompactView("cancelled", "manual", error = "cancelled"), messages.parts[1].compact)
+        assertEquals("模型已切换至 p/new", messages.parts[2].body)
+    }
+
+    @Test
+    fun absentTranscriptMetadataRemainsUnknownAndOpenThinkingHasNoEnd() {
+        val messages = parseMessages(JSONArray("""
+            [{"id":"live","role":"assistant","text":"","parts":[
+              {"kind":"thinking","text":"still working","startedAt":2000}
+            ]}]
+        """.trimIndent())).single()
+
+        assertNull(messages.runStartedAt)
+        assertNull(messages.completedAt)
+        assertNull(messages.kind)
+        assertNull(messages.stop)
+        assertNull(messages.stopCause)
+        assertNull(messages.compact)
+        assertEquals(2000L, messages.parts.single().startedAt)
+        assertNull(messages.parts.single().endedAt)
+        assertNull(messages.parts.single().compact)
+    }
+
+    @Test
+    fun accountEmailComesFromTheRealAccountUser() {
+        val state = parseRuntimeState(JSONObject("""
+            {"account":{"user":{"login":"developer","email":"developer@example.com"}}}
+        """.trimIndent()))
+        assertEquals("developer", state.accountUser)
+        assertEquals("developer@example.com", state.accountEmail)
+        assertNull(parseRuntimeState(JSONObject("""{"account":{"user":{"login":"developer"}}}""")).accountEmail)
+    }
+
+    @Test
     fun parsesCoreSnapshotShapesAndSessionState() {
         val snapshot = JSONObject()
             .put("conversationId", "conversation-1")

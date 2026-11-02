@@ -57,12 +57,23 @@ internal data class OutputView(
     val mimeType: String? = null,
 )
 
+internal data class CompactView(
+    val status: String,
+    val reason: String? = null,
+    val tokensBefore: Long? = null,
+    val tokensAfter: Long? = null,
+    val error: String? = null,
+)
+
 internal data class PartView(
     val kind: String,
     val title: String = "",
     val body: String = "",
     val toolId: String? = null,
     val outputs: List<OutputView> = emptyList(),
+    val startedAt: Long? = null,
+    val endedAt: Long? = null,
+    val compact: CompactView? = null,
 )
 
 internal data class MessageView(
@@ -76,6 +87,11 @@ internal data class MessageView(
     val createdAt: Long = 0L,
     val completedAt: Long? = null,
     val outputs: List<OutputView> = emptyList(),
+    val runStartedAt: Long? = null,
+    val kind: String? = null,
+    val stop: String? = null,
+    val stopCause: String? = null,
+    val compact: CompactView? = null,
 )
 
 internal data class QueueItemView(
@@ -161,6 +177,7 @@ internal data class MobileRuntimeState(
     val models: List<ModelView> = emptyList(),
     val pendingRequests: Int = 0,
     val accountUser: String? = null,
+    val accountEmail: String? = null,
     val accountOrigin: String? = null,
     val loadingHistory: Boolean = false,
 )
@@ -439,6 +456,11 @@ internal fun parseMessages(array: JSONArray): List<MessageView> = buildList {
                 createdAt = item.longOrNull("createdAt", "created_at") ?: 0L,
                 completedAt = item.longOrNull("completedAt", "completed_at"),
                 outputs = outputs,
+                runStartedAt = item.longOrNull("runStartedAt", "run_started_at"),
+                kind = item.stringOrNull("kind"),
+                stop = item.stringOrNull("stop"),
+                stopCause = item.stringOrNull("stopCause", "stop_cause"),
+                compact = item.optJSONObject("compact")?.let(::parseCompact),
             ),
         )
     }
@@ -497,16 +519,28 @@ private fun parsePart(part: JSONObject, tools: List<ToolView>): PartView {
             val tool = tools.firstOrNull { it.id == id }
             PartView(kind, "工具 · ${tool?.name ?: id.orEmpty()}", toolId = id)
         }
-        "thinking" -> PartView(kind, "思考", part.stringOrNull("text").orEmpty())
+        "thinking" -> PartView(
+            kind, "思考", part.stringOrNull("text").orEmpty(),
+            startedAt = part.longOrNull("startedAt", "started_at"),
+            endedAt = part.longOrNull("endedAt", "ended_at"),
+        )
         "model" -> {
             val from = modelLabel(part.opt("from"))
             val to = modelLabel(part.opt("to"))
-            PartView(kind, "模型切换", listOfNotNull(from, to).joinToString(" → "))
+            PartView(kind, "模型切换", to?.let { "模型已切换至 $it" } ?: from.orEmpty())
         }
-        "compact" -> PartView(kind, "上下文压缩", part.stringOrNull("text").orEmpty())
+        "compact" -> PartView(kind, "上下文压缩", part.stringOrNull("text").orEmpty(), compact = part.optJSONObject("compact")?.let(::parseCompact))
         else -> PartView(kind, body = part.stringOrNull("text", "content").orEmpty())
     }
 }
+
+private fun parseCompact(value: JSONObject) = CompactView(
+    status = value.stringOrNull("status") ?: "done",
+    reason = value.stringOrNull("reason"),
+    tokensBefore = value.longOrNull("tokensBefore", "tokens_before"),
+    tokensAfter = value.longOrNull("tokensAfter", "tokens_after"),
+    error = value.stringOrNull("error"),
+)
 
 private fun parseOutputs(array: JSONArray): List<OutputView> = buildList {
     for (index in 0 until array.length()) {
@@ -746,6 +780,7 @@ internal fun parseRuntimeState(raw: JSONObject?, currentConversationId: String? 
         accountUser = account?.objectOrNull("user")?.stringOrNull("login", "name", "email")
             ?: account?.stringOrNull("login", "name", "email")
             ?: state.stringOrNull("accountUser", "account_user"),
+        accountEmail = account?.objectOrNull("user")?.stringOrNull("email"),
         accountOrigin = state.stringOrNull("accountOrigin", "origin")
             ?: account?.stringOrNull("origin"),
         loadingHistory = state.booleanOrNull("loadingHistory", "loading_history") ?: false,

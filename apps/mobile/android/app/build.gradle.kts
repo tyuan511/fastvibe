@@ -77,6 +77,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (providers.gradleProperty("fastvibeVisualReview").orNull == "true") {
+                applicationIdSuffix = ".visual"
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true

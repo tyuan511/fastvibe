@@ -96,8 +96,9 @@ struct MobileIconButton: View {
     var body: some View {
         let palette = MobilePalette(scheme: colorScheme)
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 18, weight: .semibold))
+            MobileGlyph(systemName: systemName, strokeWidth: systemName == "chevron.left" ? 2 : 1.5)
+                .frame(width: systemName == "chevron.left" ? 22 : 20, height: systemName == "chevron.left" ? 22 : 20)
+                .offset(x: systemName == "chevron.left" ? -1 : 0)
                 .foregroundStyle(palette.text)
                 .frame(width: 44, height: 44)
                 .background { MobileGlassSurface(kind: .control, radius: 22) }

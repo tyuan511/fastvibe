@@ -19,9 +19,17 @@ public struct NativeTranscriptView: View {
     public let onQueueRemove: (String) -> Void
     public let onPermissionRespond: (MobileJSONValue, MobileJSONValue) -> Void
     public let onAttach: () -> Void
+    /// Optional reference-render controls. Nil keeps the live transcript's state-driven defaults.
+    public let initiallyExpandedThinkingMessageIDs: Set<String>?
+    public let initiallyExpandedToolMessageIDs: Set<String>?
+    public let initiallyExpandedToolIDs: Set<String>?
+    public let referenceNow: Int64?
+    public let initialScrollToLatest: Bool
+    public let initialScrollTargetID: String?
 
     @Environment(\.colorScheme) private var scheme
     @State private var scrollToLatest = 0
+    @State private var composerHeight: CGFloat = 0
     @FocusState private var composerFocused: Bool
 
     public init(
@@ -39,7 +47,13 @@ public struct NativeTranscriptView: View {
         onLoadHistory: @escaping () -> Void,
         onQueueRemove: @escaping (String) -> Void,
         onPermissionRespond: @escaping (MobileJSONValue, MobileJSONValue) -> Void,
-        onAttach: @escaping () -> Void
+        onAttach: @escaping () -> Void,
+        initiallyExpandedThinkingMessageIDs: Set<String>? = nil,
+        initiallyExpandedToolMessageIDs: Set<String>? = nil,
+        initiallyExpandedToolIDs: Set<String>? = nil,
+        referenceNow: Int64? = nil,
+        initialScrollToLatest: Bool = true,
+        initialScrollTargetID: String? = nil
     ) {
         self.messages = messages
         self.snapshot = snapshot
@@ -56,11 +70,21 @@ public struct NativeTranscriptView: View {
         self.onQueueRemove = onQueueRemove
         self.onPermissionRespond = onPermissionRespond
         self.onAttach = onAttach
+        self.initiallyExpandedThinkingMessageIDs = initiallyExpandedThinkingMessageIDs
+        self.initiallyExpandedToolMessageIDs = initiallyExpandedToolMessageIDs
+        self.initiallyExpandedToolIDs = initiallyExpandedToolIDs
+        self.referenceNow = referenceNow
+        self.initialScrollToLatest = initialScrollToLatest
+        self.initialScrollTargetID = initialScrollTargetID
     }
 
     private var palette: MobilePalette { MobilePalette(scheme: scheme) }
     private var running: Bool { snapshot?.running == true }
     private var hasDraft: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var queueHeight: CGFloat {
+        guard let queue = snapshot?.queue, !queue.items.isEmpty else { return 0 }
+        return 38 + min(CGFloat(queue.items.count) * 44, 132)
+    }
     private var pending: [MobileJSONValue] {
         (snapshot?.pendingUI ?? []).filter { request in
             guard let method = request.ntString("method"),
@@ -76,23 +100,33 @@ public struct NativeTranscriptView: View {
     public var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottom) {
-                VStack(spacing: 0) {
-                    navigation
-                        .zIndex(1)
-                    NativeTranscriptScroll(
-                        messages: messages,
-                        running: running,
-                        waiting: !pending.isEmpty,
-                        projectName: projectName,
-                        hasHistory: snapshot?.historyBeforeEntryId != nil,
-                        loadingHistory: isLoadingHistory,
-                        scrollToLatest: scrollToLatest,
-                        onLoadHistory: loadHistory,
-                        onContinue: { onSend("继续") }
-                    )
-                    .id(snapshot?.conversationId ?? "new-conversation")
-                    .clipped()
-                    composer
+                NativeTranscriptScroll(
+                    messages: messages,
+                    running: running,
+                    waiting: !pending.isEmpty,
+                    projectName: projectName,
+                    hasHistory: snapshot?.historyBeforeEntryId != nil,
+                    loadingHistory: isLoadingHistory,
+                    scrollToLatest: scrollToLatest,
+                    topInset: isLoadingHistory ? 111 : 61,
+                    bottomInset: max(48 + queueHeight, composerHeight) + 2,
+                    initiallyExpandedThinkingMessageIDs: initiallyExpandedThinkingMessageIDs,
+                    initiallyExpandedToolMessageIDs: initiallyExpandedToolMessageIDs,
+                    initiallyExpandedToolIDs: initiallyExpandedToolIDs,
+                    referenceNow: referenceNow,
+                    initialScrollToLatest: initialScrollToLatest,
+                    initialScrollTargetID: initialScrollTargetID,
+                    onLoadHistory: loadHistory,
+                    onContinue: { onSend("继续") }
+                )
+                .id(snapshot?.conversationId ?? "new-conversation")
+                .overlay(alignment: .top) { navigation }
+                .overlay(alignment: .bottom) {
+                    if pending.isEmpty {
+                        composer
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+                            .offset(y: composerFocused ? 0 : max(0, geometry.safeAreaInsets.bottom - 30))
+                    }
                 }
                 .accessibilityHidden(!pending.isEmpty)
 
@@ -105,12 +139,13 @@ public struct NativeTranscriptView: View {
                         request: request,
                         count: pending.count,
                         context: conversationTitle,
-                        maximumHeight: max(180, geometry.size.height - 24),
+                        maximumHeight: max(180, geometry.size.height + geometry.safeAreaInsets.bottom - 24),
                         onRespond: { response in onPermissionRespond(request, response) }
                     )
                     .id(request.ntField("id"))
                     .padding(8)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(.bottom, -geometry.safeAreaInsets.bottom)
+                    .transition(.move(edge: .bottom))
                     .zIndex(1)
                 }
             }
@@ -140,25 +175,29 @@ public struct NativeTranscriptView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .accessibilityElement(children: .combine)
-                Menu {
-                    Button("回到最新消息", systemImage: "arrow.down.to.line") { scrollToLatest += 1 }
-                    if snapshot?.historyBeforeEntryId != nil {
-                        Button("加载更早消息", systemImage: "clock.arrow.circlepath", action: loadHistory)
-                            .disabled(isLoadingHistory)
+                if pending.isEmpty {
+                    Menu {
+                        Button("回到最新消息", systemImage: "arrow.down.to.line") { scrollToLatest += 1 }
+                        if snapshot?.historyBeforeEntryId != nil {
+                            Button("加载更早消息", systemImage: "clock.arrow.circlepath", action: loadHistory)
+                                .disabled(isLoadingHistory)
+                        }
+                        if running { Button("停止回复", systemImage: "stop", action: onStop) }
+                    } label: {
+                        MobileGlyph(systemName: "ellipsis")
+                            .frame(width: 20, height: 20)
+                            .frame(width: 44, height: 44)
+                            .background { NativeTranscriptControlBackground(radius: 22) }
                     }
-                    if running { Button("停止回复", systemImage: "stop", action: onStop) }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 20, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .background { NativeTranscriptControlBackground(radius: 22) }
-                }
-                .fixedSize()
+                    .fixedSize()
                 #if os(macOS)
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                 #endif
-                .accessibilityLabel("更多")
+                    .accessibilityLabel("更多")
+                } else {
+                    Color.clear.frame(width: 44, height: 44)
+                }
             }
             if isLoadingHistory {
                 HStack(spacing: 8) {
@@ -167,8 +206,8 @@ public struct NativeTranscriptView: View {
                 }
                 .foregroundStyle(palette.secondary)
                 .padding(.horizontal, 14)
-                .frame(height: 38)
-                .background { NativeTranscriptControlBackground(radius: 19) }
+                .frame(height: 36)
+                .background { NativeTranscriptControlBackground(radius: 18) }
                 .accessibilityElement(children: .combine)
             }
         }
@@ -189,12 +228,12 @@ public struct NativeTranscriptView: View {
                 NativeTranscriptQueue(queue: queue, onRemove: onQueueRemove)
             }
             HStack(alignment: .bottom, spacing: 8) {
-                HStack(alignment: .bottom, spacing: 2) {
+                HStack(alignment: .center, spacing: 2) {
                     Button(action: onAttach) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 20, weight: .regular))
+                        MobileGlyph(systemName: "paperclip")
+                            .frame(width: 20, height: 20)
                             .foregroundStyle(palette.secondary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -204,12 +243,12 @@ public struct NativeTranscriptView: View {
                         .lineLimit(1...6)
                         .textFieldStyle(.plain)
                         .focused($composerFocused)
-                        .padding(.vertical, 12)
-                        .padding(.leading, 2)
-                        .padding(.trailing, 12)
-                        .frame(minHeight: 48)
+                        .padding(.vertical, 7)
+                        .padding(.horizontal, 6)
+                        .frame(minHeight: 40)
                         .accessibilityLabel("消息")
                 }
+                .padding(4)
                 .frame(minHeight: 48)
                 .background { NativeTranscriptControlBackground(radius: 24) }
                 Button(action: primaryAction) {
@@ -220,8 +259,8 @@ public struct NativeTranscriptView: View {
                             RoundedRectangle(cornerRadius: 2).fill(scheme == .dark ? .black : .white)
                                 .frame(width: 14, height: 14)
                         } else {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 22, weight: .semibold))
+                            MobileGlyph(systemName: "arrow.up")
+                                .frame(width: 22, height: 22)
                                 .foregroundStyle(hasDraft ? .white : palette.secondary)
                         }
                     }
@@ -244,9 +283,14 @@ public struct NativeTranscriptView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
+        .padding(.bottom, 0)
         .background {
+            #if canImport(UIKit)
+            NativeBackdropBlur(recipe: .composer, mask: .composer)
+                .padding(.top, -24)
+                .ignoresSafeArea(edges: .bottom)
+                .allowsHitTesting(false)
+            #else
             MobileGlassBackdropSample(saturation: 1, blurRadius: 8)
                 .mask(LinearGradient(stops: [
                     .init(color: .clear, location: 0),
@@ -256,6 +300,7 @@ public struct NativeTranscriptView: View {
                 .padding(.top, -24)
                 .ignoresSafeArea(edges: .bottom)
                 .allowsHitTesting(false)
+            #endif
         }
     }
 
@@ -283,6 +328,14 @@ private struct NativeTranscriptScroll: View {
     let hasHistory: Bool
     let loadingHistory: Bool
     let scrollToLatest: Int
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let initiallyExpandedThinkingMessageIDs: Set<String>?
+    let initiallyExpandedToolMessageIDs: Set<String>?
+    let initiallyExpandedToolIDs: Set<String>?
+    let referenceNow: Int64?
+    let initialScrollToLatest: Bool
+    let initialScrollTargetID: String?
     let onLoadHistory: () -> Void
     let onContinue: () -> Void
 
@@ -302,14 +355,14 @@ private struct NativeTranscriptScroll: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
-                        if hasHistory {
+                        if hasHistory && !loadingHistory {
                             HStack {
                                 Spacer(minLength: 0)
                                 Button {
                                     followsTail = false
                                     onLoadHistory()
                                 } label: {
-                                    Label("加载更早消息", systemImage: "clock.arrow.circlepath")
+                                    Label("加载更早的消息", systemImage: "clock.arrow.circlepath")
                                         .font(.system(size: 13, weight: .semibold))
                                         .foregroundStyle(palette.secondary)
                                         .padding(.horizontal, 14)
@@ -323,15 +376,19 @@ private struct NativeTranscriptScroll: View {
                             }
                         }
                         if messages.isEmpty && !running {
-                            emptyState.frame(minHeight: max(200, viewport.size.height - 84))
+                            emptyState.frame(minHeight: max(200, viewport.size.height - topInset - bottomInset - 24))
                         }
                         ForEach(messages) { message in
                             NativeTranscriptMessage(
                                 message: message,
                                 isRunning: message.id == activeMessageID,
                                 waiting: waiting,
-                                canContinue: message.id == messages.last?.id && !running,
-                                onContinue: onContinue
+                                canContinue: message.id == messages.last?.id && !running && !waiting && message.stop != nil,
+                                onContinue: onContinue,
+                                initiallyExpandedThinking: initiallyExpandedThinkingMessageIDs.map { $0.contains(message.id) },
+                                initiallyExpandedTools: initiallyExpandedToolMessageIDs.map { $0.contains(message.id) },
+                                initiallyExpandedToolIDs: initiallyExpandedToolIDs,
+                                referenceNow: referenceNow
                             )
                             .id(message.id)
                         }
@@ -343,7 +400,7 @@ private struct NativeTranscriptScroll: View {
                             }
                             .frame(minHeight: 36)
                         }
-                        Color.clear.frame(height: 1)
+                        Color.clear.frame(height: bottomInset + 20)
                             .id(bottomID)
                             .background {
                                 GeometryReader { marker in
@@ -353,8 +410,7 @@ private struct NativeTranscriptScroll: View {
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, 16)
-                    .padding(.top, 4)
-                    .padding(.bottom, 20)
+                    .padding(.top, topInset + 4)
                 }
                 .coordinateSpace(name: "native-transcript-scroll")
                 .scrollPosition(id: $visibleMessageID, anchor: .top)
@@ -364,16 +420,19 @@ private struct NativeTranscriptScroll: View {
                     followsTail = bottom.isFinite && bottom <= viewport.size.height + 72
                 }
                 .onAppear {
+                    followsTail = initialScrollToLatest
                     guard !didInitialScroll, !messages.isEmpty else { return }
                     didInitialScroll = true
-                    proxy.scrollTo(bottomID, anchor: .bottom)
+                    if let target = initialScrollTargetID { proxy.scrollTo(target, anchor: .top) }
+                    else if initialScrollToLatest { proxy.scrollTo(bottomID, anchor: .bottom) }
                 }
                 .onChange(of: messages.map(\.id)) { old, new in
                     // Stable scroll targets preserve the reading anchor when history is prepended.
                     let prepended = old.first != new.first && old.first.map(new.contains) == true
                     if !didInitialScroll && !new.isEmpty {
                         didInitialScroll = true
-                        proxy.scrollTo(bottomID, anchor: .bottom)
+                        if let target = initialScrollTargetID { proxy.scrollTo(target, anchor: .top) }
+                        else if initialScrollToLatest { proxy.scrollTo(bottomID, anchor: .bottom) }
                     } else if !prepended && followsTail && !loadingHistory {
                         proxy.scrollTo(bottomID, anchor: .bottom)
                     }
@@ -400,9 +459,9 @@ private struct NativeTranscriptScroll: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "bubble.left")
-                .font(.system(size: 20))
-                .foregroundStyle(palette.secondary)
+            MobileGlyph(systemName: "bubble.left")
+                .frame(width: 20, height: 20)
+                .foregroundStyle(palette.text)
                 .frame(width: 44, height: 44)
                 .background(palette.controlTint, in: RoundedRectangle(cornerRadius: 14))
                 .padding(.bottom, 8)

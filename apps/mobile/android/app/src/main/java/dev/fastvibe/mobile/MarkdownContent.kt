@@ -92,9 +92,16 @@ private const val RENDER_STATE_TAG = 0x46564D44
 
 private fun TextView.configureReplyTextView(context: Context) {
     setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-    setLineSpacing(dp(context, 4f), 1f)
+    // CSS line-height is 1.47 at 16px. Set the complete line box rather than adding
+    // 4dp to Android's font-dependent default metrics.
+    val lineHeight = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 23.52f, context.resources.displayMetrics)
+    val leading = (lineHeight - (paint.fontMetricsInt.descent - paint.fontMetricsInt.ascent)).coerceAtLeast(0f)
+    setLineSpacing(leading, 1f)
+    letterSpacing = 0f
+    breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
     setBackgroundColor(Color.TRANSPARENT)
-    setPadding(0, 0, 0, 0)
+    val halfLeading = kotlin.math.round(leading / 2).toInt()
+    setPadding(0, halfLeading, 0, halfLeading)
     includeFontPadding = false
     setTextIsSelectable(true)
     movementMethod = LinkMovementMethod.getInstance()

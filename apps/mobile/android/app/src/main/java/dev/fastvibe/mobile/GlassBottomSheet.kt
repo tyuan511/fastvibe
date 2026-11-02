@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,6 +36,7 @@ internal fun GlassBottomSheet(
         containerColor = Color.Transparent,
         scrimColor = if (MaterialTheme.colorScheme.background.red < .1f) Color.Black.copy(alpha = .5f) else Color(0xFF141828).copy(alpha = .20f),
         dragHandle = null,
+        contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
     ) {
         GlassPanel(Modifier.fillMaxWidth().heightIn(max = (LocalConfiguration.current.screenHeightDp - 72).coerceAtLeast(240).dp), RoundedCornerShape(40.dp), high = true, sheet = true) {
             Column(Modifier.fillMaxWidth()) {

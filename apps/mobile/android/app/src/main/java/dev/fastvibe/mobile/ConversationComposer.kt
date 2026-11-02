@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -106,16 +107,17 @@ internal fun ConversationComposer(
             ) {
                 Row(
                     Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp).padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(
                         Modifier.size(40.dp)
-                            .semantics { contentDescription = "添加图片" }
+                            .semantics { contentDescription = "添加附件" }
                             .glassClick(enabled = enabled, onClick = onAttach),
                         contentAlignment = Alignment.Center,
                     ) {
                         ComposerIcon(
-                            R.drawable.fv_image,
+                            R.drawable.fv_paperclip,
                             Modifier.size(20.dp),
                             muted.copy(alpha = muted.alpha * if (enabled) 1f else .4f),
                         )
@@ -123,7 +125,7 @@ internal fun ConversationComposer(
                     BasicTextField(
                         value = value,
                         onValueChange = onChange,
-                        modifier = Modifier.weight(1f).padding(start = 8.dp, end = 6.dp, top = 7.dp, bottom = 7.dp)
+                        modifier = Modifier.weight(1f).padding(horizontal = 6.dp, vertical = 7.dp)
                             .semantics { contentDescription = "消息" },
                         enabled = enabled,
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -131,9 +133,11 @@ internal fun ConversationComposer(
                             color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 16.sp,
                             lineHeight = 22.sp,
+                            letterSpacing = 0.sp,
+                            platformStyle = PlatformTextStyle(includeFontPadding = false),
                         ),
                         minLines = 1,
-                        maxLines = 5,
+                        maxLines = 6,
                         decorationBox = { innerTextField ->
                             Box(contentAlignment = Alignment.CenterStart) {
                                 if (value.isEmpty()) {
@@ -146,6 +150,8 @@ internal fun ConversationComposer(
                                         color = muted,
                                         fontSize = 16.sp,
                                         lineHeight = 22.sp,
+                                        letterSpacing = 0.sp,
+                                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false)),
                                     )
                                 }
                                 innerTextField()
@@ -179,12 +185,10 @@ internal fun ConversationComposer(
                         ),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Box(
-                            Modifier.size(12.dp).background(
-                                if (MaterialTheme.colorScheme.background.red < .1f) Color.Black else Color.White,
-                                RoundedCornerShape(1.5.dp),
-                            ),
-                        )
+                        Box(Modifier.size(12.dp).background(
+                            if (MaterialTheme.colorScheme.background.red < .1f) Color.Black else Color.White,
+                            RoundedCornerShape(1.33.dp),
+                        ))
                     }
                 }
                 canSend -> {

@@ -165,8 +165,12 @@ struct MobileGlassSurface: View {
                     .overlay { shape.fill(.black).blendMode(.destinationOut) }
                     .compositingGroup()
             }
+            #if canImport(UIKit)
+            liveSurface
+            #else
             surface
                 .clipShape(shape)
+            #endif
             if kind != .navigation {
                 shape.strokeBorder(.black.opacity(dark ? 0.5 : 0.06), lineWidth: 0.5)
             }
@@ -174,6 +178,69 @@ struct MobileGlassSurface: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
+
+    #if canImport(UIKit)
+    private var liveRecipe: NativeBackdropBlurRecipe {
+        switch kind {
+        case .panel: .panel
+        case .control: .control
+        case .sheet: .sheet
+        case .navigation: .navigation
+        }
+    }
+
+    /// UIKit's fixed material already adds a neutral wash. These smaller color
+    /// overlays retain the backdrop's gradients instead of adding the full CSS
+    /// wash twice. Initial visual recipes only; neither is an exact CSS radius.
+    private var liveTint: Color {
+        switch kind {
+        case .panel: dark ? Color(hex: 0x2C2C34).opacity(0.22) : .white.opacity(0.28)
+        case .control: dark ? Color(hex: 0x383840).opacity(0.30) : .white.opacity(0.40)
+        case .sheet: dark ? Color(hex: 0x202026).opacity(0.46) : Color(hex: 0xF8F8FC).opacity(0.48)
+        case .navigation: tint
+        }
+    }
+
+    private var liveSurface: some View {
+        ZStack {
+            // No ancestor SwiftUI mask/clip/compositingGroup: UIKit masks the
+            // effect directly so real content remains available as its backdrop.
+            NativeBackdropBlur(recipe: liveRecipe, mask: kind == .navigation
+                               ? .navigation(radius: radius) : .rounded(radius: radius))
+            if kind == .navigation {
+                // Only the color artwork is rendered into this SwiftUI mask.
+                LinearGradient(stops: [
+                    .init(color: liveTint.opacity(0.88), location: 0),
+                    .init(color: liveTint.opacity(0.88), location: 0.4),
+                    .init(color: liveTint.opacity(0.30), location: 1),
+                ], startPoint: .top, endPoint: .bottom)
+                .clipShape(shape)
+                .mask(LinearGradient(stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: 0.55),
+                    .init(color: .clear, location: 1),
+                ], startPoint: .top, endPoint: .bottom))
+            } else {
+                shape.fill(liveTint)
+                shape.fill(LinearGradient(stops: [
+                    .init(color: .white.opacity(dark ? 0.04 : 0.50), location: 0),
+                    .init(color: .clear, location: sheenEnd),
+                    .init(color: .clear, location: 1),
+                ], startPoint: .top, endPoint: .bottom))
+                shape.strokeBorder(line, lineWidth: 1)
+                    .mask(alignment: .top) {
+                        Rectangle().frame(height: 1).frame(maxHeight: .infinity, alignment: .top)
+                    }
+                if kind == .control {
+                    shape.strokeBorder(line, lineWidth: 0.5)
+                        .mask(alignment: .bottom) {
+                            Rectangle().frame(height: 0.5).frame(maxHeight: .infinity, alignment: .bottom)
+                        }
+                }
+            }
+        }
+    }
+    #endif
 
     @ViewBuilder
     private var surface: some View {
