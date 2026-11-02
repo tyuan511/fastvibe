@@ -1355,7 +1355,9 @@ export type Conversation = {
   /** Isolated git worktree this conversation's engine cwd is bound to. */
   worktree?: { path: string; branch: string };
   /** Hidden from the left sidebar; lives in the right side pane. */
-  kind?: "side-chat";
+  kind?: "side-chat" | "bot-router" | "bot-worker";
+  /** Stable Bot-owned session key; distinct from display name and active navigation. */
+  botKey?: string;
   /** Parent conversation for a side-chat tab. */
   parentId?: string;
   /** The background schedule that created this run; never an activation target at creation. */

@@ -344,8 +344,12 @@ export class ViviPetWindow {
   }
 
   updateActors(actors: ViviActor[]): void {
-    const actor = actors.find((item) => item.mood === "waiting") ?? actors[0];
-    this.setMood(actor?.mood ?? "idle", actor?.conversationId);
+    if (actors.some((actor) => actor.mood === "waiting") && this.successTimer) {
+      clearTimeout(this.successTimer);
+      this.successTimer = undefined;
+    }
+    this.store.follow(actors, Boolean(this.successTimer));
+    this.publish();
   }
 
   setMood(mood: ViviMood, conversationId?: string): void {
@@ -355,7 +359,7 @@ export class ViviPetWindow {
       this.successTimer = setTimeout(() => {
         this.successTimer = undefined;
         if (this.disposed) return;
-        this.store.setMood("idle", conversationId);
+        this.store.restoreActivity();
         this.publish();
       }, SUCCESS_DURATION_MS);
     }

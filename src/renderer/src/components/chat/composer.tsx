@@ -785,6 +785,7 @@ export function Composer({
   }
 
   async function addFiles(list: FileList | File[]): Promise<void> {
+    if (readOnly || locked) return;
     const next = await filesToAttachments([...list]);
     if (next.length === 0) return;
     onAttachmentsChange([...attachments, ...next]);
@@ -850,7 +851,7 @@ export function Composer({
       className={cn("@container/composer mx-auto w-full max-w-3xl px-6 pb-5", className)}
       onDragOver={(event) => {
         event.preventDefault();
-        setDragging(true);
+        setDragging(!readOnly && !locked);
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}

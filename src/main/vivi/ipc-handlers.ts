@@ -8,7 +8,7 @@ import { readAppSettings, writeAppSettings } from "../engine/app-settings";
 
 type ViviIpcOptions = {
   queueSettingsWrite: (task: () => Promise<void>) => Promise<void>;
-  openConversation: (conversationId?: string) => Promise<void>;
+  openConversation: (conversationId?: string, runId?: string) => Promise<void>;
 };
 
 export function registerViviIpc(options: ViviIpcOptions): void {
@@ -46,9 +46,10 @@ export function registerViviIpc(options: ViviIpcOptions): void {
   handle(Ipc.viviPreviewMood, (payload: { mood?: string }) => pet.setMood(normalizeMood(payload?.mood)));
   handle(Ipc.viviDragStart, () => pet.startDrag());
   handle(Ipc.viviDragEnd, () => pet.stopDrag());
-  handle(Ipc.viviOpenConversation, (payload: { conversationId?: string }) => {
+  handle(Ipc.viviOpenConversation, (payload: { conversationId?: string; runId?: string }) => {
     const id = typeof payload?.conversationId === "string" ? payload.conversationId : undefined;
-    return options.openConversation(id);
+    const runId = typeof payload?.runId === "string" ? payload.runId : undefined;
+    return options.openConversation(id, runId);
   });
   handle(Ipc.viviContextMenu, () => {
     pet.showContextMenu(

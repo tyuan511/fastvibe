@@ -86,7 +86,7 @@ export function staleConversationIds(
   return conversations
     .filter(
       (item) =>
-        item.kind !== "side-chat" &&
+        item.kind !== "side-chat" && item.kind !== "bot-router" && item.kind !== "bot-worker" &&
         Boolean(item.preview) &&
         !archived.has(item.id) &&
         !running.has(item.id) &&

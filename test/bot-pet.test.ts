@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { ViviStateStore } from "../src/main/vivi/state.ts";
+import { ViviCompletionState } from "../src/renderer/src/lib/vivi-completion.ts";
+import type { BotDelivery } from "../src/shared/bot.ts";
+import { openPetConversation } from "../src/main/vivi/conversation-navigation.ts";
+
+const delivery: BotDelivery = { id: "delivery:1", conversationId: "worker-a", targetConversationId: "router", status: "delivered", text: "报告已经完成。", createdAt: 1 };
+
+test("a completion animation returns to the latest work instead of hiding another task", () => {
+  const state = new ViviStateStore({});
+  state.follow([{ id: "a", label: "A", mood: "working", palette: "sky", conversationId: "a" }]);
+  state.setMood("success", "a");
+  state.follow([{ id: "b", label: "B", mood: "working", palette: "sky", conversationId: "b" }], true);
+  assert.equal(state.state().mood, "success"); state.restoreActivity();
+  assert.equal(state.state().mood, "working"); assert.equal(state.state().conversationId, "b");
+  state.follow([]); assert.equal(state.state().mood, "idle");
+});
+
+test("an outstanding question takes priority over a success animation", () => {
+  const state = new ViviStateStore({}); state.setMood("success", "done");
+  state.follow([{ id: "q", label: "Q", mood: "waiting", palette: "sky", conversationId: "q" }], true);
+  assert.equal(state.state().mood, "waiting"); state.restoreActivity(); assert.equal(state.state().conversationId, "q");
+});
+
+test("Bot delivery retains its conversation target when the Router starts another turn", () => {
+  const state = new ViviCompletionState();
+  assert.equal(state.deliver(delivery, true), true);
+  state.event({ type: "conversation_running", conversationId: "router", running: true });
+  assert.equal(state.completion?.conversationId, "worker-a"); assert.equal(state.completion?.text, delivery.text);
+  assert.equal(state.deliver(delivery, true), false); assert.equal(state.completion?.revision, 1);
+});
+
+test("foreground deliveries are consumed and do not pop up when a duplicate arrives later", () => {
+  const state = new ViviCompletionState(); assert.equal(state.deliver(delivery, false), false); assert.equal(state.deliver(delivery, true), false); assert.equal(state.completion, undefined);
+});
+
+test("a final Bot result supersedes an older asynchronous conversation read", () => {
+  const state = new ViviCompletionState();
+  const old = state.event({ type: "conversation_activity", conversationId: "chat", status: "completed" })!;
+  state.deliver(delivery, true);
+  assert.equal(state.accept(old, { conversationId: "chat", running: false, messages: [] }), false);
+  assert.equal(state.completion?.conversationId, "worker-a");
+});
+
+test("clicking a Bot delivery opens its Worker in Vivi without changing the ordinary active chat", async () => {
+  const completion = new ViviCompletionState();
+  completion.deliver(delivery, true);
+  let activeId = "ordinary-chat";
+  const targets: Array<string | undefined> = [];
+  await openPetConversation({
+    isBotConversation: (id) => id === "worker-a",
+    openVivi: (id) => { targets.push(id); },
+    openChat: async (id) => { activeId = id; },
+  }, completion.completion?.conversationId, completion.completion?.runId);
+  assert.deepEqual(targets, ["worker-a"]);
+  assert.equal(activeId, "ordinary-chat");
+});
+
+test("pet navigation keeps Bot routers, workspace entry and legacy targets in Vivi", async () => {
+  const targets: Array<string | undefined> = [];
+  const navigation = {
+    isBotConversation: (id: string) => id === "router",
+    openVivi: (id?: string) => { targets.push(id); },
+    openChat: async () => { assert.fail("Vivi navigation must not open an ordinary chat"); },
+  };
+  await openPetConversation(navigation, "router");
+  await openPetConversation(navigation);
+  await openPetConversation(navigation, "ignored-chat", "legacy-target");
+  assert.deepEqual(targets, ["router", undefined, "legacy-target"]);
+});
+
+test("ordinary completion clicks still open the exact conversation and await navigation", async () => {
+  let activeId = "current-chat";
+  await openPetConversation({
+    isBotConversation: () => false,
+    openVivi: () => { assert.fail("ordinary completions must stay in ordinary chat"); },
+    openChat: async (id) => { await Promise.resolve(); activeId = id; },
+  }, "completed-chat");
+  assert.equal(activeId, "completed-chat");
+});

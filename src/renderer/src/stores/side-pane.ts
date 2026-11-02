@@ -9,6 +9,8 @@ import type { GitDiffSource, GitHistoryScope } from "@shared/ipc";
 import { subagentKey } from "@shared/subagent-state";
 
 export type SidePaneTabType =
+  | "bot-tasks"
+  | "bot-task"
   | "git"
   | "terminal"
   | "browser"
@@ -40,6 +42,8 @@ export type SubagentTabInit = {
 export type SidePaneTab = {
   id: string;
   type: SidePaneTabType;
+  botConversationId?: string;
+  parentId?: string;
   openedAt: number;
   title: string;
   path?: string;
@@ -124,6 +128,7 @@ const EMPTY_SCOPE: SidePaneScopeState = { tabs: [], activeTabId: null, maximized
  * the first prompt is not lost when the conversation row appears.
  */
 export const DRAFT_SCOPE = "";
+export const VIVI_PANE_SCOPE = "vivi";
 
 const WIDTH_KEY = "fastvibe.side-pane.width";
 const COLLAPSED_KEY = "fastvibe.side-pane.collapsed";
@@ -244,6 +249,8 @@ type SidePaneStore = {
    * history list to show that branch (or every one) rather than whatever the pane
    * last had.
    */
+  openBotTasks: () => void;
+  openBotConversation: (conversationId: string, title?: string) => void;
   openGit: (cwd?: string, historyScope?: GitHistoryScope) => void;
   /**
    * Open 审查 focused on one file's diff, so a caller that already knows the file
@@ -525,7 +532,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
       let scopes = state.scopes;
       // The draft pane belongs to the chat that materialises from it: carry the
       // tabs the user opened on the hero into the new conversation's scope.
-      if (nextId && scopeKeyOf(state) === DRAFT_SCOPE && !scopes[nextKey] && state.tabs.length > 0) {
+      if (nextId && nextId !== VIVI_PANE_SCOPE && scopeKeyOf(state) === DRAFT_SCOPE && !scopes[nextKey] && state.tabs.length > 0) {
         scopes = {
           ...scopes,
           [nextKey]: {
@@ -678,6 +685,20 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         { collapsed: true, maximized: false },
       ),
     ),
+  openBotTasks: () => set((state) => {
+    if (scopeKeyOf(state) !== VIVI_PANE_SCOPE) return state;
+    const scope = scopeOf(state);
+    const tab: SidePaneTab = scope.tabs.find((item) => item.type === "bot-tasks") ?? { id: "bot-tasks", type: "bot-tasks", title: "", parentId: VIVI_PANE_SCOPE, openedAt: Date.now() };
+    return writeScope(state, VIVI_PANE_SCOPE, { ...scope, tabs: upsert(scope.tabs, tab), activeTabId: tab.id }, { collapsed: false });
+  }),
+  openBotConversation: (conversationId, title) => set((state) => {
+    if (scopeKeyOf(state) !== VIVI_PANE_SCOPE) return state;
+    const scope = scopeOf(state);
+    const id = `bot-conversation:${conversationId}`;
+    const existing = scope.tabs.find((item) => item.id === id);
+    const tab: SidePaneTab = { ...(existing ?? { id, type: "bot-task", openedAt: Date.now() }), title: title ?? existing?.title ?? "", botConversationId: conversationId, parentId: VIVI_PANE_SCOPE };
+    return writeScope(state, VIVI_PANE_SCOPE, { ...scope, tabs: upsert(scope.tabs, tab), activeTabId: id }, { collapsed: false });
+  }),
   openGit: (cwd, historyScope) =>
     set((state) => {
       const scope = scopeOf(state);

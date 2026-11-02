@@ -5,7 +5,7 @@ import { Layers01Icon } from "@hugeicons/core-free-icons";
 import type { ChatMessage, MessagePart } from "@shared/types";
 import type { ToolGroup } from "@/lib/group-parts";
 import type { ThinkingPart } from "@/lib/tool-run";
-import { useWorkspacePath } from "@/stores/session";
+import { useWorkspacePath } from "@/lib/workspace-path-context";
 import { PathLink } from "@/components/path-menu";
 import { displayPath } from "@/lib/workspace-path";
 import { ThinkingBlock } from "./thinking-block";

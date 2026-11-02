@@ -1,5 +1,20 @@
 {
+  "bot": {
+    "active": "Active · {{count}}",
+    "finished": "Finished · {{count}}",
+    "back": "Back to Vivi",
+    "conversations": "Work conversations",
+    "empty": "No work conversations yet",
+    "emptyConversation": "This work conversation has no messages yet",
+    "workspace": "Workspace",
+    "recovery": "Ready to continue",
+    "continue": "Continue",
+    "stop": "Stop",
+    "supplement": "Add a requirement…"
+  },
   "tabs": {
+    "bot-tasks": "Work conversations",
+    "bot-task": "Task details",
     "git": "Changes",
     "terminal": "Terminal",
     "browser": "Browser",

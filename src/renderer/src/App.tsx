@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type JSX } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { motion } from "motion/react";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -82,7 +82,7 @@ import type {
 } from "@shared/types";
 import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
 import { TASKS_PATH, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
-import { useSidePaneStore } from "@/stores/side-pane";
+import { useSidePaneStore, VIVI_PANE_SCOPE } from "@/stores/side-pane";
 import { useAppShortcuts, useNativeMenuActions, useShortcutLabel } from "@/lib/use-shortcuts";
 import { onShortcutRecordingChange, type ShortcutHandler, type ShortcutId } from "@/lib/shortcuts";
 import { syncNativeMenu } from "@/lib/native-menu";
@@ -101,6 +101,7 @@ import { isAbortOutcome, isCompactionCancelled } from "@shared/abort";
  * router validates `#/settings/:section` on every navigation); only the panes are
  * deferred, and they load while the route's own transition runs.
  */
+const ViviPage = lazy(async () => ({ default: (await import("@/components/bot/vivi-page")).ViviPage }));
 const SettingsDialog = lazy(async () => ({
   default: (await import("@/components/settings/settings-dialog")).SettingsDialog,
 }));
@@ -268,6 +269,10 @@ export function App(): JSX.Element {
   // Only one of them is mounted; the conversation column is the other page.
   const pluginsOpen = Boolean(useMatch("/plugins"));
   const tasksOpen = Boolean(useMatch(TASKS_PATH));
+  const viviOpen = Boolean(useMatch("/vivi"));
+  useEffect(() => window.fastvibe.bot.onNavigate(({ runId }) => {
+    navigate(runId ? `/vivi?run=${encodeURIComponent(runId)}` : "/vivi");
+  }), [navigate]);
   // Latches on: the lazy chunk is fetched the first time 设置 is opened, and the
   // dialog stays mounted after so closing it still animates.
   const [settingsMounted, setSettingsMounted] = useState(false);
@@ -311,7 +316,8 @@ export function App(): JSX.Element {
   const [modelsLoaded, setModelsLoaded] = useState(false);
 
   const paneCollapsed = useSidePaneStore((state) => state.collapsed);
-  const paneMaximized = useSidePaneStore((state) => state.maximized);
+  const storedPaneMaximized = useSidePaneStore((state) => state.maximized);
+  const paneScope = useSidePaneStore((state) => state.scopeId);
   const togglePane = useSidePaneStore((state) => state.toggle);
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.update);
@@ -321,6 +327,12 @@ export function App(): JSX.Element {
   // A phone has no width to give the sidebar or the right pane; the first overlays
   // (`CollapsiblePanel overlay`) and the second is simply not there.
   const narrow = useIsNarrowViewport();
+  const paneMaximized = !narrow && storedPaneMaximized;
+  // Vivi owns its pane tabs. This is navigation only: the ordinary conversation
+  // remains active in the engine, and regains its own pane on return.
+  useLayoutEffect(() => {
+    useSidePaneStore.getState().setScope(viviOpen ? VIVI_PANE_SCOPE : activeId);
+  }, [viviOpen, activeId, paneScope]);
   const archivedIds = useArchivedIds();
   // Maximised hands the window to the side pane. Emptying the conversation column
   // rather than unmounting it keeps the shell one three-panel group the library can
@@ -1368,7 +1380,7 @@ export function App(): JSX.Element {
       applyOpen(opened);
       if (source === "user") revealConversation(id);
       else if (source === "remote") revealConversation(id, true);
-      else if (source === "restore" && !/\/(settings|plugins|tasks)/.test(window.location.hash)) revealConversation(id, true);
+      else if (source === "restore" && !/\/(settings|plugins|tasks|vivi)/.test(window.location.hash)) revealConversation(id, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1705,6 +1717,7 @@ export function App(): JSX.Element {
   const onSidebarOpenSettings = useStable(() => navigate("/settings/general"));
   const onSidebarOpenMarket = useStable(() => navigate("/plugins"));
   const onSidebarOpenTasks = useStable(() => navigate(TASKS_PATH));
+  const onSidebarOpenVivi = useStable(() => navigate("/vivi"));
   const onSidebarSearch = useStable(() => setCommandOpen(true));
   const onSidePaneNewChat = useStable(() => void handleNewChat());
 
@@ -1827,7 +1840,7 @@ export function App(): JSX.Element {
           <Sidebar
             projects={projects}
             conversations={conversations}
-            activeId={openingId ?? activeId}
+            activeId={viviOpen ? null : openingId ?? activeId}
             running={running}
             waitingForUser={waitingForUser}
             failedInBackground={failedInBackground}
@@ -1847,6 +1860,8 @@ export function App(): JSX.Element {
             pluginsActive={pluginsOpen}
             onOpenTasks={onSidebarOpenTasks}
             tasksActive={tasksOpen}
+            onOpenVivi={onSidebarOpenVivi}
+            viviActive={viviOpen}
             onSearch={onSidebarSearch}
           />
           {narrow || sidebarCollapsed ? null : <ResizableHandle data-pane-edge="sidebar" />}
@@ -1857,7 +1872,13 @@ export function App(): JSX.Element {
             inert={paneMaximized || undefined}
             aria-hidden={paneMaximized || undefined}
           >
-            {pluginsOpen ? (
+            {viviOpen && narrow && !paneCollapsed ? (
+              <SidePane narrow parentId={VIVI_PANE_SCOPE} canSideChat={false} onNewChat={onSidePaneNewChat} onError={setError} />
+            ) : viviOpen ? (
+              <Suspense fallback={<main className="flex min-h-0 flex-1" />}>
+                <ViviPage projects={projects} sidebarCollapsed={sidebarCollapsed} onExpandSidebar={() => setSidebarCollapsed(false)} onManageModels={() => navigate("/settings/providers")} />
+              </Suspense>
+            ) : pluginsOpen ? (
               <main className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <PluginsPage
                   sidebarCollapsed={sidebarCollapsed}
@@ -2018,11 +2039,11 @@ export function App(): JSX.Element {
           {narrow || paneCollapsed || paneMaximized ? null : <ResizableHandle data-pane-edge="side-pane" />}
           {narrow ? null : (
             <SidePane
-              cwd={active?.project ? active.cwd : activeProject?.cwd}
-              project={active?.project}
-              workspace={activeProject}
-              parentId={activeId ?? undefined}
-              canSideChat={Boolean(activeId && hasTranscript)}
+              cwd={viviOpen ? undefined : active?.project ? active.cwd : activeProject?.cwd}
+              project={viviOpen ? undefined : active?.project}
+              workspace={viviOpen ? undefined : activeProject}
+              parentId={viviOpen ? VIVI_PANE_SCOPE : activeId ?? undefined}
+              canSideChat={!viviOpen && Boolean(activeId && hasTranscript)}
               onNewChat={onSidePaneNewChat}
               onError={setError}
             />

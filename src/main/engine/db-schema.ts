@@ -223,7 +223,79 @@ function v10(db: Db): void {
   `);
 }
 
+/** Vivi's task facts and durable Router inbox. Launches happen only after their rows commit. */
+function v11(db: Db): void {
+  db.exec(`
+    CREATE TABLE bot_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE bot_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE bot_tasks (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES bot_runs(id), status TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE INDEX bot_tasks_run ON bot_tasks(run_id,created_at);
+    CREATE TABLE bot_attempts (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES bot_tasks(id), generation INTEGER NOT NULL, status TEXT NOT NULL, started_at INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE INDEX bot_attempts_task ON bot_attempts(task_id,started_at);
+    CREATE TABLE bot_inputs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES bot_runs(id), status TEXT NOT NULL, created_at INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE INDEX bot_inputs_queue ON bot_inputs(status,created_at);
+    CREATE TABLE bot_questions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES bot_tasks(id), status TEXT NOT NULL, created_at INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE bot_requests (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES bot_runs(id));
+    CREATE TABLE bot_deliveries (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES bot_runs(id), data TEXT NOT NULL);
+  `);
+}
+
+function v12(db: Db): void {
+  db.exec(`
+    CREATE TABLE bot_conversations (
+      conversation_id TEXT PRIMARY KEY,
+      role            TEXT NOT NULL,
+      owner           TEXT NOT NULL,
+      creation_key    TEXT NOT NULL UNIQUE,
+      epoch           INTEGER NOT NULL DEFAULT 0,
+      paused          INTEGER NOT NULL DEFAULT 0,
+      created_at      INTEGER NOT NULL,
+      updated_at      INTEGER NOT NULL,
+      data            TEXT NOT NULL
+    );
+    CREATE INDEX bot_conversations_owner ON bot_conversations(owner, updated_at);
+    CREATE TABLE bot_v2_inputs (
+      id              TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES bot_conversations(conversation_id),
+      epoch           INTEGER NOT NULL,
+      source          TEXT NOT NULL,
+      text            TEXT NOT NULL,
+      status          TEXT NOT NULL,
+      created_at      INTEGER NOT NULL,
+      data            TEXT NOT NULL
+    );
+    CREATE INDEX bot_v2_inputs_queue ON bot_v2_inputs(status, created_at);
+    CREATE TABLE bot_attention (
+      id              TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES bot_conversations(conversation_id),
+      input_id        TEXT,
+      epoch           INTEGER NOT NULL,
+      status          TEXT NOT NULL,
+      created_at      INTEGER NOT NULL,
+      data            TEXT NOT NULL
+    );
+    CREATE TABLE bot_results (
+      id              TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES bot_conversations(conversation_id),
+      input_id        TEXT,
+      epoch           INTEGER NOT NULL,
+      status          TEXT NOT NULL,
+      created_at      INTEGER NOT NULL,
+      data            TEXT NOT NULL
+    );
+    CREATE TABLE bot_outbox (
+      id              TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES bot_conversations(conversation_id),
+      target_conversation_id TEXT NOT NULL,
+      status          TEXT NOT NULL,
+      created_at      INTEGER NOT NULL,
+      data            TEXT NOT NULL
+    );
+    CREATE INDEX bot_outbox_pending ON bot_outbox(status, created_at);
+  `);
+}
+
 /** The whole schema, in order. Its length is the version this build of the app knows. */
-export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10];
+export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

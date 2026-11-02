@@ -25,7 +25,7 @@ import { collectInlinePreviews, type InlinePreview } from "@shared/inline-media"
 import { skillCommandOf } from "@shared/skill-invocation";
 import { prettyProviderDetail } from "@shared/assistant-error";
 import { resolvePath } from "@/lib/workspace-path";
-import { useWorkspacePath } from "@/stores/session";
+import { useWorkspacePath } from "@/lib/workspace-path-context";
 import { AttachmentChip } from "./attachment-chip";
 import { SkillBadgeRow } from "./skill-badge";
 import { collectChangedFiles, TurnFileChips } from "./file-chips";

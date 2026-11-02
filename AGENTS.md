@@ -3828,13 +3828,21 @@ locale charmap        →   US-ASCII
   而 id 那时还不知道）。Main 的 16ms 合帧通常让回复先到，所以实践中罕见；真发生时表现是「终端空白/少了前几行」，
   不是乱码。彻底修需要客户端自带 id（要过 SSH Agent 的版本偏差），暂不做。
 
+### Vivi 持久会话的输入与恢复
+
+`BotInput` 的文字、图片、目标会话与本次项目选择共同决定请求幂等性，图片写入输入 JSON 并经 Host → `runBotSession` → SDK prompt 传递，只有图片的输入也有效。Router 的实时上下文只读取正在执行的输入，带上其 `requestId/project` 与已知会话；后续排队输入不能提前改变当前项目，未选项目时回到默认输出目录。创建 Worker 省略项目时沿用当前 Router 输入的选择。
+
+停止全部使旧 epoch 失效并暂停会话；新 requestId 的用户输入可以重新开放 Router，重复旧请求不能恢复，也不重放取消输入或自动恢复 Worker。Router 通过 `bot_send_message` 向已有 Worker 发送补充要求，暂停的 Worker 仍需先显式继续。工作会话详情在所有提前返回之前调用一次 `useBotSnapshot`，会话与结果共用它，不能在 JSX 条件中调用 Hook。
+
+验证见 `test/bot-runtime.test.ts`（停止/重启、图片持久化、输入项目隔离）、`test/bot-engine.test.ts`（真实 SDK 图片请求、Router 补充进入原 Worker）及 `docs/vivi-bot-implementation.md`。
+
 ## Vivi 桌面宠物
 
 `main/vivi/pet-window.ts` 管理两个独立透明窗口：模型窗口始终只有宠物大小，通知窗口只装文字。`surface` 的坐标属于通知窗口；模型 canvas 始终位于自己窗口的 `(0, 0)`。不要再为气泡扩缩模型窗口：原生 frame 更新和渲染进程 canvas 偏移是两次绘制，拖动开始、落地以及屏幕边缘换侧时会瞬间跳位。通知窗口跟随相同的全屏父窗口，移动期间隐藏，销毁时独立清理。
 
 `ViviSnapshot.moving` 包含拖动、抛掷与落地弹簧回弹。模型 renderer 在 `ViviDragPhysics` 不再 active 且连续稳定 120ms 后，通过 `vivi:motion-settled` 回传最后一个运动样本的 `at`；Main 核对来源窗口、最新时间戳及鼠标/拖动/飞行状态后才恢复文字。移动期间暂停通知的五秒寿命，新消息等停稳后再完整展示。重复的 actors/visible 快照不得触发布局或立即重绘。
 
-通知只由 `conversation_activity: completed` 触发读取最终回复；不轮询，不展示过程文字、工具状态、思考、等待、错误或点击闲话。`ViviCompletionState` 丢弃新运行开始前或较新完成事件之前发起的迟到读取，失败/中断/工具结尾不回退展示之前的过程文字。文字和点击目标来自同一条完成记录，点击始终打开其 `conversationId`。验证见 `test/vivi-pet-motion.test.ts`、`test/vivi-completion.test.ts`、`test/vivi-notification.test.ts`。
+通知只由 `conversation_activity: completed` 触发读取最终回复；不轮询，不展示过程文字、工具状态、思考、等待、错误或点击闲话。`ViviCompletionState` 丢弃新运行开始前或较新完成事件之前发起的迟到读取，失败/中断/工具结尾不回退展示之前的过程文字。文字和点击目标来自同一条完成记录，点击始终打开其 `conversationId`。Bot 的 Router/Worker 由 `openPetConversation` 分流到 Vivi 工作台，不经普通聊天的 `conversationsOpen`，不能改变普通聊天的 `activeId` 或绕开 BotRuntime；普通会话仍走原聊天导航。验证见 `test/bot-pet.test.ts`、`test/vivi-pet-motion.test.ts`、`test/vivi-completion.test.ts`、`test/vivi-notification.test.ts`。
 
 ## 测试
 

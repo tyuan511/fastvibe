@@ -14,7 +14,7 @@ import { useHighlightedCode } from "@/lib/highlight";
 import { splitMarkdownBlocks } from "@/lib/markdown-blocks";
 import { liveParseInterval, mayShowLive } from "@/lib/markdown-live";
 import { collapseBlankRuns } from "@/lib/blank-output";
-import { useSessionStore } from "@/stores/session";
+import { useWorkspacePath } from "@/lib/workspace-path-context";
 import { resolvePath } from "@/lib/workspace-path";
 import { stripMemoryCitation } from "@shared/memory-citation";
 import { markdownMedia } from "@/lib/markdown-media";
@@ -181,7 +181,7 @@ function urlTransform(url: string): string {
 
 /** A markdown image: a picture, or — when the path says so — a video or an HTML page. */
 function MarkdownImage({ src, alt }: { src?: string; alt?: string }): JSX.Element | null {
-  const cwd = useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId)?.cwd);
+  const cwd = useWorkspacePath();
   const preview = markdownMedia(src, alt, (path) => resolvePath(path, cwd));
   if (preview) return <InlineMediaItem preview={preview} />;
   if (!src) return null;
@@ -285,7 +285,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, headingIds }: { text: 
   // does parse is still deferred so the urgent UI (caret, scroll) stays ahead of it.
   const live = useLiveText(text);
   const deferred = useDeferredValue(live);
-  const cwd = useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId)?.cwd);
+  const cwd = useWorkspacePath();
   const validPaths = useValidatedMarkdownPaths(deferred, cwd);
   return (
     <MarkdownPathContext.Provider value={validPaths}>

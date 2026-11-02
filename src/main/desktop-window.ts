@@ -36,7 +36,7 @@ const DEFAULT_WINDOW_SIZE = { width: 1280, height: 840 } as const;
 const MIN_WINDOW_SIZE = { width: 920, height: 640 } as const;
 const WINDOW_STATE_SAVE_DELAY_MS = 250;
 
-export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => void, onFocusChanged?: () => void): void {
+export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => void, onFocusChanged?: () => void, initialHash?: string): void {
   const paths = getFastVibePaths();
   const restored = readWindowState(paths.windowStateFile);
   const workArea = screen.getPrimaryDisplay().workAreaSize;
@@ -147,9 +147,11 @@ export function createDesktopWindow(windows: Set<BrowserWindow>, onBlur?: () => 
   attachBrowserRenderer(window.webContents);
 
   if (process.env.ELECTRON_RENDERER_URL) {
-    window.loadURL(process.env.ELECTRON_RENDERER_URL);
+    const url = new URL(process.env.ELECTRON_RENDERER_URL);
+    if (initialHash) url.hash = initialHash;
+    window.loadURL(url.href);
   } else {
-    window.loadFile(join(__dirname, "../renderer/index.html"));
+    window.loadFile(join(__dirname, "../renderer/index.html"), initialHash ? { hash: initialHash } : undefined);
   }
 
   mainWindow = window;

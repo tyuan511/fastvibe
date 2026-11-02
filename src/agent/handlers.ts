@@ -6,6 +6,7 @@ import { VERSION as piVersion } from "@earendil-works/pi-coding-agent";
 import { Ipc } from "@shared/ipc";
 import type { AgentConfigSyncPayload } from "@shared/agent-config";
 import { broadcast } from "../main/ipc/broadcast";
+import { registerBotIpc } from "../main/ipc/bot-handlers";
 import { registerScheduleIpc } from "../main/ipc/schedule-handlers";
 import { handle, handlerChannels, type CallerContext } from "../main/ipc/registry";
 import type { PiProcessManager } from "../main/pi/process-manager";
@@ -14,7 +15,7 @@ import { searchProjectFiles } from "../main/engine/project-files";
 import { readGitStatus as readWorkspaceGitStatus, collectCommitMessageMaterial, readCommitStatusFiles } from "../main/workspace-git";
 import { createWorkspaceEntry, deleteWorkspaceEntry, readWorkspaceDir, renameWorkspaceEntry, writeWorkspaceTextFile } from "../main/engine/workspace-fs";
 import { existingFiles } from "../main/engine/path-exists";
-import { conversationCwd, readFileForPayload, resolveReadPath } from "../main/engine/file-chunk";
+import { readFileForPayload, resolveReadPath } from "../main/engine/file-chunk";
 import { officeCliInstall } from "../main/engine/office-cli";
 import { renderOfficeSnapshot } from "../main/engine/office-render";
 import { officeWatches } from "../main/engine/office-watch";
@@ -149,6 +150,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.engineSetFollowUp, (payload: { mode: "all" | "one-at-a-time"; conversationId?: string }) => engine.setFollowUpMode(payload.mode, payload.conversationId));
   handle(Ipc.enginePromptConversation, (payload: { id: string; message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => engine.promptConversation(payload.id, payload.message, payload.images));
   handle(Ipc.engineGetConversationMessages, (payload: { id: string }) => engine.getConversationMessages(payload.id));
+  registerBotIpc(engine);
   registerScheduleIpc(engine);
   handle(Ipc.conversationsList, () => engine.listWorkspace());
   handle(Ipc.conversationsCreate, (payload?: { project?: string; activate?: boolean; reuseEmpty?: boolean }) => engine.createConversation(payload?.project, {
@@ -189,7 +191,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
 
   handle(Ipc.workspacePreview, (payload: { path: string }) => readFilePreview(payload.path));
   const officePath = (payload: { path?: unknown; conversationId?: unknown }): string =>
-    resolveReadPath(payload?.path, conversationCwd(engine.listWorkspace(), payload?.conversationId));
+    resolveReadPath(payload?.path, engine.conversationCwd(payload?.conversationId));
   const watches = officeWatches({
     onState: (state) => broadcast(Ipc.officeWatchState, state),
   });
@@ -224,7 +226,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
     await deleteWorkspaceEntry(payload);
   });
   handle(Ipc.workspaceReadFile, (payload: { path?: unknown; conversationId?: unknown; offset?: unknown; length?: unknown }) =>
-    readFileForPayload(payload, () => conversationCwd(engine.listWorkspace(), payload?.conversationId)),
+    readFileForPayload(payload, () => engine.conversationCwd(payload?.conversationId)),
   );
   handle(Ipc.workspaceGitStatus, (payload: { cwd: string }) => readGitStatus(payload.cwd));
   handle(Ipc.workspaceGitBranches, (payload: { cwd: string }) => gitBranches(payload.cwd));
@@ -273,7 +275,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
     platform: process.platform,
   }));
   handle(Ipc.workspaceFileIcons, () => ({ files: {}, folders: {} }));
-  handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => collectUsageStats(paths, payload?.range ?? "30d", engine.listWorkspace().conversations));
+  handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => collectUsageStats(paths, payload?.range ?? "30d", engine.usageConversations()));
 
   handle(Ipc.providersList, () => engine.listProviders());
   handle(Ipc.providersReorder, (payload: { ids: string[] }) => engine.reorderProviders(payload.ids));

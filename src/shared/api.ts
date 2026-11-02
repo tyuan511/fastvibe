@@ -1,4 +1,5 @@
 import { Ipc } from "@shared/ipc";
+import type { BotApi, BotActivity, BotChanged, BotReportRequest, BotSubmitRequest, BotConversationMeta, BotResult, BotAttention, WorkSnapshot } from "./bot";
 import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
 import type { ViviDragMotion, ViviSettings, ViviSnapshot, ViviState } from "./vivi";
 import type { BrowserLibrary, BrowserClearData, BrowserDownloadAction, BrowserShortcut } from "./browser-workspace";
@@ -425,6 +426,20 @@ export function createFastVibeApi(t: ApiTransport) {
       onChanged: (listener: (snapshot: WorkspaceSnapshot) => void): (() => void) =>
         t.subscribe(Ipc.workspaceChanged, listener),
     },
+    bot: {
+      getActivity: (): Promise<BotActivity> => t.invoke(Ipc.botGetActivity),
+      getWorkSnapshot: (): Promise<WorkSnapshot> => t.invoke(Ipc.botGetWorkSnapshot),
+      submit: (input: BotSubmitRequest): Promise<WorkSnapshot> => t.invoke(Ipc.botSubmit, input),
+      createWork: (input: { requestId: string; title: string; text: string; project?: string }): Promise<BotConversationMeta> => t.invoke(Ipc.botCreateWork, input),
+      report: (input: BotReportRequest): Promise<BotResult> => t.invoke(Ipc.botReport, input),
+      ask: (input: { conversationId: string; requestId?: string; question: string }): Promise<BotAttention> => t.invoke(Ipc.botAsk, input),
+      answer: (input: { attentionId: string; answer: string }): Promise<WorkSnapshot> => t.invoke(Ipc.botAnswer, input),
+      stopConversation: (input: { conversationId: string; callerConversationId?: string }): Promise<WorkSnapshot> => t.invoke(Ipc.botStopConversation, input),
+      continueConversation: (input: { conversationId: string }): Promise<WorkSnapshot> => t.invoke(Ipc.botContinueConversation, input),
+      stopAll: (): Promise<WorkSnapshot> => t.invoke(Ipc.botStopAll),
+      onChanged: (listener: (event: BotChanged) => void): (() => void) => t.subscribe(Ipc.botChanged, listener),
+      onNavigate: (listener: (target: { conversationId?: string; runId?: string }) => void): (() => void) => t.subscribe(Ipc.botNavigate, listener),
+    } satisfies BotApi,
     schedules: {
       list: (): Promise<ScheduledTaskSnapshot> => t.invoke(Ipc.scheduleList),
       create: (draft: ScheduledTaskDraft): Promise<ScheduledTask> => t.invoke(Ipc.scheduleCreate, draft),
@@ -732,7 +747,7 @@ export function createFastVibeApi(t: ApiTransport) {
       previewMood: (mood: string): Promise<void> => t.invoke(Ipc.viviPreviewMood, { mood }),
       dragStart: (): Promise<void> => t.invoke(Ipc.viviDragStart),
       dragEnd: (): Promise<void> => t.invoke(Ipc.viviDragEnd),
-      openConversation: (conversationId?: string): Promise<void> => t.invoke(Ipc.viviOpenConversation, { conversationId }),
+      openConversation: (conversationId?: string, runId?: string): Promise<void> => t.invoke(Ipc.viviOpenConversation, { conversationId, runId }),
       contextMenu: (): Promise<void> => t.invoke(Ipc.viviContextMenu),
     },
     /**

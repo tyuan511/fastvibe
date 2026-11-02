@@ -217,8 +217,7 @@ function handlePointerUp(event: PointerEvent): void {
   const isDouble = lastClick?.actorId === current.actorId && now - lastClick.at < 340;
   lastClick = isDouble ? undefined : { actorId: current.actorId, at: now };
   if (isDouble) {
-    const actor = latestSnapshot.actors.find((candidate) => candidate.id === current.actorId);
-    safeCall(() => api.openConversation(actor?.conversationId));
+    safeCall(() => api.openConversation());
     return;
   }
   scene?.poke(current.actorId);

@@ -41,6 +41,10 @@ import { CollapsiblePanel } from "@/components/layout/collapsible-panel";
 import { setSidebarCollapsed, useIsNarrowViewport, useSidebarCollapsed } from "@/lib/sidebar-visibility";
 import { SidebarAccount } from "@/components/layout/sidebar-account";
 import { SidebarUpdateButton } from "@/components/layout/sidebar-update-button";
+import { Button } from "@/components/ui/button";
+import { RunningMark } from "@/components/running-mark";
+import { useBotActivity } from "@/components/bot/use-bot-activity";
+import { FastVibeMascot } from "@/components/fastvibe-mascot";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
 import { readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
@@ -98,6 +102,8 @@ export const Sidebar = memo(function Sidebar({
   pluginsActive,
   onOpenTasks,
   tasksActive,
+  onOpenVivi,
+  viviActive,
   onSearch,
 }: {
   projects: Project[];
@@ -130,9 +136,12 @@ export const Sidebar = memo(function Sidebar({
   onOpenTasks: () => void;
   /** That page is the one on screen. */
   tasksActive: boolean;
+  onOpenVivi: () => void;
+  viviActive: boolean;
   onSearch: () => void;
 }): JSX.Element {
   const { t } = useTranslation("app");
+  const botActivity = useBotActivity();
   const [width] = useState(readSidebarWidth);
   const sidebarCollapsed = useSidebarCollapsed();
   const narrow = useIsNarrowViewport();
@@ -592,6 +601,19 @@ export const Sidebar = memo(function Sidebar({
               <HugeiconsIcon strokeWidth={2} icon={MessageSquarePlusIcon} className="size-3.5 text-muted-foreground" />
               {t("workspace.newChat")}
             </button>
+            <Button
+              variant="ghost"
+              aria-current={viviActive ? "page" : undefined}
+              className={cn("h-8 pointer-coarse:h-10 w-full justify-start gap-2.5 px-2 text-sm font-normal hover:bg-sidebar-accent/50", viviActive && "bg-sidebar-accent font-medium")}
+              onClick={() => { onOpenVivi(); dismissDrawer(); }}
+            >
+              <FastVibeMascot size="size-3.5" motion={false} />
+              {t("sidebar.vivi")}
+              <span className="ml-auto flex items-center gap-1.5">
+                {botActivity?.running ? <RunningMark className="size-3.5" /> : null}
+                {botActivity?.waiting ? <span className="text-xs text-warning">{t("sidebar.waitingAction")}</span> : null}
+              </span>
+            </Button>
             <button
               type="button"
               aria-current={pluginsActive ? "page" : undefined}
