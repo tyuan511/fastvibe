@@ -117,6 +117,7 @@ public struct NativeTranscriptView: View {
                     initialScrollToLatest: initialScrollToLatest,
                     initialScrollTargetID: initialScrollTargetID,
                     onLoadHistory: loadHistory,
+                    onScrollToLatest: { scrollToLatest += 1 },
                     onContinue: { onSend("继续") }
                 )
                 .id(snapshot?.conversationId ?? "new-conversation")
@@ -337,6 +338,7 @@ private struct NativeTranscriptScroll: View {
     let initialScrollToLatest: Bool
     let initialScrollTargetID: String?
     let onLoadHistory: () -> Void
+    let onScrollToLatest: () -> Void
     let onContinue: () -> Void
 
     @Environment(\.colorScheme) private var scheme
@@ -353,7 +355,8 @@ private struct NativeTranscriptScroll: View {
     var body: some View {
         GeometryReader { viewport in
             ScrollViewReader { proxy in
-                ScrollView {
+                ZStack(alignment: .bottom) {
+                    ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         if hasHistory && !loadingHistory {
                             HStack {
@@ -449,13 +452,31 @@ private struct NativeTranscriptScroll: View {
                     if reduceMotion { proxy.scrollTo(bottomID, anchor: .bottom) }
                     else { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) } }
                 }
+                .opacity(!needsInitialPosition || messages.isEmpty || didInitialScroll ? 1 : 0)
                 .onChange(of: viewport.size.height) { _, _ in
                     guard followsTail, !loadingHistory else { return }
                     proxy.scrollTo(bottomID, anchor: .bottom)
                 }
+                if didInitialScroll && !followsTail && !loadingHistory && !messages.isEmpty {
+                    Button(action: onScrollToLatest) {
+                        MobileGlyph(systemName: "arrow.down.to.line")
+                            .frame(width: 20, height: 20)
+                            .foregroundStyle(palette.text)
+                            .frame(width: 44, height: 44)
+                            .background { NativeTranscriptControlBackground(radius: 22) }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, bottomInset + 12)
+                    .accessibilityLabel("回到最新消息")
+                    .transition(.scale.combined(with: .opacity))
+                    .zIndex(1)
+                }
             }
         }
     }
+    }
+
+    private var needsInitialPosition: Bool { initialScrollToLatest || initialScrollTargetID != nil }
 
     private var emptyState: some View {
         VStack(spacing: 10) {

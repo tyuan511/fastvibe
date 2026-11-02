@@ -309,6 +309,8 @@ private fun FastVibeApp(callback: OAuthCallback?, notificationConversationId: St
                     onDismissDetail = { detailId = null },
                     onError = { showError = it },
                     onCheckUpdates = { updateController.check(true) },
+                    updateChannel = updateController.channel,
+                    onUpdateChannel = updateController::selectChannel,
                     promptPresented = pendingPrompt != null,
                 )
             }
@@ -364,6 +366,8 @@ internal fun ProductShell(
     onDismissDetail: () -> Unit,
     onError: (String) -> Unit,
     onCheckUpdates: () -> Unit,
+    updateChannel: UpdateChannel = UpdateChannel.GITHUB,
+    onUpdateChannel: (UpdateChannel) -> Unit = {},
     promptPresented: Boolean = false,
 ) {
     var conversationFilter by remember(controller.selectedDeviceId()) { mutableStateOf(ConversationCatalogFilter()) }
@@ -401,7 +405,14 @@ internal fun ProductShell(
                                 },
                             )
                             AppPage.CONVERSATIONS -> ConversationCatalogScreen(controller, onOpen, onCreate, filter = conversationFilter)
-                            AppPage.SETTINGS -> MobileSettingsScreen(controller, themeKey, onTheme, onCheckUpdates)
+                            AppPage.SETTINGS -> MobileSettingsScreen(
+                                controller,
+                                themeKey,
+                                onTheme,
+                                onCheckUpdates,
+                                updateChannel,
+                                onUpdateChannel,
+                            )
                         }
                     }
                 }
@@ -495,6 +506,7 @@ private fun ThreadScreen(
     val snapshot = controller.state.snapshot
     val messages = snapshot?.messages.orEmpty()
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val scrollScope = rememberCoroutineScope()
     val nearBottom = !listState.canScrollForward
     var firstLoaded by remember(id) { mutableStateOf(false) }
     LaunchedEffect(id, snapshot?.conversationId, messages.isNotEmpty()) {
@@ -513,7 +525,9 @@ private fun ThreadScreen(
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().glassPageSource(),
+            modifier = Modifier.fillMaxSize()
+                .alpha(if (firstLoaded || messages.isEmpty()) 1f else 0f)
+                .glassPageSource(),
             contentPadding = PaddingValues(start = 16.dp, top = contentTop + if (controller.state.loadingHistory) 52.dp else 4.dp, end = 16.dp, bottom = composerHeight + 46.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -545,6 +559,17 @@ private fun ThreadScreen(
                 ) { output -> controller.readFile(output) { uri -> shareUri(context, uri) } }
             }
             snapshot?.turnEvents?.forEachIndexed { index, event -> item(key = "event:$index") { Text(event, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+        }
+        if (firstLoaded && messages.isNotEmpty() && !nearBottom) {
+            Box(
+                Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 12.dp),
+            ) {
+                GlassIconButton(R.drawable.fv_chevron_down, "滚动到底部", onClick = {
+                    scrollScope.launch {
+                        listState.animateScrollToItem(messages.lastIndex + if (snapshot?.historyBeforeEntryId != null) 1 else 0)
+                    }
+                })
+            }
         }
         if (controller.state.loadingHistory && snapshot != null) {
             Box(Modifier.align(Alignment.TopCenter).padding(top = contentTop + 4.dp)) {

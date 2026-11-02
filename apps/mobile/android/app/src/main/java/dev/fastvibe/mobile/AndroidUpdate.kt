@@ -36,6 +36,26 @@ internal data class UpdateState(
     val pageUrl: String? = null,
 )
 
+internal enum class UpdateChannel(
+    val key: String,
+    val label: String,
+    private val proxyPrefix: String?,
+) {
+    GITHUB("github", "GitHub 官方", null),
+    GHFAST("ghfast", "ghfast.top", "https://ghfast.top/"),
+    GH_PROXY("gh-proxy", "gh-proxy.com", "https://gh-proxy.com/"),
+
+    ;
+
+    fun url(path: String): String = "${proxyPrefix ?: ""}https://github.com/$path"
+
+    companion object {
+        fun fromKey(key: String?): UpdateChannel = entries.firstOrNull { it.key == key } ?: GITHUB
+    }
+}
+
+private const val UPDATE_REPOSITORY = "tyuan511/fastvibe"
+
 /**
  * Android's native updater for the public FastVibe arm64 release.
  *
@@ -59,6 +79,9 @@ internal class AndroidUpdateController(context: Context) {
     @Volatile private var activeConnection: HttpURLConnection? = null
     private var release: ReleaseCandidate? = null
 
+    var channel by mutableStateOf(UpdateChannel.fromKey(preferences.getString(KEY_CHANNEL, null)))
+        private set
+
     var state by mutableStateOf(UpdateState())
         private set
 
@@ -66,7 +89,40 @@ internal class AndroidUpdateController(context: Context) {
         activeJob = executor.submit { restoreDownloadedCache() }
     }
 
-    /** Start a check. force=true always asks GitHub; force=false uses the short-lived result cache. */
+    /** Select a source, discard source-specific cache, and immediately check it. */
+    fun selectChannel(next: UpdateChannel) {
+        synchronized(lock) {
+            if (closed || channel == next) return
+            generation += 1
+            activeJob?.cancel(true)
+            activeConnection?.disconnect()
+            activeConnection = null
+            release = null
+            channel = next
+        }
+        preferences.edit()
+            .putString(KEY_CHANNEL, next.key)
+            .remove(KEY_CHECKED_AT)
+            .remove(KEY_CHECK_HAS_RELEASE)
+            .remove(KEY_CHECK_VERSION)
+            .remove(KEY_CHECK_URL)
+            .remove(KEY_CHECK_BYTES)
+            .remove(KEY_BACKOFF_UNTIL)
+            .remove(KEY_DOWNLOAD_VERSION)
+            .remove(KEY_DOWNLOAD_NAME)
+            .remove(KEY_DOWNLOAD_URL)
+            .remove(KEY_DOWNLOAD_BYTES)
+            .apply()
+        updateDirectory.listFiles()?.forEach { file ->
+            if (file.isFile && (file.extension.equals("apk", ignoreCase = true) || file.name.endsWith(".part"))) {
+                file.delete()
+            }
+        }
+        postStateAny { UpdateState() }
+        check(true)
+    }
+
+    /** Start a check. force=true always asks the selected source; force=false uses the short-lived result cache. */
     fun check(force: Boolean = true) {
         val token: Long
         synchronized(lock) {
@@ -326,14 +382,15 @@ internal class AndroidUpdateController(context: Context) {
 
     private fun findReleaseAndRemember(token: Long): ReleaseCandidate? {
         if (!isCurrent(token)) return null
-        val refs = requestText(REFS_URL, REQUEST_TIMEOUT_MS)
+        val selectedChannel = channel
+        val refs = requestText(refsUrl(selectedChannel), REQUEST_TIMEOUT_MS)
         val newerVersions = versionsFromAdvertisement(refs)
             .filter { compareVersions(it, CURRENT_VERSION) > 0 }
         var found: ReleaseCandidate? = null
         for (version in newerVersions.take(MAX_TAGS_TRIED)) {
             if (!isCurrent(token)) return null
             val name = apkAssetName(version)
-            val url = apkDownloadUrl(version, name)
+            val url = apkDownloadUrl(version, name, selectedChannel)
             val head = head(url, REQUEST_TIMEOUT_MS)
             if (head.status == HttpURLConnection.HTTP_NOT_FOUND) continue
             if (head.status !in 200..299) throw UpdateHttpException(head.status, url)
@@ -341,7 +398,7 @@ internal class AndroidUpdateController(context: Context) {
                 version = version,
                 apkName = name,
                 apkUrl = url,
-                pageUrl = releasePageUrl(version),
+                pageUrl = releasePageUrl(version, selectedChannel),
                 expectedBytes = head.contentLength,
             )
             break
@@ -353,7 +410,7 @@ internal class AndroidUpdateController(context: Context) {
     private fun cachedCheck(): ReleaseCandidate? {
         val now = System.currentTimeMillis()
         val backoffUntil = preferences.getLong(KEY_BACKOFF_UNTIL, 0L)
-        if (backoffUntil > now) throw UpdateHttpException(429, REFS_URL)
+        if (backoffUntil > now) throw UpdateHttpException(429, refsUrl(channel))
         val checkedAt = preferences.getLong(KEY_CHECKED_AT, 0L)
         if (checkedAt <= 0L || now - checkedAt >= CHECK_FRESH_MS) {
             return findReleaseAndRemember(currentGeneration())
@@ -367,14 +424,14 @@ internal class AndroidUpdateController(context: Context) {
         parseVersion(version) ?: return null
         if (compareVersions(version, CURRENT_VERSION) <= 0) return null
         val name = apkAssetName(version)
-        val url = apkDownloadUrl(version, name)
+        val url = apkDownloadUrl(version, name, channel)
         val storedUrl = preferences.getString(KEY_CHECK_URL, null)
         if (storedUrl != null && storedUrl != url) return null
         return ReleaseCandidate(
             version = version,
             apkName = name,
             apkUrl = url,
-            pageUrl = releasePageUrl(version),
+            pageUrl = releasePageUrl(version, channel),
             expectedBytes = preferences.getLong(KEY_CHECK_BYTES, 0L).coerceAtLeast(0L),
         )
     }
@@ -383,7 +440,7 @@ internal class AndroidUpdateController(context: Context) {
         val version = preferences.getString(KEY_DOWNLOAD_VERSION, null) ?: return null
         if (parseVersion(version) == null || compareVersions(version, CURRENT_VERSION) <= 0) return null
         val name = apkAssetName(version)
-        val url = apkDownloadUrl(version, name)
+        val url = apkDownloadUrl(version, name, channel)
         val storedName = preferences.getString(KEY_DOWNLOAD_NAME, null)
         val storedUrl = preferences.getString(KEY_DOWNLOAD_URL, null)
         if (storedName != null && storedName != name) return null
@@ -392,7 +449,7 @@ internal class AndroidUpdateController(context: Context) {
             version = version,
             apkName = name,
             apkUrl = url,
-            pageUrl = releasePageUrl(version),
+            pageUrl = releasePageUrl(version, channel),
             expectedBytes = preferences.getLong(KEY_DOWNLOAD_BYTES, 0L).coerceAtLeast(0L),
         )
     }
@@ -753,10 +810,10 @@ internal class AndroidUpdateController(context: Context) {
     private class UpdateHttpException(val status: Int, url: String) : IOException("HTTP $status from $url")
 
     private companion object {
-        private const val REPOSITORY = "tyuan511/fastvibe"
         private const val HTTPS_SCHEME = "https"
         private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
         private const val PREFERENCES_NAME = "fastvibe.android.update.v1"
+        private const val KEY_CHANNEL = "channel"
         private const val KEY_CHECKED_AT = "checkedAt"
         private const val KEY_CHECK_HAS_RELEASE = "checkHasRelease"
         private const val KEY_CHECK_VERSION = "checkVersion"
@@ -767,7 +824,6 @@ internal class AndroidUpdateController(context: Context) {
         private const val KEY_DOWNLOAD_NAME = "downloadName"
         private const val KEY_DOWNLOAD_URL = "downloadUrl"
         private const val KEY_DOWNLOAD_BYTES = "downloadBytes"
-        private const val REFS_URL = "https://github.com/$REPOSITORY.git/info/refs?service=git-upload-pack"
         private const val CHECK_FRESH_MS = 10 * 60 * 1000L
         private const val BACKOFF_MS = 30 * 60 * 1000L
         private const val REQUEST_TIMEOUT_MS = 15_000L
@@ -834,11 +890,17 @@ internal fun versionsFromAdvertisement(body: String): List<String> {
 
 internal fun apkAssetName(version: String): String = "FastVibe-app-v$version-arm64-v8a.apk"
 
-internal fun apkDownloadUrl(version: String, name: String = apkAssetName(version)): String =
-    "https://github.com/tyuan511/fastvibe/releases/download/app-v$version/$name"
+internal fun refsUrl(channel: UpdateChannel = UpdateChannel.GITHUB): String =
+    channel.url("$UPDATE_REPOSITORY.git/info/refs?service=git-upload-pack")
 
-internal fun releasePageUrl(version: String): String =
-    "https://github.com/tyuan511/fastvibe/releases/tag/app-v$version"
+internal fun apkDownloadUrl(
+    version: String,
+    name: String = apkAssetName(version),
+    channel: UpdateChannel = UpdateChannel.GITHUB,
+): String = channel.url("$UPDATE_REPOSITORY/releases/download/app-v$version/$name")
+
+internal fun releasePageUrl(version: String, channel: UpdateChannel = UpdateChannel.GITHUB): String =
+    channel.url("$UPDATE_REPOSITORY/releases/tag/app-v$version")
 
 private fun PackageInfo.versionCodeForUpdate(): Long =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) longVersionCode else versionCode.toLong()
