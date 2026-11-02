@@ -17,7 +17,7 @@ fn string_result(value: serde_json::Value) -> *mut c_char {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn fv_mobile_core_version() -> *mut c_char {
-    CString::new("fastvibe-mobile-core/0.1.0")
+    CString::new(concat!("fastvibe-mobile-core/", env!("CARGO_PKG_VERSION")))
         .unwrap()
         .into_raw()
 }

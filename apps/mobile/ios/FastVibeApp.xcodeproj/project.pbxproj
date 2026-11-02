@@ -10,6 +10,7 @@
 		A10000000000000000000001 /* FastVibeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* FastVibeApp.swift */; };
 		A10000000000000000000003 /* FastVibeUI in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000070 /* FastVibeUI */; };
 		A10000000000000000000002 /* FastVibeMobileCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* FastVibeMobileCore.xcframework */; }; 
+		A10000000000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -17,6 +18,7 @@
 		A10000000000000000000011 /* FastVibeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../FastVibeApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000012 /* FastVibeMobileCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = FastVibeMobileCore.xcframework; path = ../ios/.native-build/FastVibeMobileCore.xcframework; sourceTree = "<group>"; };
 		A10000000000000000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A10000000000000000000014 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -46,6 +48,7 @@
 			children = (
 				A10000000000000000000011 /* FastVibeApp.swift */,
 				A10000000000000000000013 /* Info.plist */,
+				A10000000000000000000014 /* Assets.xcassets */,
 			);
 			path = FastVibeApp;
 			sourceTree = "<group>";
@@ -104,7 +107,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		A10000000000000000000042 /* Resources */ = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000042 /* Resources */ = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ( A10000000000000000000004 /* Assets.xcassets in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXBuildPhase section */
@@ -115,9 +118,9 @@
 		A10000000000000000000052 /* Debug */ = { isa = XCBuildConfiguration; buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; IPHONEOS_DEPLOYMENT_TARGET = 18.0; SDKROOT = iphoneos; SWIFT_VERSION = 6.0; }; name = Debug; };
 		A10000000000000000000053 /* Release */ = { isa = XCBuildConfiguration; buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; IPHONEOS_DEPLOYMENT_TARGET = 18.0; SDKROOT = iphoneos; SWIFT_VERSION = 6.0; }; name = Release; };
 		A10000000000000000000061 /* Debug */ = { isa = XCBuildConfiguration; buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 512;
 				DEVELOPMENT_TEAM = "";
 				INFOPLIST_FILE = FastVibeApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -129,9 +132,9 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			}; name = Debug; };
 		A10000000000000000000062 /* Release */ = { isa = XCBuildConfiguration; buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGNING_ALLOWED = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 512;
 				INFOPLIST_FILE = FastVibeApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = ( "$(inherited)", "@executable_path/Frameworks" );

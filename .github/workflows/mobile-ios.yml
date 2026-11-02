@@ -3,20 +3,80 @@ name: Native mobile iOS
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "app-v* tag to build (empty: the selected branch)"
+        type: string
+        required: false
+        default: ""
+      upload:
+        description: "Upload to TestFlight (off: export a signed IPA only)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: mobile-ios-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ inputs.tag || '' }}
+      TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
     steps:
+      - name: Validate release tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$RELEASE_TAG" && ! "$RELEASE_TAG" =~ ^app-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf '%s\n' '::error::tag must be an app-vX.Y.Z release tag.'
+            exit 1
+          fi
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - name: Verify release version and signing configuration
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [[ -z "${!name}" ]]; then
+              printf '::error::Missing signing configuration: %s.\n' "$name"
+              exit 1
+            fi
+          done
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' apps/mobile/ios/FastVibeApp/Info.plist)
+          if [[ -n "$RELEASE_TAG" && "$RELEASE_TAG" != "app-v$version" ]]; then
+            printf '%s\n' '::error::Release tag does not match the native iOS version.'
+            exit 1
+          fi
+          # Higher than the native 512 baseline and the previous run_number.attempt
+          # series; keep each CFBundleVersion component within Apple's four-digit limit.
+          build_number="$((1000 + GITHUB_RUN_NUMBER)).${GITHUB_RUN_ATTEMPT}"
+          if (( 1000 + GITHUB_RUN_NUMBER > 9999 || GITHUB_RUN_ATTEMPT > 9999 )); then
+            printf '%s\n' '::error::Increase the build-number scheme before releasing.'
+            exit 1
+          fi
+          printf 'FASTVIBE_IOS_BUILD_NUMBER=%s\n' "$build_number" >> "$GITHUB_ENV"
       - name: Check Apple toolchain
         run: |
           xcodebuild -version
           swift --version
+          sdk_version=$(xcrun --sdk iphoneos --show-sdk-version)
+          if (( ${sdk_version%%.*} < 26 )); then
+            printf '%s\n' '::error::The native UI requires an iOS 26 or newer SDK.'
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
@@ -53,3 +113,119 @@ jobs:
           path: ${{ runner.temp }}/FastVibe-iOS-simulator.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Prepare distribution signing
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
+          if [[ -n "$APPLE_CERT_P12" ]]; then
+            printf '%s' "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/distribution.p12"
+            # The OU is public certificate metadata. Do not print it or the P12 contents.
+            if ! openssl pkcs12 -in "$RUNNER_TEMP/distribution.p12" -clcerts -nokeys \
+              -passin env:APPLE_CERT_PASSWORD -out "$RUNNER_TEMP/distribution.pem" 2>/dev/null; then
+              # Older exported P12 files can use RC2, disabled by default in OpenSSL 3.
+              openssl pkcs12 -legacy -in "$RUNNER_TEMP/distribution.p12" -clcerts -nokeys \
+                -passin env:APPLE_CERT_PASSWORD -out "$RUNNER_TEMP/distribution.pem" 2>/dev/null
+            fi
+            if [[ -z "$TEAM_ID" ]]; then
+              TEAM_ID=$(openssl x509 -in "$RUNNER_TEMP/distribution.pem" -noout -subject -nameopt sep_multiline \
+                | sed -n 's/^[[:space:]]*OU[[:space:]]*=[[:space:]]*//p')
+            fi
+            keychain="$RUNNER_TEMP/fastvibe-signing.keychain-db"
+            keychain_password=$(openssl rand -hex 32)
+            security create-keychain -p "$keychain_password" "$keychain"
+            security set-keychain-settings -lut 21600 "$keychain"
+            security unlock-keychain -p "$keychain_password" "$keychain"
+            security import "$RUNNER_TEMP/distribution.p12" -k "$keychain" \
+              -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security >/dev/null
+            security set-key-partition-list -S apple-tool:,apple:,codesign: \
+              -s -k "$keychain_password" "$keychain" >/dev/null
+            security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          fi
+          if [[ ! "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            printf '%s\n' '::error::Set vars.APPLE_TEAM_ID or provide APPLE_CERT_P12 with a valid team OU.'
+            exit 1
+          fi
+          printf 'TEAM_ID=%s\n' "$TEAM_ID" >> "$GITHUB_ENV"
+
+      # Sign at export so TestFlight-only teams do not need a development profile
+      # or registered devices.
+      - name: Archive native iOS app
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $FASTVIBE_IOS_BUILD_NUMBER" \
+            apps/mobile/ios/FastVibeApp/Info.plist
+          xcodebuild archive \
+            -project apps/mobile/ios/FastVibeApp.xcodeproj -scheme FastVibe \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/fastvibe-ios-device" \
+            -archivePath "$RUNNER_TEMP/FastVibe.xcarchive" \
+            CURRENT_PROJECT_VERSION="$FASTVIBE_IOS_BUILD_NUMBER" \
+            DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic CODE_SIGNING_ALLOWED=NO
+
+      - name: Export signed IPA
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, plistlib
+          options = {
+              "method": "app-store-connect",
+              "teamID": os.environ["TEAM_ID"],
+              "signingStyle": "automatic",
+              "destination": "export",
+              "uploadSymbols": True,
+              "manageAppVersionAndBuildNumber": False,
+          }
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "ExportOptions.plist"), "wb") as output:
+              plistlib.dump(options, output)
+          PY
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/FastVibe.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/fastvibe-ios-export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8" \
+            -authenticationKeyID "$APPLE_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APPLE_API_ISSUER"
+          test -f "$RUNNER_TEMP/fastvibe-ios-export/FastVibe.ipa"
+
+      - name: Upload signed IPA artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastVibe-iOS-${{ env.RELEASE_TAG || github.sha }}-${{ env.FASTVIBE_IOS_BUILD_NUMBER }}
+          path: ${{ runner.temp }}/fastvibe-ios-export/*.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload to TestFlight
+        if: github.event_name == 'workflow_dispatch' && inputs.upload
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          API_PRIVATE_KEYS_DIR: ${{ runner.temp }}/private_keys
+        run: |
+          set -euo pipefail
+          xcrun altool --upload-app --type ios \
+            --file "$RUNNER_TEMP/fastvibe-ios-export/FastVibe.ipa" \
+            --apiKey "$APPLE_API_KEY_ID" --apiIssuer "$APPLE_API_ISSUER"
+
+      - name: Remove signing material
+        if: always() && github.event_name == 'workflow_dispatch'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/fastvibe-signing.keychain-db" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/private_keys"
+          rm -f "$RUNNER_TEMP/distribution.p12" "$RUNNER_TEMP/distribution.pem" "$RUNNER_TEMP/ExportOptions.plist"
