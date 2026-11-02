@@ -21,7 +21,8 @@ const dependencies: Record<string, unknown> = {
   "../engine/transcript-window": { transcriptWindow, transcriptEntryEnd },
   "../engine/tool-images": { externalizeToolResultMessages: <T>(messages: T[]) => messages },
 };
-runInNewContext(compiled, { module, exports: module.exports, Date, Map, require: (name: string) => {
+// Read Date when the projection runs, so later test timer mocks reach the VM too.
+runInNewContext(compiled, { module, exports: module.exports, get Date() { return Date; }, Map, require: (name: string) => {
   assert.ok(name in dependencies, name); return dependencies[name];
 } });
 const { projectSessionMessages: project } = module.exports as typeof import("../src/main/pi/process-manager-transcript.ts");
@@ -73,6 +74,7 @@ test("paged projection reconstructs the full transcript including tools, images,
   for (const [running, compacting] of [[false, false], [true, false], [true, true]]) {
     const deps = setup(branch, running, compacting);
     const full = project(deps).messages;
+    if (compacting) assert.equal(full.at(-1)?.createdAt, Date.parse(stamp), "the VM projection must share the mocked clock");
     const paged = allPages(deps, 4);
     assert.deepEqual(paged.messages, full);
     assert.ok(paged.latest.messages.length < full.length / 3);
