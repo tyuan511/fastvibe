@@ -64,7 +64,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      # v4 no longer asks sdkmanager for the retired `tools` package (Google stopped serving
+      # it, and that single call failed the whole action); `packages` names what is still real.
+      - uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: platform-tools
 
       - name: Install Android SDK components
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"

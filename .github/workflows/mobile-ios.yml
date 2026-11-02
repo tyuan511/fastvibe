@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: macos-14
+    # `macos-14` ships Swift 5.10 and the package asks for tools 6.0, so `swift test` failed
+    # before it compiled a line. `macos-15` carries Xcode 16.x and a Swift 6 toolchain.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run: swift test --package-path apps/mobile/ios

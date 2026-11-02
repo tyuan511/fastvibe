@@ -27,7 +27,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "17" }
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: platform-tools
+        with:
+          packages: platform-tools
       - name: Install Android SDK components
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
       - uses: gradle/actions/setup-gradle@v4
@@ -37,7 +41,7 @@ jobs:
       - working-directory: apps/mobile/android
         run: ./gradlew :app:testDebugUnitTest :native:testDebugUnitTest :app:assembleDebug
   ios:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run: swift test --package-path apps/mobile/ios
