@@ -682,7 +682,7 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
   }
 }
 
-/* Live-task mark only; request loading keeps the ordinary Spinner. */
+/* Only the reply's Working row uses this grid; other run/loading marks are circular. */
 .running-grid > circle {
   animation: running-grid-pulse 1.2s linear infinite;
 }

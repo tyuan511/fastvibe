@@ -5,7 +5,7 @@ import { ArrowDown01Icon } from "@hugeicons/core-free-icons";
 import { subagentStatusText } from "@/lib/subagent-status";
 import { findSubagentForThread, subagentToolRuns } from "@shared/subagent-state";
 import { AgentAvatar } from "@/components/agent-avatar";
-import { RunningMark } from "@/components/running-mark";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import type { ToolCallBlock } from "@shared/types";
 import { useSessionStore, useWorkspacePath } from "@/stores/session";
@@ -222,7 +222,7 @@ function CodemodeCallRow({ call }: { call: CodemodeCall }): JSX.Element {
   const { t } = useTranslation("chat");
   const status =
     call.status === "running" ? (
-      <RunningMark className="size-3" />
+      <Spinner className="size-3" />
     ) : (
       <span
         aria-label={call.status === "ok" ? t("tools.completed") : call.status === "cancelled" ? t("tools.callCancelled") : t("tools.error")}
@@ -490,7 +490,7 @@ export const ToolCard = memo(function ToolCard({
   // the doorway to that run's tab (see SubagentPanel).
   return (
     <ToolRow
-      icon={running ? <RunningMark /> : view.icon}
+      icon={running ? <Spinner className="size-3" /> : view.icon}
       label={view.label}
       subject={view.subject}
       context={view.context}

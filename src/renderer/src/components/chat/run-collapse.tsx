@@ -3,10 +3,11 @@ import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { RunningMark } from "@/components/running-mark";
+import { WorkingMark } from "@/components/working-mark";
 import { PROCESS_BODY_CAP } from "@/lib/process-body";
 import { formatDuration } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { ToolRow } from "./tool-row";
 
 function RunHeader({ children }: { children: ReactNode }): JSX.Element {
   return (
@@ -29,12 +30,18 @@ export function RunProgress({ startedAt }: { startedAt: number }): JSX.Element {
   }, [startedAt]);
 
   return (
-    <div data-slot="run-progress" className="flex items-center gap-2 text-sm text-muted-foreground">
-      <RunningMark className="size-4" label={t("message.working")} />
-      <span className="font-medium">{t("message.working")}</span>
-      <span role="timer" className="tabular-nums">
-        {formatDuration(Math.floor(Math.max(0, now - startedAt) / 1000) * 1000)}
-      </span>
+    <div data-slot="run-progress" className="w-full">
+      <ToolRow
+        icon={<WorkingMark label={t("message.working")} />}
+        label={t("message.working")}
+        running
+        canToggle={false}
+        trailing={
+          <span role="timer" className="shrink-0 tabular-nums text-muted-foreground">
+            {formatDuration(Math.floor(Math.max(0, now - startedAt) / 1000) * 1000)}
+          </span>
+        }
+      />
     </div>
   );
 }

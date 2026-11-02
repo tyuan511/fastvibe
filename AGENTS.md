@@ -2077,7 +2077,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
       just because it is unfinished.
     - **Busy marks follow the run.** The header's leading glyph and the leading glyph
       of the item `in_progress` are `RunningMark` (`components/running-mark.tsx`) —
-      the same nine-dot grid the sidebar puts on a running conversation, shared so
+      the same circular mark the sidebar puts on a running conversation, shared so
       "a run is in flight" reads identically — but only while that conversation is
       working. Idle, a stalled item falls back to the plain circle (`StatusIcon`), in
       the panel and in the transcript card alike (the card reads the same flag through
@@ -2939,7 +2939,7 @@ means either: an agent **run** and a **compaction**.
   uses the same gate as the button it clicks. A delegated run's tab is the same idea one
   level down: `Main` finalises it when the sub-session's prompt has settled and its
   transcript/state have been cached, then publishes the terminal lifecycle.
-- **Running marks are nine-dot grids** (`components/running-mark.tsx`, `index.css`): the same 1.2-second staggered opacity animation is used for live conversations, projects, todos, Agent resources, tool execution, retry status and the reply's 工作中 row. It keeps the existing square slots and theme colour, and stops animating under reduced motion. Ordinary page, button and request loading still uses the existing Spinner / FLoader. 工作中 shows whole seconds and updates once per second.
+- **Only 工作中 uses a nine-dot grid** (`components/working-mark.tsx`, `index.css`): its 1.2-second staggered opacity animation stays inside the reply's progress row and stops under reduced motion. Conversations, projects, todos and Agent resources keep the circular `RunningMark`; tool execution and retry status keep the ordinary Spinner, as do page, button and request loading. 工作中 reuses `ToolRow` for its 14px icon, normal text weight, spacing and running-label treatment, and shows whole seconds with one update per second. Agent action avatars are 16px.
 - The renderer's `streaming` is deliberately *not* that mark: it means 「a run is in flight
   for the chat on screen」, and is read only where that is the question — the transcript's
   caret / working row / per-message footer, and whether a send is queued (steer or

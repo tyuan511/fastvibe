@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import type { ChatMessage, ToolCallBlock } from "@shared/types";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { RunningMark } from "@/components/running-mark";
+import { Spinner } from "@/components/ui/spinner";
 import { agentToolAction, agentToolTargets } from "@/lib/agent-tool";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
@@ -35,7 +35,7 @@ export function AgentActionCard({ tool, showIcon, children }: {
         conversationId: conversationId ?? undefined, title: agent.name ?? t("tool.agentUnnamed"), avatarSeed: agent.avatarSeed,
       })}
     >
-      {agent.avatarSeed !== undefined ? <AgentAvatar seed={agent.avatarSeed} size="size-5" /> : <HugeiconsIcon icon={BotIcon} className="size-3.5 shrink-0" />}
+      {agent.avatarSeed !== undefined ? <AgentAvatar seed={agent.avatarSeed} size="size-4" /> : <HugeiconsIcon icon={BotIcon} className="size-3.5 shrink-0" />}
       <span className="truncate">{agent.name ?? t("tool.agentUnnamed")}</span>
     </button>
   )) : <span className="mx-1">{t(action === "spawn" ? "tool.agentNew" : "tool.agentTeam")}</span>;
@@ -44,7 +44,7 @@ export function AgentActionCard({ tool, showIcon, children }: {
     <Collapsible className="group/agent-action w-full">
       <ToolRow
         persistKey={tool.id}
-        icon={phase === "running" ? <RunningMark /> : <HugeiconsIcon icon={BotIcon} className="size-3.5" />}
+        icon={phase === "running" ? <Spinner className="size-3" /> : <HugeiconsIcon icon={BotIcon} className="size-3.5" />}
         label={<Trans ns="common" i18nKey={`tool.agentAction.${action}.${phase}`} components={{ agents: <span>{identities}</span> }} />}
         running={phase === "running"}
         error={phase === "error" ? tool.result ?? t("tool.failed") : undefined}
