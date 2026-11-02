@@ -79,10 +79,7 @@ internal fun MobileSettingsScreen(
     val packageInfo = remember(context) {
         context.packageManager.getPackageInfo(context.packageName, 0)
     }
-    val deviceName = remember(context) {
-        runCatching { android.provider.Settings.Global.getString(context.contentResolver, "device_name") }
-            .getOrNull()?.takeIf(String::isNotBlank) ?: Build.MODEL
-    }
+    val deviceName = remember(context) { mobileDeviceName(context) }
     val versionCode = if (Build.VERSION.SDK_INT >= 28) {
         packageInfo.longVersionCode
     } else {

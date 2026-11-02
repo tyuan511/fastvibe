@@ -154,10 +154,14 @@ public final class MobileSessionController: ObservableObject {
     public var connectionPath: String? { state.path }
     public var accountEmail: String? { accountEmailValue }
     public var localDeviceName: String {
-        get { deviceName }
+        get { deviceRegistration.name }
         set {
-            deviceName = newValue
             UserDefaults.standard.set(newValue, forKey: Self.deviceNameKey)
+            let name = MobileDeviceName.resolve(custom: newValue, system: deviceNameOverride ?? MobileDeviceName.systemName, fallback: MobileDeviceName.deviceKind)
+            guard name != deviceRegistration.name else { return }
+            objectWillChange.send()
+            deviceRegistration.name = name
+            scheduleDeviceNameUpdate()
         }
     }
 
@@ -166,8 +170,10 @@ public final class MobileSessionController: ObservableObject {
     private let coordinator: MobileCoreCommandCoordinator
     private let platform: String
     private let installID: String
-    private var deviceName: String
-    private var localDeviceID: String?
+    private let deviceNameOverride: String?
+    private let deviceRegistration: MobileDeviceRegistration
+    private var deviceNameUpdateTask: Task<Void, Never>?
+    private var deviceNameUpdateID: UUID?
     private var endpointID: String?
     private var accountEmailValue: String?
     private var loginState: String?
@@ -180,7 +186,7 @@ public final class MobileSessionController: ObservableObject {
     public init(
         bridge: MobileCoreBridge = MobileCoreBridge(),
         accountOrigin: String = "https://app.fastvibe.dev",
-        deviceName: String = "FastVibe Mobile",
+        deviceName: String? = nil,
         platform: String = "ios",
         conversationID: String = "",
         commandRuntime: (any MobileCoreCommanding)? = nil
@@ -190,7 +196,12 @@ public final class MobileSessionController: ObservableObject {
         self.platform = platform
         self.conversationID = conversationID
         self.installID = Self.loadInstallID()
-        self.deviceName = UserDefaults.standard.string(forKey: Self.deviceNameKey) ?? deviceName
+        self.deviceNameOverride = deviceName
+        self.deviceRegistration = MobileDeviceRegistration(name: MobileDeviceName.resolve(
+            custom: UserDefaults.standard.string(forKey: Self.deviceNameKey),
+            system: deviceName ?? MobileDeviceName.systemName,
+            fallback: MobileDeviceName.deviceKind
+        ))
         let executor = MobileCoreCommandExecutor(bridge: bridge)
         self.coordinator = MobileCoreCommandCoordinator(runtime: commandRuntime ?? executor)
         self.state = bridge.store.state
@@ -222,6 +233,7 @@ public final class MobileSessionController: ObservableObject {
     deinit {
         pollTask?.cancel()
         resyncTask?.cancel()
+        deviceNameUpdateTask?.cancel()
     }
 
     public var messages: [MobileMessage] { state.messages }
@@ -617,7 +629,10 @@ public final class MobileSessionController: ObservableObject {
         loginURL = nil
         loginState = nil
         callbackState = nil
-        localDeviceID = nil
+        deviceNameUpdateTask?.cancel()
+        deviceNameUpdateTask = nil
+        deviceNameUpdateID = nil
+        deviceRegistration.reset()
         isLoading = false
         isSending = false
         errorMessage = nil
@@ -652,23 +667,52 @@ public final class MobileSessionController: ObservableObject {
     }
 
     private func ensureLocalDevice() async throws -> String {
-        if let localDeviceID { return localDeviceID }
-        let response = try await perform(
-            "registerDevice",
-            parameters: [
+        try await deviceRegistration.ensure { [self] name in
+            // Account registration is independent of whichever computer is being connected.
+            let ticket = try await coordinator.start("registerDevice", parameters: [
                 "installId": .string(installID),
-                "name": .string(localDeviceName),
+                "name": .string(name),
                 "platform": .string(platform),
-            ]
-        )
-        guard let id = response.result.stringValue(key: "deviceId") else {
-            throw MobileSessionControllerError.message("无法注册本机设备。")
+            ])
+            guard let id = ticket.initial.result.stringValue(key: "deviceId"), !id.isEmpty else {
+                throw MobileSessionControllerError.message("无法注册本机设备。")
+            }
+            return id
         }
-        localDeviceID = id
-        return id
+    }
+
+    private func scheduleDeviceNameUpdate() {
+        guard isAuthenticated, deviceNameUpdateTask == nil else { return }
+        let updateID = UUID()
+        deviceNameUpdateID = updateID
+        deviceNameUpdateTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if deviceNameUpdateID == updateID { deviceNameUpdateTask = nil }
+            }
+            do {
+                _ = try await ensureLocalDevice()
+            } catch is CancellationError {
+                return
+            } catch {
+                // Keep the name and retry on the next refresh; a failed rename must not hide computers.
+                guard isAuthenticated, !Task.isCancelled else { return }
+                errorMessage = message(for: error)
+            }
+        }
     }
 
     private func refreshDevicesInternal() async throws {
+        let currentName = MobileDeviceName.resolve(
+            custom: UserDefaults.standard.string(forKey: Self.deviceNameKey),
+            system: deviceNameOverride ?? MobileDeviceName.systemName,
+            fallback: MobileDeviceName.deviceKind
+        )
+        if currentName != deviceRegistration.name {
+            objectWillChange.send()
+            deviceRegistration.name = currentName
+        }
+        scheduleDeviceNameUpdate()
         let response = try await perform("devices")
         let value: MobileJSONValue?
         if case .object(let object) = response.result, let nested = object["devices"] {

@@ -258,7 +258,7 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
     attach: (socket, peer) => instance().attachTransport(socket, peer),
     log: { info: (message) => log.info(message), warn: (message, error) => log.warn(message, error) },
     onChange: announceFromServer,
-    authorizePeer: async (endpointId) => (await account.irohEndpointIds()).has(endpointId),
+    authorizePeer: async (endpointId) => (await account.irohDevices()).get(endpointId) ?? null,
   });
   official = new OfficialConnection({
     account: { token: () => account.token(), origin: () => account.origin() },

@@ -227,7 +227,12 @@ impl CoreHandle {
             .runtime
             .block_on(client.devices())
             .map_err(|error| error.to_string())?;
-        Ok(serde_json::to_value(devices).unwrap_or_else(|_| serde_json::json!([])))
+        // The computers list is a projection; phone endpoints stay in the raw account registry.
+        let desktops = devices
+            .into_iter()
+            .filter(|device| matches!(device.platform.as_str(), "darwin" | "win32" | "linux"))
+            .collect::<Vec<_>>();
+        Ok(serde_json::to_value(desktops).unwrap_or_else(|_| serde_json::json!([])))
     }
 
     #[cfg(not(feature = "mobile-client"))]

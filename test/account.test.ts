@@ -25,6 +25,8 @@ type Cloud = {
   revoked: string[];
   meStatus: number;
   tokenStatus: number;
+  devicesBody: unknown;
+  devicesStatus: number;
   server: Server;
 };
 
@@ -35,7 +37,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, string>> {
 }
 
 async function cloud(): Promise<Cloud> {
-  const state: Cloud = { origin: "", codes: new Map(), calls: [], revoked: [], meStatus: 200, tokenStatus: 200, server: undefined as never };
+  const state: Cloud = { origin: "", codes: new Map(), calls: [], revoked: [], meStatus: 200, tokenStatus: 200, devicesBody: { devices: [{ id: "phone", name: "Ada's iPhone", platform: "ios", iroh_endpoint_id: "endpoint-a" }] }, devicesStatus: 200, server: undefined as never };
   state.server = createServer(async (req, res) => {
     state.calls.push(`${req.method} ${req.url}`);
     const send = (status: number, body: unknown) => res.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(body));
@@ -56,7 +58,7 @@ async function cloud(): Promise<Cloud> {
     }
     if (req.url === "/api/devices") {
       if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
-      return send(200, { devices: [{ iroh_endpoint_id: "endpoint-a" }] });
+      return send(state.devicesStatus, state.devicesBody);
     }
     if (req.url?.startsWith("/api/devices/") && req.url.endsWith("/iroh")) {
       if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
@@ -207,6 +209,7 @@ test("an account receives the iroh relay URL and can report cumulative bytes", a
     assert.ok(r.cloud.calls.includes("PUT /api/devices/00000000-0000-0000-0000-000000000001/iroh"));
     const endpoints = await r.service.irohEndpointIds();
     assert.deepEqual([...endpoints], ["endpoint-a"]);
+    assert.deepEqual((await r.service.irohDevices()).get("endpoint-a"), { id: "phone", name: "Ada's iPhone", platform: "ios" });
     const issued = await r.service.issueIrohRelay("00000000-0000-0000-0000-000000000001", "endpoint-a");
     assert.equal(issued.relayId, "hk1");
     assert.equal(issued.url, "https://relay.example.test:8444");
@@ -224,6 +227,48 @@ test("an account receives the iroh relay URL and can report cumulative bytes", a
     assert.ok(r.cloud.calls.includes("POST /api/relay/iroh/usage"));
   } finally { closeAll(r); }
 });
+test("iroh account metadata ignores malformed entries while endpoint-set callers remain compatible", async () => {
+  const r = await rig();
+  try {
+    await assert.rejects(r.service.irohDevices(), /signed out/);
+    await r.service.login();
+    await settled(r, "signed-in");
+    r.cloud.devicesBody = { devices: [null, 42, {}, { iroh_endpoint_id: "" }, { iroh_endpoint_id: "  " }, { iroh_endpoint_id: 12 },
+      { id: "phone-a", name: " Phone ", platform: "ios", iroh_endpoint_id: "a" },
+      { id: "phone-b", name: "Phone", platform: "android", iroh_endpoint_id: "b" },
+      { name: null, platform: 17, iroh_endpoint_id: "unnamed" }] };
+    assert.deepEqual([...(await r.service.irohDevices())], [
+      ["a", { id: "phone-a", name: "Phone", platform: "ios" }],
+      ["b", { id: "phone-b", name: "Phone", platform: "android" }],
+      ["unnamed", { id: "", name: "", platform: "" }],
+    ]);
+    assert.deepEqual([...(await r.service.irohEndpointIds())], ["a", "b", "unnamed"]);
+    r.cloud.devicesBody = { devices: "bad response" };
+    assert.equal((await r.service.irohDevices()).size, 0);
+    r.cloud.devicesStatus = 401;
+    await assert.rejects(r.service.irohDevices(), /device list request failed: 401/);
+  } finally { closeAll(r); }
+});
+
+test("an account change while the device list is loading invalidates authorization metadata", async () => {
+  const r = await rig();
+  try {
+    await r.service.login();
+    await settled(r, "signed-in");
+    let answer!: (response: Response) => void;
+    const service = new AccountService({
+      file: r.file, origin: r.cloud.origin, platform: "darwin", deviceName: () => "Desktop", onChange() {}, openUrl() {},
+      fetch: async (url) => String(url).endsWith("/api/devices")
+        ? new Promise<Response>((resolve) => { answer = resolve; })
+        : new Response(null, { status: 204 }),
+    });
+    const devices = service.irohDevices();
+    await service.logout();
+    answer(Response.json({ devices: [{ name: "Old account phone", iroh_endpoint_id: "endpoint" }] }));
+    await assert.rejects(devices, /account changed/);
+  } finally { closeAll(r); }
+});
+
 test("the browser is told the outcome on the page it is left on", async () => {
   const r = await rig();
   try {

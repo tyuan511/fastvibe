@@ -1,10 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configureFastVibeUserData } from "../src/main/engine/paths.ts";
-import { IrohRemoteConnection } from "../src/main/rtc/iroh-remote.ts";
+import { IrohRemoteConnection, type IrohRemoteDeps } from "../src/main/rtc/iroh-remote.ts";
+import { IrohSidecar, type IrohSidecarEvent } from "../src/main/rtc/iroh-sidecar.ts";
+import { AccountService, type AccountIrohDevice } from "../src/main/engine/account.ts";
+import { splitFrame } from "../src/main/rtc/frames.ts";
+import { uiText } from "../src/main/engine/ui-text.ts";
 
 const relayConfig = {
   relayId: "hk1",
@@ -34,6 +38,7 @@ test("iroh initialization failures become visible error state", async () => {
       async reportIrohUsage() { return relayConfig.usage; },
     },
     deviceId: "device",
+    authorizePeer: async () => null,
     attach() {},
     log: { info() {}, warn() {} },
     onChange: () => changes.push("changed"),
@@ -50,4 +55,135 @@ test("iroh initialization failures become visible error state", async () => {
     else process.env.FASTVIBE_IROH_BIN = previous;
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+class FakeSidecar extends IrohSidecar {
+  closed: string[] = [];
+  override async identity() { return "desktop-endpoint"; }
+  override async startLease() {}
+  override async refresh() {}
+  override async stop() {}
+  override closeConnection(id: string) { this.closed.push(id); }
+  event(event: IrohSidecarEvent) { this.emit("event", event); }
+}
+
+function connection(authorizePeer: IrohRemoteDeps["authorizePeer"], attach?: IrohRemoteDeps["attach"]) {
+  const sidecar = new FakeSidecar();
+  const attached: Array<{ id: string; label: string }> = [];
+  const snapshots: unknown[] = [];
+  const remote = new IrohRemoteConnection({
+    account: {
+      async issueIrohRelay() { return { ...relayConfig, expiresAt: new Date(Date.now() + 3600_000).toISOString() }; },
+      async reportIrohUsage() { return relayConfig.usage; },
+    },
+    deviceId: "desktop-device",
+    identityFile: "/unused/endpoint.key",
+    sidecar,
+    authorizePeer,
+    attach(socket, peer) { attached.push(peer); attach?.(socket, peer); },
+    log: { info() {}, warn() {} },
+    onChange() { snapshots.push(remote.state(true).peers); },
+  });
+  return { remote, sidecar, attached, snapshots };
+}
+
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+const device = (name: string): AccountIrohDevice => ({ id: "account-device", name, platform: "ios" });
+
+test("account-authorized device names reach peer state and transport attachment; pending and unknown peers stay hidden", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fastvibe-iroh-account-"));
+  const file = join(dir, "account.json");
+  const origin = "https://account.example.test";
+  await writeFile(file, JSON.stringify({ version: 1, origin, token: "account-token", user: { id: "u1", login: "user" } }));
+  let answer!: (response: Response) => void;
+  const account = new AccountService({
+    file, origin, deviceName: () => "Desktop", platform: "darwin", openUrl() {}, onChange() {},
+    fetch: async (url, options) => {
+      assert.equal(String(url), `${origin}/api/devices`);
+      assert.equal((options?.headers as Record<string, string>).Authorization, "Bearer account-token");
+      return new Promise<Response>((resolve) => { answer = resolve; });
+    },
+  });
+  const received: string[] = [];
+  const r = connection(async (endpointId) => (await account.irohDevices()).get(endpointId) ?? null,
+    (socket) => socket.on("message", (data) => received.push(data.toString())));
+  try {
+    await r.remote.start();
+    r.sidecar.event({ type: "connected", connectionId: "iroh-1", remoteId: "verified-endpoint", name: "Forged name" } as IrohSidecarEvent);
+    r.sidecar.event({ type: "path", connectionId: "iroh-1", path: "direct" });
+    const frame = splitFrame(Buffer.from("early hello"), false, false)[0];
+    r.sidecar.event({ type: "data", connectionId: "iroh-1", data: frame.toString("base64") });
+    assert.deepEqual(r.remote.state(true).peers, []);
+    assert.deepEqual(r.attached, []);
+    assert.deepEqual(received, []);
+    answer(Response.json({ devices: [{ id: "phone", name: "Ada’s iPhone", platform: "ios", iroh_endpoint_id: "verified-endpoint" }] }));
+    await tick();
+    assert.deepEqual(r.remote.state(true).peers, [{ id: "iroh-1", label: "Ada’s iPhone", path: "direct" }]);
+    assert.deepEqual(r.attached, [{ id: "iroh:iroh-1", label: "Ada’s iPhone" }]);
+    assert.deepEqual(received, ["early hello"]);
+
+    r.sidecar.event({ type: "connected", connectionId: "iroh-2", remoteId: "unknown-endpoint", name: "Ada’s iPhone" } as IrohSidecarEvent);
+    r.sidecar.event({ type: "path", connectionId: "iroh-2", path: "relay" });
+    assert.equal(r.remote.state(true).peers.length, 1);
+    answer(Response.json({ devices: [{ name: "Ada’s iPhone", iroh_endpoint_id: "verified-endpoint" }] }));
+    await tick();
+    assert.deepEqual(r.sidecar.closed, ["iroh-2"]);
+    assert.equal(r.attached.length, 1);
+    assert.equal(JSON.stringify(r.snapshots).includes("iroh-2"), false);
+    r.sidecar.event({ type: "closed", connectionId: "iroh-1" });
+    assert.deepEqual(r.remote.state(true).peers, []);
+  } finally {
+    await r.remote.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("duplicate and missing account device names stay distinct without endpoint labels", async () => {
+  const names = [" Phone ", "Phone", "Phone (2)", "", "  ", "bad\nname"];
+  const r = connection(async (endpointId) => device(names[Number(endpointId)]));
+  try {
+    await r.remote.start();
+    for (let i = 0; i < names.length; i++) r.sidecar.event({ type: "connected", connectionId: `iroh-${i}`, remoteId: String(i) });
+    await tick();
+    const fallback = uiText("已连接设备", "Connected device");
+    const labels = ["Phone", "Phone (2)", "Phone (2) (2)", fallback, `${fallback} (2)`, `${fallback} (3)`];
+    assert.deepEqual(r.remote.state(true).peers.map((peer) => peer.label), labels);
+    assert.deepEqual(r.attached.map((peer) => peer.label), labels);
+    assert.equal(new Set(labels).size, names.length);
+    r.remote.disconnectPeers();
+    assert.deepEqual(r.remote.state(true).peers, []);
+  } finally { await r.remote.dispose(); }
+});
+
+test("failed account authorization closes the socket without attaching or listing it", async () => {
+  const r = connection(async () => { throw new Error("account offline"); });
+  try {
+    await r.remote.start();
+    r.sidecar.event({ type: "connected", connectionId: "denied", remoteId: "endpoint" });
+    await tick();
+    assert.deepEqual(r.attached, []);
+    assert.deepEqual(r.remote.state(true).peers, []);
+    assert.deepEqual(r.sidecar.closed, ["denied"]);
+  } finally { await r.remote.dispose(); }
+});
+
+test("authorization resolving after stop, disconnect or peer close never revives a session", async (t) => {
+  for (const action of ["stop", "disconnect", "closed"] as const) await t.test(action, async () => {
+    let authorize!: (value: AccountIrohDevice) => void;
+    const r = connection(() => new Promise((resolve) => { authorize = resolve; }));
+    try {
+      await r.remote.start();
+      r.sidecar.event({ type: "connected", connectionId: "pending", remoteId: "endpoint" });
+      if (action === "stop") {
+        await r.remote.stop();
+        await r.remote.start();
+      } else if (action === "disconnect") r.remote.disconnectPeers();
+      else r.sidecar.event({ type: "closed", connectionId: "pending" });
+      authorize(device("Late phone"));
+      await tick();
+      assert.deepEqual(r.attached, []);
+      assert.deepEqual(r.remote.state(true).peers, []);
+      assert.deepEqual(r.sidecar.closed, ["pending"]);
+    } finally { await r.remote.dispose(); }
+  });
 });

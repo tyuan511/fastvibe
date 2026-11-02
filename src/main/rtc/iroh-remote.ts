@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import type { RemoteSocket } from "../server/server.ts";
 import { getFastVibePaths } from "../engine/paths.ts";
+import type { AccountIrohDevice } from "../engine/account.ts";
+import { uiText } from "../engine/ui-text.ts";
+import { deviceNameSetting } from "../../shared/device-name.ts";
 import { IrohRelayLease, type IrohRelayLeaseAccount } from "./iroh-relay.ts";
 import { IrohSidecar, IrohSocket, type IrohSidecarEvent } from "./iroh-sidecar.ts";
 import type { IrohRemoteState, IrohPeerPath } from "../../shared/iroh-remote";
@@ -11,7 +14,9 @@ export type IrohRemoteDeps = {
   attach: (socket: RemoteSocket, peer: { id: string; label: string }) => void;
   log: { info(message: string): void; warn(message: string, error?: unknown): void };
   onChange?: () => void;
-  authorizePeer?: (endpointId: string) => Promise<boolean>;
+  /** Only metadata returned by the authenticated account service may authorize a peer. */
+  authorizePeer: (endpointId: string) => Promise<AccountIrohDevice | null>;
+  sidecar?: IrohSidecar;
   identityFile?: string;
 };
 
@@ -23,9 +28,11 @@ export type IrohRemoteDeps = {
  */
 export class IrohRemoteConnection {
   #deps: IrohRemoteDeps;
-  #sidecar = new IrohSidecar();
+  #sidecar: IrohSidecar;
   #lease: IrohRelayLease | null = null;
+  // Pending sockets must remain tracked for stop/disconnect, but never appear in state().
   #sockets = new Map<string, IrohSocket>();
+  #labels = new Map<string, string>();
   #paths = new Map<string, "connecting" | "direct" | "relay">();
   #started = false;
   #stopping = false;
@@ -37,6 +44,7 @@ export class IrohRemoteConnection {
 
   constructor(deps: IrohRemoteDeps) {
     this.#deps = deps;
+    this.#sidecar = deps.sidecar ?? new IrohSidecar();
     this.#onEvent = (event) => this.#handle(event);
     this.#sidecar.on("event", this.#onEvent);
     this.#sidecar.on("log", (message: string) => this.#deps.log.warn(`iroh: ${message.trim()}`));
@@ -50,6 +58,7 @@ export class IrohRemoteConnection {
       if (!this.#error) this.#error = "iroh transport exited";
 
       this.#sockets.clear();
+      this.#labels.clear();
       this.#paths.clear();
       this.#deps.onChange?.();
     });
@@ -62,7 +71,7 @@ export class IrohRemoteConnection {
       status,
       endpointId: this.#endpointId,
       ...(this.#error ? { error: this.#error } : {}),
-      peers: [...this.#sockets.keys()].map((id) => ({ id, label: id, path: (this.#paths.get(id) ?? "connecting") as IrohPeerPath })),
+      peers: [...this.#labels].map(([id, label]) => ({ id, label, path: (this.#paths.get(id) ?? "connecting") as IrohPeerPath })),
       ...(this.#lease?.state().usage ? { usage: this.#lease.state().usage! } : {}),
     };
   }
@@ -136,6 +145,7 @@ export class IrohRemoteConnection {
   disconnectPeers(): void {
     for (const socket of this.#sockets.values()) socket.terminate();
     this.#sockets.clear();
+    this.#labels.clear();
     this.#paths.clear();
     this.#deps.onChange?.();
   }
@@ -143,13 +153,11 @@ export class IrohRemoteConnection {
   async stop(): Promise<void> {
     if (!this.#started && !this.#lease) return;
     this.#stopping = true;
+    this.disconnectPeers();
     try {
       await this.#lease?.flush().catch((error: unknown) => this.#deps.log.warn("iroh usage flush failed", error));
       this.#lease?.close();
       await this.#sidecar.stop();
-      for (const socket of this.#sockets.values()) socket.terminate();
-      this.#sockets.clear();
-      this.#paths.clear();
       this.#started = false;
       this.#lease = null;
       this.#deps.onChange?.();
@@ -163,20 +171,21 @@ export class IrohRemoteConnection {
     await this.stop();
   }
 
-  async #socketFor(event: Extract<IrohSidecarEvent, { type: "connected" }>, socket: IrohSocket): Promise<IrohSocket | null> {
-    if (this.#deps.authorizePeer) {
-      let allowed = false;
-      try {
-        allowed = await this.#deps.authorizePeer(event.remoteId);
-      } catch (error) {
-        this.#deps.log.warn("iroh peer authorization failed", error);
-      }
-      if (!allowed) {
-        socket.terminate();
-        return null;
-      }
+  async #deviceFor(endpointId: string): Promise<AccountIrohDevice | null> {
+    try {
+      return await this.#deps.authorizePeer(endpointId);
+    } catch (error) {
+      this.#deps.log.warn("iroh peer authorization failed", error);
+      return null;
     }
-    return socket;
+  }
+
+  #peerLabel(device: AccountIrohDevice): string {
+    const name = deviceNameSetting(device.name) || uiText("已连接设备", "Connected device");
+    const used = new Set(this.#labels.values());
+    let label = name;
+    for (let suffix = 2; used.has(label); suffix++) label = `${name} (${suffix})`;
+    return label;
   }
 
   #handle(event: IrohSidecarEvent): void {
@@ -185,8 +194,9 @@ export class IrohRemoteConnection {
       return;
     }
     if (event.type === "path") {
+      if (!this.#sockets.has(event.connectionId)) return;
       this.#paths.set(event.connectionId, event.path);
-      this.#deps.onChange?.();
+      if (this.#labels.has(event.connectionId)) this.#deps.onChange?.();
       return;
     }
     if (event.type === "traffic") {
@@ -197,20 +207,28 @@ export class IrohRemoteConnection {
 
   async #accept(event: Extract<IrohSidecarEvent, { type: "connected" }>): Promise<void> {
     const socket = new IrohSocket(this.#sidecar, event.connectionId, true);
+    if (!this.#started || this.#stopping) {
+      socket.terminate();
+      return;
+    }
     this.#sockets.set(event.connectionId, socket);
     this.#paths.set(event.connectionId, "connecting");
     socket.once("close", () => {
+      if (this.#sockets.get(event.connectionId) !== socket) return;
       this.#sockets.delete(event.connectionId);
+      this.#labels.delete(event.connectionId);
       this.#paths.delete(event.connectionId);
       this.#deps.onChange?.();
     });
-    const allowed = await this.#socketFor(event, socket);
-    if (!allowed || socket.readyState !== socket.OPEN || !this.#started || this.#stopping) {
+    const device = await this.#deviceFor(event.remoteId);
+    if (!device || socket.readyState !== socket.OPEN || !this.#started || this.#stopping || this.#sockets.get(event.connectionId) !== socket) {
       socket.terminate();
       return;
     }
     try {
-      this.#deps.attach(socket, { id: `iroh:${event.connectionId}`, label: `iroh ${event.remoteId.slice(0, 12)}` });
+      const label = this.#peerLabel(device);
+      this.#labels.set(event.connectionId, label);
+      this.#deps.attach(socket, { id: `iroh:${event.connectionId}`, label });
       socket.resumeMessages();
       this.#deps.onChange?.();
     } catch (error) {
