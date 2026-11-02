@@ -1,10 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { BotExecutionOutcome } from "../../shared/bot.ts";
+import type { PromptImage } from "../../shared/types.ts";
 
 /** Await the SDK's whole prompt promise, including preflight, retries and compaction. */
 export async function runBotSession(session: AgentSession, text: string, options: {
   signal: AbortSignal;
+  images?: PromptImage[];
   timeoutMs: number;
   abort: () => Promise<unknown>;
   prepare?: () => Promise<void>;
@@ -32,7 +34,7 @@ export async function runBotSession(session: AgentSession, text: string, options
       if (canceled) throw new Error("Vivi execution canceled before submission");
       return Reflect.apply(prompt, session.agent, args);
     };
-    try { await session.prompt(text, { expandPromptTemplates: false }); }
+    try { await session.prompt(text, { images: options.images, expandPromptTemplates: false }); }
     finally { session.agent.prompt = prompt; }
     await session.waitForIdle();
     const last = [...session.messages].reverse().find((message): message is AssistantMessage => message.role === "assistant" && !previous.has(message));

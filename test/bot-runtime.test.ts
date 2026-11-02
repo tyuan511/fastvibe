@@ -13,8 +13,8 @@ function fixture() {
   const db = openDatabase(":memory:");
   const store = new BotStore(db);
   const events: BotChanged[] = [];
-  const calls: Array<{ conversationId: string; requestId: string; text: string; epoch: number }> = [];
-  let behavior: (input: { conversationId: string; requestId: string; text: string; epoch: number; signal: AbortSignal }) => Promise<BotExecutionOutcome> = async () => done;
+  const calls: Array<Parameters<BotHost["execute"]>[0]> = [];
+  let behavior: BotHost["execute"] = async () => done;
   const ids = new Map<string, string>();
   const host: BotHost = {
     createConversation: async ({ kind, key }) => { const id = ids.get(key) ?? `${kind}:${ids.size + 1}`; ids.set(key, id); return { conversationId: id }; },
@@ -126,6 +126,82 @@ test("activity 只读取持久事实，不需要加载会话正文", async () =>
   const f = fixture(); const changed: BotChanged[] = []; f.host.changed = (event) => changed.push(event);
   try { f.runtime.start(); await f.runtime.submit({ requestId: "a", text: "你好" }); assert.equal(typeof f.runtime.activity().running, "boolean"); assert.ok(changed.some((event) => event.activity)); }
   finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("停止全部后新请求恢复 Router，重启与重复请求不重放旧工作", async () => {
+  const f = fixture();
+  let restarted: BotRuntime | undefined;
+  try {
+    await f.runtime.submit({ requestId: "old-router", text: "旧请求" });
+    const worker = await f.runtime.createWork({ requestId: "old-worker", title: "工作", text: "旧工作" });
+    const routerId = f.store.routerConversationId!;
+    await f.runtime.stopAll();
+    assert.ok(f.store.inputs().every((input) => input.status === "canceled"));
+    restarted = new BotRuntime(new BotStore(f.db), f.host);
+    restarted.start();
+    await restarted.submit({ requestId: "old-router", text: "旧请求" });
+    assert.equal(f.store.conversation(routerId)?.paused, true);
+    await restarted.submit({ requestId: "new-router", text: "新任务" });
+    await until(() => f.store.input("new-router")?.status === "completed");
+    assert.equal(f.store.conversation(routerId)?.paused, false);
+    assert.equal(f.store.conversation(worker.conversationId)?.paused, true);
+    assert.equal(f.store.input("old-router")?.status, "canceled");
+    assert.equal(f.store.input("old-worker")?.status, "canceled");
+    assert.deepEqual(f.calls.map((call) => call.requestId), ["new-router"]);
+    await assert.rejects(restarted.submit({ requestId: "worker-followup", conversationId: worker.conversationId, text: "补充" }), /会话已暂停/);
+  } finally { await restarted?.stop(); await f.runtime.stop(); f.db.close(); }
+});
+
+test("图片输入跨 Runtime 重建保留附件，图片与项目均参与幂等校验", async () => {
+  const f = fixture();
+  let restarted: BotRuntime | undefined;
+  const images = [{ type: "image" as const, mimeType: "image/png", data: "aW1hZ2U=" }];
+  try {
+    await f.runtime.submit({ requestId: "image-only", text: "  ", images, project: "/project" });
+    await f.runtime.submit({ requestId: "image-only", text: "", images, project: "/project" });
+    await assert.rejects(f.runtime.submit({ requestId: "image-only", text: "", images: [{ ...images[0], data: "b3RoZXI=" }], project: "/project" }), /不同内容/);
+    await assert.rejects(f.runtime.submit({ requestId: "image-only", text: "", images, project: "/other" }), /不同内容/);
+    await assert.rejects(f.runtime.submit({ requestId: "empty", text: "", images: [] }), /消息不能为空/);
+    await assert.rejects(f.runtime.submit({ requestId: "invalid", text: "图片", images: [{}] as never }), /图片附件格式无效/);
+    const stored = new BotStore(f.db);
+    assert.deepEqual(stored.input("image-only")?.images, images);
+    restarted = new BotRuntime(stored, f.host);
+    restarted.start();
+    await until(() => stored.input("image-only")?.status === "completed");
+    assert.deepEqual(f.calls[0].images, images);
+    assert.equal(f.calls[0].text, "");
+    assert.equal(f.calls[0].project, "/project");
+  } finally { await restarted?.stop(); await f.runtime.stop(); f.db.close(); }
+});
+
+test("每条 Router 输入使用自己的项目，排队选择不会污染当前上下文", async () => {
+  const f = fixture();
+  const gate = deferred<BotExecutionOutcome>();
+  const seen: Array<string | undefined> = [];
+  try {
+    f.behavior(async (input) => {
+      if (!input.conversationId.startsWith("router:")) return done;
+      const context = f.runtime.contextFor(input.conversationId);
+      seen.push(context.input?.project);
+      assert.equal(context.input?.requestId, input.requestId);
+      if (input.requestId === "a") return gate.promise;
+      await f.runtime.createWork({ requestId: `work-${input.requestId}`, title: "整理项目", text: "整理这个项目" });
+      return done;
+    });
+    f.runtime.start();
+    await f.runtime.submit({ requestId: "a", text: "整理这个项目", project: "/project-a" });
+    await until(() => seen.length === 1);
+    await f.runtime.submit({ requestId: "b", text: "整理这个项目", project: "/project-b" });
+    await f.runtime.submit({ requestId: "c", text: "整理默认输出目录" });
+    assert.equal(f.runtime.contextFor(f.store.routerConversationId!).input?.project, "/project-a");
+    gate.resolve(done);
+    await until(() => seen.length === 3);
+    assert.deepEqual(seen, ["/project-a", "/project-b", undefined]);
+    assert.equal(f.store.input("b")?.project, "/project-b");
+    assert.equal(f.store.conversationByKey("work:work-b")?.project, "/project-b");
+    await until(() => Boolean(f.store.conversationByKey("work:work-c")));
+    assert.equal(f.store.conversationByKey("work:work-c")?.project, "/output");
+  } finally { gate.resolve(done); await f.runtime.stop(); f.db.close(); }
 });
 
  test("自然语言后续输入可以继续同一个 Router 会话", async () => {

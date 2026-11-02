@@ -764,7 +764,7 @@ export class PiProcessManager {
     );
     this.bot = new BotRuntime(new BotStore(this.#db), {
       createConversation: async ({ kind, key, project }) => ({ conversationId: await this.#createBotConversation(kind, key, project) }),
-      execute: ({ conversationId, text, signal }) => this.#executeBotConversation(conversationId, text, signal),
+      execute: ({ conversationId, text, images, signal }) => this.#executeBotConversation(conversationId, text, signal, images),
       snapshot: (id) => this.getSnapshot(id),
       messages: (id) => this.getConversationMessages(id),
       abort: (id) => this.abort(id),
@@ -826,7 +826,7 @@ export class PiProcessManager {
     return conversation.id;
   }
 
-  async #executeBotConversation(id: string, text: string, signal: AbortSignal): Promise<BotExecutionOutcome> {
+  async #executeBotConversation(id: string, text: string, signal: AbortSignal, images?: PromptImage[]): Promise<BotExecutionOutcome> {
     await this.#ensureReady();
     const conversation = this.#catalog.get(id);
     if (!conversation || !botRole(conversation)) throw new Error("Unknown Vivi conversation");
@@ -835,6 +835,7 @@ export class PiProcessManager {
     try {
       return await runBotSession(managed.session, text, {
         signal,
+        images,
         timeoutMs: botRole(conversation) === "router" ? 120_000 : 3_600_000,
         abort: () => this.abort(id),
         prepare: async () => {

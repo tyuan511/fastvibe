@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationSnapshot } from "./types.ts";
+import type { ChatMessage, ConversationSnapshot, PromptImage } from "./types.ts";
 
 export const VIVI_BOT_ID = "vivi";
 export type BotConversationRole = "router" | "worker";
@@ -26,6 +26,8 @@ export type BotInput = {
   epoch: number;
   source: BotInputSource;
   text: string;
+  images?: PromptImage[];
+  project?: string;
   status: BotInputStatus;
   createdAt: number;
   error?: string;
@@ -78,7 +80,7 @@ export type BotSubmitRequest = {
   text: string;
   conversationId?: string;
   project?: string;
-  images?: unknown[];
+  images?: PromptImage[];
   behavior?: string;
 };
 export type BotReportRequest = {
@@ -92,7 +94,7 @@ export type BotReportRequest = {
 
 export type BotHost = {
   createConversation(input: { kind: BotConversationRole; key: string; project?: string }): Promise<{ conversationId: string }>;
-  execute(input: { conversationId: string; requestId: string; text: string; epoch: number; signal: AbortSignal }): Promise<BotExecutionOutcome>;
+  execute(input: { conversationId: string; requestId: string; text: string; images?: PromptImage[]; project?: string; epoch: number; signal: AbortSignal }): Promise<BotExecutionOutcome>;
   snapshot(conversationId: string): Promise<ConversationSnapshot>;
   messages(conversationId: string): Promise<ChatMessage[]>;
   abort(conversationId: string): Promise<void>;
@@ -120,4 +122,6 @@ export type BotContext = {
   conversationId: string;
   active: boolean;
   phase: "running" | "reported" | "waiting" | "inactive";
+  input?: { requestId: string; project?: string };
+  conversations?: BotConversationMeta[];
 };

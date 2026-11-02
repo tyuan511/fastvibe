@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { BotAttention, BotChanged, BotConversationMeta, BotExecutionOutcome, BotHost, BotReportRequest, BotResult, BotSubmitRequest, BotActivity, WorkSnapshot } from "../../shared/bot.ts";
+import type { BotAttention, BotChanged, BotConversationMeta, BotExecutionOutcome, BotHost, BotInput, BotReportRequest, BotResult, BotSubmitRequest, BotActivity, WorkSnapshot } from "../../shared/bot.ts";
+import type { PromptImage } from "../../shared/types.ts";
 import { VIVI_BOT_ID } from "../../shared/bot.ts";
 import { BotStore } from "./bot-store.ts";
 
@@ -10,6 +11,14 @@ const textOf = (value: unknown, label: string, max = 64000): string => {
   return value.trim();
 };
 
+const imagesOf = (images: unknown): PromptImage[] | undefined => {
+  if (images === undefined) return undefined;
+  if (!Array.isArray(images)) throw new Error("图片附件格式无效");
+  return images.map((image) => {
+    if (!image || image.type !== "image" || typeof image.data !== "string" || !image.data || typeof image.mimeType !== "string" || !image.mimeType.startsWith("image/")) throw new Error("图片附件格式无效");
+    return { type: "image", data: image.data, mimeType: image.mimeType };
+  });
+};
 
 type Active = { meta: BotConversationMeta; inputId: string; controller: AbortController; promise: Promise<void> };
 
@@ -54,7 +63,8 @@ export class BotRuntime {
     const existingInput = this.store.input(input.requestId);
     const existing = this.store.conversationByKey(key);
     if (existingInput && existing) { if (existingInput.text !== text) throw new Error("相同请求标识不能提交不同内容"); return existing; }
-    const project = this.host.resolveProject(input.project);
+    const selectedProject = input.project ?? this.#routerInput()?.project;
+    const project = this.host.resolveProject(selectedProject);
     const created = await this.host.createConversation({ kind: "worker", key, project });
     const conversationId = typeof created === "string" ? created : created.conversationId;
     const now = Date.now();
@@ -66,8 +76,10 @@ export class BotRuntime {
 
   async submit(input: BotSubmitRequest): Promise<WorkSnapshot> {
     const requestId = textOf(input.requestId, "请求标识", 200);
-    const text = textOf(input.text, "消息");
-    if (input.project !== undefined) this.host.resolveProject(input.project);
+    const images = imagesOf(input.images);
+    const text = typeof input.text === "string" && !input.text.trim() && images?.length ? "" : textOf(input.text, "消息");
+    const project = input.project;
+    if (project !== undefined) this.host.resolveProject(project);
     let meta = input.conversationId ? this.#meta(input.conversationId) : undefined;
     if (!meta) {
       const routerId = this.store.routerConversationId;
@@ -81,9 +93,17 @@ export class BotRuntime {
       }
     }
     const prior = this.store.input(requestId);
-    if (prior) { if (prior.text !== text || prior.conversationId !== meta.conversationId) throw new Error("相同请求标识不能提交不同内容"); return this.getWorkSnapshot(); }
-    if (meta.paused) throw new Error("会话已暂停，请先继续");
-    this.#change(() => this.store.putInput({ id: requestId, conversationId: meta!.conversationId, epoch: meta!.epoch, source: "user", text, status: "queued", createdAt: Date.now() }));
+    if (prior) {
+      if (prior.text !== text || prior.conversationId !== meta.conversationId || prior.project !== project || JSON.stringify(prior.images ?? []) !== JSON.stringify(images ?? [])) throw new Error("相同请求标识不能提交不同内容");
+      return this.getWorkSnapshot();
+    }
+    if (meta.paused && meta.role !== "router") throw new Error("会话已暂停，请先继续");
+    this.#change(() => {
+      // A fresh user request reopens the Router, without replaying stopped inputs
+      // or resuming Workers. The stop's epoch still rejects late completions.
+      if (meta!.paused) this.store.putConversation({ ...meta!, paused: false, updatedAt: Date.now() });
+      this.store.putInput({ id: requestId, conversationId: meta!.conversationId, epoch: meta!.epoch, source: "user", text, images, project, status: "queued", createdAt: Date.now() });
+    });
     this.#kick();
     return this.getWorkSnapshot();
   }
@@ -156,9 +176,20 @@ export class BotRuntime {
   }
   async stopAll(): Promise<WorkSnapshot> { await Promise.all(this.store.conversations().map((item) => this.stopConversation({ conversationId: item.conversationId }))); return this.getWorkSnapshot(); }
 
+  #routerInput(): BotInput | undefined {
+    const routerId = this.store.routerConversationId;
+    const active = routerId ? this.#active.get(routerId) : undefined;
+    return active ? this.store.input(active.inputId) : undefined;
+  }
+
   contextFor(conversationId: string): import("../../shared/bot.ts").BotContext {
     const meta = this.store.conversation(conversationId);
-    return { role: meta?.role ?? "worker", conversationId, active: Boolean(meta && !meta.paused), phase: meta && !meta.paused ? "running" : "inactive" };
+    const active = this.#active.get(conversationId);
+    const input = active ? this.store.input(active.inputId) : undefined;
+    return {
+      role: meta?.role ?? "worker", conversationId, active: Boolean(meta && !meta.paused), phase: meta && !meta.paused ? "running" : "inactive",
+      ...(meta?.role === "router" ? { input: input ? { requestId: input.id, project: input.project } : undefined, conversations: this.store.conversations() } : {}),
+    };
   }
 
   #emitDelivery(delivery: import("../../shared/bot.ts").BotDelivery): void { try { this.host.changed({ revision: this.store.revision, delivery: { id: delivery.id, conversationId: delivery.conversationId, text: delivery.text } }); } catch (error) { this.#error = error instanceof Error ? error.message : String(error); } }
@@ -190,12 +221,12 @@ export class BotRuntime {
       const controller = new AbortController();
       const active: Active = { meta, inputId: input.id, controller, promise: Promise.resolve() };
       this.#active.set(meta.conversationId, active);
-      active.promise = this.#execute(active, input.text).finally(() => { this.#active.delete(meta.conversationId); this.#emit(); this.#kick(); });
+      active.promise = this.#execute(active, input).finally(() => { this.#active.delete(meta.conversationId); this.#emit(); this.#kick(); });
     }
   }
-  async #execute(active: Active, text: string): Promise<void> {
+  async #execute(active: Active, payload: BotInput): Promise<void> {
     let outcome: BotExecutionOutcome;
-    try { outcome = await this.host.execute({ conversationId: active.meta.conversationId, requestId: active.inputId, text, epoch: active.meta.epoch, signal: active.controller.signal }); }
+    try { outcome = await this.host.execute({ conversationId: active.meta.conversationId, requestId: active.inputId, text: payload.text, images: payload.images, project: payload.project, epoch: active.meta.epoch, signal: active.controller.signal }); }
     catch (error) { outcome = { status: active.controller.signal.aborted ? "interrupted" : "failed", text: "", error: error instanceof Error ? error.message : String(error) }; }
     const current = this.store.conversation(active.meta.conversationId);
     const input = this.store.input(active.inputId);

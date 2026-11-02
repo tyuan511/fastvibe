@@ -24,6 +24,8 @@ interface ViviConversationHost {
     conversationId: string;
     requestId: string;
     text: string;
+    images?: PromptImage[];
+    project?: string;
     epoch: number;
     signal: AbortSignal;
   }): Promise<{ status: "completed" | "failed" | "interrupted"; text: string; error?: string }>;
@@ -53,7 +55,11 @@ stopAll()
 getSnapshot()
 ```
 
-所有入口先在一个 SQLite 事务中登记 request/epoch/状态，再调用 Host。重复 `requestId` 必须返回原记录；同一 ID 的内容指纹不同必须拒绝。
+所有入口先在一个 SQLite 事务中登记 request/epoch/状态，再调用 Host。重复 `requestId` 必须返回原记录；文字、图片、目标会话或项目选择不同必须拒绝。
+
+纯图片输入有效，图片随输入持久化，并经 Host 交给 SDK prompt。Router 的项目选择属于每条输入，实时上下文使用当前正在执行的输入；创建 Worker 未指定项目时沿用该选择，没有选择时使用默认输出目录。Router 用 `bot_send_message({ conversationId, requestId, text })` 将补充要求送到已有 Worker。
+
+停止全部仍暂停 Worker 并使旧 epoch 失效；新 requestId 的用户输入可重新开放 Router，旧请求重试不恢复 Router，不重放被停止的输入。
 
 ## 持久事实
 

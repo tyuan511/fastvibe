@@ -59,7 +59,8 @@ export function SidePaneBotTask({ tab }: { tab: SidePaneTab }): JSX.Element {
 function ConversationPane({ conversationId, tab }: { conversationId: string; tab: SidePaneTab }): JSX.Element {
   const { t } = useTranslation("sidepane");
   const { data, loading, error } = useConversationData(conversationId);
-  const conversation = useBotSnapshot().snapshot?.conversations.find((item) => item.conversationId === conversationId);
+  const { snapshot: workSnapshot } = useBotSnapshot();
+  const conversation = workSnapshot?.conversations.find((item) => item.conversationId === conversationId);
   const models = useSessionStore((state) => state.models);
   const projects = useSessionStore((state) => state.projects);
   const settings = useSettingsStore((state) => state.settings);
@@ -85,7 +86,7 @@ function ConversationPane({ conversationId, tab }: { conversationId: string; tab
     {error ? <p role="alert" className="wrap-anywhere border-b px-4 py-2 text-sm text-destructive">{error}</p> : null}
     <div className="min-h-0 flex-1"><MessageList messages={messages} conversationId={conversationId} cwd={conversation?.project} streaming={working} loading={loading && !data} emptyState={<p className="p-6 text-center text-sm text-muted-foreground">{t("bot.emptyConversation")}</p>} /></div>
     {conversation?.paused && !working ? <div className="border-t px-4 py-2"><Button size="sm" variant="outline" onClick={resume}>{t("bot.continue")}</Button></div> : null}
-    {data?.snapshot && <ResultStatus status={useBotSnapshot().snapshot?.results.find((result) => result.conversationId === conversationId)?.status ?? "idle"} />}
+    {data?.snapshot && <ResultStatus status={workSnapshot?.results.find((result) => result.conversationId === conversationId)?.status ?? "idle"} />}
     <div className="shrink-0 px-3 pb-3"><Composer className="px-0 pb-0" value={draft} disabled={false} streaming={working} working={working} conversationId={conversationId} placeholder={t("bot.supplement")} models={models} model={data?.state.model} workspaceLabel={projectName} projects={projects} project={conversation?.project} commands={getCommands(conversationId) as never} queued={data?.snapshot.queue.items ?? []} queuePause={data?.snapshot.queue.pause ?? null} attachments={attachments} history={() => messages.filter((message) => message.role === "user").map((message) => message.text)} contextPercent={data?.state.contextUsage?.percent} contextUsage={data?.state.contextUsage} stats={null} onChange={(value) => { setDraft(value); patchTab(tab.id, { draft: value }); }} onSubmit={() => void send()} onAbort={stop} onPickWorkspace={() => undefined} onSelectProject={() => undefined} onModelChange={(provider, model) => { void engine.setModel(provider, model, conversationId); }} onManageModels={() => undefined} onThinkingChange={(level) => { void engine.setThinking(level, conversationId); }} onAttachmentsChange={setAttachments} onRemoveQueued={() => undefined} onEditQueued={() => undefined} onSendQueuedNow={() => undefined} onRecallQueued={() => undefined} onReorderQueued={() => undefined} onResumeQueue={() => undefined} canResume={Boolean(conversation?.paused)} onResumeRun={resume} sendOnEnter={settings.sendOnEnter} /></div>
   </div>;
 }
