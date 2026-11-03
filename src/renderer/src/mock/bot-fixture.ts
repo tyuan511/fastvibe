@@ -30,6 +30,25 @@ export function createBotFixture(cwd: string, english = false, empty = false, sc
     "vivi-worker-release": { text: word("已核对本周的提交和发布记录，正在补充安装说明与兼容性注意事项。", "Checked this week's commits and releases. I'm filling in the installation notes and compatibility details."), updatedAt: now - 90_000 },
     [workerId]: { text: word("入门说明的结构已经整理好。这份说明主要面向开发者，还是第一次接触 AI 助手的普通用户？", "The guide outline is ready. Is it for developers or for people trying an AI assistant for the first time?"), updatedAt: now - 5000 },
   };
+  if (scenario === "chat") {
+    attention.length = 0;
+    progress.length = 0;
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(18, 40, 0, 0);
+    const minute = 60_000;
+    chatMessages.splice(0, chatMessages.length,
+      { id: "chat:yesterday-user", conversationId: routerId, role: "user", text: word("明天帮我一起整理一下新用户入门文档吧。", "Let's work on the getting-started guide tomorrow."), createdAt: yesterday.getTime() },
+      { id: "chat:yesterday-vivi", conversationId: routerId, role: "assistant", text: word("好，明天我们接着聊。", "Sure, we can pick it up tomorrow."), createdAt: yesterday.getTime() + minute },
+      { id: "chat:today-user", conversationId: routerId, role: "user", text: word("我们继续昨天的文档。希望写得像朋友在介绍这个软件，让第一次接触 AI 助手的人也能看懂。", "Let's continue yesterday's guide. Make it feel like a friend introducing the app, so someone new to AI assistants can follow along."), createdAt: now - 22 * minute },
+      { id: "chat:today-user-extra", conversationId: routerId, role: "user", text: word("先讲怎么开始聊天，再讲文件和项目。", "Start with chatting, then introduce files and projects."), createdAt: now - 21.8 * minute },
+      { id: "chat:today-vivi", conversationId: routerId, role: "assistant", text: word("明白。我会从第一次打开软件开始，把术语换成具体的操作。", "Got it. I'll start from opening the app and explain the concrete steps in plain language."), createdAt: now - 21.5 * minute },
+      { id: "chat:today-vivi-extra", conversationId: routerId, role: "assistant", text: word("例子也会用日常的事情，比如整理资料、写周报和看文件。", "I'll use everyday examples, like organizing notes, writing an update, and reading a file."), createdAt: now - 21.3 * minute },
+      { id: "chat:later-vivi", conversationId: routerId, role: "assistant", text: word("初稿整理好了，分成三个小节：\n\n- **开始聊天**：直接告诉我你想做什么\n- **带上文件**：把资料拖进输入框\n- **接着聊**：随时补充要求\n\n你可以先看看，哪里太正式我们再一起改。", "The draft is ready, in three short sections:\n\n- **Start chatting**: tell me what you need\n- **Bring a file**: drag your material into the composer\n- **Keep talking**: add instructions whenever you like\n\nTake a look, and we can soften anything that feels too formal."), createdAt: now - 9 * minute },
+      { id: "chat:latest-user", conversationId: routerId, role: "user", text: word("这个结构可以！最后再补一句：不用一次把要求说完整，想到什么都可以接着发。这样更像日常聊天，也能让刚开始用的人放松一点。", "I like the structure! Add that you don't have to explain everything at once: you can send another message whenever something comes to mind. That should help new users feel at ease."), createdAt: now - 2 * minute },
+      { id: "chat:latest-vivi", conversationId: routerId, role: "assistant", text: word("加上了。你想到什么就接着说，我会把前后连起来。", "Added. Send things as they come to mind; I'll connect the dots."), createdAt: now - minute },
+    );
+  }
   if (scenario === "cards") {
     const completedId = "vivi-worker-docs";
     conversations.push({ conversationId: completedId, role: "worker", owner: "vivi", creationKey: "docs", epoch: 0, paused: false, createdAt: now - 3_600_000, updatedAt: now - 720_000, title: word("检查项目文档中的链接", "Check links in the project documentation"), project: cwd });

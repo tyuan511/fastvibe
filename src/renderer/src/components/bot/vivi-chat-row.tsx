@@ -39,7 +39,7 @@ export function ViviChatRow({ message }: { message: ChatMessage }): JSX.Element 
   const bot = message.bot;
   if (!bot) return <></>;
   if (message.error) return <ViviExecutionError message={message} />;
-  if (bot.kind === "progress") return <p data-slot="vivi-milestone" className="w-full max-w-2xl wrap-anywhere text-sm leading-6 text-muted-foreground">{message.text}</p>;
+  if (bot.kind === "progress") return <p data-slot="vivi-milestone" className="w-full max-w-2xl wrap-anywhere text-sm leading-6 text-foreground">{message.text}</p>;
   const result = bot.kind === "result" ? bot.result : undefined;
   const text = result?.summary ?? message.text;
   const cwd = snapshot?.conversations.find((item) => item.conversationId === bot.conversationId)?.project;

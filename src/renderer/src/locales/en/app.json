@@ -1,5 +1,6 @@
 {
  "viviBot": {
+  "chat": { "messages": "Chat with Vivi", "latest": "Back to latest messages", "loading": "Loading messages", "you": "You", "sender": "{{name}}, {{time}}" },
   "clearDescription": "Clear main chat messages; keep context and memory",
   "needsRecovery": "{{count}} tasks need attention",
   "sectionActive": "In progress",

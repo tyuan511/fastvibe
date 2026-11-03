@@ -183,6 +183,9 @@ function buildTokens(seed: ThemeSeed): ThemeTokens {
     "popover-foreground": seed.fg,
     primary: seed.accent,
     "primary-foreground": seed.accentFg,
+    // Vivi messages keep a quiet blue identity across theme accents and glass treatments.
+    "vivi-user-bubble": seed.kind === "dark" ? "#263958" : "#e8efff",
+    "vivi-user-bubble-foreground": seed.kind === "dark" ? "#e6eeff" : "#243858",
     secondary: seed.muted,
     "secondary-foreground": seed.fg,
     muted: seed.muted,

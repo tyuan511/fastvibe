@@ -96,6 +96,8 @@ html {
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-vivi-user-bubble: var(--vivi-user-bubble);
+  --color-vivi-user-bubble-foreground: var(--vivi-user-bubble-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);

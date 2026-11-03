@@ -3846,6 +3846,8 @@ Router 和 Worker 共用 `bot_progress` 上报真实阶段，有价值的阶段�
 
 进度问句和普通消息一样交给 Router，由 Router 按实时进度、待答问题和结果用 Vivi 的口吻回答（`main/bot/vivi-voice.ts` 是口吻的唯一来源），等待期间主界面只有一行「正在处理…」；回答进度问题不新建工作、不恢复暂停的工作。主界面没有状态卡片、阶段名或操作按钮，停止用输入框的停止键。失败、未确认交付和中断不得呈现为成功，已有产物保留，继续沿用同一会话。扩展每轮捕获 input ID 与 epoch，不以工具调用 ID 代替，停止后的迟到进度和报告不能影响新一轮。详见 `docs/vivi-bot-implementation.md`，验证包括 `test/bot-conversation-progress.test.ts` 的真实 SDK 流程。
 
+Vivi 主聊天使用独立的 `ViviMessageList` / `ViviMessageRow`，按消息虚拟化，直接呈现用户消息 feed；普通 Agent 会话与右侧执行详情仍用原来的 `MessageList`。用户气泡靠右，使用 `vivi-user-bubble` / `vivi-user-bubble-foreground` 的固定蓝色配对（只区分浅色/深色，不随主题主色或玻璃效果变化）；Vivi 气泡靠左，阶段消息使用普通正文色。连续同一方的消息只收紧间距、不合并，头像只在分组开头显示。主聊天没有轮次目录、提问吸顶、两行用户消息折叠或执行耗时。`lib/vivi-message-layout.ts` 统一计算时间分隔：第一条、间隔至少五分钟、跨本地日历日期；首条与跨天显示日期，今天/昨天按读者的日历判断，精确时间可通过悬停或消息右键菜单查看。复制、附件、Markdown、错误恢复和原有待答请求继续复用已有组件。预览 `mock.html?vivi=chat&theme=light|dark&lang=zh|en`；规则回归为 `test/vivi-message-layout.test.ts`。
+
 Vivi 主聊天的 `ViviRequestsPanel` 在 composer 上方统一展示 `BotAttention` 与所属 Router/Worker 的插件阻塞请求（confirm/select/input/editor/questions），显示来源并可切换，普通聊天请求不混入。插件应答保留原 id 走 `engine.respondPermission`，成功或 dismiss 后才按 id 移除，失败保留草稿；持久问题仍走 `bot.answer`。`engine.getPendingUi` 是全局轻量存量入口，不读取转写；`pending-ui.ts` 在读取前订阅、缓冲 request/dismiss，重放后一次安装共享 `pendingPermissions`，防止迟到快照复活已撤回请求。`PermissionPanel` 的 embedded/active 模式让隐藏表单保留草稿但不监听键盘，当前表单也只处理自身可见范围内的按键，editor 在 Vivi 内联预填编辑；普通聊天仍使用原来的 editor 弹窗，Vivi 打开时不展示它。这里只恢复仍在 Main 等待的插件 Promise，不持久化进程退出前的 Promise。预览 `mock.html?vivi=requests&lang=zh|en`，回归 `test/vivi-requests.test.ts`、`test/vivi-plugin-requests.test.ts`。
 
 ## Vivi 独立 Markdown 记忆

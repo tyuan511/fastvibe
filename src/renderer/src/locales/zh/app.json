@@ -1,5 +1,6 @@
 {
  "viviBot": {
+  "chat": { "messages": "与 Vivi 的聊天", "latest": "回到最新消息", "loading": "正在读取消息", "you": "你", "sender": "{{name}}，{{time}}" },
   "clearDescription": "清空主聊天消息，保留上下文和记忆",
   "needsRecovery": "有 {{count}} 件事需要继续",
   "sectionActive": "正在进行",

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
 import { FastVibeMascot } from "@/components/fastvibe-mascot";
 import { IconButton } from "@/components/icon-button";
-import { MessageList } from "@/components/chat/message-list";
+import { ViviMessageList } from "./vivi-message-list";
 import { Composer } from "@/components/chat/composer";
 import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore } from "@/stores/side-pane";
@@ -28,7 +28,6 @@ import { useBotComposerState } from "./bot-composer-state";
 import type { BotSubmitRequest } from "@shared/bot";
 import type { EngineModel } from "@shared/types";
 
-const Transcript = memo(MessageList);
 const STARTERS = [
   { key: "write", icon: FileEditIcon },
   { key: "research", icon: Search01Icon },
@@ -144,7 +143,7 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
       </div>
     </header>
     {error ? <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-6 py-3"><p role="alert" className="min-w-0 flex-1 wrap-anywhere text-sm text-destructive">{t(viviFeedbackKey(error, "load"))}</p><Button variant="outline" size="sm" onClick={refresh}>{t("viviBot.retry")}</Button></div> : null}
-    <div className="relative min-h-0 flex-1"><Transcript cwd={null} messages={messages} conversationId={routerId ?? "vivi"} streaming={false} loading={loading && !optimistic} footer={<ViviProgressFooter progress={progress} sending={sending} fallbackRunning={snapshot?.progress === undefined && Boolean(activity?.running)} />} emptyState={<Empty className="h-full gap-6 pb-8"><EmptyHeader className="max-w-md gap-3"><EmptyMedia className="relative mb-1"><span aria-hidden className="absolute inset-0 scale-150 rounded-full bg-primary/5 blur-2xl" /><FastVibeMascot size="size-20" palette={palette} status="idle" /></EmptyMedia><EmptyTitle className="text-2xl font-semibold tracking-tight">{t("viviBot.greeting")}</EmptyTitle><EmptyDescription className="max-w-sm text-sm leading-6">{t("viviBot.description")}</EmptyDescription></EmptyHeader>{hasMainModel ? <div className="flex max-w-lg flex-wrap justify-center gap-2">{STARTERS.map(({ key, icon }) => <Button key={key} type="button" variant="outline" size="sm" className="h-auto gap-2 rounded-xl bg-card/60 px-3 py-2 font-normal text-muted-foreground shadow-none hover:text-foreground" disabled={sending} onClick={() => setDraft(t(`viviBot.starters.${key}.prompt`))}><HugeiconsIcon strokeWidth={1.8} icon={icon} className="size-3.5" />{t(`viviBot.starters.${key}.label`)}</Button>)}</div> : <Button variant="outline" size="sm" onClick={onManageModels}>{t("viviBot.addModels")}</Button>}</Empty>} /></div>
+    <div className="relative min-h-0 flex-1"><ViviMessageList messages={messages} palette={palette} conversationId={routerId ?? "vivi"} loading={loading && !optimistic} footer={<ViviProgressFooter progress={progress} sending={sending} fallbackRunning={snapshot?.progress === undefined && Boolean(activity?.running)} />} emptyState={<Empty className="h-full gap-6 pb-8"><EmptyHeader className="max-w-md gap-3"><EmptyMedia className="relative mb-1"><span aria-hidden className="absolute inset-0 scale-150 rounded-full bg-primary/5 blur-2xl" /><FastVibeMascot size="size-20" palette={palette} status="idle" /></EmptyMedia><EmptyTitle className="text-2xl font-semibold tracking-tight">{t("viviBot.greeting")}</EmptyTitle><EmptyDescription className="max-w-sm text-sm leading-6">{t("viviBot.description")}</EmptyDescription></EmptyHeader>{hasMainModel ? <div className="flex max-w-lg flex-wrap justify-center gap-2">{STARTERS.map(({ key, icon }) => <Button key={key} type="button" variant="outline" size="sm" className="h-auto gap-2 rounded-xl bg-card/60 px-3 py-2 font-normal text-muted-foreground shadow-none hover:text-foreground" disabled={sending} onClick={() => setDraft(t(`viviBot.starters.${key}.prompt`))}><HugeiconsIcon strokeWidth={1.8} icon={icon} className="size-3.5" />{t(`viviBot.starters.${key}.label`)}</Button>)}</div> : <Button variant="outline" size="sm" onClick={onManageModels}>{t("viviBot.addModels")}</Button>}</Empty>} /></div>
     <div className="safe-bottom transcript-gutter shrink-0 px-4 pb-3 sm:px-6"><div className="mx-auto w-full max-w-3xl">
       {requestsError ? <div className="mb-2 flex items-center gap-2"><p role="alert" className="min-w-0 flex-1 text-sm text-destructive wrap-anywhere">{t("viviBot.requests.loadFailed")}</p><Button size="sm" variant="outline" onClick={() => void retryRequests()}>{t("viviBot.retry")}</Button></div> : null}
       {requests.length ? <ViviRequestsPanel requests={requests} onAnswer={answer} /> : null}
