@@ -196,6 +196,95 @@ test("Router 创建稳定 Worker，会话结果写入 outbox 并成功投递一�
   } finally { await f.runtime.stop(); f.db.close(); }
 });
 
+function workerOutcome(f: ReturnType<typeof fixture>, outcome: "ready" | "failed" | "blocked" | "uncertain" | "idle") {
+  f.behavior(async (input) => {
+    if (input.conversationId.startsWith("router:")) {
+      if (input.text.includes("[Worker result")) return { status: "completed", text: "已经整理好啦，文件在 /project/report.md" };
+      await f.runtime.createWork(withExternalProject({ requestId: "w1", title: "报告", text: "写报告" }, "/project"));
+      return { status: "completed", text: "收到，已安排处理～" };
+    }
+    await f.runtime.report({ conversationId: input.conversationId, requestId: input.requestId, outcome, summary: `结果 ${outcome}` });
+    return done;
+  });
+}
+
+test("完成通知：Router 的承接回复不算完成，Worker ready 结果经 Router 回传后只发一次，内容是最后回复", async () => {
+  const f = fixture();
+  try {
+    workerOutcome(f, "ready");
+    f.runtime.start();
+    await f.runtime.submit({ requestId: "u1", text: "请写报告" });
+    await until(() => f.store.deliveries("delivered").length === 1);
+    const worker = f.store.conversations().find((item) => item.role === "worker")!;
+    const replies = f.events.filter((event) => event.message?.role === "assistant");
+    assert.ok(replies.length >= 2, "承接回复与最终回复都是 Router 消息");
+    assert.ok(replies.some((event) => event.message!.text.includes("已安排")), "承接回复存在，但不触发完成");
+    const completions = f.events.filter((event) => event.completion);
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0].completion!.conversationId, worker.conversationId, "点击跳转到 Worker 会话");
+    assert.equal(completions[0].completion!.text, "已经整理好啦，文件在 /project/report.md");
+    const ackIndex = f.events.findIndex((event) => event.message?.text.includes("已安排"));
+    assert.ok(f.events.indexOf(completions[0]) > ackIndex);
+    assert.ok(f.events.slice(0, f.events.indexOf(completions[0])).every((event) => !event.completion));
+  } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("完成通知：只安排工作、尚无结果时不发完成事件", async () => {
+  const f = fixture();
+  const gate = deferred<BotExecutionOutcome>();
+  try {
+    f.behavior(async (input) => {
+      if (input.conversationId.startsWith("router:")) {
+        await f.runtime.createWork(withExternalProject({ requestId: "w1", title: "报告", text: "写报告" }, "/project"));
+        return { status: "completed", text: "收到，已安排处理～" };
+      }
+      return gate.promise;
+    });
+    f.runtime.start();
+    await f.runtime.submit({ requestId: "u1", text: "请写报告" });
+    await until(() => f.events.some((event) => event.message?.text.includes("已安排")));
+    await tick();
+    assert.equal(f.events.filter((event) => event.completion).length, 0);
+    gate.resolve(done);
+  } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("完成通知：failed、blocked、uncertain、idle 的 Worker 结果回传时不报告为完成", async () => {
+  for (const outcome of ["failed", "blocked", "uncertain", "idle"] as const) {
+    const f = fixture();
+    try {
+      workerOutcome(f, outcome);
+      f.runtime.start();
+      await f.runtime.submit({ requestId: "u1", text: "请写报告" });
+      // idle results are never handed to the Router; the others are, and settle there.
+      await until(() => !f.runtime.activity().running && f.store.inputs().every((input) => input.status !== "queued" && input.status !== "running") && f.store.results().length > 0);
+      for (let i = 0; i < 20; i++) await tick();
+      assert.equal(f.events.filter((event) => event.completion).length, 0, outcome);
+    } finally { await f.runtime.stop(); f.db.close(); }
+  }
+});
+
+test("完成通知：Worker 被停止（interrupted）不产生完成事件", async () => {
+  const f = fixture();
+  const gate = deferred<BotExecutionOutcome>();
+  try {
+    f.behavior(async (input) => {
+      if (input.conversationId.startsWith("router:")) {
+        await f.runtime.createWork(withExternalProject({ requestId: "w1", title: "报告", text: "写报告" }, "/project"));
+        return { status: "completed", text: "收到，已安排处理～" };
+      }
+      return gate.promise;
+    });
+    f.runtime.start();
+    await f.runtime.submit({ requestId: "u1", text: "请写报告" });
+    await until(() => f.store.conversations().some((item) => item.role === "worker") && f.calls.some((call) => !call.conversationId.startsWith("router:")));
+    await f.runtime.stopAll();
+    gate.resolve({ status: "interrupted", text: "" });
+    await tick(); await tick();
+    assert.equal(f.events.filter((event) => event.completion).length, 0);
+  } finally { await f.runtime.stop(); f.db.close(); }
+});
+
 test("提问会暂停当前会话，回答沿用 conversationId 并进入新 epoch", async () => {
   const f = fixture(); let attentionId = ""; let rounds = 0;
   try {
@@ -240,15 +329,20 @@ test("continueConversation 创建恢复输入且不会复用旧 epoch", async ()
   } finally { await f.runtime.stop(); f.db.close(); }
 });
 
-test("恢复将 running 输入标成 uncertain 并暂停会话，不自动重放", async () => {
+test("恢复将 running 输入标成 uncertain，再由新检查回合接续 Router 原请求", async () => {
   const f = fixture();
   try {
     const now = Date.now();
     f.store.putConversation({ conversationId: "router:1", role: "router", owner: "vivi", creationKey: "router:vivi", epoch: 0, paused: false, createdAt: now, updatedAt: now });
+    f.store.setRouterConversationId("router:1");
     f.store.putInput({ id: "crashed", conversationId: "router:1", epoch: 0, source: "user", text: "未完成", status: "running", createdAt: now });
     f.store.recover();
     assert.equal(f.store.input("crashed")?.status, "uncertain"); assert.equal(f.store.conversation("router:1")?.paused, true);
-    f.runtime.start(); await tick(); assert.equal(f.calls.length, 0);
+    f.runtime.start();
+    await until(() => f.calls.length === 1 && !f.runtime.activity().running);
+    assert.match(f.calls[0].text, /Original request:\n未完成/);
+    assert.notEqual(f.calls[0].requestId, "crashed");
+    assert.equal(f.store.input("crashed")?.status, "uncertain");
   } finally { await f.runtime.stop(); f.db.close(); }
 });
 
@@ -387,13 +481,14 @@ test("同一个Runtime停止后再启动会恢复中断状态，不把迟到完�
     await f.runtime.stop();
     assert.equal(f.store.input("restart")?.status, "uncertain");
     f.runtime.start();
-    assert.equal(f.store.conversations()[0].paused, true);
-    assert.equal(f.runtime.activity().running, false);
-    assert.equal(f.calls.length, 1);
+    await until(() => f.calls.length === 2 && !f.runtime.activity().running);
+    assert.equal(f.store.conversations()[0].paused, false);
+    assert.equal(f.store.input("restart")?.status, "uncertain", "不将旧运行迟到的结果当成功");
+    assert.equal(f.calls[1].requestId.startsWith("restart-check:"), true);
   } finally { gate.resolve(done); await f.runtime.stop(); f.db.close(); }
 });
 
-test("重启后的显式继续处理已有结果并结算投递，不重新执行Worker", async () => {
+test("重启后自动检查已有结果并结算投递，不重新执行Worker", async () => {
   const f = fixture();
   try {
     await f.runtime.submit({ requestId: "original", text: "整理文档" });
@@ -405,9 +500,7 @@ test("重启后的显式继续处理已有结果并结算投递，不重新执�
     f.store.putDelivery({ id: "delivery:ready-result", conversationId: worker.conversationId, targetConversationId: router, resultId: "ready-result", status: "injected", text: "[Worker result ready] 文档已完成；产物 /output/guide.md", createdAt: 11 });
     f.store.putInput({ id: "delivery:ready-result", conversationId: router, epoch: 0, source: "report", text: "文档已完成", status: "running", createdAt: f.store.input("original")!.createdAt + 10 });
     f.runtime.start();
-    assert.equal(f.store.conversation(router)?.paused, true);
-    assert.equal(f.calls.length, 0, "恢复时不能自动重放");
-    await f.runtime.continueConversation({ conversationId: router });
+    assert.equal(f.store.conversation(router)?.paused, false);
     await until(() => f.store.delivery("delivery:ready-result")?.status === "delivered");
     assert.equal(f.calls.length, 1);
     assert.equal(f.calls[0].conversationId, router);

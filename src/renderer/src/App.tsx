@@ -1775,8 +1775,8 @@ export function App(): JSX.Element {
   // (see PermissionPanel): `confirm`, the agent's `select`/`input` questions, and the
   // paged `questions` form render inline; only `editor` (multi-line prefill) stays a
   // dialog.
-  const pendingPanel = permission && permission.method !== "editor" ? permission : null;
-  const pendingDialog = permission && permission.method === "editor" ? permission : null;
+  const pendingPanel = !viviOpen && permission && permission.method !== "editor" ? permission : null;
+  const pendingDialog = !viviOpen && permission && permission.method === "editor" ? permission : null;
   const composerSlot = pendingPanel ? (
     <PermissionPanel key={pendingPanel.id} request={pendingPanel} onRespond={handlePermissionRespond} />
   ) : (

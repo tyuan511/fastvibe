@@ -79,7 +79,7 @@ getSnapshot()
 - `stopConversation` 先事务内递增 epoch/paused，再 abort；自会话调用不能等待自身 abort。
 - Worker 正常收尾但没有 `report`：写入 `idle`/`uncertain` 结果，不判失败、不自动重试。
 - `ask` 持久化后结束当前执行；回答以同一 conversationId 的新 input 进入下一 epoch/回合。
-- 重启不自动重放 running/uncertain input；只恢复 durable queued input、pending attention 和 pending outbox。
+- 重启将 running/accepted 输入标为 uncertain 并持久记录 restartRecovery，自动排队 Router 检查中断 Worker。检查后沿原会话追加恢复输入，先核对已有文件与外部效果，再继续剩余工作；保留附件和后续队列。ready 只恢复交付，blocked/failed 和待答问题不自动执行，用户主动停止不被恢复。检查自身中断可再次检查，稳定输入身份防止重复排队。
 - 结果先落库，再写 outbox；交付成功才产生 `ConversationChanged.delivery`。失败只出现在 snapshot/sidebar 状态。
 
 ## Snapshot / Event

@@ -663,11 +663,14 @@ app.whenReady().then(async () => {
     syncScheduleTray(backgroundWorkEnabled(), openWindow, () => app.quit());
     const event = payload as BotChanged;
     notifyBotAttention();
-    if (event.message?.role === "assistant") {
-      const message = event.message;
-      getViviPetWindow().setMood("success", message.conversationId);
+    // Only a ready Worker result that the Router reported is a completion. A Router reply
+    // alone may be an acknowledgement or a question, and a failed/blocked/uncertain result
+    // has its own attention notice, so none of those announces «finished».
+    if (event.completion) {
+      const completion = event.completion;
+      getViviPetWindow().setMood("success", completion.conversationId);
       if (![...windows].some((window) => !window.isDestroyed() && window.isFocused()) && notificationEnabled(readNotificationSettings(), "notifyDone")) {
-        presentNotification({ setting: "notifyDone", title: uiText("Vivi 已完成任务", "Vivi finished your task"), body: message.text.slice(0, 400), conversationId: message.conversationId }, {
+        presentNotification({ setting: "notifyDone", title: uiText("Vivi 已完成任务", "Vivi finished your task"), body: completion.text.slice(0, 400), conversationId: completion.conversationId }, {
           windows: () => windows, createWindow: () => createWindow("/vivi"), openConversation: async () => openViviWindow(),
         });
       }

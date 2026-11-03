@@ -35,6 +35,16 @@ test("foreground deliveries are consumed and do not pop up when a duplicate arri
   const state = new ViviCompletionState(); assert.equal(state.deliver(delivery, false), false); assert.equal(state.deliver(delivery, true), false); assert.equal(state.completion, undefined);
 });
 
+test("a BotChanged completion feeds the bubble with the Worker target, and focus suppression consumes it", () => {
+  const event: import("../src/shared/bot.ts").BotChanged = { revision: 2, completion: { id: "completion:r1", conversationId: "worker-a", text: "文件已整理好" } };
+  const state = new ViviCompletionState();
+  assert.equal(state.deliver(event.completion!, false), false, "FastVibe 在前台时不展示");
+  assert.equal(state.deliver(event.completion!, true), false, "已消费，之后不补弹");
+  const later = new ViviCompletionState();
+  assert.equal(later.deliver(event.completion!, true), true);
+  assert.deepEqual([later.completion?.conversationId, later.completion?.text], ["worker-a", "文件已整理好"]);
+});
+
 test("a final Bot result supersedes an older asynchronous conversation read", () => {
   const state = new ViviCompletionState();
   const old = state.event({ type: "conversation_activity", conversationId: "chat", status: "completed" })!;

@@ -250,6 +250,7 @@
     "hintConfirm": "↑↓ to choose · 1–2 shortcuts · Enter to confirm · Esc for No",
     "hintSelect": "↑↓ to choose · 1–9 shortcuts · Enter to confirm · Esc to cancel",
     "hintInput": "Enter to submit · Esc to cancel",
+    "hintEditor": "Enter for a new line · Cmd/Ctrl+Enter to submit · Esc to cancel",
     "hintTyping": "Enter to submit · Esc to cancel",
     "hintMulti": "←→ switch questions · ↑↓ options · 1–9 to pick · Enter to confirm · Esc to cancel",
     "hintSingle": "↑↓ options · 1–9 to pick · Enter to confirm · Esc to cancel",

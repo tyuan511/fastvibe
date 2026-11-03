@@ -9,13 +9,23 @@ Vivi 现在采用“长期 Router 会话 + 持久 Worker 会话 + 薄持久编�
 - `BotStore` 只保存编排事实；会话正文、模型状态、队列、挂起 UI 和实时事件仍归引擎及会话转写所有。
 - `conversationId` 是 Worker 的稳定身份。首次创建使用 `creationKey` 幂等恢复；补充、回答、继续和结果回报都沿用同一个会话。
 - `epoch` 是停止与恢复边界。停止先持久化暂停和新 epoch，再中止 SDK；旧执行的迟到结果不能重新激活会话。
-- Worker 结果先写入结果表，并在用户 feed 保存关联结果、验证信息和产物的结果消息，再写入 Router outbox。Router 仍通过 `bot_reply` 给出自然语言汇总；内部 `BotChanged.delivery`、阶段进度和结果卡不直接触发宠物消息，宠物只消费显式 Router 回复。
+- Worker 结果先写入结果表，并在用户 feed 保存关联结果、验证信息和产物的结果消息，再写入 Router outbox。主聊天映射过滤这类内部结果消息，只展示 Router 通过 `bot_reply` 发出的简短汇报，避免同一结果出现两遍；结果与完整会话仍保留在具体任务详情。内部 `BotChanged.delivery`、阶段进度和结果卡不直接触发宠物消息，宠物只消费显式 Router 回复。
 - 问题跨重启保留。回答会进入同一 Worker 会话的新 epoch；旧问题不能重复回答。
-- 进程退出时 running/accepted 输入变成 `uncertain`，所属会话暂停，不自动重放可能已经产生外部副作用的执行。显式继续会在原会话中创建恢复输入。
+- 进程退出时 running/accepted 输入变成 `uncertain`，在同一事务中给会话记录 `restartRecovery`。启动后自动创建持久的 Router 检查输入，读取中断 Worker 的实时状态与已有结果，沿原 conversationId 调用继续；Router 正常收尾遗漏继续工具时，由运行时补齐仍有效的恢复。Worker 的恢复输入要求先核对历史、实际文件与外部效果，再完成剩余工作，保留原要求、图片、记忆引用与后续队列，不重放旧请求。已有 ready 结果只恢复汇报，blocked/failed 与待答问题不自动执行。
+- 恢复检查与 Worker 继续均持久化；检查过程中再次退出可继续检查，重复启动不重复排队。Router 自身中断、尚未派发的原请求也由检查接续，文字、图片与记忆引用从原回执恢复，不依赖 SDK 已保存提示词。用户主动停止递增 epoch 并清除恢复标记，检查期间停止后，旧检查、迟到工具和收尾补偿都不能重新恢复该 Worker。继续工具同时携带提供方请求时捕获的目标 epoch，普通 Router 回合也不能用旧状态解除新停止。主动暂停的 Router 不因重启被唤醒。
+- 等待问题后回答会将已有补充队列迁移到答案的新 epoch，先处理答案、再按原顺序执行补充，保留附件。重启识别中断输入按实际执行时间及在途回执，不按最初入队时间；恢复输入先于较早排队的补充执行，不会导致补充再次中断后被漏掉。
 - 停止全部后，新 `requestId` 的用户输入会重新开放 Router；重复旧请求不会恢复 Router，也不重放已取消输入或恢复 Worker。Worker 仍需显式继续。
 - 输入的图片写入 `BotInput` 的 JSON，和文字、目标会话一起参与幂等校验。纯图片输入有效，图片经 Host 和 `runBotSession` 传给 SDK 的 `prompt(..., { images })`。
 - 用户 feed 的 `text` 只保存展示正文，复用 `stripPromptMetadata` / `extractPromptAttachments` 将文件路径和长粘贴还原为附件；图片以 `ChatAttachment` 随消息持久化并传给标准聊天附件条。解析使用 trim 之前的原始提示，纯文件、纯粘贴和纯图片消息重开后仍保留附件；模型队列中的文字和图片保持原样。
 - Router 的实时上下文只携带当前执行输入的 `requestId` 与已知会话；排队中的输入不会改变当前执行。Router 每次请求都收到最新本地项目列表，按当前对话语义通过 `bot_create_work.project` 选择项目（精确主目录路径）。项目 Worker 的 catalog 同时绑定项目标识和真实 cwd，正常加载项目规则与多文件夹上下文；无项目的 Worker 默认按稳定创建 key 分配自己的 `vivi/workspaces/<hash>`，重试、继续和补充沿用该目录。只有显式指定 `workspace: "vivi"` 才共用 Router 的 `vivi/outputs` 总工作区，且不能与 project 同时指定。未知、远程或无法访问的项目明确报错，不回退到其他目录。已有 Worker 保留创建时的工作区，不迁移历史产物。
+
+## Vivi 主聊天的统一待处理面板
+
+主聊天在 composer 上方用 `ViviRequestsPanel` 汇总持久的 `BotAttention` 与插件阻塞请求，按 Vivi 快照里的 Router/Worker conversationId 筛选；普通聊天的请求不混入。面板显示所属工作与总数，可切换待处理项；已访问的表单保持挂载保存未提交内容，只有当前表单启用键盘。confirm/select/input/questions 复用 `PermissionPanel`，editor 在这个面板内保留预填并多行编辑；普通聊天的 editor 仍使用原来的对话框。
+
+插件请求继续以原请求 ID 调用 `engine.respondPermission`，不转换成 Bot attention、不新建用户输入。应答成功或收到宿主 dismiss 才移除对应 ID；发送失败保留请求与草稿，取消和超时也不会移除下一条。持久问题仍通过 `bot.answer` 回到原 Worker。页面和窗口初次加载用轻量的 `engine.getPendingUi` 补齐全部存量请求，不打开 Worker、不读各自的转写；请求列表与实时事件共用 `pendingPermissions`。全局列表没有快照水位，所以读取前先订阅并缓冲 request/dismiss，读取完成后重放这些事件并一次性安装队列；并发补齐读取合并，失败保留实时状态。插件 Promise 仍在 Main 的内存中，进程退出后的旧 Promise 不由这个界面恢复。
+
+共享 `PermissionPanel` 的 embedded 模式只处理面板内部且可见的键盘事件；隐藏或正在提交的请求不监听、不抢焦点。Vivi 主聊天不会同时展示普通聊天的 editor 对话框。预览：`mock.html?vivi=requests&lang=zh|en`；`requestError=1` 模拟首次应答失败，`pendingDelay=800` 模拟补齐读取期间的撤回与新增。`test/vivi-requests.test.ts` 覆盖读取竞争与来源隔离，`test/vivi-plugin-requests.test.ts` 用生产宿主方法验证五类 Promise、原 ID 应答、取消、超时与 Stop。
 
 ## 引擎与工具
 
@@ -24,6 +34,10 @@ Vivi 现在采用“长期 Router 会话 + 持久 Worker 会话 + 薄持久编�
 `bot-session-extension.ts` 使用 SDK 工具与事件机制：Router 可以读取当前会话上下文、创建工作会话、通过 `bot_send_message` 向原 Worker 投递补充要求、通过 `bot_reply` 向 Vivi 用户发送一条简短反馈、停止或继续指定会话；Worker 可以报告结果或持久化问题。两种角色都能通过 `bot_progress` 上报真实阶段与有用的中间成果。进度不结束回合，最终回复、报告和问题才结束；每轮捕获输入 ID 和 epoch，不能把工具调用 ID 当作输入 ID，停止后的迟到调用不得更新下一轮。普通文本收尾只作为兼容兜底转成 Router 消息，新的 Router 指令应使用 `bot_reply`，不能依赖 transcript 作为用户界面。
 
 ## 对话反馈
+
+主聊天是简短汇报入口，默认一两句话：承接只说已安排什么，完成只说结果，遇到阻塞或需要用户决定时说清关键事项。默认不重复需求、执行计划、根因、代码位置和测试清单；只有用户明确追问才展开。`vivi-voice.ts` 统一定义这条规则，工具说明和每次请求的实时上下文共同携带，继续或压缩后仍适用。Worker 将详细说明写在自己的会话正文中，`bot_report.summary` 仅放简短结论，证据和产物继续通过独立字段完整保存，用户可在任务详情查看。
+
+报错、失败、未确认结果和提问/确认共用同一条简短规则：失败只给真实问题与一个有用的下一步，不转贴错误原文、调用栈、尝试清单或诊断；确认只问一个具体问题，保留必要选项、范围及不可恢复的后果，不附执行回顾和后续计划。问题正文不做机械截断。主聊天的加载、发送、停止和回答错误由 `vivi-feedback.ts` 映射为简短的中英文文案；原始错误仍保留在状态、任务详情或诊断日志中。运行错误只显示一次，不在页面顶部和输入框上方重复提示。
 
 - `WorkSnapshot.progress` 从持久输入、当前 epoch、待答问题与结果推导每个会话的进度，不增加 Task / Run / Attempt 层级。开始与完成时间随输入保存，切页和重连不重置计时。快照更新通过带 revision 的事件触发读取，终态不能被旧失败或迟到快照覆盖。
 - 发送中的用户行和承接状态只在设备本地存在；宿主接收后采用同一个请求 ID 的持久行。失败撤回乐观行并保留草稿和附件。临时状态位于对话末尾，不写进聊天记录，也不把历史回复标成流式。
@@ -79,4 +93,6 @@ FASTVIBE_IROH_BIN=/Users/yuantang/code/fastvibe/resources/iroh/fastvibe-iroh pnp
 
 ## 后续阶段
 
-定时交办、IM、SSH 项目执行、多 Bot、独立历史全文搜索和结果未读计数尚未接入。持久投递提供逻辑去重与恢复，不承诺任意外部副作用 exactly-once；继续执行前仍需核对现场效果。
+启动恢复回归：`test/bot-restart.test.ts` 用真实数据库关闭重开验证自动检查、原 Worker 续跑、附件与后续队列、终态结果、问题等待、检查再次退出、停止竞争及结果汇报。`test/bot-restart-sdk.test.ts` 通过真实 SDK 与脚本模型验证 Router 检查工具、磁盘会话历史和 Worker 恢复执行。
+
+定时交办、IM、SSH 项目执行、多 Bot、独立历史全文搜索和结果未读计数尚未接入。持久投递提供逻辑去重与恢复，不承诺任意外部副作用 exactly-once；恢复输入要求执行模型先核对现场效果。

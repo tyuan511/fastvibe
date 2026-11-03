@@ -3,6 +3,7 @@ import type { NavigateFunction } from "react-router";
 import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { engine, getStatus, onConversationReady, onEvent, onStatus } from "@/lib/engine-client";
+import { refreshPendingUi } from "@/lib/pending-ui-client";
 import { createConversationRefresh } from "@/lib/conversation-refresh";
 import { coalesce } from "@/lib/coalesce";
 import { createWorkspaceRestore } from "@/lib/workspace-restore";
@@ -382,6 +383,9 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
         }
       }
     });
+    // Subscribe to live traffic first; the light global list restores prompts in
+    // unopened Workers too, without fetching every conversation's transcript.
+    void refreshPendingUi().catch(() => undefined);
     return () => {
       disposed = true;
       restore.dispose();

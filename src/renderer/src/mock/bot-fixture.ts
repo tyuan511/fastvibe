@@ -1,5 +1,5 @@
 import type { BotApi, BotChanged, BotConversationMeta, BotAttention, BotChatMessage, BotProgress, BotResult, WorkSnapshot } from "@shared/bot";
-import type { ChatMessage } from "@shared/types";
+import type { ChatMessage, EngineEvent } from "@shared/types";
 
 export function createBotFixture(cwd: string, english = false, empty = false, scenario = "sample"): BotApi {
   const word = (zh: string, en: string) => english ? en : zh;
@@ -81,4 +81,45 @@ export function createBotFixture(cwd: string, english = false, empty = false, sc
     stopAll: async () => { progress.forEach((item) => { if (["accepted", "understanding", "planning", "delegating", "working", "summarizing"].includes(item.phase)) item.phase = "paused"; }); conversations.forEach((conversation) => { if (conversation.role === "worker") conversation.paused = true; }); emit(); return snapshot(); },
   };
   return api;
+}
+
+export type ViviPendingUiFixture = {
+  requests: () => Array<Record<string, unknown>>;
+  respond: (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }) => void;
+  add: (request: Record<string, unknown>) => void;
+  dismiss: (id: string) => void;
+  onEvent: (listener: (event: EngineEvent) => void) => () => void;
+  responses: Array<{ id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }>;
+};
+
+export function createViviPendingUiFixture(english = false, enabled = false, ordinaryConversationId = "ordinary-chat"): ViviPendingUiFixture {
+  const word = (zh: string, en: string) => english ? en : zh;
+  const listeners = new Set<(event: EngineEvent) => void>();
+  const responses: ViviPendingUiFixture["responses"] = [];
+  const requests: Array<Record<string, unknown>> = enabled ? [
+    { type: "extension_ui_request", id: "vivi-plugin-confirm", conversationId: "vivi-worker-release", method: "confirm", title: word("需要确认", "Confirmation needed"), message: word("发布说明已经准备好，是否继续运行发布检查？", "The release notes are ready. Continue the release checks?"), timeout: 0 },
+    { type: "extension_ui_request", id: "vivi-plugin-select", conversationId: "vivi-worker-release", method: "select", title: word("选择发布渠道", "Choose a release channel"), message: word("请选择这次检查使用的渠道。", "Choose the channel for this check."), options: [word("测试环境", "Staging"), word("正式环境", "Production")], optionDetails: [{ description: word("只验证构建和安装流程", "Validate build and installation only") }, { description: word("会检查正式发布配置", "Check production release settings") }] },
+    { type: "extension_ui_request", id: "vivi-plugin-input", conversationId: "vivi-worker-guide", method: "input", title: word("需要一个文件名", "A filename is needed"), message: word("请输入入门说明的输出文件名。", "Enter the output filename for the guide."), placeholder: word("例如：getting-started.md", "e.g. getting-started.md") },
+    { type: "extension_ui_request", id: "vivi-plugin-editor", conversationId: "vivi-worker-guide", method: "editor", title: word("补充发布说明", "Add release notes"), message: word("请补充一段会写入文档的说明。", "Add a paragraph that will be written to the document."), prefill: word("这次更新包含……", "This update includes…") },
+    { type: "extension_ui_request", id: "vivi-plugin-questions", conversationId: "vivi-worker-guide", method: "questions", title: word("需要确认几项信息", "A few details need confirmation"), questions: [{ header: word("受众", "Audience"), question: word("这份文档面向谁？", "Who is this document for?"), options: [word("开发者", "Developers"), word("普通用户", "General users")], allowOther: true }, { header: word("语气", "Tone"), question: word("文档使用什么语气？", "What tone should the document use?"), options: [word("简洁", "Concise"), word("详细", "Detailed")], allowOther: false }] },
+    { type: "extension_ui_request", id: "ordinary-plugin-confirm", conversationId: ordinaryConversationId, method: "confirm", title: word("普通聊天请求", "Ordinary chat request"), message: word("这条请求不应出现在 Vivi 面板。", "This request should not appear in Vivi.") },
+  ] : [];
+  const emit = (event: EngineEvent): void => { for (const listener of listeners) listener(event); };
+  const requestSnapshot = (): Array<Record<string, unknown>> => structuredClone(requests);
+  const remove = (id: string): void => { const index = requests.findIndex((item) => item.id === id); if (index >= 0) requests.splice(index, 1); };
+  const respond = (payload: ViviPendingUiFixture["responses"][number]): void => {
+    const request = requests.find((item) => item.id === payload.id);
+    if (!request) return;
+    remove(payload.id); responses.push(structuredClone(payload));
+    emit({ type: "extension_ui_dismiss", id: payload.id, conversationId: request.conversationId } as EngineEvent);
+  };
+  const fixture: ViviPendingUiFixture = {
+    requests: requestSnapshot,
+    respond,
+    add: (request) => { if (typeof request.id !== "string" || requests.some((item) => item.id === request.id)) return; requests.push({ type: "extension_ui_request", ...request }); emit({ ...request, type: "extension_ui_request" } as EngineEvent); },
+    dismiss: (id) => { const request = requests.find((item) => item.id === id); if (!request) return; remove(id); emit({ type: "extension_ui_dismiss", id, conversationId: request.conversationId } as EngineEvent); },
+    onEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+    responses,
+  };
+  return fixture;
 }

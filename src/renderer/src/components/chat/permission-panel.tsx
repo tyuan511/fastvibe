@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -9,6 +9,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { PermissionRequest } from "@shared/types";
 
@@ -23,6 +24,21 @@ export type PermissionResponse = {
 
 type Respond = (payload: PermissionResponse) => void;
 
+type PanelScope = {
+  embedded: boolean;
+  active: boolean;
+  rootRef: React.RefObject<HTMLDivElement | null>;
+  acceptsKey: (event: globalThis.KeyboardEvent) => boolean;
+};
+
+const PanelContext = createContext<PanelScope | null>(null);
+
+function usePanelScope(): PanelScope {
+  const scope = useContext(PanelContext);
+  if (!scope) throw new Error("PermissionPanel context is missing");
+  return scope;
+}
+
 function confirmOptions(t: (key: string) => string): Array<{ label: string; response: Pick<PermissionResponse, "confirmed"> }> {
   return [
     { label: t("permission.yes"), response: { confirmed: true } },
@@ -34,30 +50,60 @@ function confirmOptions(t: (key: string) => string): Array<{ label: string; resp
 const INLINE_INPUT =
   "h-auto min-h-5 rounded-none border-transparent bg-transparent px-0 py-0 text-sm font-medium leading-5 shadow-none focus-visible:border-transparent focus-visible:ring-0 md:text-sm";
 
-/**
- * Inline prompt panel for extension dialogs, occupying the composer's slot at the
- * bottom of the thread instead of opening a modal. It handles the three shapes the
- * agent asks with:
- *
- * - `confirm` — a yes / no question
- * - `select`  — pick one of a list (numbered listbox)
- * - `input`   — type a free-form answer
- *
- * `editor` (a multi-line prefill) still uses the modal `PermissionDialog`.
- */
-export function PermissionPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element | null {
+/** Inline extension prompt; embedded panels share their enclosing card's layout. */
+export function PermissionPanel({
+  request,
+  onRespond,
+  embedded = false,
+  active = true,
+}: {
+  request: PermissionRequest;
+  onRespond: Respond;
+  embedded?: boolean;
+  active?: boolean;
+}): JSX.Element | null {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const scope = useMemo<PanelScope>(() => ({
+    embedded,
+    active,
+    rootRef,
+    acceptsKey: (event) => {
+      if (!active || event.defaultPrevented) return false;
+      if (!embedded) return true;
+      const root = rootRef.current;
+      // Vivi's composer and settings remain mounted beside this panel. Only
+      // visible, in-panel events belong to the request, even if focus is stale.
+      if (!root || !(event.target instanceof Node) || !root.contains(event.target)) return false;
+      if (root.getClientRects().length === 0) return false;
+      const visibility = getComputedStyle(root).visibility;
+      return visibility === "visible" && root.contains(document.activeElement);
+    },
+  }), [active, embedded]);
+  const respond = useCallback<Respond>((payload) => {
+    if (active) onRespond(payload);
+  }, [active, onRespond]);
+
+  let panel: ReactNode;
   switch (request.method) {
     case "confirm":
-      return <ConfirmPanel request={request} onRespond={onRespond} />;
+      panel = <ConfirmPanel request={request} onRespond={respond} />;
+      break;
     case "select":
-      return <SelectPanel request={request} onRespond={onRespond} />;
+      panel = <SelectPanel request={request} onRespond={respond} />;
+      break;
     case "input":
-      return <InputPanel request={request} onRespond={onRespond} />;
+      panel = <InputPanel request={request} onRespond={respond} />;
+      break;
+    case "editor":
+      panel = <EditorPanel request={request} onRespond={respond} />;
+      break;
     case "questions":
-      return <QuestionsPanel request={request} onRespond={onRespond} />;
+      panel = <QuestionsPanel request={request} onRespond={respond} />;
+      break;
     default:
       return null;
   }
+  return <PanelContext.Provider value={scope}>{panel}</PanelContext.Provider>;
 }
 
 
@@ -81,9 +127,24 @@ function PanelShell({
   actions?: ReactNode;
   children: ReactNode;
 }): JSX.Element {
+  const { embedded, active, rootRef } = usePanelScope();
+  useEffect(() => {
+    if (active && embedded && !rootRef.current?.contains(document.activeElement)) {
+      rootRef.current?.focus({ preventScroll: true });
+    }
+  }, [active, embedded, rootRef]);
+
   return (
-    <div className="@container/composer mx-auto w-full max-w-3xl px-6 pb-5">
-      <div className="glass-rim relative flex w-full flex-col gap-2 overflow-hidden rounded-2xl border border-border bg-card p-2.5 shadow-sm">
+    <div
+      ref={rootRef}
+      tabIndex={embedded && active ? -1 : undefined}
+      inert={!active}
+      className={cn("@container/composer w-full outline-none", !embedded && "mx-auto max-w-3xl px-6 pb-5")}
+    >
+      <div className={cn(
+        "relative flex w-full flex-col gap-2 overflow-hidden",
+        !embedded && "glass-rim rounded-2xl border border-border bg-card p-2.5 shadow-sm",
+      )}>
         <div className="flex items-start gap-2">
           <HugeiconsIcon
             strokeWidth={2}
@@ -102,7 +163,7 @@ function PanelShell({
           </div>
           {aside ? <div className="flex shrink-0 items-center gap-0.5">{aside}</div> : null}
         </div>
-        {children}
+        {embedded ? <div className="max-h-80 overflow-y-auto overflow-x-hidden">{children}</div> : children}
         <div className="flex items-center justify-between gap-3 px-0.5">
           <p className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
             <HugeiconsIcon strokeWidth={2} icon={CornerDownLeftIcon} className="size-3.5 shrink-0 text-foreground" />
@@ -302,19 +363,23 @@ function SelectPanel({ request, onRespond }: { request: PermissionRequest; onRes
 
 function InputPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element {
   const { t } = useTranslation("chat");
+  const { active, acceptsKey } = usePanelScope();
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (active) inputRef.current?.focus();
+  }, [active]);
 
-  const submit = useCallback(() => onRespond({ id: request.id, value }), [onRespond, request.id, value]);
+  const submit = useCallback(() => {
+    if (value.trim()) onRespond({ id: request.id, value });
+  }, [onRespond, request.id, value]);
   const cancel = useCallback(() => onRespond({ id: request.id, cancelled: true }), [onRespond, request.id]);
 
   useEffect(() => {
+    if (!active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.isComposing) return;
+      if (!acceptsKey(event) || event.isComposing) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -326,7 +391,7 @@ function InputPanel({ request, onRespond }: { request: PermissionRequest; onResp
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cancel, submit]);
+  }, [active, acceptsKey, cancel, submit]);
 
   return (
     <PanelShell
@@ -354,6 +419,64 @@ function InputPanel({ request, onRespond }: { request: PermissionRequest; onResp
   );
 }
 
+/** Multi-line editor keeps its draft while its request is parked by the parent. */
+function EditorPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element {
+  const { t } = useTranslation("chat");
+  const { active, acceptsKey } = usePanelScope();
+  const [draft, setDraft] = useState<{ id: string; value: string } | null>(null);
+  const value = draft?.id === request.id ? draft.value : (request.prefill ?? "");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const submit = useCallback(() => {
+    onRespond({ id: request.id, value });
+  }, [onRespond, request.id, value]);
+  const cancel = useCallback(() => onRespond({ id: request.id, cancelled: true }), [onRespond, request.id]);
+
+  useEffect(() => {
+    if (active) inputRef.current?.focus();
+  }, [active]);
+
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!acceptsKey(event) || event.isComposing) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        cancel();
+      } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        event.stopPropagation();
+        submit();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [active, acceptsKey, cancel, submit]);
+
+  return (
+    <PanelShell
+      title={request.title || t("permission.needInput")}
+      message={request.message}
+      hint={t("permission.hintEditor")}
+      actions={
+        <>
+          <Button size="sm" variant="outline" onClick={cancel}>{t("permission.cancel")}</Button>
+          <Button size="sm" onClick={submit}>{t("permission.submit")}</Button>
+        </>
+      }
+    >
+      <Textarea
+        ref={inputRef}
+        value={value}
+        aria-label={request.title || t("permission.needInput")}
+        placeholder={request.placeholder ?? t("permission.placeholder")}
+        className="max-h-72 min-h-40 resize-y text-sm"
+        onChange={(event) => setDraft({ id: request.id, value: event.target.value })}
+      />
+    </PanelShell>
+  );
+}
+
 /**
  * Shared keyboard behaviour for the list panels: ↑/↓ (or Tab) move, 1–9 jump,
  * Enter confirms the focused row, Esc cancels. The handler lives on `window` in
@@ -374,9 +497,11 @@ function usePanelKeys({
   onCancel: () => void;
   onIndex: (index: number) => void;
 }): void {
+  const { active: enabled, acceptsKey } = usePanelScope();
   useEffect(() => {
+    if (!enabled) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.isComposing) return;
+      if (!acceptsKey(event) || event.isComposing) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -403,7 +528,7 @@ function usePanelKeys({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [active, count, onCancel, onConfirm, onIndex, setActive]);
+  }, [enabled, acceptsKey, active, count, onCancel, onConfirm, onIndex, setActive]);
 }
 
 /**
@@ -412,6 +537,7 @@ function usePanelKeys({
  */
 function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; onRespond: Respond }): JSX.Element | null {
   const { t } = useTranslation("chat");
+  const { active, embedded, rootRef, acceptsKey } = usePanelScope();
   const questions = useMemo(() => request.questions ?? [], [request.questions]);
   const count = questions.length;
   const [index, setIndex] = useState(0);
@@ -459,8 +585,8 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
     (value: string) => {
       const next = answers.map((item, i) => (i === index ? value : item));
       setAnswers(next);
-      setCustomOpen(false);
-      setCustomValue("");
+      // The enclosing surface may keep this request after a transport failure.
+      // Retain the visible custom answer until the host actually dismisses it.
       onRespond({ id: request.id, answers: next });
     },
     [answers, index, onRespond, request.id],
@@ -493,12 +619,19 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
   }, [cursor, customValue, goTo, index, isLast, options, record, recordAndSubmit, rowCount, submit, typing]);
 
   useEffect(() => {
+    if (!active) return;
     if (typing) inputRef.current?.focus();
-  }, [typing, index]);
+    // Advancing from a typed answer can unmount the focused input. Keep the
+    // next question's shortcuts reachable without focusing a particular option.
+    else if (embedded && !rootRef.current?.contains(document.activeElement)) {
+      rootRef.current?.focus({ preventScroll: true });
+    }
+  }, [active, embedded, rootRef, typing, index]);
 
   useEffect(() => {
+    if (!active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.isComposing) return;
+      if (!acceptsKey(event) || event.isComposing) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -540,7 +673,7 @@ function QuestionsPanel({ request, onRespond }: { request: PermissionRequest; on
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cancel, count, freeForm, customOpen, goTo, index, isLast, options, primary, record, recordAndSubmit, rowCount, typing]);
+  }, [active, acceptsKey, cancel, count, freeForm, customOpen, goTo, index, isLast, options, primary, record, recordAndSubmit, rowCount, typing]);
 
   if (!current) return null;
 

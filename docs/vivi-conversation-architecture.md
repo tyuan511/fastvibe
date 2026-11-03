@@ -29,7 +29,7 @@
 | 报告区分 progress/waiting/ready/blocked/failed/dropped；ready 可仍在等待 PR 审核 | [执行文档](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/6337fc823ce20251c8de8085948165c81aaa701e/docs/003-execution.md) | 采用运行与交付分离；不搬 PR 结束规则，不把所有正常收尾都硬判完成 |
 | 普通进度留在内部；问题和有用结果通过可靠 relay 唤醒主会话 | [notices.ts L109–135](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/6337fc823ce20251c8de8085948165c81aaa701e/src/app/notices.ts#L109)、[sessions.ts L100](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/6337fc823ce20251c8de8085948165c81aaa701e/src/app/sessions.ts#L100) | 采用；不轮询模型，不让每条工具结果触发汇报 |
 | 事务内登记 effect，提交后执行；出站消息有 receipt | [effects.ts](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/6337fc823ce20251c8de8085948165c81aaa701e/src/app/effects.ts)、[outbox.ts L23](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/6337fc823ce20251c8de8085948165c81aaa701e/src/app/outbox.ts#L23) | 采用小型、封闭操作集的持久投递，不引入通用工作流平台 |
-| 主动恢复中断 Assignment，要求先检查实际外部效果 | [执行文档的 Restart](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/6337fc823ce20251c8de8085948165c81aaa701e/docs/003-execution.md#restart) | 保存历史与待投递；不自动重跑不确定的工具执行，继续由人明确触发 |
+| 主动恢复中断 Assignment，要求先检查实际外部效果 | [执行文档的 Restart](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/6337fc823ce20251c8de8085948165c81aaa701e/docs/003-execution.md#restart) | 保存历史与待投递；重启时 Vivi 自动检查中断 Worker，在原会话先核对实际效果，再恢复未完成工作 |
 
 DeepSeek 管理面板确实展示 Ticket，外部聊天才用自然语言隐藏术语。“界面轻”不能推导“内部无状态”。其 Ticket 解决的是单仓库、多用户、GitHub/飞书事件订阅、授权和 PR 生命周期；FastVibe 首版是本机用户直接交办，职责不同。
 
@@ -141,7 +141,7 @@ flowchart TB
 
 ### 重启
 
-恢复同一批 conversationId 与转写。确定尚未执行的持久投递可对账后继续；已执行但未确认结束的会话标为中断，不能仅因某个队列非空就自动重跑。用户继续时在原会话附恢复说明，先核对已有文件与外部效果。已完成但未汇报的结果可恢复汇报，尊重主会话暂停状态；不会重新执行 Worker 来获得同一结果。
+恢复同一批 conversationId 与转写。running/accepted 输入先标为 uncertain，持久保存应用退出产生的恢复责任，再自动创建 Router 检查回合。Router 读取当前 Worker、问题与结果，沿原会话恢复未完成工作；继续输入携带原要求与附件，先核对已有文件及外部效果，不重新执行旧请求。已完成但未汇报的结果只恢复汇报；blocked/failed、待答问题和用户主动停止的工作不自动执行。检查期间再次退出可继续检查，重复启动不重复入队；主动停止递增 epoch、清除恢复标记，旧检查与迟到工具不得解除暂停。Router 自己被用户暂停时仍保持暂停。
 
 ### 持久问题
 

@@ -45,10 +45,12 @@ function ViviBubble(): JSX.Element | null {
   useEffect(() => {
     listeners.add(change);
     const offBot = api.bot.onChanged((event) => {
-      if (!event.message || event.message.role !== "assistant") return;
+      // Only a ready Worker result reported by the Router is a completion; plain Router
+      // replies («已安排», follow-up questions) are conversation, not a finished task.
+      if (!event.completion) return;
       const snapshot = surface.snapshot;
       const eligible = Boolean(snapshot?.visible && snapshot.settings.enabled && snapshot.settings.messages !== false && snapshot.appFocused !== true);
-      if (completions.current.deliver(event.message, eligible)) change();
+      if (completions.current.deliver(event.completion, eligible)) change();
     });
     const theme = api.settings.onChanged((settings) => applyThemePreferences(settings as Parameters<typeof applyThemePreferences>[0]));
     return () => { listeners.delete(change); offBot(); theme(); };

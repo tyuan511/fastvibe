@@ -36,7 +36,7 @@ import {
 } from "./preview-data";
 import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
 import { setTranscriptDisplay } from "@/lib/transcript-display";
-import { createBotFixture } from "./bot-fixture";
+import { createBotFixture, createViviPendingUiFixture } from "./bot-fixture";
 import { createScheduleFixture } from "./schedule-fixture";
 import { gitTreeFixture } from "./git-tree-fixture";
 import { gitHistoryFixture } from "./git-history-fixture";
@@ -507,6 +507,23 @@ const runOnStart = params.get("running") === "1";
 
 /** The store's engine-event subscribers, so the replay above has somewhere to land. */
 const eventListeners = new Set<(event: unknown) => void>();
+const viviRequestsPreview = params.get("vivi") === "requests";
+const viviPendingUi = createViviPendingUiFixture(params.get("lang") === "en", viviRequestsPreview, fixtureActiveId);
+let rejectNextViviResponse = viviRequestsPreview && params.get("requestError") === "1";
+const pendingUiDelay = Math.min(10_000, Math.max(0, Number(params.get("pendingDelay")) || 0));
+const allParkedPrompts = (): Array<Record<string, unknown>> => [...parkedPrompts(), ...viviPendingUi.requests()];
+viviPendingUi.onEvent((event) => { for (const listener of eventListeners) listener(event); });
+if (viviRequestsPreview) {
+  Object.assign(window, {
+    __viviRequestResponses: viviPendingUi.responses,
+    __viviRequestTest: {
+      add: viviPendingUi.add,
+      dismiss: viviPendingUi.dismiss,
+      pending: viviPendingUi.requests,
+      responses: viviPendingUi.responses,
+    },
+  });
+}
 
 const openResult = (id: string): ConversationOpenResult => {
   const conversation = fixtureConversations.find((item) => item.id === id) ?? fixtureConversations[0];
@@ -764,8 +781,25 @@ const vivi = {
   },
 };
 
+const botFixture = createBotFixture(PREVIEW_CWD, params.get("lang") === "en", params.get("vivi") === "empty", params.get("vivi") ?? "sample");
+if (viviRequestsPreview) {
+  const stopConversation = botFixture.stopConversation;
+  const stopAll = botFixture.stopAll;
+  botFixture.stopConversation = async (input) => {
+    const next = await stopConversation(input);
+    for (const request of viviPendingUi.requests()) if (request.conversationId === input.conversationId) viviPendingUi.dismiss(String(request.id));
+    return next;
+  };
+  botFixture.stopAll = async () => {
+    const next = await stopAll();
+    const owners = new Set(next.conversations.map((conversation) => conversation.conversationId));
+    for (const request of viviPendingUi.requests()) if (typeof request.conversationId === "string" && owners.has(request.conversationId)) viviPendingUi.dismiss(String(request.id));
+    return next;
+  };
+}
+
 const api = {
-  bot: createBotFixture(PREVIEW_CWD, params.get("lang") === "en", params.get("vivi") === "empty", params.get("vivi") ?? "sample"),
+  bot: botFixture,
   schedules: createScheduleFixture(params.get("tasks") === "sample"),
   vivi,
   engine: {
@@ -862,20 +896,30 @@ const api = {
     saveAgentConfig: async () => [],
     removeAgentConfig: async () => [],
     getSubagentMessages: async (): Promise<ChatMessage[]> => [],
-    respondPermission: async () => undefined,
+    respondPermission: async (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }) => {
+      if (!viviRequestsPreview || !viviPendingUi.requests().some((request) => request.id === payload.id)) return;
+      if (rejectNextViviResponse) { rejectNextViviResponse = false; throw new Error("Preview: response could not be sent"); }
+      viviPendingUi.respond(payload);
+    },
     newSession: async () => undefined,
     // Answered for the chat that asked, as the engine does: a state reply with no
     // `conversationId` is a draft, which the store refuses for an open conversation.
     getState: async (conversationId?: string) => mockSession(conversationId),
     getRunning: async (): Promise<string[]> => [...runningIds],
     // `?waiting=1` parks a question on the active chat, for the phone page's 等你.
-    getPendingUi: async (): Promise<Array<Record<string, unknown>>> => parkedPrompts(),
+    getPendingUi: async (): Promise<Array<Record<string, unknown>>> => {
+      // Capture before delaying so tests can dismiss a request while this old
+      // snapshot is in flight, then verify that the renderer does not revive it.
+      const requests = allParkedPrompts();
+      if (viviRequestsPreview && pendingUiDelay) await new Promise((resolve) => setTimeout(resolve, pendingUiDelay));
+      return requests;
+    },
     getSnapshot: async (conversationId?: string) => ({
       conversationId: conversationId ?? fixtureActiveId,
       messages: conversationId && conversationId !== fixtureActiveId ? fixtureMessages.slice(0, 2) : fixtureMessages,
       running: runningIds.has(conversationId ?? fixtureActiveId),
       queue: skillQueue(conversationId ?? fixtureActiveId, !conversationId || conversationId === fixtureActiveId),
-      pendingUi: parkedPrompts().filter((request) => request.conversationId === (conversationId ?? fixtureActiveId)),
+      pendingUi: allParkedPrompts().filter((request) => request.conversationId === (conversationId ?? fixtureActiveId)),
       turnEvents: [],
       overflowed: false,
       seq: 0,

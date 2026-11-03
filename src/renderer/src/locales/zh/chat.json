@@ -250,6 +250,7 @@
     "hintConfirm": "↑↓ 选择 · 1–2 快捷 · Enter 确认 · Esc 选否",
     "hintSelect": "↑↓ 选择 · 1–9 快捷 · Enter 确定 · Esc 取消",
     "hintInput": "Enter 提交 · Esc 取消",
+    "hintEditor": "Enter 换行 · Cmd/Ctrl+Enter 提交 · Esc 取消",
     "hintTyping": "Enter 提交 · Esc 取消",
     "hintMulti": "←→ 切换问题 · ↑↓ 选项 · 1–9 选择 · Enter 确认 · Esc 取消",
     "hintSingle": "↑↓ 选项 · 1–9 选择 · Enter 确认 · Esc 取消",

@@ -49,6 +49,8 @@ export type BotConversationMeta = {
   creationKey: string;
   epoch: number;
   paused: boolean;
+  /** An application exit interrupted this input; explicit Stop clears this obligation. */
+  restartRecovery?: { inputId: string };
   createdAt: number;
   updatedAt: number;
   title?: string;
@@ -71,6 +73,10 @@ export type BotInput = {
   intent?: "status";
   /** Result updates explicitly included in a resumed Router turn. */
   deliveryIds?: string[];
+  /** Workers owned by a durable startup inspection, scoped to their interruption epoch. */
+  restartTargets?: { conversationId: string; epoch: number; inputId: string }[];
+  /** The interrupted request being continued after the startup inspection. */
+  recoveryOf?: string;
   /** Markdown references are resolved again when this input starts. */
   memoryRefs?: BotMemoryRef[];
   /** Actual persisted SDK branch span, used only for incremental memory extraction. */
@@ -131,6 +137,12 @@ export type BotChanged = {
   delivery?: Pick<BotDelivery, "id" | "conversationId" | "text">;
   /** Explicit Router replies only; progress/status/result rows are read via the snapshot. */
   message?: Pick<BotChatMessage, "id" | "conversationId" | "role" | "text">;
+  /**
+   * Final completion only: a Worker result with status `ready` that the Router has just
+   * reported to the user. `text` is the Router's last reply; `conversationId` is the Worker.
+   * Acknowledgements, questions and failed/blocked/uncertain results never produce one.
+   */
+  completion?: Pick<BotDelivery, "id" | "conversationId" | "text">;
 };
 export type BotExecutionOutcome = { status: "completed" | "failed" | "interrupted"; text: string; error?: string };
 

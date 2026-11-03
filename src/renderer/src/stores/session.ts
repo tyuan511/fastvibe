@@ -310,6 +310,8 @@ export type SessionStore = {
    * do queue up here.
    */
   resolvePermission: (id: string) => void;
+  /** Install the global parked-prompt list after replaying events from its read. */
+  setPendingUi: (requests: PermissionRequest[]) => void;
   dismissNotice: (id: string) => void;
   addUserMessage: (text: string, attachments?: ChatAttachment[]) => void;
   /**
@@ -833,6 +835,18 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       const next = mergeSubagentSnapshot(state.subagents, subagents);
       return next === state.subagents ? state : { subagents: next };
     }),
+  setPendingUi: (requests) => set((state) => {
+    const pendingPermissions: Record<string, PermissionRequest[]> = {};
+    for (const request of requests) {
+      const owner = request.conversationId ?? state.activeId ?? "__active__";
+      (pendingPermissions[owner] ??= []).push(request);
+    }
+    return {
+      pendingPermissions,
+      permission: activePermission(pendingPermissions, state.activeId),
+      waitingForUser: waitingFrom(pendingPermissions, state.waitingForUser),
+    };
+  }),
   resolvePermission: (id) =>
     set((state) => {
       // Search every conversation, not just the one on screen.

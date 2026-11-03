@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { BotCreateWorkRequest, BotAttention, BotChanged, BotChatMessage, BotConversationMeta, BotExecutionOutcome, BotHost, BotInput, BotProgressRequest, BotReportRequest, BotResult, BotSubmitRequest, BotActivity, BotProgress, WorkSnapshot } from "../../shared/bot.ts";
 import { extractPromptAttachments, stripPromptMetadata } from "../../shared/attachment-metadata.ts";
 import type { ChatAttachment, PromptImage } from "../../shared/types.ts";
@@ -51,19 +51,114 @@ export class BotRuntime {
   #enabled = false;
   #scheduled = false;
   #recovered = false;
+  #generation = 0;
   #error: string | undefined;
   readonly store: BotStore;
   readonly host: BotHost;
   constructor(store: BotStore, host: BotHost) { this.store = store; this.host = host; }
 
   start(): void {
+    if (this.#enabled) return;
     if (!this.#recovered) { this.store.recover(); this.#recovered = true; }
     this.#enabled = true;
+    void this.#queueRestartInspection(++this.#generation).catch((error) => {
+      this.#error = error instanceof Error ? error.message : String(error);
+      this.#emit();
+    });
     this.#emit();
     this.#kick();
   }
+  async #queueRestartInspection(generation: number): Promise<void> {
+    let targets = this.store.conversations().filter((meta) => {
+      const receipt = meta.restartRecovery ? this.store.input(meta.restartRecovery.inputId) : undefined;
+      return meta.role === "worker" && receipt?.status === "uncertain" && receipt.epoch === meta.epoch && !this.store.attentions(meta.conversationId).some((item) => item.status === "pending");
+    }).map((meta) => ({ conversationId: meta.conversationId, epoch: meta.epoch, inputId: meta.restartRecovery!.inputId }));
+    let router = this.store.routerConversationId ? this.store.conversation(this.store.routerConversationId) : undefined;
+    const reports = this.store.deliveries().filter((delivery) => delivery.targetConversationId === router?.conversationId && (delivery.status === "injected" || delivery.status === "pending"));
+    const interruptedRouter = router?.restartRecovery ? this.store.input(router.restartRecovery.inputId) : undefined;
+    const originalRouter = this.#originalInput(interruptedRouter);
+    if (!targets.length && !interruptedRouter) return;
+    if (router?.paused && !router.restartRecovery) return;
+    if (router && this.store.attentions(router.conversationId).some((item) => item.status === "pending")) return;
+    if (!router) {
+      const created = await this.host.createConversation({ kind: "router", key: "router:vivi" });
+      if (!this.#enabled || generation !== this.#generation) return;
+      // A user submission may have created the same stable Router while awaiting the host.
+      router = this.store.routerConversationId ? this.store.conversation(this.store.routerConversationId) : undefined;
+      if (!router) {
+        const now = Date.now();
+        router = { conversationId: typeof created === "string" ? created : created.conversationId, role: "router", owner: VIVI_BOT_ID, creationKey: "router:vivi", epoch: 0, paused: false, createdAt: now, updatedAt: now };
+      }
+    }
+    targets = targets.filter((target) => {
+      const current = this.store.conversation(target.conversationId);
+      return current?.epoch === target.epoch && current.restartRecovery?.inputId === target.inputId;
+    });
+    if (!targets.length && !router.restartRecovery) return;
+    if (router.paused && !router.restartRecovery) return;
+    const epoch = router.epoch + Number(Boolean(router.restartRecovery));
+    const fingerprint = createHash("sha256").update(JSON.stringify([router.conversationId, epoch, targets, reports.map((item) => item.id)])).digest("hex").slice(0, 24);
+    const baseId = `restart-check:${fingerprint}`;
+    let id = baseId;
+    for (let attempt = 1; ; attempt++) {
+      const previous = this.store.input(id);
+      if (!previous) break;
+      if (previous.status !== "failed" && previous.status !== "uncertain") return;
+      id = `${baseId}:${attempt}`;
+    }
+    const details = targets.map((target) => ({ ...target, title: this.store.conversation(target.conversationId)?.title, results: this.store.results(target.conversationId).filter((item) => item.inputId === target.inputId && item.epoch === target.epoch) }));
+    const originalRequest = originalRouter && !originalRouter.restartTargets && originalRouter.source !== "report" ? `\nAlso finish handling the interrupted user request below, which may not have reached SDK history. First check existing conversations and reuse any Worker already created for it; arrange new work only if it was never dispatched. Do not repeat a completed dispatch.\nOriginal request:\n${originalRouter.text}` : "";
+    const text = `The application restarted. Automatically inspect these interrupted Worker conversations using bot_read_context and their existing results. Resume unfinished work with bot_continue_conversation on the SAME conversationId; never create replacement Workers or repeat completed work. Do not resume user-stopped work or conversations with pending questions. A ready result needs delivery only; blocked/failed results need an explanation, not automatic execution. Recovery instructions tell each resumed Worker to check actual files and external effects before continuing. This is an internal startup check, not a new user request.\nWorkers: ${JSON.stringify(details)}\nExisting result updates:\n${reports.map((item) => item.text).join("\n\n")}${originalRequest}`;
+    this.#change(() => {
+      this.store.setRouterConversationId(router!.conversationId);
+      this.store.putConversation({ ...router!, paused: false, restartRecovery: undefined, epoch, updatedAt: Date.now() });
+      for (const queued of this.store.inputs(router!.conversationId)) if (queued.status === "queued" && queued.epoch === router!.epoch) this.store.putInput({ ...queued, epoch, ...(queued.restartTargets ? { status: "canceled" } : {}) });
+      for (const report of reports) {
+        if (report.status === "pending") this.store.updateDelivery({ ...report, status: "injected" });
+        const queued = this.store.input(report.id);
+        if (queued?.status === "queued") this.store.putInput({ ...queued, status: "canceled" });
+      }
+      this.store.putInput({ id, conversationId: router!.conversationId, epoch, source: "resume", text, restartTargets: targets, ...(interruptedRouter ? { recoveryOf: interruptedRouter.id, rootInputId: interruptedRouter.rootInputId ?? interruptedRouter.id, images: originalRouter?.images, memoryRefs: originalRouter?.memoryRefs } : {}), deliveryIds: reports.map((item) => item.id), status: "queued", createdAt: Date.now() });
+    });
+    this.#kick();
+  }
+
+  #originalInput(input: BotInput | undefined): BotInput | undefined {
+    const seen = new Set<string>();
+    while (input?.recoveryOf && !seen.has(input.id)) {
+      seen.add(input.id);
+      const previous = this.store.input(input.recoveryOf);
+      if (!previous) break;
+      input = previous;
+    }
+    return input;
+  }
+
+  async #finishRestartInspection(input: BotInput): Promise<void> {
+    for (const target of input.restartTargets ?? []) {
+      const router = this.#active.get(input.conversationId);
+      if (!this.#enabled || !router || router.controller.signal.aborted || this.store.conversation(input.conversationId)?.epoch !== input.epoch || this.store.input(input.id)?.status !== "running") return;
+      const meta = this.store.conversation(target.conversationId);
+      if (!meta || meta.epoch !== target.epoch || meta.restartRecovery?.inputId !== target.inputId) continue;
+      if (this.store.attentions(meta.conversationId).some((item) => item.status === "pending")) continue;
+      const result = this.store.results(meta.conversationId).filter((item) => item.inputId === target.inputId && item.epoch === target.epoch).at(-1);
+      if (result && ["ready", "blocked", "failed"].includes(result.status)) {
+        this.#change(() => {
+          this.store.putConversation({ ...meta, restartRecovery: undefined, paused: result.status !== "ready", updatedAt: Date.now() });
+          const receipt = this.store.input(target.inputId);
+          if (receipt?.status === "uncertain") this.store.putInput({ ...receipt, status: result.status === "ready" ? "completed" : "failed", completedAt: result.createdAt, error: result.status === "ready" ? undefined : result.summary });
+        });
+        continue;
+      }
+      // Finishing the inspection must not silently drop a Worker if the Router
+      // described its next step but omitted the continuation tool call.
+      await this.continueConversation({ conversationId: meta.conversationId });
+    }
+  }
+
   async stop(): Promise<void> {
     this.#enabled = false;
+    this.#generation++;
     const active = [...this.#active.values()];
     for (const job of active) job.controller.abort();
     await Promise.allSettled(active.map((job) => this.host.abort(job.meta.conversationId)));
@@ -76,7 +171,11 @@ export class BotRuntime {
     const first = this.#active.values().next().value as Active | undefined;
     // The input becomes running before the active job is registered. Keep that
     // transition busy too, otherwise the last queued input broadcasts idle.
-    return { running: this.#active.size > 0 || this.store.inputs().some((input) => input.status === "queued" || input.status === "running"), waiting, conversationId: first?.meta.conversationId };
+    const pending = this.store.inputs().some((input) => {
+      const meta = this.store.conversation(input.conversationId);
+      return meta && !meta.paused && meta.epoch === input.epoch && (input.status === "queued" || input.status === "running");
+    });
+    return { running: this.#active.size > 0 || pending, waiting, conversationId: first?.meta.conversationId };
   }
   /** Called only after the SDK has persisted a new assistant message. */
   conversationUpdated(conversationId: string): void {
@@ -176,7 +275,7 @@ export class BotRuntime {
     if (meta.paused && meta.role !== "router") throw new Error("会话已暂停，请先继续");
     const now = Math.max(Date.now(), (this.store.chatMessages().at(-1)?.createdAt ?? 0) + 1);
     this.#change(() => {
-      if (meta!.paused) this.store.putConversation({ ...meta!, paused: false, updatedAt: now });
+      if (meta!.paused) this.store.putConversation({ ...meta!, paused: false, restartRecovery: undefined, updatedAt: now });
       this.store.putInput({ id: requestId, conversationId: meta!.conversationId, epoch: meta!.epoch, source, text, images, memoryRefs, status: "queued", createdAt: now, rootInputId: source === "router" ? (this.#routerInput()?.rootInputId ?? this.#routerInput()?.id) : requestId });
       if (source === "user") {
         this.store.putChatMessage({
@@ -263,8 +362,9 @@ export class BotRuntime {
     const answer = textOf(input.answer, "回答", 16000);
     this.#change(() => {
       this.store.putAttention({ ...attention, answer, status: "resolved" });
-      const next = { ...meta, paused: false, epoch: meta.epoch + 1, updatedAt: Date.now() };
+      const next = { ...meta, paused: false, restartRecovery: undefined, epoch: meta.epoch + 1, updatedAt: Date.now() };
       this.store.putConversation(next);
+      for (const queued of this.store.inputs(meta.conversationId)) if (queued.status === "queued" && queued.epoch === meta.epoch) this.store.putInput({ ...queued, epoch: next.epoch });
       this.store.putInput({ id: `answer:${attention.id}`, conversationId: next.conversationId, epoch: next.epoch, source: "answer", text: answer, status: "queued", createdAt: Date.now() });
       this.store.putChatMessage({ id: `chat:user:answer:${attention.id}`, conversationId: next.conversationId, role: "user", text: answer, inputId: `answer:${attention.id}`, createdAt: Date.now() });
     });
@@ -275,7 +375,7 @@ export class BotRuntime {
   async stopConversation(input: { conversationId: string; callerConversationId?: string }): Promise<WorkSnapshot> {
     const meta = this.#meta(input.conversationId);
     this.#change(() => {
-      this.store.putConversation({ ...meta, epoch: meta.epoch + 1, paused: true, updatedAt: Date.now() });
+      this.store.putConversation({ ...meta, epoch: meta.epoch + 1, paused: true, restartRecovery: undefined, updatedAt: Date.now() });
       for (const attention of this.store.attentions(meta.conversationId)) if (attention.status === "pending") this.store.putAttention({ ...attention, status: "withdrawn" });
       for (const delivery of this.store.deliveries()) if ((delivery.conversationId === meta.conversationId || delivery.targetConversationId === meta.conversationId) && (delivery.status === "pending" || delivery.status === "injected")) this.store.updateDelivery({ ...delivery, status: "failed" });
       for (const item of this.store.inputs(meta.conversationId)) {
@@ -288,18 +388,34 @@ export class BotRuntime {
     if (active && input.callerConversationId !== meta.conversationId) await this.host.abort(meta.conversationId);
     return this.getWorkSnapshot();
   }
-  async continueConversation(input: { conversationId: string }): Promise<WorkSnapshot> {
+  async continueConversation(input: { conversationId: string; callerConversationId?: string; callerRequestId?: string; callerEpoch?: number; targetEpoch?: number }): Promise<WorkSnapshot> {
     const meta = this.#meta(input.conversationId);
+    if (input.targetEpoch !== undefined && input.targetEpoch !== meta.epoch) return this.getWorkSnapshot();
+    const caller = input.callerConversationId ? this.#active.get(input.callerConversationId) : undefined;
+    if (input.callerConversationId && (!caller || caller.controller.signal.aborted || this.store.conversation(input.callerConversationId)?.epoch !== caller.meta.epoch || (input.callerRequestId !== undefined && input.callerRequestId !== caller.inputId) || (input.callerEpoch !== undefined && input.callerEpoch !== caller.meta.epoch))) return this.getWorkSnapshot();
+    const inspection = caller ? this.store.input(caller.inputId) : undefined;
+    if (inspection?.restartTargets) {
+      if (caller?.controller.signal.aborted || this.store.conversation(inspection.conversationId)?.epoch !== inspection.epoch || inspection.status !== "running") return this.getWorkSnapshot();
+      const target = inspection.restartTargets.find((item) => item.conversationId === meta.conversationId);
+      if (!target || meta.epoch !== target.epoch || meta.restartRecovery?.inputId !== target.inputId) return this.getWorkSnapshot();
+      const result = this.store.results(meta.conversationId).filter((item) => item.inputId === target.inputId && item.epoch === target.epoch).at(-1);
+      if (result && ["ready", "blocked", "failed"].includes(result.status)) return this.getWorkSnapshot();
+    }
     if (!meta.paused && (this.#active.has(meta.conversationId) || this.store.inputs(meta.conversationId).some((item) => item.epoch === meta.epoch && item.status === "queued"))) return this.getWorkSnapshot();
     if (this.store.attentions(meta.conversationId).some((item) => item.status === "pending")) throw new Error(uiText("请先回答当前问题。", "Please answer the pending question first."));
+    const interrupted = meta.restartRecovery ? this.store.input(meta.restartRecovery.inputId) : undefined;
+    const original = this.#originalInput(interrupted);
     this.#change(() => {
-      this.store.putConversation({ ...meta, paused: false, epoch: meta.epoch + 1, updatedAt: Date.now() });
+      this.store.putConversation({ ...meta, paused: false, restartRecovery: undefined, epoch: meta.epoch + 1, updatedAt: Date.now() });
       const next = this.#meta(meta.conversationId);
+      if (interrupted) for (const queued of this.store.inputs(meta.conversationId)) if (queued.status === "queued" && queued.epoch === meta.epoch) this.store.putInput({ ...queued, epoch: next.epoch });
       const pendingReports = next.role === "router" ? this.store.deliveries().filter((delivery) => delivery.targetConversationId === next.conversationId && delivery.status === "injected") : [];
       const resumeText = pendingReports.length
         ? `Continue the unfinished work. Review these existing result updates and summarize them for the user; do not repeat completed work.\n${pendingReports.map((delivery) => delivery.text).join("\n\n")}`
-        : "Continue the unfinished work from the current conversation.";
-      this.store.putInput({ id: `resume:${next.conversationId}:${next.epoch}`, conversationId: next.conversationId, epoch: next.epoch, source: "resume", text: resumeText, ...(pendingReports.length ? { deliveryIds: pendingReports.map((delivery) => delivery.id) } : {}), status: "queued", createdAt: Date.now() });
+        : interrupted && meta.role === "worker"
+          ? `The application exited while this work was running. Inspect the existing conversation, actual workspace files and external effects first; tool calls may have partially or fully succeeded. Continue only the unfinished work in this same workspace, without repeating completed actions. If the work is already complete, verify and report its existing result. Ask only if a real missing answer blocks progress. Original interrupted requirements:\n${original?.text ?? interrupted.text}`
+          : "Continue the unfinished work from the current conversation.";
+      this.store.putInput({ id: `resume:${next.conversationId}:${next.epoch}`, conversationId: next.conversationId, epoch: next.epoch, source: "resume", text: resumeText, ...(interrupted ? { recoveryOf: interrupted.id, rootInputId: interrupted.rootInputId ?? interrupted.id, images: interrupted.images, memoryRefs: interrupted.memoryRefs } : {}), ...(pendingReports.length ? { deliveryIds: pendingReports.map((delivery) => delivery.id) } : {}), status: "queued", createdAt: Date.now() });
     });
     this.#kick();
     return this.getWorkSnapshot();
@@ -350,7 +466,7 @@ export class BotRuntime {
     }
     for (const meta of this.store.conversations()) {
       if (meta.paused || this.#active.has(meta.conversationId)) continue;
-      const input = this.store.inputs(meta.conversationId).filter((item) => item.status === "queued" && item.epoch === meta.epoch).sort((a, b) => Number(a.source === "report") - Number(b.source === "report") || a.createdAt - b.createdAt)[0];
+      const input = this.store.inputs(meta.conversationId).filter((item) => item.status === "queued" && item.epoch === meta.epoch).sort((a, b) => Number(Boolean(b.recoveryOf) || b.source === "answer") - Number(Boolean(a.recoveryOf) || a.source === "answer") || Number(a.source === "report") - Number(b.source === "report") || a.createdAt - b.createdAt)[0];
       if (!input) continue;
       const phase = meta.role === "router" ? input.source === "report" ? "summarizing" : "understanding" : "working";
       const detail = phase === "summarizing"
@@ -382,6 +498,8 @@ export class BotRuntime {
     const current = this.store.conversation(active.meta.conversationId);
     const input = this.store.input(active.inputId);
     if (!current || !input || current.epoch !== active.meta.epoch || input.status === "canceled") return;
+    if (outcome.status === "completed" && payload.restartTargets) await this.#finishRestartInspection(payload);
+    if (this.store.conversation(active.meta.conversationId)?.epoch !== active.meta.epoch) return;
     const delivery = this.store.delivery(active.inputId);
     // Fallback persistence must happen while the receipt is still running. The public
     // reply/report methods deliberately reject stale calls after Stop; calling them
@@ -391,7 +509,8 @@ export class BotRuntime {
     }
     if ((active.meta.role === "worker" || outcome.status !== "completed") && !current.paused) {
       const previous = this.store.results(active.meta.conversationId).filter((result) => result.inputId === active.inputId && result.epoch === active.meta.epoch).at(-1);
-      if (!previous || outcome.status !== "completed") {
+      const savedBeforeExit = outcome.status === "interrupted" && previous && ["ready", "blocked", "failed"].includes(previous.status);
+      if (!previous || (outcome.status !== "completed" && !savedBeforeExit)) {
         this.#saveResult(current, input, { id: previous?.id ?? `result:${input.id}`, conversationId: current.conversationId, inputId: input.id, epoch: current.epoch, status: outcome.status === "completed" ? "idle" : outcome.status === "interrupted" ? "uncertain" : "failed", summary: outcome.error ?? (outcome.text.trim() || uiText("执行结束，但没有确认完成的结果。", "Execution ended without a confirmed result.")), evidence: previous?.evidence, artifacts: previous?.artifacts, createdAt: Date.now() });
       }
     }
@@ -413,5 +532,26 @@ export class BotRuntime {
     if (outcome.status === "completed") this.#error = undefined;
     if (outcome.status !== "completed") this.#error = outcome.error ?? "Vivi 会话执行未完成";
     if (delivery && outcome.status === "completed") this.#emitDelivery({ ...delivery, status: "delivered" });
+    if (outcome.status === "completed" && active.meta.role === "router") this.#announceCompletion(current.conversationId, input.id, [delivery?.id, ...(settled.deliveryIds ?? [])]);
+  }
+
+  /**
+   * The only «finished» signal for the pet and system notification. A Router reply on its own
+   * proves nothing (it may be «已安排»); what proves completion is a Worker result that
+   * reported `ready`, handed to the user by a Router turn that itself completed.
+   */
+  #announceCompletion(routerId: string, inputId: string, deliveryIds: Array<string | undefined>): void {
+    let ready: BotResult | undefined;
+    for (const id of new Set(deliveryIds)) {
+      const resultId = id ? this.store.delivery(id)?.resultId : undefined;
+      const result = resultId ? this.store.result(resultId) : undefined;
+      if (result?.status === "ready") ready = result;
+    }
+    if (!ready) return;
+    const reply = this.store.chatMessages().filter((message) => message.conversationId === routerId && message.inputId === inputId && message.role === "assistant" && message.kind === "message").at(-1);
+    const text = (reply?.text || ready.summary || "").trim();
+    if (!text) return;
+    try { this.host.changed({ revision: this.store.revision, completion: { id: `completion:${ready.id}`, conversationId: ready.conversationId, text } }); }
+    catch (error) { this.#error = error instanceof Error ? error.message : String(error); }
   }
 }

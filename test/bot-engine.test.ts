@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { botSessionExtension, botToolAllowed, type BotSessionService } from "../src/main/bot/bot-session-extension.ts";
+import { VIVI_CHAT_BRIEFING, VIVI_FAILURE_BRIEFING, VIVI_QUESTION_BRIEFING } from "../src/main/bot/vivi-voice.ts";
 import { runBotSession } from "../src/main/bot/bot-engine-host.ts";
 import type { BotExecutionOutcome, BotHost } from "../src/shared/bot.ts";
 import type { PromptImage } from "../src/shared/types.ts";
@@ -53,6 +54,68 @@ test("Router 的 bot_reply 写入用户反馈并结束当前回合", async (t) =
   assert.equal(result.text, "");
   assert.equal(replies, 1);
   assert.equal(h.session.isIdle, true);
+});
+
+test("Router 每次提供方请求都带简短汇报规则，工具结果不冲淡规则", async (t) => {
+  let requests = 0;
+  const checkBriefing = (context: { messages: unknown[] }) => {
+    requests++;
+    const live = context.messages.filter((message) => JSON.stringify(message).includes("Current Vivi conversation state:"));
+    assert.equal(live.length, 1);
+    assert.ok(JSON.stringify(live).includes(VIVI_CHAT_BRIEFING));
+    assert.match(VIVI_CHAT_BRIEFING, /one or two short sentences/);
+  };
+  const h = await harness(t, [
+    (context) => { checkBriefing(context); return fauxAssistantMessage([fauxToolCall("bot_read_context", {})], { stopReason: "toolUse" }); },
+    (context) => { checkBriefing(context); return fauxAssistantMessage([fauxToolCall("bot_reply", { text: "通知误报修好啦，检查也通过了～" })], { stopReason: "toolUse" }); },
+    (context) => { checkBriefing(context); return fauxAssistantMessage([fauxToolCall("bot_reply", { text: "具体改动可以在任务详情里查看。" })], { stopReason: "toolUse" }); },
+  ], "router");
+  const first = await h.run();
+  assert.equal(first.status, "completed", first.error);
+  const next = await h.run("现在怎么样了");
+  assert.equal(next.status, "completed", next.error);
+  assert.equal(requests, 3);
+});
+
+test("Worker 详细正文留在真实会话，简短报告仍完整传递证据和产物", async (t) => {
+  const detail = "根因：完成通知误用了中间回复。\n改动位置：src/main/index.ts。\n验证：通知相关测试通过。";
+  const report = { outcome: "ready" as const, summary: "通知误报修好了。", evidence: ["通知相关测试通过"], artifacts: ["/output/report.md"] };
+  let recorded: unknown;
+  const h = await harness(t, [(context) => {
+    assert.match(JSON.stringify(context.messages), /Do not pack that explanation into summary/);
+    return fauxAssistantMessage([{ type: "text", text: detail }, fauxToolCall("bot_report", report)], { stopReason: "toolUse" });
+  }], "worker", undefined, { report: async (input) => { recorded = input; return { recorded: true }; } });
+  assert.equal((await h.run()).status, "completed");
+  assert.deepEqual(recorded, { conversationId: "worker:1", requestId: undefined, epoch: undefined, ...report });
+  assert.ok(h.session.sessionManager.getBranch().some((entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some((part) => part.type === "text" && part.text === detail)));
+});
+
+test("失败、阻塞和确认在真实 SDK 请求中沿用简短规则，必要后果保留", async (t) => {
+  for (const outcome of ["failed", "blocked"] as const) await t.test(outcome, async (t) => {
+    const summary = outcome === "failed" ? "文件没能保存，请检查文件夹权限后再试。" : "还缺少发布账号，请补充后我再继续。";
+    let reported: unknown;
+    const h = await harness(t, [(context) => {
+      const prompt = JSON.stringify(context.messages);
+      assert.ok(prompt.includes(VIVI_FAILURE_BRIEFING));
+      assert.match(prompt, /Do not invent a cause/);
+      return fauxAssistantMessage([fauxToolCall("bot_report", { outcome, summary, evidence: ["完整诊断保留在任务详情"] })], { stopReason: "toolUse" });
+    }], "worker", undefined, { report: async (input) => { reported = input; return {}; } });
+    assert.equal((await h.run()).status, "completed");
+    assert.deepEqual(reported, { conversationId: "worker:1", requestId: undefined, epoch: undefined, outcome, summary, evidence: ["完整诊断保留在任务详情"], artifacts: undefined });
+  });
+  await t.test("confirmation", async (t) => {
+    const question = "删除后无法恢复，要继续删除这份备份吗？";
+    let asked: unknown;
+    const h = await harness(t, [(context) => {
+      const prompt = JSON.stringify(context.messages);
+      assert.ok(prompt.includes(VIVI_QUESTION_BRIEFING));
+      assert.match(prompt, /irreversible consequences explicit/);
+      assert.doesNotMatch(prompt, /say what you will do once they answer/);
+      return fauxAssistantMessage([fauxToolCall("bot_ask_user", { question })], { stopReason: "toolUse" });
+    }], "worker", undefined, { ask: async (input) => { asked = input; return {}; } });
+    assert.equal((await h.run()).status, "completed");
+    assert.deepEqual(asked, { conversationId: "worker:1", requestId: undefined, epoch: undefined, question });
+  });
 });
 
 test("Host runner 等待完整 prompt、不会复用上一轮 assistant", async (t) => {

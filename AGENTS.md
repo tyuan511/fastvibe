@@ -3834,6 +3834,8 @@ locale charmap        →   US-ASCII
 
 停止全部使旧 epoch 失效并暂停会话；新 requestId 的用户输入可以重新开放 Router，重复旧请求不能恢复，也不重放取消输入或自动恢复 Worker。Router 通过 `bot_send_message` 向已有 Worker 发送补充要求，暂停的 Worker 仍需先显式继续。工作会话详情在所有提前返回之前调用一次 `useBotSnapshot`，会话与结果共用它，不能在 JSX 条件中调用 Hook。
 
+启动时 `BotStore.recover()` 为应用退出中断的输入记录 `restartRecovery`；Router 自动收到持久检查输入，读取已有 Worker 状态与结果，再沿原会话继续未完成工作。恢复输入要求先核对实际文件与外部效果，保留原要求、图片、记忆引用与后续队列；ready 只恢复汇报，blocked/failed 与待答问题不自动执行。主动停止递增 epoch 并清除恢复标记，旧检查与迟到继续工具均不能解除暂停；主动暂停的 Router 也不被重启唤醒。恢复回归见 `test/bot-restart.test.ts` 与 `test/bot-restart-sdk.test.ts`。
+
 验证见 `test/bot-runtime.test.ts`（停止/重启、图片持久化、输入项目隔离）、`test/bot-engine.test.ts`（真实 SDK 图片请求、Router 补充进入原 Worker）及 `docs/vivi-bot-implementation.md`。
 
 ## Vivi 对话反馈
@@ -3843,6 +3845,8 @@ Vivi 主聊天的临时承接与真实进度来自 `WorkSnapshot.progress`，按
 Router 和 Worker 共用 `bot_progress` 上报真实阶段，有价值的阶段成果才用 `milestone` 进入聊天，同一用户请求最多三条并去重、限频。最终报告包含摘要、证据和产物；阶段行与结果行不合并进普通 SDK 回复，也不进入「用时」折叠。结果、进度和内部投递不触发宠物消息，宠物仍只消费显式 Router 回复。
 
 进度问句和普通消息一样交给 Router，由 Router 按实时进度、待答问题和结果用 Vivi 的口吻回答（`main/bot/vivi-voice.ts` 是口吻的唯一来源），等待期间主界面只有一行「正在处理…」；回答进度问题不新建工作、不恢复暂停的工作。主界面没有状态卡片、阶段名或操作按钮，停止用输入框的停止键。失败、未确认交付和中断不得呈现为成功，已有产物保留，继续沿用同一会话。扩展每轮捕获 input ID 与 epoch，不以工具调用 ID 代替，停止后的迟到进度和报告不能影响新一轮。详见 `docs/vivi-bot-implementation.md`，验证包括 `test/bot-conversation-progress.test.ts` 的真实 SDK 流程。
+
+Vivi 主聊天的 `ViviRequestsPanel` 在 composer 上方统一展示 `BotAttention` 与所属 Router/Worker 的插件阻塞请求（confirm/select/input/editor/questions），显示来源并可切换，普通聊天请求不混入。插件应答保留原 id 走 `engine.respondPermission`，成功或 dismiss 后才按 id 移除，失败保留草稿；持久问题仍走 `bot.answer`。`engine.getPendingUi` 是全局轻量存量入口，不读取转写；`pending-ui.ts` 在读取前订阅、缓冲 request/dismiss，重放后一次安装共享 `pendingPermissions`，防止迟到快照复活已撤回请求。`PermissionPanel` 的 embedded/active 模式让隐藏表单保留草稿但不监听键盘，当前表单也只处理自身可见范围内的按键，editor 在 Vivi 内联预填编辑；普通聊天仍使用原来的 editor 弹窗，Vivi 打开时不展示它。这里只恢复仍在 Main 等待的插件 Promise，不持久化进程退出前的 Promise。预览 `mock.html?vivi=requests&lang=zh|en`，回归 `test/vivi-requests.test.ts`、`test/vivi-plugin-requests.test.ts`。
 
 ## Vivi 独立 Markdown 记忆
 

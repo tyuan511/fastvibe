@@ -120,6 +120,7 @@ export const onEvent: FastVibeEngine["onEvent"] = (...args) => window.fastvibe.e
 export const onStatus: FastVibeEngine["onStatus"] = (...args) => window.fastvibe.engine.onStatus(...args);
 export const onConversationReady: FastVibeEngine["onConversationReady"] = (...args) =>
   window.fastvibe.engine.onConversationReady(...args);
+export const getPendingUi: FastVibeEngine["getPendingUi"] = (...args) => window.fastvibe.engine.getPendingUi(...args);
 export const respondPermission: FastVibeEngine["respondPermission"] = (...args) =>
   window.fastvibe.engine.respondPermission(...args);
 /**

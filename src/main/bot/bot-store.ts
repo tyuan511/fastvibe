@@ -52,13 +52,20 @@ export class BotStore {
   recover(): void {
     this.transaction(() => {
       let changed = false;
-      for (const input of this.inputs()) if (input.status === "running" || input.status === "accepted") { this.putInput({ ...input, status: "uncertain", error: "应用在执行期间退出，请核对现场后继续" }); changed = true; }
+      const interrupted = new Set<string>();
+      for (const input of this.inputs()) if (input.status === "running" || input.status === "accepted") { this.putInput({ ...input, status: "uncertain", error: "应用在执行期间退出，请核对现场后继续" }); interrupted.add(input.id); changed = true; }
       for (const meta of this.conversations()) {
         const currentInputs = this.inputs(meta.conversationId).filter((input) => input.epoch === meta.epoch && input.intent !== "status");
-        const latest = currentInputs.filter((input) => input.status !== "queued").at(-1);
+        // A recovery input runs before older queued follow-ups. Request creation
+        // order therefore cannot identify which input was actually interrupted.
+        const latest = currentInputs.find((input) => interrupted.has(input.id)) ?? currentInputs.filter((input) => input.status !== "queued").sort((a, b) => (a.completedAt ?? a.startedAt ?? a.createdAt) - (b.completedAt ?? b.startedAt ?? b.createdAt) || Number(a.status === "uncertain") - Number(b.status === "uncertain")).at(-1);
         if (!latest || latest.status !== "uncertain") continue;
-        if (meta.paused) continue;
-        this.putConversation({ ...meta, paused: true, updatedAt: Date.now() });
+        if (this.attentions(meta.conversationId).some((item) => item.status === "pending")) continue;
+        // Stop advances the conversation epoch before marking its old input uncertain.
+        // An uncertain input in the current epoch belongs to application recovery,
+        // including legacy recovery pauses written before restartRecovery existed.
+        if (meta.paused && meta.restartRecovery?.inputId === latest.id) continue;
+        this.putConversation({ ...meta, paused: true, restartRecovery: { inputId: latest.id }, updatedAt: Date.now() });
         changed = true;
       }
       if (changed) this.bumpRevision();

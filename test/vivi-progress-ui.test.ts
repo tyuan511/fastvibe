@@ -10,7 +10,7 @@ const compiled = ts.transpileModule(readFileSync(new URL("../src/renderer/src/li
 const exports_: Record<string, any> = {};
 vm.runInNewContext(compiled, { exports: exports_, require: (name: string) => name.includes("i18n") ? { i18n: { language: "zh" } } : {}, WeakMap, Map, Set });
 
-test("Vivi 连续回复、阶段汇报和结果各自独立，不合并成 SDK 运行", () => {
+test("Vivi 阶段和 Router 汇报各自独立，Worker 结果留在详情里", () => {
   const messages: BotChatMessage[] = [
     { id: "u", conversationId: "router", role: "user", text: "写文档", createdAt: 1 },
     { id: "a", conversationId: "router", role: "assistant", text: "开始处理", createdAt: 2 },
@@ -21,10 +21,12 @@ test("Vivi 连续回复、阶段汇报和结果各自独立，不合并成 SDK �
   ];
   const mapped = botChatMessages(messages);
   const rows = exports_.groupMessageRows(mapped);
-  assert.equal(rows.length, messages.length);
-  assert.deepEqual(mapped[3].bot?.result?.artifacts, ["/tmp/doc.md"]);
-  assert.deepEqual(mapped[3].bot?.result?.evidence, ["链接有效"]);
+  assert.equal(rows.length, messages.length - 1);
+  assert.deepEqual(mapped.map((message) => message.id), ["u", "a", "p", "a2", "a3"]);
+  assert.ok(mapped.every((message) => !message.bot?.result));
+  assert.deepEqual(messages[3].result?.evidence, ["链接有效"], "完整结果保留在原始数据中");
+  assert.deepEqual(messages[3].result?.artifacts, ["/tmp/doc.md"]);
   assert.equal(mapped[2].role, "system");
   assert.equal(mapped[0].role, "user");
-  assert.equal(mapped[4].role, "assistant");
+  assert.equal(mapped[3].role, "assistant");
 });
