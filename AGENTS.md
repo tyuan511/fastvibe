@@ -768,7 +768,7 @@ Provider credentials are kept in FastVibe's isolated runtime and injected into t
 任务清单复用 `useConversationTodo` / `TodoRow`，显示已完成数量；展示条件与 composer 上方的面板完全一致，过时的计划两处都不画（不是画出来再打个标记）。
 子代理合并转写、当前会话的运行注册表和 DAG；实时状态优先，DAG 的当前运行不能重复列出。
 资源面板不展示后台任务或命令调用；命令输出仍在会话转写中查看。
-最近产出复用当前已载入转写的 `conversationOutputs`，不代表未载入历史的完整文件索引。
+资源面板不展示「最近产出」文件列表；文件产物仍从会话转写中打开。
 工作区变更是仓库全部改动，不宣称由本会话产生；点击仓库通过 `openGit(cwd)` 定位审查。
 环境的分支行同样打开变更视图，并额外把提交历史的分支范围切到当前分支（`openGit(cwd, "current")`）。这个请求是一次性的：面板应用后经 `onFocusHandled` 清除，所以之后用户在历史里自己选的范围不会被下一次挂载改回去。窄布局（手机）不渲染右侧面板，因此该行和仓库行一样 `disabled`。
 预览：`mock.html?resources=sample|empty&theme=light|dark&lang=zh|en`。
@@ -2355,7 +2355,7 @@ Word / Excel / PowerPoint 的预览和智能体编辑都走随安装包发布的
   可展示；https 链接必须以图片/视频扩展名结尾；不收 data URL（让模型把 base64 写进参数是浪费 token）。结果
   `details.items` 记下 `{ref, title, ok, error}`，渲染层只画 `ok` 的。扩展不能 import `@shared`，所以扩展名
   清单在两处各一份，`test/inline-media.test.ts` 把它们对齐。
-- **消息里不画大图，只画名字。** 回复里的预览是行内文件名（图标 + 名字，和路径链接同一个观感；一次调用的多项同一行换行排列；markdown 的 `![]()` 同样）。工具产生的预览随工具一起进入「用时 …」，不再提取缩略图到折叠标题；展开过程后点名字打开**查看器**（`Viewer`）：全窗口深色遮罩，一次一项，图片 / 视频 / HTML 都支持，底部「‹ 第 i 项，共 n 项 ›」，← / → 在**同一批**里切换，左下是名字，右上是「在侧栏中打开」和 ⋮（在文件夹中显示 / 复制路径或链接 / 在浏览器中打开）与关闭。点遮罩空白处也关。猜出来的本地路径用 `filesExist` 核对，不存在就不画名字（`useMissingGuesses`）；明确要求展示的不核对，打不开时查看器里写「无法加载」。
+- **消息里不画大图，只画名字。** 回复里的预览是行内文件名（图标 + 名字，和路径链接同一个观感；一次调用的多项同一行换行排列；markdown 的 `![]()` 同样）。工具产生的预览随工具一起进入「用时 …」，并通过 `InlineThumbStrip` 在折叠标题右侧汇总入口（最多三个，超出显示更多）；入口是折叠触发器的兄弟，点击预览不切换折叠。最终回复区仍只保留正文。点击标题右侧入口或展开过程后的文件名都打开**查看器**（`Viewer`）：全窗口深色遮罩，一次一项，图片 / 视频 / HTML 都支持，底部「‹ 第 i 项，共 n 项 ›」，← / → 在**同一批**里切换，左下是名字，右上是「在侧栏中打开」和 ⋮（在文件夹中显示 / 复制路径或链接 / 在浏览器中打开）与关闭。点遮罩空白处也关。猜出来的本地路径用 `filesExist` 核对，不存在就不画名字（`useMissingGuesses`）；明确要求展示的不核对，打不开时查看器里写「无法加载」。
 - **位置。** 预览紧跟产生它的工具卡，随运行过程一起折叠；最终回复区只保留最后输出的正文，不额外提取智能体操作、工具产物或文件变更卡。
   `shared/media-preview.ts` 不能用 `node:path`：渲染层也 import 它，浏览器构建里 `extname`
   是 `undefined`，第一次展示文件就会抛。
@@ -3843,6 +3843,16 @@ Vivi 主聊天的临时承接与真实进度来自 `WorkSnapshot.progress`，按
 Router 和 Worker 共用 `bot_progress` 上报真实阶段，有价值的阶段成果才用 `milestone` 进入聊天，同一用户请求最多三条并去重、限频。最终报告包含摘要、证据和产物；阶段行与结果行不合并进普通 SDK 回复，也不进入「用时」折叠。结果、进度和内部投递不触发宠物消息，宠物仍只消费显式 Router 回复。
 
 明确的简短进度问句与「查看进度」直接读当前事实，不排队调用模型、不恢复已暂停工作；混合新要求或附件的输入仍交给模型。失败、未确认交付和中断不得呈现为成功，已有产物保留，继续沿用同一会话。扩展每轮捕获 input ID 与 epoch，不以工具调用 ID 代替，停止后的迟到进度和报告不能影响新一轮。详见 `docs/vivi-bot-implementation.md`，验证包括 `test/bot-conversation-progress.test.ts` 的真实 SDK 流程。
+
+## Vivi 独立 Markdown 记忆
+
+Vivi 的记忆由 `src/main/bot/memory/` 管理，常开、没有配置入口，不读全局 `MemoryConfig.enabled`。`runtime/engine/vivi/memories/` 保存 `memory_summary.md`、`MEMORY.md`、`raw_memories.md` 和 `rollout_summaries/`，旁边的 `memory-state.json` 只记来源指纹、游标与重试。没有新数据库表；普通记忆清理不影响这套文件。
+
+Router 通过 `bot_memory_read/search/update` 查阅和维护记忆，Worker 只有只读工具。明确更新必须绑定当前用户输入、原话、requestId 和 epoch，文件 revision 不匹配时拒绝覆盖；用户说已记住前必须写入成功。分派的 `memoryRefs` 最多三项，执行时按当前 Markdown 章节重新读取。隐藏 `vivi-memory-context` 在请求投影中只留有效快照，压缩后补回，版本变化撤回旧记忆工具结果，普通工具配对保持完整。
+
+后台在输入真正收尾后提炼；`memoryBranch` 用 SDK entry ID 限定本轮材料，排除内部 `bot_*` 调用、思考、注入记忆及用户元数据，只在选中来源后加载实际工具片段。显式保存和收尾后的同一输入共享稳定来源指纹，不重复提炼；遗忘截止使用原始要求时间，旧工作迟到完成不能重新学习。整理在隔离工作副本进行，模型调用不持发布锁；发布前核对来源、generation 和文件 revision，使用目录锁、journal 和原子文件替换恢复多文件写入。Vivi 整理器使用 `workspaceOnly` 文件工具边界，普通全局记忆行为不变。
+
+详细结构和遗忘时清理原始笔记的取舍见 `docs/vivi-memory-design.md`；回归为 `test/vivi-memory-*.test.ts`。记忆维护不新增 UI、配置、宠物通知或 Worker 自动重放。
 
 ## Vivi 桌面宠物
 

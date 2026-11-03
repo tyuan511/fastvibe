@@ -57,10 +57,13 @@ export function RunProgress({ startedAt }: { startedAt: number }): JSX.Element {
  */
 export function RunCollapse({
   durationMs,
+  trailing,
   children,
 }: {
   /** How long the run took: its first request start to the instant it finished. */
   durationMs: number;
+  /** Preview shortcuts stay visible without opening the process. */
+  trailing?: ReactNode;
   children: ReactNode;
 }): JSX.Element {
   const { t } = useTranslation("chat");
@@ -78,7 +81,7 @@ export function RunCollapse({
         <CollapsibleTrigger
           data-slot="run-collapse"
           className={cn(
-            "group/run inline-flex max-w-full cursor-pointer items-center gap-1.5 text-left text-sm",
+            "group/run inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 text-left text-sm",
             "rounded-none text-muted-foreground transition-colors hover:text-foreground",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
           )}
@@ -94,6 +97,7 @@ export function RunCollapse({
             )}
           />
         </CollapsibleTrigger>
+        {trailing}
       </RunHeader>
       <CollapsibleContent>
         {/*

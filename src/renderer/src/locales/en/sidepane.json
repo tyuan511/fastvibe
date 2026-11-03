@@ -6,6 +6,8 @@
     "conversations": "Work conversations",
     "empty": "No work conversations yet",
     "emptyConversation": "This work conversation has no messages yet",
+    "noReply": "No replies yet",
+    "cardStatus": {"queued": "Queued", "working": "Working", "waiting": "Needs your answer", "paused": "Paused", "completed": "Completed", "failed": "Failed", "interrupted": "Interrupted", "blocked": "Needs more information", "unconfirmed": "Unconfirmed", "idle": "Not started"},
     "workspace": "Workspace",
     "recovery": "Ready to continue",
     "continue": "Continue",
@@ -413,12 +415,9 @@
     "progress": "{{done}}/{{total}} completed",
     "agents": "Agents",
     "finished": "Finished · {{count}}",
-    "outputs": "Recent outputs",
     "changes": "Workspace changes",
     "changesDescription": "All current changes in these repositories",
-    "jump": "Go to message",
     "more": "Show more ({{count}})",
-    "less": "Show less",
-    "previewFailed": "Could not open file"
+    "less": "Show less"
   }
 }

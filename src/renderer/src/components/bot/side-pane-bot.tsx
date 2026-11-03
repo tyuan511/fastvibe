@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { BotIcon, Folder01Icon, StopIcon } from "@hugeicons/core-free-icons";
+import { Folder01Icon } from "@hugeicons/core-free-icons";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Composer } from "@/components/chat/composer";
@@ -11,10 +13,11 @@ import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore, type SidePaneTab } from "@/stores/side-pane";
 import { engine, getCommands, onEvent } from "@/lib/engine-client";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
-import { folderName, ConversationRow, ResultStatus } from "./bot-status";
-import { LIVE_PHASES } from "./vivi-progress";
+import { BotConversationAvatar } from "./bot-conversation-avatar";
+import { botConversationCards } from "@/lib/bot-conversation-card";
+import { folderName, ConversationCard } from "./bot-status";
 import { useBotSnapshot } from "./use-bot-snapshot";
-import type { BotConversationMeta, WorkSnapshot } from "@shared/bot";
+import type { BotConversationMeta } from "@shared/bot";
 import type { ChatAttachment, ChatMessage, ConversationSnapshot, EngineSessionState } from "@shared/types";
 
 function useConversationData(conversationId: string) {
@@ -43,13 +46,17 @@ export function SidePaneBotTasks(): JSX.Element {
   const { t } = useTranslation("sidepane");
   const { snapshot, loading, error } = useBotSnapshot();
   const open = useSidePaneStore((state) => state.openBotConversation);
-  const conversations = (snapshot?.conversations ?? []).filter((conversation) => conversation.role === "worker");
+  const [, refreshClock] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => refreshClock((value) => value + 1), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const conversations = snapshot ? botConversationCards(snapshot) : [];
   return <div className="min-h-0 flex-1 overflow-y-auto p-3">
-    <div className="mb-3 flex items-center gap-2"><HugeiconsIcon strokeWidth={2} icon={BotIcon} className="size-4 text-muted-foreground" /><h2 className="text-sm font-medium">{t("bot.conversations")}</h2></div>
     {error ? <p role="alert" className="wrap-anywhere py-2 text-sm text-destructive">{error}</p> : null}
     {loading && !snapshot ? <div className="flex justify-center py-8"><Spinner /></div> : null}
     {!loading && !conversations.length ? <p className="py-8 text-center text-sm text-muted-foreground">{t("bot.empty")}</p> : null}
-    <div className="flex flex-col gap-1">{conversations.map((conversation) => <ConversationRow key={conversation.conversationId} conversation={conversation} running={Boolean(snapshot?.progress?.some((item) => item.conversationId === conversation.conversationId && LIVE_PHASES.has(item.phase)))} waiting={Boolean(snapshot?.attention.some((item) => item.conversationId === conversation.conversationId && item.status === "pending"))} onOpen={(item) => open(item.conversationId, titleOf(item))} />)}</div>
+    <div className="flex flex-col gap-3">{conversations.map((item) => <ConversationCard key={item.conversation.conversationId} item={item} onOpen={(conversation) => open(conversation.conversationId, titleOf(conversation))} />)}</div>
   </div>;
 }
 
@@ -73,7 +80,8 @@ function ConversationPane({ conversationId, tab }: { conversationId: string; tab
   const sendLock = useRef(false);
   const messages: ChatMessage[] = data?.snapshot.messages ?? [];
   const working = Boolean(data?.snapshot.running);
-  const projectName = conversation?.project ? folderName(conversation.project) : "";
+  const avatarStatus = workSnapshot ? botConversationCards(workSnapshot).find((item) => item.conversation.conversationId === conversationId)?.status : undefined;
+  const projectName = conversation?.project ? projects.find((project) => project.cwd === conversation.project)?.name || folderName(conversation.project) : "";
   const send = async () => {
     const text = draft.trim();
     if ((!text && !attachments.length) || sendLock.current) return;
@@ -88,11 +96,20 @@ function ConversationPane({ conversationId, tab }: { conversationId: string; tab
   const resume = () => { void window.fastvibe.bot.continueConversation({ conversationId }).catch((cause) => setSendError(cause instanceof Error ? cause.message : String(cause))); };
   if (loading && !data) return <div className="flex flex-1 items-center justify-center"><Spinner /></div>;
   return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-    <header className="flex shrink-0 items-start gap-2 border-b px-4 py-3"><HugeiconsIcon strokeWidth={2} icon={BotIcon} className="mt-1 size-4 shrink-0 text-muted-foreground" /><div className="min-w-0 flex-1"><h2 className="wrap-anywhere text-sm font-medium">{conversation ? titleOf(conversation) : conversationId}</h2><p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="size-3.5" />{projectName}</p></div>{working ? <Button size="xs" variant="outline" onClick={stop}><HugeiconsIcon strokeWidth={2} icon={StopIcon} />{t("bot.stop")}</Button> : null}</header>
+    <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border/50 px-4">
+      <BotConversationAvatar status={avatarStatus ?? (working ? "working" : "idle")} size="size-7" />
+      <h2 className="min-w-0 flex-1 truncate text-sm font-medium" title={conversation ? titleOf(conversation) : tab.title}>{conversation ? titleOf(conversation) : tab.title}</h2>
+      {conversation?.project ? <Tooltip>
+        <TooltipTrigger render={<Badge variant="outline" className="h-6 max-w-1/3 gap-1.5 rounded-md font-normal text-muted-foreground" />}>
+          <HugeiconsIcon strokeWidth={2} icon={Folder01Icon} className="shrink-0" />
+          <span className="min-w-0 truncate">{projectName}</span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="end" className="wrap-anywhere">{conversation.project}</TooltipContent>
+      </Tooltip> : null}
+    </header>
     {error ? <p role="alert" className="wrap-anywhere border-b px-4 py-2 text-sm text-destructive">{error}</p> : null}
     <div className="min-h-0 flex-1"><MessageList messages={messages} conversationId={conversationId} cwd={conversation?.project} streaming={working} loading={loading && !data} emptyState={<p className="p-6 text-center text-sm text-muted-foreground">{t("bot.emptyConversation")}</p>} /></div>
     {conversation?.paused && !working ? <div className="border-t px-4 py-2"><Button size="sm" variant="outline" onClick={resume}>{t("bot.continue")}</Button></div> : null}
-    {data?.snapshot && <ResultStatus status={workSnapshot?.results.filter((result) => result.conversationId === conversationId).at(-1)?.status ?? "idle"} />}
     {sending ? <p role="status" className="px-4 py-2 text-sm text-muted-foreground">{t("app:viviBot.sending")}</p> : null}
     {sendError ? <p role="alert" className="px-4 py-2 text-sm text-destructive wrap-anywhere">{sendError}</p> : null}
     <div className="shrink-0 px-3 pb-3"><Composer className="px-0 pb-0" value={draft} disabled={sending} streaming={working} working={working} conversationId={conversationId} placeholder={t("bot.supplement")} models={models} model={data?.state.model} workspaceLabel={projectName} projects={projects} project={conversation?.project} hideModelPicker commands={getCommands(conversationId) as never} queued={data?.snapshot.queue.items ?? []} queuePause={data?.snapshot.queue.pause ?? null} attachments={attachments} history={() => messages.filter((message) => message.role === "user").map((message) => message.text)} contextPercent={data?.state.contextUsage?.percent} contextUsage={data?.state.contextUsage} stats={null} onChange={(value) => { setDraft(value); patchTab(tab.id, { draft: value }); }} onSubmit={() => void send()} onAbort={stop} onPickWorkspace={() => undefined} onSelectProject={() => undefined} onModelChange={(provider, model) => { void engine.setModel(provider, model, conversationId); }} onManageModels={() => undefined} onThinkingChange={(level) => { void engine.setThinking(level, conversationId); }} onAttachmentsChange={setAttachments} onRemoveQueued={() => undefined} onEditQueued={() => undefined} onSendQueuedNow={() => undefined} onRecallQueued={() => undefined} onReorderQueued={() => undefined} onResumeQueue={() => undefined} canResume={Boolean(conversation?.paused)} onResumeRun={resume} sendOnEnter={settings.sendOnEnter} /></div>

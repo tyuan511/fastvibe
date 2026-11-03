@@ -54,6 +54,7 @@ export type BotConversationMeta = {
   title?: string;
   project?: string;
 };
+export type BotMemoryRef = { path: string; heading?: string; offset?: number; limit?: number };
 export type BotInput = {
   id: string;
   conversationId: string;
@@ -69,6 +70,10 @@ export type BotInput = {
   intent?: "status";
   /** Result updates explicitly included in a resumed Router turn. */
   deliveryIds?: string[];
+  /** Markdown references are resolved again when this input starts. */
+  memoryRefs?: BotMemoryRef[];
+  /** Actual persisted SDK branch span, used only for incremental memory extraction. */
+  memoryBranch?: { beforeEntryId?: string; afterEntryId?: string };
   progress?: BotProgressUpdate & { updatedAt: number };
   error?: string;
 };
@@ -102,6 +107,7 @@ export type BotDelivery = {
   resultId?: string;
   createdAt: number;
 };
+export type BotConversationPreview = { text: string; updatedAt: number };
 export type WorkSnapshot = {
   revision: number;
   routerConversationId?: string;
@@ -112,6 +118,8 @@ export type WorkSnapshot = {
   messages: BotChatMessage[];
   /** Derived from durable input receipts; optional for older hosts. */
   progress?: BotProgress[];
+  /** Bounded latest assistant prose from each Worker's selected transcript branch. */
+  conversationPreviews?: Record<string, BotConversationPreview>;
   error?: string;
 };
 export type BotActivity = { running: boolean; waiting: boolean; conversationId?: string };
@@ -132,6 +140,7 @@ export type BotSubmitRequest = {
   images?: PromptImage[];
   behavior?: string;
   intent?: "status";
+  memoryRefs?: BotMemoryRef[];
 };
 export type BotReportRequest = {
   conversationId: string;
@@ -148,15 +157,18 @@ export type BotHost = {
   execute(input: { conversationId: string; requestId: string; text: string; images?: PromptImage[]; epoch: number; signal: AbortSignal }): Promise<BotExecutionOutcome>;
   snapshot(conversationId: string): Promise<ConversationSnapshot>;
   messages(conversationId: string): Promise<ChatMessage[]>;
+  conversationPreviews?(ids: string[]): Promise<Record<string, BotConversationPreview>>;
   abort(conversationId: string): Promise<void>;
   resolveProject(): string;
   changed(event: BotChanged): void;
+  /** A durable input finished; maintenance must not delay or change its outcome. */
+  settled?(requestId: string): void;
 };
 
 export interface BotApi {
   getWorkSnapshot(): Promise<WorkSnapshot>;
   submit(input: BotSubmitRequest): Promise<WorkSnapshot>;
-  createWork(input: { requestId: string; title: string; text: string }): Promise<BotConversationMeta>;
+  createWork(input: { requestId: string; title: string; text: string; memoryRefs?: BotMemoryRef[] }): Promise<BotConversationMeta>;
   report(input: BotReportRequest): Promise<BotResult>;
   ask(input: { conversationId: string; requestId?: string; question: string }): Promise<BotAttention>;
   answer(input: { attentionId: string; answer: string }): Promise<WorkSnapshot>;

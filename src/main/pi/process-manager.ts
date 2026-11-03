@@ -5,9 +5,15 @@ import { mkdir, rm, unlink } from "node:fs/promises";
 import { dirname, join, resolve, basename } from "node:path";
 import { BotStore } from "../bot/bot-store";
 import { BotRuntime } from "../bot/bot-runtime";
+import { BotConversationPreviewReader } from "../bot/bot-conversation-preview";
 import { botRole, botSessionExtension } from "../bot/bot-session-extension";
 import { runBotSession } from "../bot/bot-engine-host";
 import type { BotExecutionOutcome } from "../../shared/bot";
+import { ViviMemoryService } from "../bot/memory/service";
+import { viviMemoryExtension } from "../bot/memory/extension";
+import { viviMemoryMaterial, viviMemorySources } from "../bot/memory/sources";
+import type { ViviMemorySource } from "../bot/memory/types";
+import { stripPromptMetadata } from "../../shared/attachment-metadata";
 import { Ipc } from "../../shared/ipc";
 import { broadcast } from "../ipc/broadcast";
 import { InMemoryModelsStore, type AssistantMessage, type AuthPrompt } from "@earendil-works/pi-ai";
@@ -695,6 +701,7 @@ export class PiProcessManager {
   readonly #promptPreparations = new PromptPreparations();
   #subagentManager: SubagentManager;
   readonly bot: BotRuntime;
+  readonly #viviMemory: ViviMemoryService;
   readonly #scheduledTasks: ScheduledTaskManager;
   /** Live subagent registry and bounded transcript cache. */
   #subagents = new Map<string, SubagentInfo>();
@@ -762,14 +769,30 @@ export class PiProcessManager {
       (task, run) => void this.#announceScheduleResult(task, run),
       { legacyFile: this.#paths.schedulesFile },
     );
+    const botPreviews = new BotConversationPreviewReader((id) => {
+      const conversation = this.#catalog.get(id);
+      if (!conversation || botRole(conversation) !== "worker") return undefined;
+      const managed = this.#sessions.get(id);
+      if (managed) return { branch: managed.session.sessionManager.getBranch() };
+      return conversation.sessionFile ? { file: conversation.sessionFile, cwd: conversation.cwd } : undefined;
+    }, (file, cwd) => this.#transcriptReader.read(file, cwd));
     this.bot = new BotRuntime(new BotStore(this.#db), {
       createConversation: async ({ kind, key }) => ({ conversationId: await this.#createBotConversation(kind, key) }),
       execute: ({ conversationId, text, images, signal }) => this.#executeBotConversation(conversationId, text, signal, images),
       snapshot: (id) => this.getSnapshot(id),
       messages: (id) => this.getConversationMessages(id),
+      conversationPreviews: (ids) => botPreviews.read(ids),
       abort: (id) => this.abort(id),
       resolveProject: () => this.#resolveBotProject(),
       changed: (event) => broadcast(Ipc.botChanged, event),
+      settled: () => this.#viviMemory.notify(),
+    });
+    this.#viviMemory = new ViviMemoryService({
+      root: join(this.#paths.runtimeRoot, "vivi", "memories"),
+      sources: () => viviMemorySources({ conversations: this.bot.store.conversations().filter((item) => Boolean(this.#catalog.get(item.conversationId))), inputs: this.bot.store.inputs(), results: this.bot.store.results() }),
+      loadMaterial: (source) => this.#loadViviMemoryMaterial(source),
+      complete: (system, user, signal) => this.#completeMemoryText(system, user, signal),
+      consolidate: (request) => this.#runMemoryAgent({ ...request, workspaceOnly: true }),
     });
     this.#memory.attach({
       conversations: () => this.#catalog.list(),
@@ -843,6 +866,8 @@ export class PiProcessManager {
     const managed = await this.#ensureSession(conversation);
     await this.#reuseMainModel(managed.session);
     if (!managed.session.model || managed.session.model.provider === "unknown") throw new Error(uiText("还没有可用的模型", "No model is available"));
+    let beforeEntryId: string | undefined;
+    let prepared = false;
     try {
       return await runBotSession(managed.session, text, {
         signal,
@@ -854,9 +879,41 @@ export class PiProcessManager {
           await this.#awaitMcp();
           this.#beginTurn(id);
           await this.#flushModelRebind(id);
+          beforeEntryId = managed.session.sessionManager.getLeafId() ?? undefined;
+          prepared = true;
         },
       });
-    } finally { this.#persist(managed.session); }
+    } finally {
+      this.#persist(managed.session);
+      const request = this.bot.contextFor(id).input;
+      const receipt = request ? this.bot.store.input(request.requestId) : undefined;
+      const afterEntryId = managed.session.sessionManager.getLeafId() ?? undefined;
+      if (prepared && receipt?.status === "running" && receipt.epoch === request?.epoch && afterEntryId && afterEntryId !== beforeEntryId) {
+        this.bot.store.transaction(() => this.bot.store.putInput({ ...receipt, memoryBranch: { beforeEntryId, afterEntryId } }));
+      }
+    }
+  }
+
+  #currentViviMemorySource(id: string): ViviMemorySource | undefined {
+    const context = this.bot.contextFor(id);
+    const input = context.input ? this.bot.store.input(context.input.requestId) : undefined;
+    const meta = this.bot.store.conversation(id);
+    if (!context.active || !input || !meta || !this.#catalog.get(id)) return undefined;
+    return { id: `input:${input.id}`, conversationId: id, requestId: input.id, epoch: input.epoch, createdAt: input.createdAt, role: meta.role, kind: input.source === "user" || input.source === "answer" ? "input" : "result", text: stripPromptMetadata(input.text), title: meta.title };
+  }
+
+  #validViviMemorySource(source: ViviMemorySource): boolean {
+    const current = this.#currentViviMemorySource(source.conversationId);
+    return current?.requestId === source.requestId && current.epoch === source.epoch;
+  }
+
+  async #loadViviMemoryMaterial(source: ViviMemorySource): Promise<string> {
+    const input = this.bot.store.input(source.requestId);
+    const conversation = this.#catalog.get(source.conversationId);
+    if (!input || !conversation) return "The original source is no longer available.";
+    const loaded = this.#sessions.get(source.conversationId)?.session.sessionManager.getBranch();
+    const branch = loaded ?? (conversation.sessionFile ? await loadConversationTranscriptBranch(conversation.sessionFile, conversation.cwd) : []);
+    return viviMemoryMaterial(input, branch);
   }
   searchConversations(query: string): Promise<ConversationSearchHit[]> {
     return searchConversationContent(query, this.#catalog.list());
@@ -1133,6 +1190,7 @@ export class PiProcessManager {
       this.#setStatus({ state: "ready", cwd: this.#cwd });
       markStartup("engine-ready");
       this.#scheduledTasks.start();
+      this.#viviMemory.start();
       await this.bot.start();
       // Durable work belongs to every conversation, not only whichever chat happened
       // to be active when Main restarted. Drains lazily create background sessions.
@@ -1143,6 +1201,7 @@ export class PiProcessManager {
   }
 
   async stop(): Promise<void> {
+    await this.#viviMemory.stop().catch((error) => console.error("[vivi-memory] shutdown failed", error));
     await this.bot.stop().catch((error) => console.error("[bot] shutdown failed; continuing engine cleanup", error));
     this.#promptPreparations.cancel();
     this.#queueShutdown = true;
@@ -3078,7 +3137,7 @@ export class PiProcessManager {
     return response.content.map((block) => (block.type === "text" ? block.text : "")).join("").trim();
   }
 
-  async #runMemoryAgent(request: { cwd: string; task: string; signal?: AbortSignal; model?: EngineModel }): Promise<void> {
+  async #runMemoryAgent(request: { cwd: string; task: string; signal?: AbortSignal; model?: EngineModel; workspaceOnly?: boolean }): Promise<void> {
     await this.#ensureReady();
     if (!this.#runtime || !this.#models) throw new Error(uiText("模型尚未就绪", "Model is not ready"));
     await mkdir(request.cwd, { recursive: true });
@@ -4233,6 +4292,19 @@ export class PiProcessManager {
           },
         }),
       }, ...(bot ? [{
+        name: "fastvibe-vivi-memory",
+        hidden: true,
+        factory: viviMemoryExtension({
+          memory: this.#viviMemory,
+          role: bot,
+          source: () => this.#currentViviMemorySource(conversation.id),
+          refs: () => {
+            const input = this.bot.contextFor(conversation.id).input;
+            return input ? this.bot.store.input(input.requestId)?.memoryRefs ?? [] : [];
+          },
+          valid: (source) => this.#validViviMemorySource(source),
+        }),
+      }, {
         name: "fastvibe-bot-role",
         hidden: true,
         factory: botSessionExtension({ role: bot, conversationId: conversation.id, service: {
@@ -4359,6 +4431,14 @@ export class PiProcessManager {
         this.#recordUsage(event.message, result.session, now);
         // A reply that cites memory is how consolidation learns which conversations were used.
         this.#memory.noteReply(messageText(event.message));
+        if (bot === "worker") {
+          const assistantMessage = event.message;
+          // SDK subscribers run before appendMessage. Reuse the user-message
+          // persistence boundary so a botChanged reader sees this exact entry.
+          queueMicrotask(() => {
+            if (this.#entryIdForMessage(result.session, assistantMessage) && this.#persist(result.session)) this.bot.conversationUpdated(conversation.id);
+          });
+        }
       }
       if (event.type === "session_info_changed") {
         this.#applySessionTitle(conversation.id, event.name);

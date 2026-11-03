@@ -44,7 +44,7 @@ import { SidebarUpdateButton } from "@/components/layout/sidebar-update-button";
 import { Button } from "@/components/ui/button";
 import { RunningMark } from "@/components/running-mark";
 import { useBotActivity } from "@/components/bot/use-bot-activity";
-import { FastVibeMascot } from "@/components/fastvibe-mascot";
+import { ViviIcon } from "@/components/vivi-icon";
 import { AppLogo } from "@/components/app-logo";
 import { cn } from "@/lib/utils";
 import { readSidebarWidth, writeSidebarWidth, SIDEBAR_MIN_WIDTH } from "@/lib/sidebar-width";
@@ -607,7 +607,7 @@ export const Sidebar = memo(function Sidebar({
               className={cn("h-8 pointer-coarse:h-10 w-full justify-start gap-2.5 px-2 text-sm font-normal hover:bg-sidebar-accent/50", viviActive && "bg-sidebar-accent font-medium")}
               onClick={() => { onOpenVivi(); dismissDrawer(); }}
             >
-              <FastVibeMascot size="size-5" motion={false} />
+              <HugeiconsIcon strokeWidth={2} icon={ViviIcon} className="size-3.5 text-muted-foreground" />
               {t("sidebar.vivi")}
               <span className="ml-auto flex items-center gap-1.5">
                 {botActivity?.running ? <RunningMark className="size-3.5" /> : null}

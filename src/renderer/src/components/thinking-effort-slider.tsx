@@ -1,4 +1,4 @@
-import { useId, useState, type CSSProperties, type JSX } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { Slider } from "@/components/ui/slider";
 import { thinkingLabel, thinkingMenuLabel } from "@/lib/thinking-levels";
@@ -6,6 +6,14 @@ import type { ThinkingLevel } from "@shared/types";
 import "./thinking-effort-slider.css";
 
 type Effort = ThinkingLevel | "auto";
+
+// Stable phases keep the stream continuous while its playback rate accelerates.
+const PARTICLES = Array.from({ length: 32 }, (_, particle) => ({
+  "--particle-y": `${(particle * 29 + 17) % 80 + 10}%`,
+  "--particle-delay": `${particle * -0.47}s`,
+  "--particle-duration": `${1.3 + particle % 5 * 0.15}s`,
+  "--particle-size": `${0.075 + particle % 3 * 0.035}rem`,
+} as CSSProperties));
 
 export function ThinkingEffortSlider({
   options,
@@ -20,6 +28,7 @@ export function ThinkingEffortSlider({
 }): JSX.Element {
   const { t } = useTranslation("chat");
   const labelId = useId();
+  const particlesRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(Math.max(0, options.indexOf(value)));
   const [previousValue, setPreviousValue] = useState(value);
   if (previousValue !== value) {
@@ -28,8 +37,20 @@ export function ThinkingEffortSlider({
   }
   const index = Math.min(options.length - 1, Math.max(0, Math.round(position)));
   const preview = options[index] ?? value;
-  const atMax = options.length > 1 && index === options.length - 1 && preview !== "auto";
+  const progress = options.length > 1 ? position / (options.length - 1) : 0;
+  // The reference becomes luminous continuously, before the high label snaps in.
+  const energy = Math.min(1, Math.max(0, (progress - 0.35) / 0.65));
+  const energized = energy > 0 && preview !== "auto";
   const label = preview === "auto" ? thinkingMenuLabel("auto") : thinkingLabel(preview);
+
+  useEffect(() => {
+    // Changing CSS duration would jump the particles' phases during a drag.
+    // updatePlaybackRate preserves their positions and only changes travel speed.
+    const speed = 0.5 + 1.5 * energy * energy;
+    for (const animation of particlesRef.current?.getAnimations({ subtree: true }) ?? []) {
+      animation.updatePlaybackRate(speed);
+    }
+  }, [energy]);
 
   function commit(next: number): void {
     const nextIndex = Math.min(options.length - 1, Math.max(0, Math.round(next)));
@@ -41,7 +62,11 @@ export function ThinkingEffortSlider({
   return (
     <div
       className="thinking-effort px-2.5 pt-2 pb-1"
-      data-max={atMax || undefined}
+      data-energized={energized && !disabled || undefined}
+      style={{
+        "--thinking-progress": progress,
+        "--thinking-energy": preview === "auto" ? 0 : energy,
+      } as CSSProperties}
       data-disabled={disabled || options.length < 2 || undefined}
       onKeyDownCapture={(event) => {
         if (disabled || options.length < 2 || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -62,9 +87,9 @@ export function ThinkingEffortSlider({
         commit(next);
       }}
     >
-      <div id={labelId} className="flex items-baseline gap-2 text-sm">
+      <div id={labelId} className="flex items-baseline justify-between gap-2 text-sm">
         <span className="text-muted-foreground">{t("composer.thinking")}</span>
-        <span key={preview} className="thinking-effort-label font-medium text-primary">{label}</span>
+        <span key={preview} className="thinking-effort-label font-medium">{label}</span>
       </div>
       <div className="relative mt-1">
         <Slider
@@ -85,26 +110,18 @@ export function ThinkingEffortSlider({
         />
         <div aria-hidden="true" className="thinking-effort-ticks pointer-events-none absolute inset-y-0 flex items-center justify-between">
           {options.map((level, tick) => (
-            <span key={level} data-filled={tick <= index && preview !== "auto" || undefined} />
+            <span key={level} data-filled={tick <= position || undefined} />
           ))}
         </div>
-        {atMax && !disabled ? (
-          <div
-            aria-hidden="true"
-            className="thinking-effort-particles pointer-events-none absolute inset-x-0 overflow-hidden rounded-full"
-            style={{ clipPath: `inset(0 calc(${1 - position / (options.length - 1)} * (100% - var(--thinking-thumb-size)) + var(--thinking-thumb-size) / 2) 0 0)` }}
-          >
-            {Array.from({ length: 30 }, (_, particle) => (
-              <i key={particle} style={{
-                "--particle-x": `${(particle * 37 + 7) % 94}%`,
-                "--particle-y": `${(particle * 29 + 17) % 76 + 8}%`,
-                "--particle-delay": `${particle * -0.47}s`,
-                "--particle-duration": `${1.8 + particle % 4 * 0.35}s`,
-                "--particle-size": `${1.5 + particle % 3 * 0.75}px`,
-              } as CSSProperties} />
-            ))}
-          </div>
-        ) : null}
+        <div
+          ref={particlesRef}
+          aria-hidden="true"
+          className="thinking-effort-particles pointer-events-none absolute inset-x-0 overflow-hidden"
+        >
+          {PARTICLES.map((style, particle) => (
+            <i key={particle} data-star={particle % 4 === 0 || undefined} style={style} />
+          ))}
+        </div>
       </div>
     </div>
   );

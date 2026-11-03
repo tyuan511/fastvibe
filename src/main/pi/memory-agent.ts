@@ -10,6 +10,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastVibePaths } from "../engine/paths";
 import { summaryBudgetProblem } from "../engine/memory-summary.ts";
+import { memoryToolPathAllowed } from "./memory-agent-boundary.ts";
 
 /**
  * Tools the consolidation agent may use. No `bash`: the job is reading and editing Markdown
@@ -27,7 +28,7 @@ const MEMORY_AGENT_TIMEOUT_MS = 10 * 60_000;
  */
 export async function runMemoryAgent(
   host: { runtime: ModelRuntime; models: ModelRegistry; paths: FastVibePaths; model: ReturnType<ModelRegistry["find"]> },
-  request: { cwd: string; task: string; signal?: AbortSignal },
+  request: { cwd: string; task: string; signal?: AbortSignal; workspaceOnly?: boolean },
 ): Promise<void> {
   if (!host.model) throw new Error("no model is available for memory consolidation");
   const settingsManager = SettingsManager.create(request.cwd, host.paths.agentDir);
@@ -39,6 +40,14 @@ export async function runMemoryAgent(
     noThemes: true,
     noPromptTemplates: true,
     noSkills: true,
+    ...(request.workspaceOnly ? { extensionFactories: [{
+      name: "memory-workspace-boundary",
+      hidden: true,
+      factory: (pi) => {
+        pi.on("tool_call", (event) => memoryToolPathAllowed(request.cwd, event.toolName, event.input)
+          ? undefined : { block: true, reason: "Memory consolidation may access only its own workspace." });
+      },
+    }] } : {}),
   });
   await loader.reload();
   const { session } = await createAgentSession({
@@ -53,6 +62,7 @@ export async function runMemoryAgent(
     // Codex runs consolidation at medium reasoning.
     thinkingLevel: "medium",
   });
+  await session.bindExtensions({ mode: "rpc" });
   let stopped = false;
   const stop = (): void => { stopped = true; void session.abort().catch(() => undefined); };
   const timer = setTimeout(stop, MEMORY_AGENT_TIMEOUT_MS);

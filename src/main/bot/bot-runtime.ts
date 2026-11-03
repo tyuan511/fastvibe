@@ -6,6 +6,8 @@ import { VIVI_BOT_ID } from "../../shared/bot.ts";
 import { BotStore } from "./bot-store.ts";
 import { uiText } from "../engine/ui-text.ts";
 import { deriveBotProgress, isStatusQuestion, statusTextForProgress } from "./bot-progress.ts";
+import { botMemoryRefs } from "./memory/sources.ts";
+import type { BotMemoryRef } from "../../shared/bot.ts";
 
 export type BotContext = import("../../shared/bot.ts").BotContext;
 
@@ -77,12 +79,25 @@ export class BotRuntime {
     // transition busy too, otherwise the last queued input broadcasts idle.
     return { running: this.#active.size > 0 || this.store.inputs().some((input) => input.status === "queued" || input.status === "running"), waiting, conversationId: first?.meta.conversationId };
   }
+  /** Called only after the SDK has persisted a new assistant message. */
+  conversationUpdated(conversationId: string): void {
+    if (this.store.conversation(conversationId)?.role !== "worker") return;
+    this.#change(() => {});
+  }
+
   async getWorkSnapshot(): Promise<WorkSnapshot> {
     const conversations = this.store.conversations();
     const inputs = this.store.inputs();
     const attention = this.store.attentions();
     const results = this.store.results();
-    return { revision: this.store.revision, routerConversationId: this.store.routerConversationId, conversations, attention, results, deliveries: this.store.deliveries(), messages: this.store.chatMessages(), progress: conversations.map((conversation) => deriveBotProgress(conversation, inputs, attention, results)), error: this.#error };
+    // Durable facts and their revision belong to one synchronous read. Preview
+    // loading may yield; never re-read a newer receipt/feed under this revision.
+    const snapshot: WorkSnapshot = { revision: this.store.revision, routerConversationId: this.store.routerConversationId, conversations, attention, results, deliveries: this.store.deliveries(), messages: this.store.chatMessages(), progress: conversations.map((conversation) => deriveBotProgress(conversation, inputs, attention, results)), error: this.#error };
+    if (this.host.conversationPreviews) {
+      try { snapshot.conversationPreviews = await this.host.conversationPreviews(conversations.filter((conversation) => conversation.role === "worker").map((conversation) => conversation.conversationId)); }
+      catch { /* Reply previews must not make an otherwise readable snapshot fail. */ }
+    }
+    return snapshot;
   }
 
   async progress(input: BotProgressRequest): Promise<WorkSnapshot> {
@@ -109,19 +124,20 @@ export class BotRuntime {
     return this.getWorkSnapshot();
   }
 
-  async createWork(input: { requestId: string; title: string; text: string }): Promise<BotConversationMeta> {
+  async createWork(input: { requestId: string; title: string; text: string; memoryRefs?: BotMemoryRef[] }): Promise<BotConversationMeta> {
     const title = textOf(input.title, "标题", 160);
     const text = textOf(input.text, "工作要求");
+    const memoryRefs = botMemoryRefs(input.memoryRefs);
     const key = `work:${input.requestId}`;
     const existingInput = this.store.input(input.requestId);
     const existing = this.store.conversationByKey(key);
-    if (existingInput && existing) { if (existingInput.text !== text) throw new Error("相同请求标识不能提交不同内容"); return existing; }
+    if (existingInput && existing) { if (existingInput.text !== text || JSON.stringify(existingInput.memoryRefs ?? []) !== JSON.stringify(memoryRefs ?? [])) throw new Error("相同请求标识不能提交不同内容"); return existing; }
     const project = this.host.resolveProject();
     const created = await this.host.createConversation({ kind: "worker", key });
     const conversationId = typeof created === "string" ? created : created.conversationId;
     const now = Date.now();
     const meta: BotConversationMeta = { conversationId, role: "worker", owner: VIVI_BOT_ID, creationKey: key, epoch: 0, paused: false, createdAt: now, updatedAt: now, title, project };
-    this.#change(() => { this.store.putConversation(meta); this.store.putInput({ id: input.requestId, conversationId: meta.conversationId, epoch: 0, source: "router", text, status: "queued", createdAt: now, rootInputId: this.#routerInput()?.rootInputId ?? this.#routerInput()?.id }); });
+    this.#change(() => { this.store.putConversation(meta); this.store.putInput({ id: input.requestId, conversationId: meta.conversationId, epoch: 0, source: "router", text, memoryRefs, status: "queued", createdAt: now, rootInputId: this.#routerInput()?.rootInputId ?? this.#routerInput()?.id }); });
     this.#kick();
     return meta;
   }
@@ -131,6 +147,7 @@ export class BotRuntime {
   async #submit(input: BotSubmitRequest, source: "user" | "router"): Promise<WorkSnapshot> {
     const requestId = textOf(input.requestId, "请求标识", 200);
     const images = imagesOf(input.images);
+    const memoryRefs = botMemoryRefs(input.memoryRefs);
     const text = typeof input.text === "string" && !input.text.trim() && images?.length ? "" : textOf(input.text, "消息");
     const statusRequest = source === "user" && !images?.length && extractPromptAttachments(input.text).length === 0 && (input.intent === "status" || isStatusQuestion(input.text));
     let meta = input.conversationId ? this.#meta(input.conversationId) : undefined;
@@ -148,7 +165,7 @@ export class BotRuntime {
     }
     const prior = this.store.input(requestId);
     if (prior) {
-      if (prior.text !== text || prior.conversationId !== meta.conversationId || JSON.stringify(prior.images ?? []) !== JSON.stringify(images ?? []) || prior.intent !== (statusRequest ? "status" : undefined)) throw new Error("相同请求标识不能提交不同内容");
+      if (prior.text !== text || prior.conversationId !== meta.conversationId || JSON.stringify(prior.images ?? []) !== JSON.stringify(images ?? []) || JSON.stringify(prior.memoryRefs ?? []) !== JSON.stringify(memoryRefs ?? []) || prior.intent !== (statusRequest ? "status" : undefined)) throw new Error("相同请求标识不能提交不同内容");
       return this.getWorkSnapshot();
     }
     if (statusRequest) return this.#submitStatus(meta, requestId, input.text);
@@ -156,7 +173,7 @@ export class BotRuntime {
     const now = Math.max(Date.now(), (this.store.chatMessages().at(-1)?.createdAt ?? 0) + 1);
     this.#change(() => {
       if (meta!.paused) this.store.putConversation({ ...meta!, paused: false, updatedAt: now });
-      this.store.putInput({ id: requestId, conversationId: meta!.conversationId, epoch: meta!.epoch, source, text, images, status: "queued", createdAt: now, rootInputId: source === "router" ? (this.#routerInput()?.rootInputId ?? this.#routerInput()?.id) : requestId });
+      this.store.putInput({ id: requestId, conversationId: meta!.conversationId, epoch: meta!.epoch, source, text, images, memoryRefs, status: "queued", createdAt: now, rootInputId: source === "router" ? (this.#routerInput()?.rootInputId ?? this.#routerInput()?.id) : requestId });
       if (source === "user") {
         this.store.putChatMessage({
           id: `chat:user:${requestId}`,
@@ -362,7 +379,12 @@ export class BotRuntime {
         this.#error = error instanceof Error ? error.message : String(error);
         const receipt = this.store.input(input.id);
         if (receipt?.status === "running") this.#change(() => this.store.putInput({ ...receipt, status: "failed", completedAt: Date.now(), error: this.#error }));
-      }).finally(() => { this.#active.delete(meta.conversationId); this.#change(() => {}); this.#kick(); });
+      }).finally(() => {
+        this.#active.delete(meta.conversationId);
+        this.#change(() => {});
+        try { this.host.settled?.(input.id); } catch (error) { console.warn("[vivi-memory] maintenance scheduling failed", error); }
+        this.#kick();
+      });
     }
   }
   async #execute(active: Active, payload: BotInput): Promise<void> {

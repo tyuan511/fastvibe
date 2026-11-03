@@ -1,20 +1,28 @@
 .thinking-effort {
-  /*
-   * Every part of the rail is sized from these three numbers: the knob, the tick dots
-   * and the bar itself. The knob's inline `calc()` (the max-state particle clip) and
-   * the particle band's vertical inset both read them, so changing one height cannot
-   * leave a stale 2rem behind somewhere else.
-   */
   --thinking-thumb-size: 1.5rem;
-  --thinking-tick-size: 0.25rem;
+  --thinking-tick-size: 0.1875rem;
   --thinking-track-height: 1.25rem;
+  --thinking-track-radius: 0.5rem;
   --thinking-rail-height: 2.75rem;
+  /* Fixed accents sampled from the reference video, independent of the theme. */
+  --thinking-blue: #4186f5;
+  --thinking-violet: #a65df2;
+  --thinking-ink: #3a137e;
+  --thinking-spark: #fff;
+  --thinking-empty: #dfe2e5;
+  --thinking-tick: #a2a8ad;
+  --thinking-start: color-mix(in oklab, var(--thinking-ink) calc(var(--thinking-energy) * 100%), var(--thinking-blue));
+  --thinking-middle: color-mix(in oklab, #9757e1 calc(var(--thinking-energy) * 100%), var(--thinking-blue));
+  --thinking-end: color-mix(in oklab, var(--thinking-violet) calc(var(--thinking-energy) * 100%), var(--thinking-blue));
+  position: relative;
+  isolation: isolate;
 }
 
 .thinking-effort-slider [data-slot="slider-track"] {
   height: var(--thinking-track-height);
-  background: var(--muted);
-  box-shadow: inset 0 0 0 1px var(--border);
+  border-radius: var(--thinking-track-radius);
+  background: var(--thinking-empty);
+  box-shadow: none;
 }
 
 .thinking-effort-slider > div {
@@ -28,8 +36,8 @@
 
 .thinking-effort-slider [data-slot="slider-range"] {
   position: relative;
-  border-radius: 999px 0 0 999px;
-  background: var(--primary);
+  border-radius: var(--thinking-track-radius) 0 0 var(--thinking-track-radius);
+  background: linear-gradient(100deg, var(--thinking-start), var(--thinking-middle) 55%, var(--thinking-end));
 }
 
 .thinking-effort-slider [data-slot="slider-range"]::after {
@@ -37,21 +45,19 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(110deg,
-    oklch(from var(--primary) calc(l + 0.14) c h),
-    oklch(from var(--primary) calc(l - 0.10) c h));
-  background-size: 200% 100%;
-  opacity: 0;
-  transition: opacity 240ms ease;
+  background: radial-gradient(ellipse at 70% 50%, color-mix(in oklab, var(--thinking-spark) 23%, transparent), transparent 65%);
+  opacity: var(--thinking-energy);
+  animation: thinking-effort-flow 3.6s ease-in-out infinite paused;
 }
 
 .thinking-effort-slider [data-slot="slider-thumb"] {
   z-index: 2;
   width: var(--thinking-thumb-size);
   height: var(--thinking-thumb-size);
-  border: 1px solid var(--border);
-  background: var(--popover);
-  box-shadow: 0 1px 3px color-mix(in oklab, var(--foreground) 16%, transparent);
+  border: 1px solid #d4d7dc;
+  border-radius: var(--thinking-track-radius);
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 16%);
   transition: scale 150ms ease, box-shadow 150ms ease;
 }
 
@@ -65,7 +71,7 @@
 
 .thinking-effort-slider[data-dragging] [data-slot="slider-thumb"] {
   scale: 1.06;
-  box-shadow: 0 2px 6px color-mix(in oklab, var(--foreground) 20%, transparent);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 20%);
 }
 
 .thinking-effort-slider [data-slot="slider-thumb"]:is(:hover, :active):not(:focus-visible):not(:has(:focus-visible)) {
@@ -73,66 +79,79 @@
 }
 
 .thinking-effort-ticks {
-  z-index: 1;
-  /*
-   * The dots mark the same positions the thumb snaps to, so they share its geometry:
-   * `thumbAlignment="edge"` parks the knob's centre half a knob in from either end,
-   * and `justify-between` puts each dot's *edge* at the row's, so half a dot comes
-   * back off. This was a fixed 1rem once, which only happened to be right while the
-   * knob was 2rem wide.
-   */
+  z-index: 0;
+  /* Base UI's edge-aligned thumb centres and the dot centres share these bounds. */
   inset-inline: calc((var(--thinking-thumb-size) - var(--thinking-tick-size)) / 2);
-  transition: opacity 180ms ease;
-}
-
-.thinking-effort[data-max] .thinking-effort-ticks {
-  opacity: 0;
 }
 
 .thinking-effort-ticks > span {
   width: var(--thinking-tick-size);
   height: var(--thinking-tick-size);
   border-radius: 50%;
-  background: color-mix(in oklab, var(--muted-foreground) 50%, transparent);
-  transition: background-color 120ms ease;
+  background: var(--thinking-tick);
+  transition: opacity 120ms ease;
 }
 
 .thinking-effort-ticks > span[data-filled] {
-  background: color-mix(in oklab, var(--primary-foreground) 55%, transparent);
-}
-
-.thinking-effort[data-max] [data-slot="slider-range"]::after {
-  opacity: 1;
-  animation: thinking-effort-flow 3s ease-in-out infinite;
+  opacity: 0;
 }
 
 .thinking-effort-label {
   display: inline-block;
+  color: var(--thinking-end);
   animation: thinking-effort-label 140ms ease-out;
 }
 
 .thinking-effort-particles {
-  z-index: 1;
-  /*
-   * The sparkles belong to the bar, so the band they live in is the bar — not the
-   * 2.75rem rail the knob is dragged across. It was `inset-y-2`, which exactly
-   * matched a 1.75rem bar and, once the bar got slimmer, left particles drifting in
-   * the empty space above and below it.
-   */
+  z-index: 0;
+  border-radius: var(--thinking-track-radius);
   inset-block: calc((var(--thinking-rail-height) - var(--thinking-track-height)) / 2);
-  animation: thinking-effort-appear 240ms ease-out;
+  /* The moving fill ends at the thumb centre; no sparkles escape into the empty rail. */
+  clip-path: inset(0 calc((1 - var(--thinking-progress)) * (100% - var(--thinking-thumb-size)) + var(--thinking-thumb-size) / 2) 0 0);
+  opacity: var(--thinking-energy);
 }
 
 .thinking-effort-particles > i {
   position: absolute;
-  left: var(--particle-x);
+  left: calc(0rem - var(--particle-size));
   top: var(--particle-y);
+  /* A full-width carrier makes translateX(100%) cross the entire rail. */
+  width: 100%;
+  height: var(--particle-size);
+  opacity: 0;
+  animation: thinking-effort-particle var(--particle-duration) linear var(--particle-delay) infinite paused;
+}
+
+.thinking-effort-particles > i::before {
+  content: "";
+  position: absolute;
   width: var(--particle-size);
   height: var(--particle-size);
   border-radius: 50%;
-  background: var(--primary-foreground);
-  opacity: 0;
-  animation: thinking-effort-particle var(--particle-duration) ease-in-out var(--particle-delay) infinite;
+  background: var(--thinking-spark);
+}
+
+/* The faint tail trails to the right as each point rushes to the left. */
+.thinking-effort-particles > i::after {
+  content: "";
+  position: absolute;
+  left: var(--particle-size);
+  top: 25%;
+  width: calc(var(--thinking-energy) * 0.3rem);
+  height: 50%;
+  border-radius: 999px;
+  background: linear-gradient(to right, color-mix(in oklab, var(--thinking-spark) 50%, transparent), transparent);
+}
+
+.thinking-effort-particles > i[data-star]::before {
+  scale: 1.5;
+  border-radius: 0;
+  clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%);
+}
+
+.thinking-effort[data-energized] .thinking-effort-particles > i,
+.thinking-effort[data-energized] [data-slot="slider-range"]::after {
+  animation-play-state: running;
 }
 
 .thinking-effort[data-disabled] {
@@ -140,8 +159,8 @@
 }
 
 @keyframes thinking-effort-flow {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
+  0%, 100% { transform: translateX(-12%); opacity: calc(var(--thinking-energy) * 0.5); }
+  50% { transform: translateX(12%); opacity: var(--thinking-energy); }
 }
 
 @keyframes thinking-effort-label {
@@ -149,15 +168,12 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes thinking-effort-appear {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
 @keyframes thinking-effort-particle {
-  0% { transform: translate(-0.25rem, 0.15rem); opacity: 0; }
-  30%, 65% { opacity: 0.5; }
-  100% { transform: translate(0.4rem, -0.3rem); opacity: 0; }
+  0% { transform: translateX(100%); opacity: 0; }
+  8% { opacity: 0.75; }
+  45% { opacity: 0.95; }
+  92% { opacity: 0.75; }
+  100% { transform: translateX(0%); opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -6,6 +6,8 @@
     "conversations": "工作会话",
     "empty": "还没有工作会话",
     "emptyConversation": "这条工作会话还没有消息",
+    "noReply": "还没有回复",
+    "cardStatus": {"queued": "排队中", "working": "处理中", "waiting": "等你回答", "paused": "已暂停", "completed": "已完成", "failed": "未完成", "interrupted": "已中断", "blocked": "需要补充信息", "unconfirmed": "待确认", "idle": "待处理"},
     "workspace": "工作区",
     "recovery": "可以继续",
     "continue": "继续",
@@ -413,12 +415,9 @@
     "progress": "{{done}}/{{total}} 已完成",
     "agents": "智能体",
     "finished": "已结束 {{count}} 项",
-    "outputs": "最近产出",
     "changes": "工作区变更",
     "changesDescription": "仓库当前的全部修改",
-    "jump": "跳转到消息",
     "more": "展开更多（{{count}}）",
-    "less": "收起",
-    "previewFailed": "无法打开文件"
+    "less": "收起"
   }
 }

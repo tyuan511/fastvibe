@@ -33,6 +33,33 @@ function fixture(db: Db = openDatabase(":memory:")) {
   return { db, store, runtime, host, events, calls, resolvedProjects, behavior: (fn: typeof behavior) => { behavior = fn; } };
 }
 
+test("已登记 Worker 的持久化更新只增长 revision，Router 与普通会话不受影响", async () => {
+  const f = fixture();
+  try {
+    await f.runtime.submit({ requestId: "router-input", text: "安排工作" });
+    const worker = await f.runtime.createWork({ requestId: "worker-input", title: "工作", text: "处理工作" });
+    const before = await f.runtime.getWorkSnapshot();
+    const receipts = f.store.inputs();
+    const eventsBefore = f.events.length;
+    f.runtime.conversationUpdated("ordinary-chat");
+    f.runtime.conversationUpdated(before.routerConversationId!);
+    assert.equal(f.store.revision, before.revision);
+    assert.equal(f.events.length, eventsBefore);
+
+    for (let index = 1; index <= 2; index++) {
+      f.runtime.conversationUpdated(worker.conversationId);
+      const snapshot = await f.runtime.getWorkSnapshot();
+      assert.equal(snapshot.revision, before.revision + index);
+      assert.deepEqual({ ...snapshot, revision: before.revision }, before, "epoch、feed、进度和投递均保持原样");
+      assert.deepEqual(f.store.inputs(), receipts, "receipt 不变");
+      assert.equal(f.events.length, eventsBefore + index);
+      assert.equal(f.events.at(-1)?.revision, snapshot.revision);
+      assert.equal(f.events.at(-1)?.message, undefined);
+      assert.equal(f.events.at(-1)?.delivery, undefined);
+    }
+  } finally { await f.runtime.stop(); f.db.close(); }
+});
+
  test("Vivi 忽略外部 project，Router 和 Worker 固定使用默认工作区", async () => {
   const f = fixture();
   try {

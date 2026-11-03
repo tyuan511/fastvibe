@@ -16,7 +16,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ProviderIcon } from "@/components/provider-icon";
 import { ThinkingEffortSlider } from "@/components/thinking-effort-slider";
 import { thinkingLabel, thinkingMenuLabel } from "@/lib/thinking-levels";
 import { cn } from "@/lib/utils";
@@ -195,7 +194,6 @@ export function ModelThinkingSelect({
               <DropdownMenuSub key={group.id}>
                 <DropdownMenuSubTrigger disabled={disabled}>
                   <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <ProviderIcon provider={group.id} />
                     <span className="min-w-0 truncate">{group.name}</span>
                     <span className="ml-auto flex size-4 shrink-0 items-center justify-center">
                       {selectedInGroup ? <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="size-4" /> : null}
@@ -222,12 +220,6 @@ export function ModelThinkingSelect({
           })
         )}
         <DropdownMenuSeparator />
-        {onManageModels ? (
-          <>
-            <DropdownMenuItem disabled={disabled} onClick={onManageModels}>{manageModelsLabel ?? t("composer.manageModels")}</DropdownMenuItem>
-            <DropdownMenuSeparator />
-          </>
-        ) : null}
         <ThinkingEffortSlider
           key={`${selected ?? "inherit"}:${thinkingOptions.join(",")}`}
           options={thinkingOptions}
@@ -235,6 +227,12 @@ export function ModelThinkingSelect({
           disabled={disabled}
           onCommit={onThinkingChange}
         />
+        {onManageModels ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={disabled} onClick={onManageModels}>{manageModelsLabel ?? t("composer.manageModels")}</DropdownMenuItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

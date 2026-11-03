@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AiExpandIcon, ArrowRight01Icon, BotIcon, ComputerIcon, Copy01Icon, Folder01Icon, GitBranchIcon, GitCompareIcon } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
-import { conversationOutputs } from "@shared/conversation-outputs";
 import { folderName, projectFolderPaths } from "@shared/project-folders";
 import type { AgentThread } from "@shared/agent-thread";
 import type { GitStatus } from "@shared/ipc";
@@ -14,7 +13,6 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { IconButton } from "@/components/icon-button";
 import { AgentAvatar } from "@/components/agent-avatar";
-import { FileIcon } from "@/components/file-icon";
 import { RunningMark } from "@/components/running-mark";
 import { TodoRow } from "@/components/chat/todo-list";
 import { activeTodo } from "@/lib/todos";
@@ -22,14 +20,12 @@ import { getAgentThreads, onEvent } from "@/lib/engine-client";
 import { useConversationTodo } from "@/lib/use-conversation-todo";
 import { conversationAgents, resourceAgentFinished, type ResourceAgent } from "@/lib/conversation-resources";
 import { subagentStatusText } from "@/lib/subagent-status";
-import { displayPath, resolvePath } from "@/lib/workspace-path";
 import { displayRemotePath, isRemoteProject } from "@/lib/remote-project";
 import { subscribeGitStatus, useGitStatus } from "@/lib/use-git-status";
 import { cn } from "@/lib/utils";
 import { useSessionStore, useConversationWorking } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore } from "@/stores/side-pane";
-import { useTranscriptNavigation } from "@/stores/transcript-navigation";
 import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
 
 const ROW = "h-auto min-h-8 w-full justify-start gap-2 rounded-md px-2 py-1.5 text-left font-normal";
@@ -154,7 +150,6 @@ function Environment({ conversation, project, onClose }: { conversation: Convers
 
 function ResourceBody({ conversation, project, onClose }: { conversation: Conversation; project?: Project; onClose: () => void }) {
   const { t } = useTranslation("sidepane");
-  const narrow = useIsNarrowViewport();
   const messages = useSessionStore((state) => state.messages);
   const registry = useSessionStore((state) => state.subagents);
   const working = useConversationWorking();
@@ -183,8 +178,6 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   // a resource of the current turn, so it does not get a section here either.
   const todo = useConversationTodo();
   const agents = useMemo(() => conversationAgents(conversation.id, messages, registry, threadAgents), [conversation.id, messages, registry, threadAgents]);
-  const outputs = useMemo(() => conversationOutputs(messages, (path) => resolvePath(path, conversation.cwd)), [messages, conversation.cwd]);
-  const [moreOutputs, setMoreOutputs] = useState(false);
   const [moreAgents, setMoreAgents] = useState(false);
   const [moreFinishedAgents, setMoreFinishedAgents] = useState(false);
   const [repos, setRepos] = useState<string[]>([conversation.cwd]);
@@ -203,21 +196,6 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
     return () => { cancelled = true; };
   }, [conversation.cwd, conversation.worktree, project?.cwd, folderKey]);
 
-  const jump = (entryId: string): void => {
-    const pane = useSidePaneStore.getState();
-    if (pane.maximized) pane.toggleMaximized();
-    useTranscriptNavigation.getState().jump(conversation.id, entryId);
-    onClose();
-  };
-  const openOutput = async (path: string): Promise<void> => {
-    onClose();
-    try {
-      const preview = await window.fastvibe.workspace.preview(path);
-      if (useSessionStore.getState().activeId === conversation.id) useSidePaneStore.getState().openFilePreview(preview);
-    } catch (error) {
-      if (useSessionStore.getState().activeId === conversation.id) toast.error(error instanceof Error ? error.message : t("resources.previewFailed"));
-    }
-  };
   const agentRow = (agent: ResourceAgent) => {
     const live = agent.status === "running" && agent.info?.phase !== "waiting";
     const attention = agent.info?.phase === "waiting" || ["blocked", "failed", "error"].includes(agent.status);
@@ -250,18 +228,6 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
         {finishedAgents.slice(0, moreFinishedAgents ? undefined : 5).map(agentRow)}
         {finishedAgents.length > 5 ? <More count={finishedAgents.length - 5} expanded={moreFinishedAgents} onClick={() => setMoreFinishedAgents((value) => !value)} /> : null}
       </Finished>
-    </ResourceSection> : null}
-    {outputs.length ? <ResourceSection title={t("resources.outputs")} summary={outputs.length}>
-      {outputs.slice(0, moreOutputs ? undefined : 5).map((output) => <div key={output.path} className="group flex min-w-0 items-center rounded-md hover:bg-muted focus-within:bg-muted dark:hover:bg-muted/50 dark:focus-within:bg-muted/50">
-        <Button variant="ghost" className={cn(ROW, "min-w-0 flex-1 hover:bg-transparent dark:hover:bg-transparent")} disabled={narrow} title={displayRemotePath(output.path)} onClick={() => void openOutput(output.path)}>
-          <FileIcon name={output.path} className="size-4 shrink-0" />
-          <span className="min-w-0 truncate">{output.title || displayPath(output.path, conversation.cwd)}</span>
-        </Button>
-        <IconButton size="icon-xs" variant="ghost" label={t("resources.jump")} onClick={() => jump(output.entryId)} className="mr-1 shrink-0 text-muted-foreground opacity-0 hover:bg-transparent group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100 dark:hover:bg-transparent">
-          <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} />
-        </IconButton>
-      </div>)}
-      {outputs.length > 5 ? <More count={outputs.length - 5} expanded={moreOutputs} onClick={() => setMoreOutputs((value) => !value)} /> : null}
     </ResourceSection> : null}
     <Repositories roots={repos} working={working} onClose={onClose} />
   </div>;

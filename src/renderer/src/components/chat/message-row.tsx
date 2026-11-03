@@ -29,7 +29,7 @@ import { useWorkspacePath } from "@/lib/workspace-path-context";
 import { AttachmentChip } from "./attachment-chip";
 import { SkillBadgeRow } from "./skill-badge";
 import { collectChangedFiles, TurnFileChips } from "./file-chips";
-import { InlinePreviews } from "./inline-preview";
+import { InlinePreviews, InlineThumbStrip } from "./inline-preview";
 import { MarkdownView } from "./markdown-view";
 import { ThinkingBlock } from "./thinking-block";
 import { ToolCard } from "./tool-card";
@@ -792,7 +792,10 @@ function ChatMessageRowImpl({
         {foldHead > 0 ? parts.slice(0, foldHead).map((part, index) => renderPart(part, index)) : null}
 
         {fold && foldHead < fold.cut ? (
-          <RunCollapse durationMs={fold.durationMs}>
+          <RunCollapse
+            durationMs={fold.durationMs}
+            trailing={<InlineThumbStrip items={parts.slice(foldHead, fold.cut).flatMap(previewsOf)} />}
+          >
             {parts
               .slice(foldHead, fold.cut)
               .map((part, index) => renderPart(part, foldHead + index))}

@@ -163,8 +163,8 @@ function baseName(path: string): string {
 const FILE_FAMILIES = new Set<ToolFamily>(["read", "write", "edit", "delete"]);
 
 /** The name a settled clause prints, plus the path when that name is a file. */
-function namedPiece(tool: ToolCallBlock): SummaryPiece {
-  const name = callName(tool);
+function namedPiece(tool: ToolCallBlock, text: Translate): SummaryPiece {
+  const name = familyOf(tool.name) === "codemode" ? text("common:tool.codemode.name") : callName(tool);
   if (!FILE_FAMILIES.has(familyOf(tool.name))) return { kind: "file", name };
   const path = argString(tool.args, FILE_KEYS);
   return path ? { kind: "file", name, path } : { kind: "file", name };
@@ -268,7 +268,7 @@ export function runSummary(items: RunItem[], text: Translate): { line: string; p
     const clause = CATEGORY_CLAUSE[category];
     const single = batch.length === 1 && batch[0]?.kind === "tool" ? batch[0].tool : undefined;
     if (single && !COUNT_ONLY.has(category)) {
-      push([{ kind: "text", text: `${text(clause.one)} ` }, namedPiece(single)]);
+      push([{ kind: "text", text: `${text(clause.one)} ` }, namedPiece(single, text)]);
       continue;
     }
     push([{ kind: "text", text: text(clause.many, { count: batch.length }) }]);
