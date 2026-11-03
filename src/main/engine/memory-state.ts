@@ -1,5 +1,5 @@
 import { importLegacyJson, RowWriter, type Db } from "./db.ts";
-import { emptyState, type MemoryStateFile } from "./memory-plan.ts";
+import { emptyState, type MemoryStateFile, type Stage1Output } from "./memory-plan.ts";
 
 /**
  * The memory pipeline's bookkeeping, in the shared database.
@@ -71,7 +71,8 @@ export class MemoryStateStore {
         `SELECT conversation_id, data FROM ${TABLE[name]}`,
       )) {
         try {
-          target[row.conversation_id] = JSON.parse(row.data);
+          const parsed: unknown = JSON.parse(row.data);
+          target[row.conversation_id] = name === "outputs" ? normalizeOutput(parsed) : parsed;
         } catch {
           // A row that is not the JSON we wrote is not worth failing the pipeline over.
           continue;
@@ -134,6 +135,21 @@ export class MemoryStateStore {
   }
 }
 
+/** Old usage counts never become reinforcements, and invalid optional clocks cannot poison decay. */
+function normalizeOutput(value: unknown): Stage1Output {
+  const record = { ...(value as Stage1Output) };
+  // Drop legacy exemption fields even when reading a ledger written by a development build.
+  delete (record as Stage1Output & { pinned?: unknown }).pinned;
+  const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+  if (!finite(record.generatedAt)) record.generatedAt = finite(record.sourceUpdatedAt) ? record.sourceUpdatedAt : finite(record.createdAt) ? record.createdAt : 0;
+  if (!finite(record.usageCount)) record.usageCount = 0;
+  for (const key of ["lastUsage", "lastReinforcedAt", "reinforcementCount"] as const) {
+    if (!finite(record[key])) delete record[key];
+  }
+  if (record.reinforcementCount !== undefined) record.reinforcementCount = Math.min(31, Math.max(0, Math.floor(record.reinforcementCount)));
+  return record;
+}
+
 function writer(db: Db, name: MapName): RowWriter<EntryRow> {
   return new RowWriter<EntryRow>(db, {
     table: TABLE[name],
@@ -154,7 +170,7 @@ function normalizeState(value: unknown): MemoryStateFile {
   return {
     ...emptyState(),
     ...parsed,
-    outputs: parsed.outputs,
+    outputs: Object.fromEntries(Object.entries(parsed.outputs).map(([id, output]) => [id, normalizeOutput(output)])),
     empty: parsed.empty ?? {},
     failures: parsed.failures ?? {},
   } as MemoryStateFile;

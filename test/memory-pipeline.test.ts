@@ -9,6 +9,8 @@ import { MemoryManager, readMemoryConfig, removeLegacyMemory } from "../src/main
 import { MemoryStateStore } from "../src/main/engine/memory-state.ts";
 import { openTestDb, testDir } from "./test-db.ts";
 import type { MemoryRuntime } from "../src/main/engine/memory-host.ts";
+import { readTree } from "../src/main/engine/memory-workspace.ts";
+import { MEMORY_RETENTION_POLICY } from "../src/main/engine/memory-retention.ts";
 import { MEMORY_CONFIG_VERSION } from "../src/shared/memory.ts";
 
 const HOUR = 3_600_000;
@@ -56,6 +58,7 @@ function harness(options: { enabled?: boolean; chats?: number } = {}): Harness {
       calls.agent += 1;
       // What the agent is shown: Codex's prompt, and the diff file it names, present while it runs.
       assert.match(task, /Memory Writing Agent: Phase 2 \(Consolidation\)/);
+      assert.ok(task.endsWith(MEMORY_RETENTION_POLICY));
       agentSaw.push(readFileSync(join(cwd, "phase2_workspace_diff.md"), "utf8"));
       if (!agentWrites.value) return;
       writeFileSync(join(cwd, "MEMORY.md"), "# Task Group: app\n- build: pnpm, parallel\n");
@@ -256,19 +259,26 @@ test("a live agent is shown Codex's read prompt with the summary, only when ther
   } finally { cleanup(h); }
 });
 
-test("a reply that cites a conversation counts as a use of it, and use decides what stays", async () => {
+test("only a successful cross-day citation reinforcement updates usage, and it survives restart", async () => {
   const h = harness();
   try {
     await h.manager.run();
     const cited = ids(h)[1];
     const block = `Done.\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n<rollout_ids>\n${cited}\n${UUID(99)}\n</rollout_ids>\n</oai-mem-citation>`;
+    const initial = new MemoryStateStore(openTestDb(h.dir)).load().outputs[cited];
     h.manager.noteReply("no citation here");
-    h.manager.noteReply(block);
+    h.manager.noteReply(block, initial.generatedAt);
+    const usedAt = initial.generatedAt + 24 * HOUR;
+    h.manager.noteReply(block, usedAt);
+    h.manager.noteReply(block, usedAt + 1_000);
+    h.manager.noteReply(block, usedAt + 60 * 24 * HOUR + 1);
     h.manager.close(); // flushes the debounced state write
     const saved = new MemoryStateStore(openTestDb(h.dir)).load();
     assert.equal(saved.outputs[cited].usageCount, 1);
     assert.equal(saved.outputs[ids(h)[0]].usageCount, 0);
-    assert.ok(saved.outputs[cited].lastUsage > 0);
+    assert.equal(saved.outputs[cited].lastUsage, usedAt);
+    assert.equal(saved.outputs[cited].reinforcementCount, 1);
+    assert.equal(saved.outputs[cited].lastReinforcedAt, usedAt);
   } finally { cleanup(h); }
 });
 
@@ -320,6 +330,56 @@ test("a model chosen for memory reaches both stages, survives a restart, and cle
     assert.equal(readMemoryConfig(h.files.memoryFile).model, undefined);
     state = await h.manager.setConfig({ model: { provider: "", id: "x" } });
     assert.equal(state.config.model, undefined, "a half-formed model is no model");
+  } finally { cleanup(h); }
+});
+
+test("expiry without new input restores a failed cleanup and retries the same source removal", async (t) => {
+  const h = harness();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  try {
+    await h.manager.run();
+    const [expiredId, retainedId] = ids(h);
+    const previous = await readTree(h.files.memoriesDir);
+    const oldPath = [...previous].find(([path, text]) => path.startsWith("rollout_summaries/") && text.includes(`thread_id: ${expiredId}`))![0];
+    const retainedPath = [...previous].find(([path, text]) => path.startsWith("rollout_summaries/") && text.includes(`thread_id: ${retainedId}`))![0];
+    now += 24 * HOUR;
+    h.manager.noteReply(`<oai-mem-citation><rollout_ids>\n${retainedId}\n</rollout_ids></oai-mem-citation>`, now);
+    now += 30 * 24 * HOUR + 1;
+    let attempt = 0;
+    const diffs: string[] = [];
+    h.manager.attach({
+      conversations: () => h.chats,
+      loadBranch: async () => BRANCH,
+      complete: async () => { throw new Error("expired sources must not be extracted again"); },
+      inputBudgetChars: () => 450_000,
+      runAgent: async ({ cwd, task }) => {
+        attempt++;
+        assert.ok(task.endsWith(MEMORY_RETENTION_POLICY));
+        diffs.push(readFileSync(join(cwd, "phase2_workspace_diff.md"), "utf8"));
+        writeFileSync(join(cwd, "MEMORY.md"), attempt === 1 ? `# Unsupported\n${oldPath}\n` : `# Shared knowledge\nStill supported by ${retainedPath}\n`);
+        writeFileSync(join(cwd, "memory_summary.md"), "v1\n\n## Index\nShared knowledge: MEMORY.md\n");
+        writeFileSync(join(cwd, oldPath), "attempted resurrection\n");
+      },
+    });
+    const failed = await h.manager.run();
+    assert.match(failed.error ?? "", /Forgotten memory reference/);
+    assert.deepEqual(await readTree(h.files.memoriesDir), previous, "all previously published files are restored");
+    assert.deepEqual(await readTree(h.files.memoriesBaselineDir), previous);
+    const retried = await h.manager.run();
+    assert.equal(retried.error, undefined);
+    assert.equal(attempt, 2);
+    assert.equal(diffs[0], diffs[1], "retry sees the same removal diff");
+    assert.match(diffs[1], new RegExp(`deleted ${oldPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    const tree = await readTree(h.files.memoriesDir);
+    assert.equal(tree.has(oldPath), false, "a consolidator cannot revive expired source files");
+    assert.equal(tree.has(retainedPath), true);
+    assert.match(tree.get("MEMORY.md")!, /Still supported/);
+    const saved = new MemoryStateStore(openTestDb(h.dir)).load();
+    assert.equal(saved.outputs[expiredId], undefined);
+    assert.ok(saved.empty[expiredId] !== undefined, "the original transcript fingerprint stays forgotten");
+    await h.manager.run();
+    assert.equal(attempt, 2, "an unchanged successful publication needs no model");
   } finally { cleanup(h); }
 });
 

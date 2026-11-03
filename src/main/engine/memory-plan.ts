@@ -1,5 +1,6 @@
 import type { Conversation } from "@shared/types";
 import { redactSecrets } from "./memory-transcript.ts";
+import { MEMORY_BASE_UNUSED_MS, MEMORY_MAX_SOURCES, memoryExpired, memoryRetentionClock, memoryRetentionScore, type MemoryRetention } from "./memory-retention.ts";
 
 /**
  * The pure half of the memory pipeline: which conversations to distil, which of the
@@ -22,16 +23,16 @@ export const MAX_AGE_MS = 10 * DAY;
 export const MAX_PER_PASS = 2;
 export const EXTRACT_CONCURRENCY = 2;
 /** How many distilled conversations consolidation keeps in view (`max_raw_memories_for_consolidation`). */
-export const MAX_CONSOLIDATED = 256;
-/** A distilled conversation unused for this long drops out, and is pruned (`max_unused_days`). */
-export const MAX_UNUSED_MS = 30 * DAY;
+export const MAX_CONSOLIDATED = MEMORY_MAX_SOURCES;
+/** Initial unused window; reinforcement extends this through the shared retention curve. */
+export const MAX_UNUSED_MS = MEMORY_BASE_UNUSED_MS;
 /** A failed extraction is tried again after this long (`JOB_RETRY_DELAY_SECONDS`), a few times. */
 export const RETRY_DELAY_MS = HOUR;
 export const MAX_ATTEMPTS = 3;
 const ROLLOUT_SLUG_MAX_LEN = 60;
 
 /** What stage 1 produced for one conversation (Codex's `Stage1Output`). */
-export type Stage1Output = {
+export type Stage1Output = MemoryRetention & {
   conversationId: string;
   /** The conversation's working directory. */
   cwd: string;
@@ -103,22 +104,16 @@ export function failureAfter(previous: Failure | undefined, sourceUpdatedAt: num
   return { sourceUpdatedAt, attempts, retryAfter: now + RETRY_DELAY_MS };
 }
 
-const lastTouched = (output: Stage1Output): number => output.lastUsage ?? output.generatedAt;
-
-/** Distilled conversations that nothing has used for the whole window; they are deleted, not just left out. */
+/** Expired sources are removed even when there is no new conversation to extract. */
 export function staleOutputIds(outputs: readonly Stage1Output[], now: number): string[] {
-  return outputs.filter((output) => now - lastTouched(output) > MAX_UNUSED_MS).map((output) => output.conversationId);
+  return outputs.filter((output) => memoryExpired(output, now)).map((output) => output.conversationId);
 }
 
-/**
- * The distilled conversations consolidation works from: the ones used or written inside the
- * window, most used first, then the most recently touched — so what the agent actually
- * reaches for stays.
- */
+/** Both memory systems rank by decay, bounded reinforcement weight, then the usage clock. */
 export function selectForConsolidation(outputs: readonly Stage1Output[], now: number): Stage1Output[] {
-  return outputs
-    .filter((output) => now - lastTouched(output) <= MAX_UNUSED_MS)
-    .sort((a, b) => b.usageCount - a.usageCount || (b.lastUsage ?? b.sourceUpdatedAt) - (a.lastUsage ?? a.sourceUpdatedAt) || a.conversationId.localeCompare(b.conversationId))
+  return [...outputs]
+    .filter((output) => !memoryExpired(output, now))
+    .sort((a, b) => memoryRetentionScore(b, now) - memoryRetentionScore(a, now) || memoryRetentionClock(b) - memoryRetentionClock(a) || a.conversationId.localeCompare(b.conversationId))
     .slice(0, MAX_CONSOLIDATED);
 }
 

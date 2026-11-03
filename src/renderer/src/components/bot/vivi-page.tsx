@@ -51,7 +51,6 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
   const setAttachments = useBotComposerState((state) => state.setAttachments);
   const setActionError = (value: string | null) => useBotComposerState.setState({ error: value });
   const optimistic = useBotComposerState((state) => state.optimistic);
-  const [statusBusy, setStatusBusy] = useState(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const sendLock = useRef(false);
@@ -94,26 +93,10 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
     const next = await window.fastvibe.bot.answer({ attentionId, answer: value });
     adopt(next); refresh();
   };
-  const askStatus = async (): Promise<void> => {
-    if (statusBusy) return;
-    setStatusBusy(true);
-    try { adopt(await window.fastvibe.bot.submit({ requestId: `status:${crypto.randomUUID()}`, text: t("viviBot.statusQuery"), intent: "status" })); }
-    catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setStatusBusy(false); }
-  };
   const stopAll = async (): Promise<void> => {
-    if (statusBusy) return;
-    setStatusBusy(true); setActionError(null);
+    setActionError(null);
     try { adopt(await window.fastvibe.bot.stopAll()); }
     catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setStatusBusy(false); }
-  };
-  const continueConversation = async (conversationId: string): Promise<void> => {
-    if (statusBusy) return;
-    setStatusBusy(true); setActionError(null);
-    try { adopt(await window.fastvibe.bot.continueConversation({ conversationId })); }
-    catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setStatusBusy(false); }
   };
 
   const submit = async (): Promise<void> => {
@@ -149,7 +132,7 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
       </div>
     </header>
     {error ? <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-6 py-3"><p role="alert" className="min-w-0 flex-1 wrap-anywhere text-sm text-destructive">{error}</p><Button variant="outline" size="sm" onClick={refresh}>{t("viviBot.retry")}</Button></div> : null}
-    <div className="relative min-h-0 flex-1"><Transcript cwd={null} messages={messages} conversationId={routerId ?? "vivi"} streaming={false} loading={loading && !optimistic} footer={<ViviProgressFooter progress={progress} sending={sending} fallbackRunning={snapshot?.progress === undefined && Boolean(activity?.running)} busy={statusBusy} onStatus={() => void askStatus()} onTasks={openWork} onStopAll={() => void stopAll()} onContinue={(conversationId) => void continueConversation(conversationId)} onCompose={() => document.querySelector<HTMLTextAreaElement>("[data-vivi-workspace] textarea")?.focus()} />} emptyState={<Empty className="h-full gap-6 pb-8"><EmptyHeader className="max-w-md gap-3"><EmptyMedia className="relative mb-1"><span aria-hidden className="absolute inset-0 scale-150 rounded-full bg-primary/5 blur-2xl" /><FastVibeMascot size="size-20" palette={palette} status="idle" /></EmptyMedia><EmptyTitle className="text-2xl font-semibold tracking-tight">{t("viviBot.greeting")}</EmptyTitle><EmptyDescription className="max-w-sm text-sm leading-6">{t("viviBot.description")}</EmptyDescription></EmptyHeader>{hasMainModel ? <div className="flex max-w-lg flex-wrap justify-center gap-2">{STARTERS.map(({ key, icon }) => <Button key={key} type="button" variant="outline" size="sm" className="h-auto gap-2 rounded-xl bg-card/60 px-3 py-2 font-normal text-muted-foreground shadow-none hover:text-foreground" disabled={sending} onClick={() => setDraft(t(`viviBot.starters.${key}.prompt`))}><HugeiconsIcon strokeWidth={1.8} icon={icon} className="size-3.5" />{t(`viviBot.starters.${key}.label`)}</Button>)}</div> : <Button variant="outline" size="sm" onClick={onManageModels}>{t("viviBot.addModels")}</Button>}</Empty>} /></div>
+    <div className="relative min-h-0 flex-1"><Transcript cwd={null} messages={messages} conversationId={routerId ?? "vivi"} streaming={false} loading={loading && !optimistic} footer={<ViviProgressFooter progress={progress} sending={sending} fallbackRunning={snapshot?.progress === undefined && Boolean(activity?.running)} />} emptyState={<Empty className="h-full gap-6 pb-8"><EmptyHeader className="max-w-md gap-3"><EmptyMedia className="relative mb-1"><span aria-hidden className="absolute inset-0 scale-150 rounded-full bg-primary/5 blur-2xl" /><FastVibeMascot size="size-20" palette={palette} status="idle" /></EmptyMedia><EmptyTitle className="text-2xl font-semibold tracking-tight">{t("viviBot.greeting")}</EmptyTitle><EmptyDescription className="max-w-sm text-sm leading-6">{t("viviBot.description")}</EmptyDescription></EmptyHeader>{hasMainModel ? <div className="flex max-w-lg flex-wrap justify-center gap-2">{STARTERS.map(({ key, icon }) => <Button key={key} type="button" variant="outline" size="sm" className="h-auto gap-2 rounded-xl bg-card/60 px-3 py-2 font-normal text-muted-foreground shadow-none hover:text-foreground" disabled={sending} onClick={() => setDraft(t(`viviBot.starters.${key}.prompt`))}><HugeiconsIcon strokeWidth={1.8} icon={icon} className="size-3.5" />{t(`viviBot.starters.${key}.label`)}</Button>)}</div> : <Button variant="outline" size="sm" onClick={onManageModels}>{t("viviBot.addModels")}</Button>}</Empty>} /></div>
     <div className="safe-bottom transcript-gutter shrink-0 px-4 pb-3 sm:px-6"><div className="mx-auto w-full max-w-3xl">
       {questions.length ? <div className="mb-3 max-h-[min(20rem,40dvh)] overflow-y-auto"><BotQuestions questions={questions} limit={1} onAnswer={answer} /></div> : null}
       {feedbackError ? <p role="alert" className="mb-2 wrap-anywhere text-sm text-destructive">{feedbackError}</p> : null}
@@ -160,7 +143,7 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
           value={draft}
           disabled={!hasMainModel || sending}
           streaming={false}
-          working={false}
+          working={working}
           placeholder={t(!hasMainModel ? "viviBot.noModel" : target ? "viviBot.supplementPlaceholder" : "viviBot.placeholder")}
           models={[]}
           model={mainModel}
@@ -180,7 +163,7 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
           stats={null}
           onChange={setDraft}
           onSubmit={() => void submit()}
-          onAbort={() => undefined}
+          onAbort={() => void stopAll()}
           onPickWorkspace={() => undefined}
           onSelectProject={() => undefined}
           onModelChange={() => undefined}

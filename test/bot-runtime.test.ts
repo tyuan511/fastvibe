@@ -20,17 +20,18 @@ function fixture(db: Db = openDatabase(":memory:")) {
   const calls: Array<Parameters<BotHost["execute"]>[0]> = [];
   let behavior: BotHost["execute"] = async () => done;
   const ids = new Map<string, string>();
+  const created: Array<Parameters<BotHost["createConversation"]>[0]> = [];
   const resolvedProjects: string[] = [];
   const host: BotHost = {
-    createConversation: async ({ kind, key }) => { const id = ids.get(key) ?? `${kind}:${ids.size + 1}`; ids.set(key, id); return { conversationId: id }; },
+    createConversation: async (input) => { created.push(input); const { kind, key } = input; const id = ids.get(key) ?? `${kind}:${ids.size + 1}`; ids.set(key, id); return { conversationId: id }; },
     execute: async (input) => { calls.push(input); return behavior(input); },
     snapshot: async (conversationId) => ({ conversationId, messages: [], running: false } as never),
     messages: async () => [], abort: async () => {},
-    resolveProject: () => { resolvedProjects.push("/output"); return "/output"; },
+    resolveProject: (project, workerKey) => { const cwd = project ?? (workerKey ? `/workers/${workerKey}` : "/output"); resolvedProjects.push(cwd); return cwd; },
     changed: (event) => events.push(event),
   };
   const runtime = new BotRuntime(store, host);
-  return { db, store, runtime, host, events, calls, resolvedProjects, behavior: (fn: typeof behavior) => { behavior = fn; } };
+  return { db, store, runtime, host, events, calls, created, resolvedProjects, behavior: (fn: typeof behavior) => { behavior = fn; } };
 }
 
 test("已登记 Worker 的持久化更新只增长 revision，Router 与普通会话不受影响", async () => {
@@ -60,7 +61,7 @@ test("已登记 Worker 的持久化更新只增长 revision，Router 与普通�
   } finally { await f.runtime.stop(); f.db.close(); }
 });
 
- test("Vivi 忽略外部 project，Router 和 Worker 固定使用默认工作区", async () => {
+test("Router 输入不能覆盖工作区，Worker 接收 Router 按语义选择的项目", async () => {
   const f = fixture();
   try {
     f.runtime.start();
@@ -71,13 +72,43 @@ test("已登记 Worker 的持久化更新只增长 revision，Router 与普通�
     assert.equal("project" in (f.store.input("r1") as object), false);
     assert.equal(f.resolvedProjects[0], "/output");
     await assert.rejects(f.runtime.submit({ requestId: "r1", text: "不同内容" }), /不同内容/);
-    const worker = await f.runtime.createWork(withExternalProject({ requestId: "w1", title: "工作", text: "整理" }, "/other"));
-    assert.equal(worker.project, "/output");
-    assert.equal(f.resolvedProjects.at(-1), "/output");
+    const request = { requestId: "w1", title: "工作", text: "整理", project: "/other" };
+    const worker = await f.runtime.createWork(request);
+    assert.equal(worker.project, "/other");
+    assert.equal(f.resolvedProjects.at(-1), "/other");
+    assert.deepEqual(f.created.at(-1), { kind: "worker", key: "work:w1", project: "/other", workspace: undefined });
+    assert.equal((await f.runtime.createWork(request)).conversationId, worker.conversationId);
+    await assert.rejects(f.runtime.createWork({ ...request, project: "/different" }), /不同内容/);
     const restarted = new BotRuntime(new BotStore(f.db), f.host);
+    assert.equal((await restarted.createWork(request)).project, "/other");
     await restarted.submit(withExternalProject({ requestId: "r1", text: "整理报告" }, "/another"));
     assert.equal(f.store.conversations().length, 2);
     await restarted.stop();
+  } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("无项目的 Worker 工作区彼此独立，显式 workspace:vivi 才共享总工作区", async () => {
+  const f = fixture();
+  try {
+    const first = { requestId: "solo-1", title: "整理", text: "整理资料" };
+    const worker = await f.runtime.createWork(first);
+    const other = await f.runtime.createWork({ ...first, requestId: "solo-2" });
+    const shared = await f.runtime.createWork({ ...first, requestId: "shared", workspace: "vivi" });
+    assert.equal(worker.project, "/workers/work:solo-1");
+    assert.notEqual(worker.project, other.project);
+    assert.equal(shared.project, "/output");
+    assert.equal(f.created.at(-1)?.workspace, "vivi");
+    const restarted = new BotRuntime(new BotStore(f.db), f.host);
+    assert.deepEqual(await restarted.createWork(first), worker);
+    assert.equal(f.created.length, 3, "同一创建标识重试不创建新会话或新目录");
+    await assert.rejects(restarted.createWork({ ...first, workspace: "vivi" }), /不同内容/);
+    await assert.rejects(restarted.createWork({ ...first, requestId: "bad", project: "/project", workspace: "vivi" }), /不能同时指定/);
+    await assert.rejects(restarted.createWork({ ...first, requestId: "bad-kind", workspace: "unknown" as never }), /未知/);
+    assert.equal(f.created.length, 3, "无效派发在创建会话前拒绝");
+    await f.runtime.routeMessage({ conversationId: worker.conversationId, requestId: "follow-up", text: "继续整理" });
+    await f.runtime.continueConversation({ conversationId: worker.conversationId });
+    assert.equal(f.store.conversation(worker.conversationId)?.project, worker.project);
+    assert.equal(f.created.length, 3, "补充与继续不重建或切换工作区");
   } finally { await f.runtime.stop(); f.db.close(); }
 });
 
@@ -293,7 +324,7 @@ test("图片输入跨 Runtime 重建保留附件且参与幂等校验", async ()
   } finally { await restarted?.stop(); await f.runtime.stop(); f.db.close(); }
 });
 
-test("每条 Router 输入都忽略外部 project 并使用默认工作区", async () => {
+test("排队输入不改变正在执行的 Router，Worker 使用每次派发指定的工作区", async () => {
   const f = fixture();
   const gate = deferred<BotExecutionOutcome>();
   const seen: Array<string | undefined> = [];
@@ -305,7 +336,7 @@ test("每条 Router 输入都忽略外部 project 并使用默认工作区", asy
       seen.push(undefined);
       assert.equal(context.input?.requestId, input.requestId);
       if (input.requestId === "a") return gate.promise;
-      await f.runtime.createWork(withExternalProject({ requestId: `work-${input.requestId}`, title: "整理项目", text: "整理这个项目" }, "/worker-project"));
+      await f.runtime.createWork({ requestId: `work-${input.requestId}`, title: "整理项目", text: "整理这个项目", ...(input.requestId === "b" ? { project: "/worker-project" } : {}) });
       return done;
     });
     f.runtime.start();
@@ -318,9 +349,9 @@ test("每条 Router 输入都忽略外部 project 并使用默认工作区", asy
     await until(() => seen.length === 3);
     assert.deepEqual(seen, [undefined, undefined, undefined]);
     assert.equal("project" in (f.store.input("b") as object), false);
-    assert.equal(f.store.conversationByKey("work:work-b")?.project, "/output");
+    assert.equal(f.store.conversationByKey("work:work-b")?.project, "/worker-project");
     await until(() => Boolean(f.store.conversationByKey("work:work-c")));
-    assert.equal(f.store.conversationByKey("work:work-c")?.project, "/output");
+    assert.equal(f.store.conversationByKey("work:work-c")?.project, "/workers/work:work-c");
   } finally { gate.resolve(done); await f.runtime.stop(); f.db.close(); }
 });
 
@@ -328,20 +359,20 @@ test("每条 Router 输入都忽略外部 project 并使用默认工作区", asy
   const f = fixture(); try { f.runtime.start(); await f.runtime.submit({ requestId: "a", text: "第一条" }); await f.runtime.submit({ requestId: "b", text: "停止之前的工作" }); assert.equal(f.store.conversations()[0].role, "router"); assert.equal(f.store.inputs().length, 2); } finally { await f.runtime.stop(); f.db.close(); }
 });
 
-test("快捷进度查询不执行模型、不恢复暂停且重复请求不新增消息", async () => {
+test("进度问句和普通消息一样交给 Router 回答，不再有绕过模型的固定回复", async () => {
   const f = fixture();
   try {
+    f.runtime.start();
     await f.runtime.submit({ requestId: "first", text: "写报告" });
-    await f.runtime.stopAll();
-    const routerId = f.store.routerConversationId!;
-    const before = f.store.chatMessages().length;
+    await until(() => f.store.input("first")?.status === "completed");
+    const before = f.calls.length;
     await f.runtime.submit({ requestId: "status", text: "现在到哪了？" });
     await f.runtime.submit({ requestId: "status", text: "现在到哪了？" });
-    assert.equal(f.store.chatMessages().length, before + 2);
-    assert.equal(f.store.chatMessages().at(-1)?.kind, "status");
-    assert.equal(f.store.conversation(routerId)?.paused, true);
-    assert.equal(f.calls.length, 0);
-    assert.equal(f.store.input("status")?.intent, "status");
+    await until(() => f.store.input("status")?.status === "completed");
+    assert.equal(f.calls.length, before + 1);
+    assert.equal(f.calls.at(-1)?.conversationId, f.store.routerConversationId);
+    assert.equal(f.store.input("status")?.intent, undefined);
+    assert.ok(f.store.chatMessages().every((message) => message.kind !== "status"));
   } finally { await f.runtime.stop(); f.db.close(); }
 });
 

@@ -65,8 +65,7 @@ export function createBotFixture(cwd: string, english = false, empty = false, sc
       const id = input.conversationId ?? routerId;
       if (chatMessages.some((item) => item.inputId === input.requestId && item.role === "user")) return snapshot();
       chatMessages.push({ id: `chat:user:${input.requestId}`, conversationId: id, role: "user", text: input.text, createdAt: Date.now(), inputId: input.requestId });
-      if (input.intent === "status") chatMessages.push({ id: `chat:status:${input.requestId}`, conversationId: id, role: "assistant", kind: "status", text: progress.map((item) => `${item.title ?? "Vivi"}: ${item.detail ?? item.phase}`).join("\n") || word("当前没有正在处理的事。", "Nothing is running."), createdAt: Date.now(), inputId: input.requestId });
-      else {
+      {
         const current = progress.find((item) => item.conversationId === id);
         const next: BotProgress = { conversationId: id, inputId: input.requestId, role: id === routerId ? "router" : "worker", phase: "understanding", detail: word("我先确认你的要求。", "Reviewing your request."), startedAt: Date.now(), updatedAt: Date.now(), queuedCount: 0 };
         if (current) Object.assign(current, next); else progress.unshift(next);

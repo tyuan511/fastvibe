@@ -2394,8 +2394,8 @@ Deliberately deferred. Plugin authors are expected to degrade via `ctx.mode` /
   `consolidation.md`、`read_path.md`，Apache-2.0，`NOTICE.md` 记着来源提交和改过的几行），运行时按路径读
   （`memory-templates.ts`，和内置扩展/技能同一套 `FASTVIBE_RESOURCES_PATH`，打包要有 `extraResources` 那一条）。
   改它们就是改每个用户的记忆长什么样；想和上游对齐就重新抓原文，不要凭印象改写。
-- **参数是 Codex 的默认值**（`memory-plan.ts`）：对话文件安静 6 小时、不超过 10 天才读；每轮 2 个；
-  整合取前 256 个；30 天没人用的丢掉。看的是转写**文件的 mtime**，不是 catalog 的 `updatedAt`（改名也会动它）。
+- **提炼参数沿用 Codex 默认值**（`memory-plan.ts`）：对话文件安静 6 小时、不超过 10 天才读；每轮 2 个。
+  普通记忆与 Vivi 的遗忘规则共用 `engine/memory-retention.ts`：初始半衰期 7.5 天，强度低于 1/16 才到期；间隔至少 24 小时的有效使用翻倍半衰期，最高 90 天。因此未强化时 30 天不用到期，强化后为 60 / 120 / 240 / 360 天。明确保存的来源使用相同规则；旧累计引用数不换算成强化，检索命中和摘要注入不续期。整合最多 256 个来源，按衰减强度和有界强化权重选取。看的是转写**文件的 mtime**，不是 catalog 的 `updatedAt`（改名也会动它）。
 - **阶段 1**：模型读一个对话，返回 `{ raw_memory, rollout_summary, rollout_slug }`；笔记或回顾为空 = 没什么
   值得记的，记下来、转写不变就不再问。读入和输出两端都过 `redactSecrets`（`[REDACTED_SECRET]`）。
 - **账本在数据库里**：`MemoryStateStore`（`engine/memory-state.ts`）把 `outputs` / `empty` / `failures`
@@ -3830,7 +3830,7 @@ locale charmap        →   US-ASCII
 
 ### Vivi 持久会话的输入与恢复
 
-`BotInput` 的文字、图片、目标会话与本次项目选择共同决定请求幂等性，图片写入输入 JSON 并经 Host → `runBotSession` → SDK prompt 传递，只有图片的输入也有效。Router 的实时上下文只读取正在执行的输入，带上其 `requestId/project` 与已知会话；后续排队输入不能提前改变当前项目，未选项目时回到默认输出目录。创建 Worker 省略项目时沿用当前 Router 输入的选择。
+`BotInput` 的文字、图片、目标会话与本次项目选择共同决定请求幂等性，图片写入输入 JSON 并经 Host → `runBotSession` → SDK prompt 传递，只有图片的输入也有效。Router 的实时上下文只读取正在执行的输入，带上其 `requestId`、已知会话及最新本地项目列表；后续排队输入不能提前改变正在执行的请求。Router 按当前对话语义通过 `bot_create_work.project` 选择精确项目主目录，真实会话同时绑定 project 与 cwd，正常加载项目规则和多文件夹上下文。无项目的 Worker 默认各有稳定独立的 `vivi/workspaces/<hash>`，只有显式 `workspace: "vivi"` 才共享总 `vivi/outputs`；两者不可同时指定。项目不存在、远程或目录不可访问时明确拒绝，不回退。补充、继续和重启保持已有 Worker 工作区，不迁移历史产物。
 
 停止全部使旧 epoch 失效并暂停会话；新 requestId 的用户输入可以重新开放 Router，重复旧请求不能恢复，也不重放取消输入或自动恢复 Worker。Router 通过 `bot_send_message` 向已有 Worker 发送补充要求，暂停的 Worker 仍需先显式继续。工作会话详情在所有提前返回之前调用一次 `useBotSnapshot`，会话与结果共用它，不能在 JSX 条件中调用 Hook。
 
@@ -3842,7 +3842,7 @@ Vivi 主聊天的临时承接与真实进度来自 `WorkSnapshot.progress`，按
 
 Router 和 Worker 共用 `bot_progress` 上报真实阶段，有价值的阶段成果才用 `milestone` 进入聊天，同一用户请求最多三条并去重、限频。最终报告包含摘要、证据和产物；阶段行与结果行不合并进普通 SDK 回复，也不进入「用时」折叠。结果、进度和内部投递不触发宠物消息，宠物仍只消费显式 Router 回复。
 
-明确的简短进度问句与「查看进度」直接读当前事实，不排队调用模型、不恢复已暂停工作；混合新要求或附件的输入仍交给模型。失败、未确认交付和中断不得呈现为成功，已有产物保留，继续沿用同一会话。扩展每轮捕获 input ID 与 epoch，不以工具调用 ID 代替，停止后的迟到进度和报告不能影响新一轮。详见 `docs/vivi-bot-implementation.md`，验证包括 `test/bot-conversation-progress.test.ts` 的真实 SDK 流程。
+进度问句和普通消息一样交给 Router，由 Router 按实时进度、待答问题和结果用 Vivi 的口吻回答（`main/bot/vivi-voice.ts` 是口吻的唯一来源），等待期间主界面只有一行「正在处理…」；回答进度问题不新建工作、不恢复暂停的工作。主界面没有状态卡片、阶段名或操作按钮，停止用输入框的停止键。失败、未确认交付和中断不得呈现为成功，已有产物保留，继续沿用同一会话。扩展每轮捕获 input ID 与 epoch，不以工具调用 ID 代替，停止后的迟到进度和报告不能影响新一轮。详见 `docs/vivi-bot-implementation.md`，验证包括 `test/bot-conversation-progress.test.ts` 的真实 SDK 流程。
 
 ## Vivi 独立 Markdown 记忆
 
@@ -3852,7 +3852,7 @@ Router 通过 `bot_memory_read/search/update` 查阅和维护记忆，Worker 只
 
 后台在输入真正收尾后提炼；`memoryBranch` 用 SDK entry ID 限定本轮材料，排除内部 `bot_*` 调用、思考、注入记忆及用户元数据，只在选中来源后加载实际工具片段。显式保存和收尾后的同一输入共享稳定来源指纹，不重复提炼；遗忘截止使用原始要求时间，旧工作迟到完成不能重新学习。整理在隔离工作副本进行，模型调用不持发布锁；发布前核对来源、generation 和文件 revision，使用目录锁、journal 和原子文件替换恢复多文件写入。Vivi 整理器使用 `workspaceOnly` 文件工具边界，普通全局记忆行为不变。
 
-详细结构和遗忘时清理原始笔记的取舍见 `docs/vivi-memory-design.md`；回归为 `test/vivi-memory-*.test.ts`。记忆维护不新增 UI、配置、宠物通知或 Worker 自动重放。
+详细结构和遗忘时清理原始笔记的取舍见 `docs/vivi-memory-design.md`；回归为 `test/vivi-memory-*.test.ts`。Vivi 与普通记忆共用遗忘曲线、强化间隔、过期阈值、256 来源上限及整理策略；Vivi 的文件账本保存可选 `retention` 元数据，兼容旧状态。按需读取来源笔记或带明确来源引用的正文片段提供使用反馈，单纯搜索和摘要注入不强化；普通记忆从回复引用取反馈。无新输入也每小时维护，到期清理须和正文、索引一起成功发布；失效文件名引用残留时拒绝发布，并保留上一版。语义是否完全清除仍依赖整理模型。记忆维护不新增 UI、配置、宠物通知或 Worker 自动重放。
 
 ## Vivi 桌面宠物
 

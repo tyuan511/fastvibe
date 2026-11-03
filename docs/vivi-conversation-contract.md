@@ -18,6 +18,7 @@ interface ViviConversationHost {
     kind: "router" | "worker";
     key: string;
     project?: string;
+    workspace?: "vivi";
   }): Promise<{ conversationId: string }>;
 
   execute(input: {
@@ -25,7 +26,6 @@ interface ViviConversationHost {
     requestId: string;
     text: string;
     images?: PromptImage[];
-    project?: string;
     epoch: number;
     signal: AbortSignal;
   }): Promise<{ status: "completed" | "failed" | "interrupted"; text: string; error?: string }>;
@@ -33,7 +33,7 @@ interface ViviConversationHost {
   abort(conversationId: string): Promise<void>;
   snapshot(conversationId: string): Promise<ConversationSnapshot>;
   messages(conversationId: string): Promise<ChatMessage[]>;
-  resolveProject(project?: string): string;
+  resolveProject(project?: string, workerKey?: string): string;
   changed(event: ConversationChanged): void;
 }
 ```
@@ -44,8 +44,8 @@ Host 不得绕过 Runtime 自己排队、创建 Worker 或发送 Vivi 输入。
 ## Runtime 写入口
 
 ```ts
-submit({ requestId, text, conversationId?, project?, images?, behavior? })
-createWork({ requestId, title, text, project? })
+submit({ requestId, text, conversationId?, images?, behavior? })
+createWork({ requestId, title, text, project?, workspace?, memoryRefs? })
 report({ conversationId, requestId?, outcome, summary, evidence, artifacts })
 ask({ conversationId, requestId?, question })
 answer({ attentionId, answer })
@@ -57,7 +57,7 @@ getSnapshot()
 
 所有入口先在一个 SQLite 事务中登记 request/epoch/状态，再调用 Host。重复 `requestId` 必须返回原记录；文字、图片、目标会话或项目选择不同必须拒绝。
 
-纯图片输入有效，图片随输入持久化，并经 Host 交给 SDK prompt。Router 的项目选择属于每条输入，实时上下文使用当前正在执行的输入；创建 Worker 未指定项目时沿用该选择，没有选择时使用默认输出目录。Router 用 `bot_send_message({ conversationId, requestId, text })` 将补充要求送到已有 Worker。
+纯图片输入有效，图片随输入持久化，并经 Host 交给 SDK prompt。Router 实时上下文使用当前正在执行的输入和最新本地项目列表，按当前对话语义在 `createWork.project` 指定精确项目主目录；项目身份与实际 cwd 同时绑定到真实 Worker 会话。未指定项目时每个 Worker 默认拥有稳定独立目录；只有显式 `workspace: "vivi"` 才共用 Vivi 总工作区，且与 project 互斥。项目不存在、远程或目录不可访问时明确拒绝，不回退。Router 用 `bot_send_message({ conversationId, requestId, text })` 将补充要求送到已有 Worker，沿用其工作区。
 
 停止全部仍暂停 Worker 并使旧 epoch 失效；新 requestId 的用户输入可重新开放 Router，旧请求重试不恢复 Router，不重放被停止的输入。
 

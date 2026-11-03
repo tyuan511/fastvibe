@@ -67,6 +67,7 @@ export type BotInput = {
   startedAt?: number;
   completedAt?: number;
   rootInputId?: string;
+  /** Only legacy rows written by the removed instant-status shortcut carry this; progress ignores them. */
   intent?: "status";
   /** Result updates explicitly included in a resumed Router turn. */
   deliveryIds?: string[];
@@ -139,7 +140,6 @@ export type BotSubmitRequest = {
   conversationId?: string;
   images?: PromptImage[];
   behavior?: string;
-  intent?: "status";
   memoryRefs?: BotMemoryRef[];
 };
 export type BotReportRequest = {
@@ -152,14 +152,25 @@ export type BotReportRequest = {
   artifacts?: string[];
 };
 
+export type BotCreateWorkRequest = {
+  requestId: string;
+  title: string;
+  text: string;
+  /** Local project's primary cwd, selected by the Router from conversation context. */
+  project?: string;
+  /** Explicitly share Vivi's main output workspace; otherwise use a private Worker workspace. */
+  workspace?: "vivi";
+  memoryRefs?: BotMemoryRef[];
+};
+
 export type BotHost = {
-  createConversation(input: { kind: BotConversationRole; key: string }): Promise<{ conversationId: string }>;
+  createConversation(input: { kind: BotConversationRole; key: string; project?: string; workspace?: "vivi" }): Promise<{ conversationId: string }>;
   execute(input: { conversationId: string; requestId: string; text: string; images?: PromptImage[]; epoch: number; signal: AbortSignal }): Promise<BotExecutionOutcome>;
   snapshot(conversationId: string): Promise<ConversationSnapshot>;
   messages(conversationId: string): Promise<ChatMessage[]>;
   conversationPreviews?(ids: string[]): Promise<Record<string, BotConversationPreview>>;
   abort(conversationId: string): Promise<void>;
-  resolveProject(): string;
+  resolveProject(project?: string, workspaceKey?: string): string;
   changed(event: BotChanged): void;
   /** A durable input finished; maintenance must not delay or change its outcome. */
   settled?(requestId: string): void;
@@ -168,7 +179,7 @@ export type BotHost = {
 export interface BotApi {
   getWorkSnapshot(): Promise<WorkSnapshot>;
   submit(input: BotSubmitRequest): Promise<WorkSnapshot>;
-  createWork(input: { requestId: string; title: string; text: string; memoryRefs?: BotMemoryRef[] }): Promise<BotConversationMeta>;
+  createWork(input: BotCreateWorkRequest): Promise<BotConversationMeta>;
   report(input: BotReportRequest): Promise<BotResult>;
   ask(input: { conversationId: string; requestId?: string; question: string }): Promise<BotAttention>;
   answer(input: { attentionId: string; answer: string }): Promise<WorkSnapshot>;

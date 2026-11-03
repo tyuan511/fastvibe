@@ -7,6 +7,7 @@ import { DEFAULT_MEMORY_CONFIG, MEMORY_CONFIG_VERSION, memoryConfigOf, type Memo
 import { memoryCitationIds } from "../../shared/memory-citation.ts";
 import type { Db } from "./db.ts";
 import type { MemoryHost, MemoryRuntime } from "./memory-host.ts";
+import { MEMORY_RETENTION_POLICY, memoryExpired, reinforceMemory } from "./memory-retention.ts";
 import { MemoryStateStore } from "./memory-state.ts";
 import {
   EXTRACT_CONCURRENCY,
@@ -227,9 +228,11 @@ export class MemoryManager implements MemoryHost {
     let changed = false;
     for (const id of memoryCitationIds(text)) {
       const output = this.#state.outputs[id];
-      if (!output) continue;
+      if (!output || memoryExpired(output, now)) continue;
+      const retention = reinforceMemory(output, now);
+      if (retention === output) continue;
+      Object.assign(output, retention);
       output.usageCount += 1;
-      output.lastUsage = now;
       changed = true;
     }
     if (changed) this.#saveSoon();
@@ -315,7 +318,11 @@ export class MemoryManager implements MemoryHost {
 
   /** What nothing has used for the whole window goes; so does the memory of a conversation that was deleted. */
   #prune(): void {
-    for (const id of staleOutputIds(Object.values(this.#state.outputs), Date.now())) delete this.#state.outputs[id];
+    for (const id of staleOutputIds(Object.values(this.#state.outputs), Date.now())) {
+      // Remember the source fingerprint so unchanged transcripts cannot revive forgotten notes.
+      this.#state.empty[id] = this.#state.outputs[id].sourceUpdatedAt;
+      delete this.#state.outputs[id];
+    }
     const known = new Set((this.#runtime?.conversations() ?? []).map((conversation) => conversation.id));
     for (const id of Object.keys(this.#state.outputs)) if (!known.has(id)) delete this.#state.outputs[id];
     for (const id of Object.keys(this.#state.empty)) if (!known.has(id)) delete this.#state.empty[id];
@@ -391,7 +398,9 @@ export class MemoryManager implements MemoryHost {
         rolloutSummary: result.rolloutSummary,
         slug: result.slug,
         usageCount: previous?.usageCount ?? 0,
-        ...(previous?.lastUsage ? { lastUsage: previous.lastUsage } : {}),
+        ...(previous?.lastUsage !== undefined ? { lastUsage: previous.lastUsage } : {}),
+        ...(previous?.reinforcementCount !== undefined ? { reinforcementCount: previous.reinforcementCount } : {}),
+        ...(previous?.lastReinforcedAt !== undefined ? { lastReinforcedAt: previous.lastReinforcedAt } : {}),
       };
     } catch (error) {
       if (!live()) return;
@@ -408,32 +417,62 @@ export class MemoryManager implements MemoryHost {
   async #consolidate(runtime: MemoryRuntime, signal: AbortSignal, live: () => boolean): Promise<void> {
     const folder = this.#files.memoriesDir;
     const selected = selectForConsolidation(Object.values(this.#state.outputs), Date.now());
+    const retained = new Set(selected.map(output => output.conversationId));
+    for (const [id, output] of Object.entries(this.#state.outputs)) {
+      if (retained.has(id)) continue;
+      this.#state.empty[id] = output.sourceUpdatedAt;
+      delete this.#state.outputs[id];
+    }
     const baseline = await readBaseline(this.#files.memoriesBaselineDir);
     // Never consolidated and nothing to consolidate: there is no folder to keep in line.
     if (selected.length === 0 && baseline.size === 0) return;
 
-    await removeSymlinks(folder);
-    await this.#syncArtifacts(selected);
-    if (!live()) return;
-    const current = await readTree(folder);
-    const invalid = await validateArtifacts(folder);
-    if (changesBetween(baseline, current).length === 0 && invalid === null) {
-      this.#ready = true;
-      return;
-    }
-
-    const diffFile = join(folder, WORKSPACE_DIFF_FILE);
-    await writeFileAtomic(diffFile, renderWorkspaceDiff(baseline, current));
+    const previous = await readTree(folder);
+    let committed = false;
     try {
-      await runtime.runAgent({ cwd: folder, task: consolidationPrompt(folder), signal, ...(this.#config.model ? { model: this.#config.model } : {}) });
+      await removeSymlinks(folder);
+      await this.#syncArtifacts(selected);
+      if (!live()) return;
+      const current = await readTree(folder);
+      const invalid = await validateArtifacts(folder);
+      if (changesBetween(baseline, current).length === 0 && invalid === null) {
+        this.#ready = true;
+        committed = true;
+        return;
+      }
+
+      const diffFile = join(folder, WORKSPACE_DIFF_FILE);
+      await writeFileAtomic(diffFile, renderWorkspaceDiff(baseline, current));
+      try {
+        await runtime.runAgent({ cwd: folder, task: consolidationPrompt(folder) + MEMORY_RETENTION_POLICY, signal, ...(this.#config.model ? { model: this.#config.model } : {}) });
+      } finally {
+        await rm(diffFile, { force: true });
+      }
+      if (!live()) return;
+      // Source notes are host-owned. A model may not recreate one removed by retention.
+      await this.#syncArtifacts(selected);
+      const problem = await validateArtifacts(folder);
+      if (problem) throw new Error(`consolidation failed: ${problem}`);
+      const consolidated = await readTree(folder);
+      const removed = [...baseline.keys()].filter(path => path.startsWith(`${ROLLOUTS_DIR}/`) && !current.has(path));
+      for (const path of removed) {
+        const name = path.slice(path.lastIndexOf("/") + 1);
+        const identifiers = [path, ...(![...current.keys()].some(candidate => candidate.startsWith(`${ROLLOUTS_DIR}/`) && candidate.endsWith(`/${name}`)) ? [name] : [])];
+        for (const [document, text] of consolidated) {
+          if (document !== "MEMORY.md" && document !== SUMMARY_FILE && !document.startsWith("skills/")) continue;
+          if (identifiers.some(identifier => new RegExp(`(?<![\\p{L}\\p{N}_./-])${identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_./-])`, "u").test(text))) {
+            throw new Error(`Forgotten memory reference remains in ${document}: ${path}`);
+          }
+        }
+      }
+      await writeBaseline(this.#files.memoriesBaselineDir, consolidated);
+      committed = true;
+      this.#ready = true;
     } finally {
-      await rm(diffFile, { force: true });
+      // Preserve the previous publication on agent failure, invalid output, or cancellation.
+      // The unchanged baseline still describes the old sources, so retries see their removal.
+      if (!committed) await writeBaseline(folder, previous);
     }
-    if (!live()) return;
-    const problem = await validateArtifacts(folder);
-    if (problem) throw new Error(`consolidation failed: ${problem}`);
-    await writeBaseline(this.#files.memoriesBaselineDir, await readTree(folder));
-    this.#ready = true;
   }
 
   /** Make the folder's input files match the selection exactly: write what is selected, delete what is not. */

@@ -80,15 +80,16 @@ test("a failing conversation is retried after an hour, a few times, then left un
   assert.equal(pickCandidates([chat("a")], mtimes, state, new Set(), NOW).length, 1);
 });
 
-test("consolidation prefers what was used, then what was touched last, and drops what went stale", () => {
+test("consolidation ranks decayed strength with bounded reinforcement, ignoring lifetime usage counts", () => {
   const outputs = [
     output("unused-new", { sourceUpdatedAt: NOW - 1000 }),
-    output("used", { usageCount: 3, lastUsage: NOW - 5000, generatedAt: NOW - 10_000 }),
+    output("used", { usageCount: 3, lastUsage: NOW - 5000, generatedAt: NOW - 10_000, reinforcementCount: 1 }),
     output("stale", { generatedAt: NOW - MAX_UNUSED_MS - 1, sourceUpdatedAt: NOW - MAX_UNUSED_MS - 1 }),
     output("stale-but-used-lately", { generatedAt: NOW - MAX_UNUSED_MS - 1, usageCount: 1, lastUsage: NOW - 100 }),
   ];
   assert.deepEqual(selectForConsolidation(outputs, NOW).map((item) => item.conversationId), ["used", "stale-but-used-lately", "unused-new"]);
   assert.deepEqual(staleOutputIds(outputs, NOW), ["stale"]);
+  assert.equal(selectForConsolidation([output("old-frequent", { usageCount: 10_000, generatedAt: NOW - 20 * 24 * HOUR }), output("new")], NOW)[0].conversationId, "new");
   const many = Array.from({ length: MAX_CONSOLIDATED + 10 }, (_, index) => output(`c${index}`, { sourceUpdatedAt: NOW - index }));
   assert.equal(selectForConsolidation(many, NOW).length, MAX_CONSOLIDATED);
 });

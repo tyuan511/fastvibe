@@ -1,5 +1,5 @@
 import { Ipc } from "@shared/ipc";
-import type { BotApi, BotActivity, BotChanged, BotReportRequest, BotSubmitRequest, BotConversationMeta, BotResult, BotAttention, WorkSnapshot } from "./bot";
+import type { BotApi, BotActivity, BotChanged, BotCreateWorkRequest, BotReportRequest, BotSubmitRequest, BotConversationMeta, BotResult, BotAttention, WorkSnapshot } from "./bot";
 import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
 import type { ViviDragMotion, ViviSettings, ViviSnapshot, ViviState } from "./vivi";
 import type { BrowserLibrary, BrowserClearData, BrowserDownloadAction, BrowserShortcut } from "./browser-workspace";
@@ -430,7 +430,7 @@ export function createFastVibeApi(t: ApiTransport) {
       getActivity: (): Promise<BotActivity> => t.invoke(Ipc.botGetActivity),
       getWorkSnapshot: (): Promise<WorkSnapshot> => t.invoke(Ipc.botGetWorkSnapshot),
       submit: (input: BotSubmitRequest): Promise<WorkSnapshot> => t.invoke(Ipc.botSubmit, input),
-      createWork: (input: { requestId: string; title: string; text: string }): Promise<BotConversationMeta> => t.invoke(Ipc.botCreateWork, input),
+      createWork: (input: BotCreateWorkRequest): Promise<BotConversationMeta> => t.invoke(Ipc.botCreateWork, input),
       report: (input: BotReportRequest): Promise<BotResult> => t.invoke(Ipc.botReport, input),
       ask: (input: { conversationId: string; requestId?: string; question: string }): Promise<BotAttention> => t.invoke(Ipc.botAsk, input),
       answer: (input: { attentionId: string; answer: string }): Promise<WorkSnapshot> => t.invoke(Ipc.botAnswer, input),

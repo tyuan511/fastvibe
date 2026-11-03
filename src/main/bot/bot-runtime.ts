@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { BotAttention, BotChanged, BotChatMessage, BotConversationMeta, BotExecutionOutcome, BotHost, BotInput, BotProgressRequest, BotReportRequest, BotResult, BotSubmitRequest, BotActivity, BotProgress, WorkSnapshot } from "../../shared/bot.ts";
+import type { BotCreateWorkRequest, BotAttention, BotChanged, BotChatMessage, BotConversationMeta, BotExecutionOutcome, BotHost, BotInput, BotProgressRequest, BotReportRequest, BotResult, BotSubmitRequest, BotActivity, BotProgress, WorkSnapshot } from "../../shared/bot.ts";
 import { extractPromptAttachments, stripPromptMetadata } from "../../shared/attachment-metadata.ts";
 import type { ChatAttachment, PromptImage } from "../../shared/types.ts";
 import { VIVI_BOT_ID } from "../../shared/bot.ts";
 import { BotStore } from "./bot-store.ts";
 import { uiText } from "../engine/ui-text.ts";
-import { deriveBotProgress, isStatusQuestion, statusTextForProgress } from "./bot-progress.ts";
+import { deriveBotProgress } from "./bot-progress.ts";
 import { botMemoryRefs } from "./memory/sources.ts";
-import type { BotMemoryRef } from "../../shared/bot.ts";
 
 export type BotContext = import("../../shared/bot.ts").BotContext;
 
@@ -124,16 +123,23 @@ export class BotRuntime {
     return this.getWorkSnapshot();
   }
 
-  async createWork(input: { requestId: string; title: string; text: string; memoryRefs?: BotMemoryRef[] }): Promise<BotConversationMeta> {
+  async createWork(input: BotCreateWorkRequest): Promise<BotConversationMeta> {
     const title = textOf(input.title, "标题", 160);
     const text = textOf(input.text, "工作要求");
+    if (input.project !== undefined && input.workspace !== undefined) throw new Error("项目工作区与 Vivi 总工作区不能同时指定");
+    if (input.workspace !== undefined && input.workspace !== "vivi") throw new Error("未知的 Vivi 工作区");
     const memoryRefs = botMemoryRefs(input.memoryRefs);
     const key = `work:${input.requestId}`;
     const existingInput = this.store.input(input.requestId);
     const existing = this.store.conversationByKey(key);
-    if (existingInput && existing) { if (existingInput.text !== text || JSON.stringify(existingInput.memoryRefs ?? []) !== JSON.stringify(memoryRefs ?? [])) throw new Error("相同请求标识不能提交不同内容"); return existing; }
-    const project = this.host.resolveProject();
-    const created = await this.host.createConversation({ kind: "worker", key });
+    if (existingInput && existing) {
+      // An omitted project on replay keeps the original binding. Explicitly asking
+      // for another workspace under the same creation key is a different request.
+      if (existingInput.text !== text || JSON.stringify(existingInput.memoryRefs ?? []) !== JSON.stringify(memoryRefs ?? []) || ((input.project !== undefined || input.workspace !== undefined) && this.host.resolveProject(input.project, input.workspace === "vivi" ? undefined : key) !== existing.project)) throw new Error("相同请求标识不能提交不同内容");
+      return existing;
+    }
+    const project = this.host.resolveProject(input.project, input.workspace === "vivi" ? undefined : key);
+    const created = await this.host.createConversation({ kind: "worker", key, project: input.project, workspace: input.workspace });
     const conversationId = typeof created === "string" ? created : created.conversationId;
     const now = Date.now();
     const meta: BotConversationMeta = { conversationId, role: "worker", owner: VIVI_BOT_ID, creationKey: key, epoch: 0, paused: false, createdAt: now, updatedAt: now, title, project };
@@ -149,7 +155,6 @@ export class BotRuntime {
     const images = imagesOf(input.images);
     const memoryRefs = botMemoryRefs(input.memoryRefs);
     const text = typeof input.text === "string" && !input.text.trim() && images?.length ? "" : textOf(input.text, "消息");
-    const statusRequest = source === "user" && !images?.length && extractPromptAttachments(input.text).length === 0 && (input.intent === "status" || isStatusQuestion(input.text));
     let meta = input.conversationId ? this.#meta(input.conversationId) : undefined;
     if (!meta) {
       const routerId = this.store.routerConversationId;
@@ -165,10 +170,9 @@ export class BotRuntime {
     }
     const prior = this.store.input(requestId);
     if (prior) {
-      if (prior.text !== text || prior.conversationId !== meta.conversationId || JSON.stringify(prior.images ?? []) !== JSON.stringify(images ?? []) || JSON.stringify(prior.memoryRefs ?? []) !== JSON.stringify(memoryRefs ?? []) || prior.intent !== (statusRequest ? "status" : undefined)) throw new Error("相同请求标识不能提交不同内容");
+      if (prior.text !== text || prior.conversationId !== meta.conversationId || JSON.stringify(prior.images ?? []) !== JSON.stringify(images ?? []) || JSON.stringify(prior.memoryRefs ?? []) !== JSON.stringify(memoryRefs ?? [])) throw new Error("相同请求标识不能提交不同内容");
       return this.getWorkSnapshot();
     }
-    if (statusRequest) return this.#submitStatus(meta, requestId, input.text);
     if (meta.paused && meta.role !== "router") throw new Error("会话已暂停，请先继续");
     const now = Math.max(Date.now(), (this.store.chatMessages().at(-1)?.createdAt ?? 0) + 1);
     this.#change(() => {
@@ -189,23 +193,6 @@ export class BotRuntime {
       }
     });
     this.#kick();
-    return this.getWorkSnapshot();
-  }
-
-  async #submitStatus(meta: BotConversationMeta, requestId: string, originalText: string): Promise<WorkSnapshot> {
-    const now = Math.max(Date.now(), (this.store.chatMessages().at(-1)?.createdAt ?? 0) + 1);
-    const text = originalText.trim();
-    const conversations = this.store.conversations();
-    const inputs = this.store.inputs();
-    const attention = this.store.attentions(meta.role === "worker" ? meta.conversationId : undefined);
-    const results = this.store.results();
-    const progresses = conversations.filter((conversation) => meta.role === "router" || conversation.conversationId === meta.conversationId).map((conversation) => deriveBotProgress(conversation, inputs, attention, results)).filter((item) => item.conversationId !== meta.conversationId || item.phase !== "idle");
-    const reply = statusTextForProgress(progresses, attention, process.env.FASTVIBE_UI_LANGUAGE !== "en");
-    this.#change(() => {
-      this.store.putInput({ id: requestId, conversationId: meta.conversationId, epoch: meta.epoch, source: "user", text, status: "completed", createdAt: now, completedAt: now, intent: "status" });
-      this.store.putChatMessage({ id: `chat:user:${requestId}`, conversationId: meta.conversationId, role: "user", text, inputId: requestId, createdAt: now, kind: "message" });
-      this.store.putChatMessage({ id: `chat:status:${requestId}`, conversationId: meta.conversationId, role: "assistant", text: reply, inputId: requestId, createdAt: now + 1, kind: "status", title: "Vivi" });
-    });
     return this.getWorkSnapshot();
   }
 

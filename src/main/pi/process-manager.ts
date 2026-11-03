@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, realpathSync, readFileSync, renameSync, statSync
 import { mkdir, rm, unlink } from "node:fs/promises";
 import { dirname, join, resolve, basename } from "node:path";
 import { BotStore } from "../bot/bot-store";
+import { resolveBotWorkspace } from "../bot/bot-workspace";
 import { BotRuntime } from "../bot/bot-runtime";
 import { BotConversationPreviewReader } from "../bot/bot-conversation-preview";
 import { botRole, botSessionExtension } from "../bot/bot-session-extension";
@@ -777,13 +778,13 @@ export class PiProcessManager {
       return conversation.sessionFile ? { file: conversation.sessionFile, cwd: conversation.cwd } : undefined;
     }, (file, cwd) => this.#transcriptReader.read(file, cwd));
     this.bot = new BotRuntime(new BotStore(this.#db), {
-      createConversation: async ({ kind, key }) => ({ conversationId: await this.#createBotConversation(kind, key) }),
+      createConversation: async ({ kind, key, project, workspace }) => ({ conversationId: await this.#createBotConversation(kind, key, project, workspace) }),
       execute: ({ conversationId, text, images, signal }) => this.#executeBotConversation(conversationId, text, signal, images),
       snapshot: (id) => this.getSnapshot(id),
       messages: (id) => this.getConversationMessages(id),
       conversationPreviews: (ids) => botPreviews.read(ids),
       abort: (id) => this.abort(id),
-      resolveProject: () => this.#resolveBotProject(),
+      resolveProject: (project, workerKey) => this.#resolveBotProject(project, workerKey),
       changed: (event) => broadcast(Ipc.botChanged, event),
       settled: () => this.#viviMemory.notify(),
     });
@@ -818,10 +819,8 @@ export class PiProcessManager {
   conversationCwd(id: unknown): string | undefined { return typeof id === "string" ? this.#catalog.get(id)?.cwd : undefined; }
   isBotConversation(id: string): boolean { const item = this.#catalog.get(id); return Boolean(item && botRole(item)); }
 
-  #resolveBotProject(): string {
-    const cwd = join(this.#paths.runtimeRoot, "vivi", "outputs");
-    mkdirSync(cwd, { recursive: true });
-    return cwd;
+  #resolveBotProject(project?: string, workerKey?: string): string {
+    return resolveBotWorkspace(join(this.#paths.runtimeRoot, "vivi"), this.#catalog.listProjects(), project, workerKey).cwd;
   }
 
   async #reuseMainModel(session: AgentSession): Promise<void> {
@@ -839,17 +838,13 @@ export class PiProcessManager {
     }
   }
 
-  async #createBotConversation(role: "router" | "worker", key: string): Promise<string> {
+  async #createBotConversation(role: "router" | "worker", key: string, selectedProject?: string, workspace?: "vivi"): Promise<string> {
     await this.#ensureReady();
     const botKey = `${role}:${key}`;
     let conversation = this.#catalog.listAll().find((item) => item.botKey === botKey && item.kind === `bot-${role}`);
     if (!conversation) {
-      const directory = this.#resolveBotProject();
-      const project = this.#catalog.listProjects().find((item) => {
-        if (item.kind === "remote") return false;
-        try { return realpathSync(item.cwd) === directory; } catch { return false; }
-      })?.cwd;
-      conversation = this.#catalog.create(project, { cwd: directory }, { activate: false, kind: role === "router" ? "bot-router" : "bot-worker", botKey, title: role === "router" ? "Vivi" : "Vivi task", preview: "Vivi" });
+      const location = resolveBotWorkspace(join(this.#paths.runtimeRoot, "vivi"), this.#catalog.listProjects(), selectedProject, role === "worker" && workspace !== "vivi" ? key : undefined);
+      conversation = this.#catalog.create(location.project, { cwd: location.cwd }, { activate: false, kind: role === "router" ? "bot-router" : "bot-worker", botKey, title: role === "router" ? "Vivi" : "Vivi task", preview: "Vivi" });
       this.#catalog.update(conversation.id, { titleManual: true });
       this.#catalog.flush();
     }
@@ -4318,7 +4313,7 @@ export class PiProcessManager {
           ask: (input) => this.bot.ask(input),
           stopConversation: (input) => this.bot.stopConversation(input),
           continueConversation: (input) => this.bot.continueConversation(input),
-        }, projects: () => this.#catalog.listProjects().filter((project) => project.kind !== "remote") }),
+        }, projects: () => this.#catalog.listProjects().filter((project) => project.kind !== "remote").map(({ cwd, name, folders }) => ({ cwd, name, ...(folders?.length ? { folders } : {}) })) }),
       }] : [])],
     });
     // browser-use and computer-use both close over the conversation id at factory time,

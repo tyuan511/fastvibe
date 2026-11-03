@@ -55,44 +55,4 @@ export function deriveBotProgress(conversation: BotConversationMeta, inputs: rea
   };
 }
 
-export function isStatusQuestion(text: string): boolean {
-  const normalized = text.trim().toLocaleLowerCase().replace(/[？。！!?.]+$/gu, "").replace(/\s+/gu, " ");
-  return new Set([
-    "现在到哪了", "现在进度怎么样", "进度怎么样", "现在进度", "目前进展", "做到哪了", "做到哪里了", "目前怎么样",
-    "what is the status", "what's the status", "what is the progress", "any progress", "status update",
-  ]).has(normalized);
-}
-
-export function statusText(progress: BotProgress, attention: readonly BotAttention[], zh = true): string {
-  const waiting = attention.some((item) => item.status === "pending" && item.conversationId === progress.conversationId);
-  if (waiting || progress.phase === "waiting") return zh ? "我正在等你回答一个问题，回答后会继续。" : "I’m waiting for your answer before I continue.";
-  if (progress.phase === "accepted") return zh ? "我已经收到，正在开始处理。" : "I’ve received it and am getting started.";
-  if (progress.phase === "understanding") return zh ? "我正在理解你的要求，先确认需要处理的范围。" : "I’m understanding the request and checking its scope.";
-  if (progress.phase === "planning") return progress.detail ?? (zh ? "我正在梳理处理步骤。" : "I’m working out the next steps.");
-  if (progress.phase === "delegating") return zh ? "我已安排处理，正在推进。" : "I’ve arranged the work and it is moving forward.";
-  if (progress.phase === "working" || progress.phase === "summarizing") return progress.detail ? (zh ? `我正在处理：${progress.detail}` : `I’m working on: ${progress.detail}`) : (zh ? "我正在处理这件事。" : "I’m working on it.");
-  if (progress.phase === "completed" && progress.role === "router" && !progress.result) return zh ? "你的消息已经处理；目前没有正在执行的工作。" : "Your message has been handled; no work is currently running.";
-  if (progress.phase === "completed") return progress.detail ? (zh ? `最近的结果是：${progress.detail}` : `The latest result is: ${progress.detail}`) : (zh ? "最近一项工作已经完成。" : "The latest piece of work is complete.");
-  if (progress.phase === "idle" && progress.result) return zh ? `已有进展，但尚未确认完成${progress.detail ? `：${progress.detail}` : "。"}` : `Progress was saved, but completion is unconfirmed${progress.detail ? `: ${progress.detail}` : "."}`;
-  if (progress.phase === "failed") return progress.detail ? (zh ? `这件事遇到了问题：${progress.detail}` : `This ran into a problem: ${progress.detail}`) : (zh ? "这件事遇到了问题，我保留了已有结果。" : "This ran into a problem; I kept the results already produced.");
-  if (progress.phase === "interrupted" || progress.phase === "paused") return zh ? "这件事暂时停下了，可以点击继续。" : "This is paused for now; you can continue it.";
-  return zh ? "目前没有正在处理的事情。" : "Nothing is currently in progress.";
-}
-
-export function statusTextForProgress(progresses: readonly BotProgress[], attention: readonly BotAttention[], zh = true): string {
-  const live = progresses.filter((item) => ACTIVE_PHASES.has(item.phase) && item.phase !== "waiting");
-  const waiting = attention.filter((item) => item.status === "pending");
-  const lines = live.slice(0, 3).map((item) => zh
-    ? `正在处理「${item.title ?? "你的要求"}」：${statusText(item, [], true)}`
-    : `I’m working on “${item.title ?? "your request"}”: ${statusText(item, [], false)}`);
-  if (live.length > 3) lines.push(zh ? `另外还有 ${live.length - 3} 件事正在处理。` : `${live.length - 3} more items are in progress.`);
-  if (waiting.length) lines.push(zh ? `需要你回答「${waiting[0].question}」，回答后会继续。` : `I need your answer to “${waiting[0].question}” to continue.`);
-  if (lines.length) return lines.join("\n");
-  const relevant = progresses.filter((item) => item.role === "worker" || item.result);
-  const candidates = relevant.length ? relevant : progresses;
-  const recent = candidates.slice().sort((a, b) => b.updatedAt - a.updatedAt).find((item) => item.phase !== "idle" || item.result);
-  if (recent) return statusText(recent, attention, zh);
-  return zh ? "目前没有正在处理的事情。" : "Nothing is currently in progress.";
-}
-
 export function progressIsActive(phase: BotProgressPhase): boolean { return ACTIVE_PHASES.has(phase); }

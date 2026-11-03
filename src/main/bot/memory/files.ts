@@ -2,12 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, openSync, fsyncSync, closeSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import type { NoteRetentions } from "./retention.ts";
 import { redactSecrets } from "../../engine/memory-transcript.ts";
 
 export type MemoryTree = Map<string, string>;
 export type MemoryState = {
   version: 1; initialized: boolean; generation: number; cutoff: number;
   seen: Record<string, string>; failures: Record<string, { hash: string; attempts: number; retryAt: number }>;
+  /** Optional for old installations; source-note strength, never a second copy of memory. */
+  retention?: NoteRetentions;
+  maintenanceFailure?: { revision: string; attempts: number; retryAt: number };
 };
 export const emptyState = (): MemoryState => ({ version: 1, initialized: false, generation: 0, cutoff: 0, seen: {}, failures: {} });
 export const digest = (value: string): string => createHash("sha256").update(value).digest("hex");

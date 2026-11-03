@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -11,10 +11,13 @@ import type { BotExecutionOutcome, BotHost } from "../src/shared/bot.ts";
 import type { PromptImage } from "../src/shared/types.ts";
 import { openDatabase } from "../src/main/engine/db.ts";
 import { BotStore } from "../src/main/bot/bot-store.ts";
+import { resolveBotWorkspace } from "../src/main/bot/bot-workspace.ts";
+import { ConversationCatalog } from "../src/main/engine/conversation-catalog.ts";
 import { BotRuntime } from "../src/main/bot/bot-runtime.ts";
 
-async function harness(t: TestContext, responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0], role: "router" | "worker" = "worker", extra?: ExtensionFactory, serviceOverride?: Partial<BotSessionService>) {
+async function harness(t: TestContext, responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0], role: "router" | "worker" = "worker", extra?: ExtensionFactory, serviceOverride?: Partial<BotSessionService>, options: { cwd?: string; projects?: () => Array<{ cwd: string; name: string; folders?: string[] }> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "vivi-engine-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cwd = options.cwd ?? dir;
   const faux = createFauxCore({ api: "faux-api", provider: "faux", models: [{ id: "scripted" }] }); faux.setResponses(responses);
   const runtime = await ModelRuntime.create({ authPath: join(dir, "auth.json"), modelsPath: null, modelsStore: new InMemoryModelsStore(), allowModelNetwork: false, refreshOnCreate: false });
   runtime.registerProvider("faux", { baseUrl: "http://faux.invalid", api: "faux-api" as never, apiKey: "unused", streamSimple: faux.streamSimple as never, models: [{ id: "scripted", name: "scripted", reasoning: false, input: ["text", "image"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 4096 }] });
@@ -27,9 +30,9 @@ async function harness(t: TestContext, responses: Parameters<ReturnType<typeof c
     ...serviceOverride,
   };
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
-  const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager, noSkills: true, noContextFiles: true, noExtensions: true, extensionFactories: [{ name: "vivi", factory: botSessionExtension({ role, conversationId: role === "router" ? "router:1" : "worker:1", service, projects: () => [] }) }, ...(extra ? [{ name: "test", factory: extra }] : [])] });
+  const resourceLoader = new DefaultResourceLoader({ cwd, agentDir: dir, settingsManager, noSkills: true, noContextFiles: !options.cwd, noExtensions: true, extensionFactories: [{ name: "vivi", factory: botSessionExtension({ role, conversationId: role === "router" ? "router:1" : "worker:1", service, projects: options.projects ?? (() => []) }) }, ...(extra ? [{ name: "test", factory: extra }] : [])] });
   await resourceLoader.reload();
-  const { session } = await createAgentSession({ cwd: dir, agentDir: dir, modelRuntime: runtime, model: runtime.getModel("faux", "scripted"), sessionManager: SessionManager.inMemory(dir), settingsManager, resourceLoader });
+  const { session } = await createAgentSession({ cwd, agentDir: dir, modelRuntime: runtime, model: runtime.getModel("faux", "scripted"), sessionManager: SessionManager.inMemory(cwd), settingsManager, resourceLoader });
   await session.bindExtensions({ mode: "rpc" }); t.after(() => session.dispose());
   const run = (text = "执行工作", timeoutMs = 5000, images?: PromptImage[]): Promise<BotExecutionOutcome> => runBotSession(session, text, { images, signal: new AbortController().signal, timeoutMs, abort: () => session.abort() });
   return { session, run, get reports() { return reports; } };
@@ -90,6 +93,85 @@ test("纯图片输入经 Host runner 进入真实 SDK 提供方请求", async (t
   assert.equal((await h.run("", 5000, images)).status, "completed");
   assert.ok(Array.isArray(received));
   assert.deepEqual(received.filter((part) => part.type === "image"), images);
+});
+
+test("真实 SDK 派发携带项目并加载项目规则，无项目 Worker 隔离且可显式共享 Vivi 工作区", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "vivi-workspaces-sdk-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const project = join(root, "project");
+  const extra = join(root, "extra");
+  mkdirSync(project); mkdirSync(extra);
+  writeFileSync(join(project, "AGENTS.md"), "Project-specific rule: VIVI_PROJECT_RULE_LOADED\n");
+  let projects = [{ cwd: project, name: "示例项目", folders: [extra] }];
+  const db = openDatabase(":memory:");
+  const catalog = new ConversationCatalog(db, { scratchRoot: join(root, "scratch") });
+  catalog.ensureProject(project);
+  const workers = new Map<string, Awaited<ReturnType<typeof harness>>>();
+  const locations = new Map<string, { cwd: string; project?: string }>();
+  let bot!: BotRuntime;
+  const router = await harness(t, [
+    (context) => {
+      assert.match(JSON.stringify(context.messages), /示例项目/);
+      assert.ok(JSON.stringify(context.messages).includes(extra));
+      assert.match(JSON.stringify(context.messages), /current conversation's meaning/);
+      return fauxAssistantMessage([fauxToolCall("bot_create_work", { requestId: "project-work", title: "改项目", text: "检查这个项目", project })], { stopReason: "toolUse" });
+    },
+    fauxAssistantMessage([fauxToolCall("bot_create_work", { requestId: "private-work", title: "整理", text: "独立整理资料" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("bot_create_work", { requestId: "shared-work", title: "汇总", text: "在 Vivi 总工作区整理", workspace: "vivi" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("已安排"),
+    (context) => {
+      const live = JSON.stringify(context.messages);
+      assert.equal(live.match(/Available local projects \(/g)?.length, 1);
+      assert.match(live, /项目已改名/);
+      return fauxAssistantMessage("已读取最新项目");
+    },
+  ], "router", undefined, { contextFor: (id) => bot.contextFor(id), createWork: (input) => bot.createWork(input) }, { projects: () => projects });
+  let checkedProjectRules = false;
+  const host: BotHost = {
+    resolveProject: (selected, key) => resolveBotWorkspace(root, catalog.listProjects(), selected, key).cwd,
+    createConversation: async ({ kind, key, project: selected, workspace }) => {
+      if (kind === "router") return { conversationId: "router:1" };
+      const location = resolveBotWorkspace(root, catalog.listProjects(), selected, workspace === "vivi" ? undefined : key);
+      const conversation = catalog.create(location.project, { cwd: location.cwd }, { kind: "bot-worker", activate: false, botKey: key });
+      const worker = await harness(t, [(context) => {
+        assert.equal(conversation.cwd, location.cwd);
+        if (selected) {
+          assert.equal(conversation.project, project);
+          assert.match(JSON.stringify(context.messages), /VIVI_PROJECT_RULE_LOADED/);
+          checkedProjectRules = true;
+        }
+        return fauxAssistantMessage("已检查");
+      }], "worker", undefined, undefined, { cwd: conversation.cwd });
+      locations.set(key, location);
+      workers.set(conversation.id, worker);
+      return { conversationId: conversation.id };
+    },
+    execute: (input) => (input.conversationId === "router:1" ? router : workers.get(input.conversationId)!).run(input.text),
+    snapshot: async () => { throw new Error("unused"); }, messages: async () => [],
+    abort: async () => {}, changed: () => {},
+  };
+  bot = new BotRuntime(new BotStore(db), host);
+  const settled = async (id: string) => {
+    for (let i = 0; i < 1000; i++) {
+      const input = bot.store.input(id);
+      if (input && ["completed", "failed"].includes(input.status)) { assert.equal(input.status, "completed", input.error); return; }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    throw new Error(`Input ${id} did not settle`);
+  };
+  try {
+    bot.start();
+    await bot.submit({ requestId: "user-1", text: "检查示例项目，再独立整理资料，最后在 Vivi 总工作区汇总" });
+    for (const id of ["user-1", "project-work", "private-work", "shared-work"]) await settled(id);
+    assert.equal(checkedProjectRules, true);
+    assert.equal(locations.get("work:project-work")?.cwd, realpathSync(project));
+    assert.equal(locations.get("work:shared-work")?.cwd, join(root, "outputs"));
+    assert.notEqual(locations.get("work:private-work")?.cwd, locations.get("work:shared-work")?.cwd);
+    projects = [{ ...projects[0], name: "项目已改名" }];
+    await bot.submit({ requestId: "user-2", text: "现在项目名称是什么" });
+    await settled("user-2");
+    assert.equal(workers.size, 3);
+  } finally { await bot.stop(); catalog.flush(); db.close(); }
 });
 
 test("真实 SDK Router 将补充要求送入原 Worker，且不新增会话", async (t) => {

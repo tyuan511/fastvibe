@@ -46,6 +46,28 @@ test("the ledger round-trips through the tables", () => {
   assert.deepEqual(new MemoryStateStore(openTestDb(dir)).load(), source);
 });
 
+test("retention metadata round-trips without converting legacy counts into reinforcement", () => {
+  const dir = testDir("fastvibe-memory-retention-state-");
+  const db = openTestDb(dir);
+  const store = new MemoryStateStore(db);
+  const source = ledger();
+  source.outputs.c1.reinforcementCount = 3;
+  source.outputs.c1.lastReinforcedAt = 900;
+  store.save(source);
+  assert.deepEqual(new MemoryStateStore(db).load(), source);
+  const legacy = output("legacy");
+  legacy.usageCount = 1_000_000;
+  db.run("INSERT INTO memory_outputs (conversation_id, data) VALUES (?, ?)", "legacy", JSON.stringify({ ...legacy, pinned: true }));
+  db.run("INSERT INTO memory_outputs (conversation_id, data) VALUES (?, ?)", "invalid", JSON.stringify({ ...output("invalid"), generatedAt: null, lastUsage: null, reinforcementCount: "Infinity", lastReinforcedAt: null }));
+  const loaded = new MemoryStateStore(db).load();
+  assert.equal(loaded.outputs.legacy.reinforcementCount, undefined);
+  assert.equal("pinned" in loaded.outputs.legacy, false);
+  assert.equal(loaded.outputs.invalid.generatedAt, 111);
+  assert.equal(loaded.outputs.invalid.lastUsage, undefined);
+  assert.equal(loaded.outputs.invalid.reinforcementCount, undefined);
+  assert.equal(loaded.outputs.invalid.lastReinforcedAt, undefined);
+});
+
 test("absent fields stay absent instead of becoming nulls", () => {
   const dir = testDir("fastvibe-memory-state-");
   const store = new MemoryStateStore(openTestDb(dir));
