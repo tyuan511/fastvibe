@@ -16,7 +16,7 @@
   "supplementPlaceholder": "Add instructions for this task…",
   "backgroundHint": "Tasks continue when you leave this page and pause when FastVibe quits.",
   "ready": "Ready when you are",
-  "thinking": "Getting things ready",
+  "executionFailed": "This request did not finish. You can continue with another instruction.",
   "workingCount": "Working on {{count}} tasks",
   "workingCount_one": "Working on {{count}} task",
   "workingCount_other": "Working on {{count}} tasks",

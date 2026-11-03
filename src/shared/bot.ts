@@ -8,6 +8,14 @@ export type BotAttentionStatus = "pending" | "resolved" | "withdrawn";
 export type BotResultStatus = "idle" | "ready" | "blocked" | "failed" | "uncertain";
 export type BotDeliveryStatus = "pending" | "injected" | "delivered" | "failed";
 
+export type BotChatMessage = {
+  id: string;
+  conversationId: string;
+  role: "user" | "assistant";
+  text: string;
+  inputId?: string;
+  createdAt: number;
+};
 export type BotConversationMeta = {
   conversationId: string;
   role: BotConversationRole;
@@ -27,7 +35,6 @@ export type BotInput = {
   source: BotInputSource;
   text: string;
   images?: PromptImage[];
-  project?: string;
   status: BotInputStatus;
   createdAt: number;
   error?: string;
@@ -69,17 +76,17 @@ export type WorkSnapshot = {
   attention: BotAttention[];
   results: BotResult[];
   deliveries: BotDelivery[];
+  messages: BotChatMessage[];
   error?: string;
 };
 export type BotActivity = { running: boolean; waiting: boolean; conversationId?: string };
-export type BotChanged = { revision: number; conversationId?: string; activity?: BotActivity; delivery?: Pick<BotDelivery, "id" | "conversationId" | "text"> };
+export type BotChanged = { revision: number; conversationId?: string; activity?: BotActivity; delivery?: Pick<BotDelivery, "id" | "conversationId" | "text">; message?: Pick<BotChatMessage, "id" | "conversationId" | "role" | "text"> };
 export type BotExecutionOutcome = { status: "completed" | "failed" | "interrupted"; text: string; error?: string };
 
 export type BotSubmitRequest = {
   requestId: string;
   text: string;
   conversationId?: string;
-  project?: string;
   images?: PromptImage[];
   behavior?: string;
 };
@@ -93,19 +100,19 @@ export type BotReportRequest = {
 };
 
 export type BotHost = {
-  createConversation(input: { kind: BotConversationRole; key: string; project?: string }): Promise<{ conversationId: string }>;
-  execute(input: { conversationId: string; requestId: string; text: string; images?: PromptImage[]; project?: string; epoch: number; signal: AbortSignal }): Promise<BotExecutionOutcome>;
+  createConversation(input: { kind: BotConversationRole; key: string }): Promise<{ conversationId: string }>;
+  execute(input: { conversationId: string; requestId: string; text: string; images?: PromptImage[]; epoch: number; signal: AbortSignal }): Promise<BotExecutionOutcome>;
   snapshot(conversationId: string): Promise<ConversationSnapshot>;
   messages(conversationId: string): Promise<ChatMessage[]>;
   abort(conversationId: string): Promise<void>;
-  resolveProject(project?: string): string;
+  resolveProject(): string;
   changed(event: BotChanged): void;
 };
 
 export interface BotApi {
   getWorkSnapshot(): Promise<WorkSnapshot>;
   submit(input: BotSubmitRequest): Promise<WorkSnapshot>;
-  createWork(input: { requestId: string; title: string; text: string; project?: string }): Promise<BotConversationMeta>;
+  createWork(input: { requestId: string; title: string; text: string }): Promise<BotConversationMeta>;
   report(input: BotReportRequest): Promise<BotResult>;
   ask(input: { conversationId: string; requestId?: string; question: string }): Promise<BotAttention>;
   answer(input: { attentionId: string; answer: string }): Promise<WorkSnapshot>;
@@ -122,6 +129,6 @@ export type BotContext = {
   conversationId: string;
   active: boolean;
   phase: "running" | "reported" | "waiting" | "inactive";
-  input?: { requestId: string; project?: string };
+  input?: { requestId: string };
   conversations?: BotConversationMeta[];
 };

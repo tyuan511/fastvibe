@@ -21,7 +21,7 @@ async function harness(t: TestContext, responses: Parameters<ReturnType<typeof c
   let reports = 0;
   const service: BotSessionService = {
     contextFor: (conversationId) => ({ role, conversationId, active: true, phase: reports ? "reported" : "running" }),
-    submit: async () => ({}), createWork: async () => ({}),
+    submit: async () => ({}), routeMessage: async () => ({}), reply: async () => ({}), createWork: async () => ({}),
     report: async () => { reports++; return {}; }, ask: async () => ({}),
     stopConversation: async () => ({}), continueConversation: async () => ({}),
     ...serviceOverride,
@@ -40,11 +40,24 @@ test("structured bot_report 结束 SDK 回合且不要求 prose", async (t) => {
   const result = await h.run(); assert.equal(result.status, "completed"); assert.equal(result.text, ""); assert.equal(h.reports, 1); assert.equal(h.session.isIdle, true);
 });
 
+test("Router 的 bot_reply 写入用户反馈并结束当前回合", async (t) => {
+  let replies = 0;
+  const h = await harness(t, [fauxAssistantMessage([fauxToolCall("bot_reply", { text: "已安排，稍后告诉你结果。" })], { stopReason: "toolUse" })], "router", undefined, {
+    reply: async (input) => { replies++; return { id: "chat:assistant:1", conversationId: input.conversationId, role: "assistant", text: input.text, createdAt: 1 }; },
+  });
+  const result = await h.run();
+  assert.equal(result.status, "completed");
+  assert.equal(result.text, "");
+  assert.equal(replies, 1);
+  assert.equal(h.session.isIdle, true);
+});
+
 test("Host runner 等待完整 prompt、不会复用上一轮 assistant", async (t) => {
   let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; }); let prompts = 0;
   const h = await harness(t, [fauxAssistantMessage("旧"), fauxAssistantMessage("新")], "worker", (pi) => { pi.on("before_agent_start", async () => { if (++prompts === 2) await gate; }); });
   assert.equal((await h.run()).text, "旧"); const pending = h.run(); await new Promise((resolve) => setTimeout(resolve, 20)); release(); assert.equal((await pending).text, "新");
 });
+
 
 test("超时取消 preflight 并返回 failed", async (t) => {
   const h = await harness(t, [fauxAssistantMessage("不会完成")], "worker", (pi) => { pi.on("before_agent_start", async () => { await new Promise((resolve) => setTimeout(resolve, 30)); }); });
@@ -55,7 +68,7 @@ test("Router/Worker 工具白名单符合会话角色", () => {
   for (const name of ["spawn_agent", "question", "dag_add_tasks", "worktree_create", "fastvibe_config_apply"]) { assert.equal(botToolAllowed("worker", name), false); assert.equal(botToolAllowed("router", name), false); }
   for (const name of ["read", "bash", "codemode", "tool_search", "bot_report", "bot_ask_user"]) assert.equal(botToolAllowed("worker", name), true);
   assert.equal(botToolAllowed("router", "bot_create_work"), true); assert.equal(botToolAllowed("router", "codemode"), false);
-  assert.equal(botToolAllowed("router", "bot_send_message"), true); assert.equal(botToolAllowed("worker", "bot_send_message"), false);
+  assert.equal(botToolAllowed("router", "bot_send_message"), true); assert.equal(botToolAllowed("router", "bot_reply"), true); assert.equal(botToolAllowed("worker", "bot_send_message"), false);
 });
 
 test("报告后 tool_call 被 sealed，且 context 注入当前会话状态", async (t) => {
@@ -96,6 +109,8 @@ test("真实 SDK Router 将补充要求送入原 Worker，且不新增会话", a
   ], "router", undefined, {
     contextFor: (id) => bot.contextFor(id),
     submit: (input) => bot.submit(input),
+    routeMessage: (input) => bot.routeMessage(input),
+    reply: (input) => bot.reply(input),
     createWork: (input) => bot.createWork(input),
   });
   const host: BotHost = {
@@ -107,7 +122,7 @@ test("真实 SDK Router 将补充要求送入原 Worker，且不新增会话", a
     },
     snapshot: async () => { throw new Error("unused"); }, messages: async () => [],
     abort: async (id) => (id === "router:1" ? router.session : worker.session).abort(),
-    resolveProject: (project) => project ?? "/output", changed: () => {},
+    resolveProject: () => "/output", changed: () => {},
   };
   bot = new BotRuntime(store, host);
   const settled = async (id: string) => {
@@ -119,7 +134,7 @@ test("真实 SDK Router 将补充要求送入原 Worker，且不新增会话", a
   };
   try {
     bot.start();
-    await bot.submit({ requestId: "user-1", text: "写报告", project: "/project" });
+    await bot.submit({ requestId: "user-1", text: "写报告" });
     await settled("user-1"); await settled("work-1");
     await bot.submit({ requestId: "user-2", text: "给刚才那个工作再加一段英文摘要" });
     await settled("user-2"); await settled("supplement-1");

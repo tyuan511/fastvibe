@@ -11,14 +11,16 @@ export function botRole(conversation: Pick<Conversation, "kind">): "router" | "w
 export type BotSessionService = {
   contextFor(conversationId: string): BotContext;
   submit(input: BotSubmitRequest): Promise<unknown>;
-  createWork: (input: { requestId: string; title: string; text: string; project?: string }) => Promise<unknown>;
+  routeMessage: (input: BotSubmitRequest) => Promise<unknown>;
+  reply: (input: { conversationId: string; text: string }) => Promise<unknown>;
+  createWork: (input: { requestId: string; title: string; text: string }) => Promise<unknown>;
   report: (input: BotReportRequest) => Promise<unknown>;
   ask: (input: { conversationId: string; requestId?: string; question: string }) => Promise<unknown>;
   stopConversation: (input: { conversationId: string; callerConversationId?: string }) => Promise<unknown>;
   continueConversation: (input: { conversationId: string }) => Promise<unknown>;
 };
 
-const ROUTER_TOOLS = new Set(["bot_read_context", "bot_create_work", "bot_send_message", "bot_stop_conversation", "bot_continue_conversation"]);
+const ROUTER_TOOLS = new Set(["bot_read_context", "bot_create_work", "bot_send_message", "bot_reply", "bot_stop_conversation", "bot_continue_conversation"]);
 const BLOCKED_WORKER = /^(?:spawn_agent|send_message|followup_task|wait_agent|interrupt_agent|list_agents|subagent|question|goal|handoff|schedule_.*|dag_.*|worktree_.*|fastvibe_config_.*)$/;
 export function botToolAllowed(role: "router" | "worker", name: string): boolean { return role === "router" ? ROUTER_TOOLS.has(name) : !BLOCKED_WORKER.test(name) && !ROUTER_TOOLS.has(name); }
 
@@ -28,12 +30,14 @@ export function botSessionExtension(options: { role: "router" | "worker"; conver
     const result = (value: unknown, terminate = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) ?? "Recorded." }], details: value, ...(terminate ? { terminate: true } : {}) });
     if (options.role === "router") {
       pi.registerTool({ name: "bot_read_context", label: "Vivi conversations", description: "Read current Vivi conversation metadata and local projects.", parameters: Type.Object({}), execute: async () => result({ context: options.service.contextFor(options.conversationId), projects: options.projects() }) });
-      pi.registerTool({ name: "bot_create_work", executionMode: "sequential", label: "Create Vivi work", description: "Create or reuse one durable Worker conversation for a concrete work request.", parameters: Type.Object({ requestId: Type.String(), title: Type.String({ minLength: 1 }), text: Type.String({ minLength: 1 }), project: Type.Optional(Type.String()) }), execute: async (_id, input) => result(await options.service.createWork!(input)) });
+      pi.registerTool({ name: "bot_create_work", executionMode: "sequential", label: "Create Vivi work", description: "Create or reuse one durable Worker conversation in Vivi's fixed private workspace.", parameters: Type.Object({ requestId: Type.String(), title: Type.String({ minLength: 1 }), text: Type.String({ minLength: 1 }) }), execute: async (_id, input) => result(await options.service.createWork!(input)) });
       pi.registerTool({ name: "bot_send_message", executionMode: "sequential", label: "Message Vivi conversation", description: "Send additional requirements to an existing Worker conversation without creating another one. Use a new requestId; resume a paused Worker first.", parameters: Type.Object({ conversationId: Type.String({ minLength: 1 }), requestId: Type.String({ minLength: 1 }), text: Type.String({ minLength: 1 }) }), execute: async (_id, input) => {
         if (options.service.contextFor(input.conversationId).role !== "worker") throw new Error("Only Worker conversations can receive routed messages.");
-        await options.service.submit(input);
+        await options.service.routeMessage(input);
         return result({ conversationId: input.conversationId, requestId: input.requestId, accepted: true });
       } });
+      pi.registerTool({ name: "bot_reply", executionMode: "sequential", label: "Reply to Vivi user", description: "Send one concise user-facing feedback message and end this Router turn. Keep all planning and execution details out of the message.", parameters: Type.Object({ text: Type.String({ minLength: 1 }) }), execute: async (_id, input) => { if (sealed) throw new Error("This conversation turn is already closed."); const message = await options.service.reply!({ conversationId: options.conversationId, text: input.text }); sealed = true; return result(message, true); } });
+
       pi.registerTool({ name: "bot_stop_conversation", label: "Stop Vivi conversation", description: "Stop one known Worker conversation.", parameters: Type.Object({ conversationId: Type.String() }), execute: async (_id, input) => result(await options.service.stopConversation!({ conversationId: input.conversationId, callerConversationId: options.conversationId })) });
       pi.registerTool({ name: "bot_continue_conversation", label: "Continue Vivi conversation", description: "Resume one paused Worker conversation after checking its state.", parameters: Type.Object({ conversationId: Type.String() }), execute: async (_id, input) => result(await options.service.continueConversation!({ conversationId: input.conversationId })) });
     } else {
@@ -42,7 +46,7 @@ export function botSessionExtension(options: { role: "router" | "worker"; conver
     }
     const setTools = (): void => pi.setActiveTools(pi.getActiveTools().filter((name) => botToolAllowed(options.role, name)));
     pi.on("session_start", setTools);
-    pi.on("before_agent_start", (event) => { sealed = false; setTools(); const directive = options.role === "router" ? "You are Vivi. Keep routing turns short. Answer ordinary questions directly. For concrete work, call bot_create_work using the current input.project, or reuse a known Worker conversationId with bot_send_message and a new requestId for additional requirements. The current input's project selection takes precedence over earlier selections and the Router's working directory. Stop or continue existing conversations through their tools. Do not invent completion from idle." : "You are a persistent Vivi Worker conversation. Continue from your history. Record a structured bot_report for useful results, or bot_ask_user when blocked; a normal response is not completion."; return { systemPrompt: `${event.systemPrompt}\n\n${directive}` }; });
+    pi.on("before_agent_start", (event) => { sealed = false; setTools(); const directive = options.role === "router" ? "You are Vivi. Keep routing turns short and quiet. Use bot_reply for every user-facing answer, including ordinary questions and concise task arrangement or update summaries. Do not put user-facing prose in the normal assistant response. After bot_reply the turn is complete. For concrete work, call bot_create_work; Vivi always uses its fixed private workspace and never accepts a project or workspace override. Reuse a known Worker conversationId with bot_send_message and a new requestId for additional requirements. Stop or continue existing conversations through their tools. Do not narrate planning, thinking, tool calls, retries, or internal execution. Do not invent completion from idle." : "You are a persistent Vivi Worker conversation. Continue from your history. Keep execution details and progress narration internal. Record a factual, concise bot_report for useful results, or bot_ask_user when blocked; a normal response is not completion."; return { systemPrompt: `${event.systemPrompt}\n\n${directive}` }; });
     pi.on("context", (event) => { setTools(); if (options.role !== "router") return undefined; const context = options.service.contextFor(options.conversationId); const messages = event.messages.filter((message) => message.role !== "custom" || message.customType !== "vivi-live-context"); messages.push({ role: "custom", customType: "vivi-live-context", display: false, timestamp: 0, content: `Current Vivi conversation state:\n${JSON.stringify(context).slice(0, 12000)}` }); return { messages }; });
     pi.on("tool_call", (event) => sealed || !botToolAllowed(options.role, event.toolName) ? { block: true, reason: sealed ? "This conversation turn is already closed." : "This tool is outside the Vivi role." } : undefined);
   };

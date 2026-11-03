@@ -607,7 +607,7 @@ export const Sidebar = memo(function Sidebar({
               className={cn("h-8 pointer-coarse:h-10 w-full justify-start gap-2.5 px-2 text-sm font-normal hover:bg-sidebar-accent/50", viviActive && "bg-sidebar-accent font-medium")}
               onClick={() => { onOpenVivi(); dismissDrawer(); }}
             >
-              <FastVibeMascot size="size-3.5" motion={false} />
+              <FastVibeMascot size="size-5" motion={false} />
               {t("sidebar.vivi")}
               <span className="ml-auto flex items-center gap-1.5">
                 {botActivity?.running ? <RunningMark className="size-3.5" /> : null}
