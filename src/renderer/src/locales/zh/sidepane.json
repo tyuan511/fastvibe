@@ -3,8 +3,8 @@
     "active": "进行中 · {{count}}",
     "finished": "已结束 · {{count}}",
     "back": "返回 Vivi",
-    "conversations": "工作会话",
-    "empty": "还没有工作会话",
+    "conversations": "任务",
+    "empty": "还没有任务",
     "emptyConversation": "这条工作会话还没有消息",
     "noReply": "还没有回复",
     "cardStatus": {"queued": "排队中", "working": "处理中", "waiting": "等你回答", "paused": "已暂停", "completed": "已完成", "failed": "未完成", "interrupted": "已中断", "blocked": "需要补充信息", "unconfirmed": "待确认", "idle": "待处理"},
@@ -15,7 +15,7 @@
     "supplement": "补充要求…"
   },
   "tabs": {
-    "bot-tasks": "工作会话",
+    "bot-tasks": "任务",
     "bot-task": "任务详情",
     "git": "变更",
     "terminal": "终端",

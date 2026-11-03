@@ -10,7 +10,6 @@ import { FastVibeMascot } from "@/components/fastvibe-mascot";
 import { IconButton } from "@/components/icon-button";
 import { MessageList } from "@/components/chat/message-list";
 import { Composer } from "@/components/chat/composer";
-import { useSessionStore } from "@/stores/session";
 import { useSettingsStore } from "@/stores/settings";
 import { useSidePaneStore } from "@/stores/side-pane";
 import { normalizeViviSettings } from "@shared/vivi";
@@ -22,7 +21,8 @@ import { useViviRequests } from "./use-vivi-requests";
 import { ViviProgressFooter, LIVE_PHASES } from "./vivi-progress";
 import { useBotSnapshot } from "./use-bot-snapshot";
 import { useBotActivity } from "./use-bot-activity";
-import { botChatMessages } from "@/lib/vivi-chat";
+import { botChatMessages, viviFeedWithOptimistic } from "@/lib/vivi-chat";
+import { viviCommand, viviCommands } from "@shared/vivi-commands";
 import { viviFeedbackKey } from "@/lib/vivi-feedback";
 import { useBotComposerState } from "./bot-composer-state";
 import type { BotSubmitRequest } from "@shared/bot";
@@ -57,7 +57,7 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const sendLock = useRef(false);
   const hasMainModel = Boolean(mainModel);
-  const commands = useSessionStore((state) => state.commands);
+  const commands = useMemo(() => viviCommands(t("viviBot.clearDescription")), [t]);
   const sendOnEnter = useSettingsStore((state) => state.settings.sendOnEnter);
   const paneCollapsed = useSidePaneStore((state) => state.collapsed);
   const openWork = useSidePaneStore((state) => state.openBotTasks);
@@ -68,11 +68,7 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
   const target = workers.find((item) => item.conversationId === targetId);
   const { requests, loadError: requestsError, retry: retryRequests } = useViviRequests(snapshot);
   const targetTitle = target?.title ?? "";
-  const messages = useMemo(() => {
-    const stored = snapshot?.messages ?? [];
-    const ids = new Set(stored.map((message) => message.id));
-    return botChatMessages([...stored, ...(optimistic && !ids.has(optimistic.id) ? [optimistic] : [])]);
-  }, [optimistic, snapshot?.messages]);
+  const messages = useMemo(() => botChatMessages(viviFeedWithOptimistic(snapshot, optimistic), routerId), [optimistic, snapshot?.messages, snapshot?.chatGeneration, routerId]);
   const empty = !loading && messages.length === 0;
   const progress = snapshot?.progress ?? [];
   const working = Boolean(snapshot?.progress ? progress.some((item) => LIVE_PHASES.has(item.phase)) : activity?.running);
@@ -102,15 +98,29 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
   };
 
   const submit = async (): Promise<void> => {
-    if (sendLock.current || sending || !hasMainModel || (!draft.trim() && attachments.length === 0)) return;
+    if (sendLock.current || sending || (!draft.trim() && attachments.length === 0)) return;
     const text = draft.trim();
+    const command = viviCommand(text);
+    if (command === "unsupported") { setActionError("viviBot.feedback.command"); return; }
+    if (command === "clear") {
+      sendLock.current = true;
+      useBotComposerState.setState({ sending: true, error: null });
+      try {
+        adopt(await window.fastvibe.bot.clearChat());
+        // Attachments and any text typed during the call stay on this device.
+        useBotComposerState.setState((current) => ({ request: null, ...(current.draft.trim() === text ? { draft: "" } : {}) }));
+      } catch (cause) { console.warn("[vivi] clear failed", cause); setActionError("viviBot.feedback.clear"); }
+      finally { sendLock.current = false; useBotComposerState.setState({ sending: false }); }
+      return;
+    }
+    if (!hasMainModel) return;
     const promptText = `${text}${attachmentPromptSuffix(attachments)}`;
     const images = attachmentsToImages(attachments);
     const previous = useBotComposerState.getState().request;
     const request: BotSubmitRequest = previous && previous.text === promptText && previous.conversationId === target?.conversationId && JSON.stringify(previous.images ?? []) === JSON.stringify(images)
       ? previous
       : { requestId: crypto.randomUUID(), text: promptText, ...(images.length ? { images } : {}), ...(target ? { conversationId: target.conversationId } : {}) };
-    useBotComposerState.setState({ request, sending: true, error: null, optimistic: { id: `chat:user:${request.requestId}`, conversationId: request.conversationId ?? routerId ?? "vivi", role: "user", text, attachments, createdAt: Date.now(), inputId: request.requestId } });
+    useBotComposerState.setState({ request, sending: true, error: null, optimistic: { id: `chat:user:${request.requestId}`, conversationId: request.conversationId ?? routerId ?? "vivi", role: "user", text, attachments, createdAt: Date.now(), inputId: request.requestId, historyGeneration: snapshot?.chatGeneration ?? 0 } });
     sendLock.current = true;
     try {
       const next = await window.fastvibe.bot.submit(request);
@@ -133,7 +143,7 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
         {paneCollapsed ? <IconButton size="icon-sm" variant="ghost" label={t("workspace.expandSidePane")} onClick={() => useSidePaneStore.getState().setCollapsed(false)}><HugeiconsIcon strokeWidth={2} icon={PanelRightOpenIcon} /></IconButton> : null}
       </div>
     </header>
-    {error ? <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-6 py-3"><p role="alert" className="min-w-0 flex-1 wrap-anywhere text-sm text-destructive">{t(viviFeedbackKey(error, error === snapshot?.error ? "execution" : "load"))}</p><Button variant="outline" size="sm" onClick={refresh}>{t("viviBot.retry")}</Button></div> : null}
+    {error ? <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-6 py-3"><p role="alert" className="min-w-0 flex-1 wrap-anywhere text-sm text-destructive">{t(viviFeedbackKey(error, "load"))}</p><Button variant="outline" size="sm" onClick={refresh}>{t("viviBot.retry")}</Button></div> : null}
     <div className="relative min-h-0 flex-1"><Transcript cwd={null} messages={messages} conversationId={routerId ?? "vivi"} streaming={false} loading={loading && !optimistic} footer={<ViviProgressFooter progress={progress} sending={sending} fallbackRunning={snapshot?.progress === undefined && Boolean(activity?.running)} />} emptyState={<Empty className="h-full gap-6 pb-8"><EmptyHeader className="max-w-md gap-3"><EmptyMedia className="relative mb-1"><span aria-hidden className="absolute inset-0 scale-150 rounded-full bg-primary/5 blur-2xl" /><FastVibeMascot size="size-20" palette={palette} status="idle" /></EmptyMedia><EmptyTitle className="text-2xl font-semibold tracking-tight">{t("viviBot.greeting")}</EmptyTitle><EmptyDescription className="max-w-sm text-sm leading-6">{t("viviBot.description")}</EmptyDescription></EmptyHeader>{hasMainModel ? <div className="flex max-w-lg flex-wrap justify-center gap-2">{STARTERS.map(({ key, icon }) => <Button key={key} type="button" variant="outline" size="sm" className="h-auto gap-2 rounded-xl bg-card/60 px-3 py-2 font-normal text-muted-foreground shadow-none hover:text-foreground" disabled={sending} onClick={() => setDraft(t(`viviBot.starters.${key}.prompt`))}><HugeiconsIcon strokeWidth={1.8} icon={icon} className="size-3.5" />{t(`viviBot.starters.${key}.label`)}</Button>)}</div> : <Button variant="outline" size="sm" onClick={onManageModels}>{t("viviBot.addModels")}</Button>}</Empty>} /></div>
     <div className="safe-bottom transcript-gutter shrink-0 px-4 pb-3 sm:px-6"><div className="mx-auto w-full max-w-3xl">
       {requestsError ? <div className="mb-2 flex items-center gap-2"><p role="alert" className="min-w-0 flex-1 text-sm text-destructive wrap-anywhere">{t("viviBot.requests.loadFailed")}</p><Button size="sm" variant="outline" onClick={() => void retryRequests()}>{t("viviBot.retry")}</Button></div> : null}
@@ -144,7 +154,7 @@ export function ViviPage({ mainModel, sidebarCollapsed, onExpandSidebar, onManag
         <Composer
           className="px-0 pb-0"
           value={draft}
-          disabled={!hasMainModel || sending}
+          disabled={sending}
           streaming={false}
           working={working}
           placeholder={t(!hasMainModel ? "viviBot.noModel" : target ? "viviBot.supplementPlaceholder" : "viviBot.placeholder")}

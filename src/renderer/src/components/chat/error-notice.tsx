@@ -1,4 +1,4 @@
-import { useState, type JSX } from "react";
+import { useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { AlertCircleIcon, ArrowRight01Icon, Copy01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
@@ -53,7 +53,7 @@ function looksLikePath(line: string): boolean {
   return line.split(/\s+/).some((token) => token.length >= 32 && UNBREAKABLE.test(token));
 }
 
-export function AssistantErrorNotice({ error }: { error: string }): JSX.Element {
+export function AssistantErrorNotice({ error, actions }: { error: string; actions?: ReactNode }): JSX.Element {
   const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const [open, setOpen] = useState(false);
@@ -124,7 +124,8 @@ export function AssistantErrorNotice({ error }: { error: string }): JSX.Element 
           </div>
         ) : null}
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {actions}
           {hasMore ? (
             <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-sm text-xs leading-4 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
               <HugeiconsIcon

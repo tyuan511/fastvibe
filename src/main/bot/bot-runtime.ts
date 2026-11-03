@@ -3,6 +3,7 @@ import type { BotCreateWorkRequest, BotAttention, BotChanged, BotChatMessage, Bo
 import { extractPromptAttachments, stripPromptMetadata } from "../../shared/attachment-metadata.ts";
 import type { ChatAttachment, PromptImage } from "../../shared/types.ts";
 import { VIVI_BOT_ID } from "../../shared/bot.ts";
+import { viviCommand } from "../../shared/vivi-commands.ts";
 import { BotStore } from "./bot-store.ts";
 import { uiText } from "../engine/ui-text.ts";
 import { deriveBotProgress } from "./bot-progress.ts";
@@ -190,7 +191,11 @@ export class BotRuntime {
     const results = this.store.results();
     // Durable facts and their revision belong to one synchronous read. Preview
     // loading may yield; never re-read a newer receipt/feed under this revision.
-    const snapshot: WorkSnapshot = { revision: this.store.revision, routerConversationId: this.store.routerConversationId, conversations, attention, results, deliveries: this.store.deliveries(), messages: this.store.chatMessages(), progress: conversations.map((conversation) => deriveBotProgress(conversation, inputs, attention, results)), error: this.#error };
+    const executionErrors = conversations.flatMap((conversation) => {
+      const failed = this.#retryableFailure(conversation, inputs, attention);
+      return failed ? [{ conversationId: conversation.conversationId, inputId: failed.id, error: failed.error ?? uiText("执行结束，但没有确认完成的结果。", "Execution ended without a confirmed result."), createdAt: failed.completedAt ?? failed.createdAt, ...(failed.startedAt !== undefined ? { startedAt: failed.startedAt } : {}) }] : [];
+    });
+    const snapshot: WorkSnapshot = { revision: this.store.revision, routerConversationId: this.store.routerConversationId, conversations, attention, results, deliveries: this.store.deliveries(), messages: this.store.visibleChatMessages(), chatGeneration: this.store.chatGeneration, progress: conversations.map((conversation) => deriveBotProgress(conversation, inputs, attention, results)), executionErrors, error: this.#error };
     if (this.host.conversationPreviews) {
       try { snapshot.conversationPreviews = await this.host.conversationPreviews(conversations.filter((conversation) => conversation.role === "worker").map((conversation) => conversation.conversationId)); }
       catch { /* Reply previews must not make an otherwise readable snapshot fail. */ }
@@ -247,9 +252,22 @@ export class BotRuntime {
     return meta;
   }
 
+  /** Display-only boundary: do not abort, change SDK history, or alter work/memory sources. */
+  async clearChat(): Promise<WorkSnapshot> {
+    this.#change(() => this.store.clearChat());
+    return this.getWorkSnapshot();
+  }
+
   async submit(input: BotSubmitRequest): Promise<WorkSnapshot> { return this.#submit(input, "user"); }
   async routeMessage(input: BotSubmitRequest): Promise<WorkSnapshot> { return this.#submit(input, "router"); }
   async #submit(input: BotSubmitRequest, source: "user" | "router"): Promise<WorkSnapshot> {
+    // UI commands never become model input or enter the ordinary SDK command path.
+    // Scope this guard to the main chat; Worker detail composers keep their own behavior.
+    if (source === "user" && (!input.conversationId || this.store.conversation(input.conversationId)?.role === "router")) {
+      const command = viviCommand(input.text);
+      if (command === "clear") return this.clearChat();
+      if (command === "unsupported") throw new Error(uiText("Vivi 仅支持 /clear 命令。", "Vivi only supports the /clear command."));
+    }
     const requestId = textOf(input.requestId, "请求标识", 200);
     const images = imagesOf(input.images);
     const memoryRefs = botMemoryRefs(input.memoryRefs);
@@ -388,8 +406,21 @@ export class BotRuntime {
     if (active && input.callerConversationId !== meta.conversationId) await this.host.abort(meta.conversationId);
     return this.getWorkSnapshot();
   }
-  async continueConversation(input: { conversationId: string; callerConversationId?: string; callerRequestId?: string; callerEpoch?: number; targetEpoch?: number }): Promise<WorkSnapshot> {
+  /** The same durable gate drives both the inline retry control and its operation. */
+  #retryableFailure(meta: BotConversationMeta, inputs = this.store.inputs(meta.conversationId), attention = this.store.attentions(meta.conversationId)): BotInput | undefined {
+    if (meta.paused || this.#active.has(meta.conversationId) || attention.some((item) => item.conversationId === meta.conversationId && item.status === "pending")) return;
+    const owned = inputs.filter((item) => item.conversationId === meta.conversationId);
+    if (owned.some((item) => item.epoch === meta.epoch && (item.status === "queued" || item.status === "running" || item.status === "accepted"))) return;
+    const latest = owned.at(-1);
+    return latest?.epoch === meta.epoch && latest.status === "failed" ? latest : undefined;
+  }
+
+  async continueConversation(input: { conversationId: string; inputId?: string; callerConversationId?: string; callerRequestId?: string; callerEpoch?: number; targetEpoch?: number }): Promise<WorkSnapshot> {
     const meta = this.#meta(input.conversationId);
+    // A retry is scoped to the failed receipt, never to whatever this chat runs later.
+    // After the first click advances the epoch, repeated/stale clicks are harmless.
+    const failed = input.inputId !== undefined ? this.#retryableFailure(meta) : undefined;
+    if (input.inputId !== undefined && failed?.id !== input.inputId) return this.getWorkSnapshot();
     if (input.targetEpoch !== undefined && input.targetEpoch !== meta.epoch) return this.getWorkSnapshot();
     const caller = input.callerConversationId ? this.#active.get(input.callerConversationId) : undefined;
     if (input.callerConversationId && (!caller || caller.controller.signal.aborted || this.store.conversation(input.callerConversationId)?.epoch !== caller.meta.epoch || (input.callerRequestId !== undefined && input.callerRequestId !== caller.inputId) || (input.callerEpoch !== undefined && input.callerEpoch !== caller.meta.epoch))) return this.getWorkSnapshot();
@@ -403,19 +434,27 @@ export class BotRuntime {
     }
     if (!meta.paused && (this.#active.has(meta.conversationId) || this.store.inputs(meta.conversationId).some((item) => item.epoch === meta.epoch && item.status === "queued"))) return this.getWorkSnapshot();
     if (this.store.attentions(meta.conversationId).some((item) => item.status === "pending")) throw new Error(uiText("请先回答当前问题。", "Please answer the pending question first."));
-    const interrupted = meta.restartRecovery ? this.store.input(meta.restartRecovery.inputId) : undefined;
+    const interrupted = failed ?? (meta.restartRecovery ? this.store.input(meta.restartRecovery.inputId) : undefined);
     const original = this.#originalInput(interrupted);
+    const createdAt = Math.max(Date.now(), (this.store.inputs(meta.conversationId).at(-1)?.createdAt ?? 0) + 1);
     this.#change(() => {
       this.store.putConversation({ ...meta, paused: false, restartRecovery: undefined, epoch: meta.epoch + 1, updatedAt: Date.now() });
       const next = this.#meta(meta.conversationId);
-      if (interrupted) for (const queued of this.store.inputs(meta.conversationId)) if (queued.status === "queued" && queued.epoch === meta.epoch) this.store.putInput({ ...queued, epoch: next.epoch });
-      const pendingReports = next.role === "router" ? this.store.deliveries().filter((delivery) => delivery.targetConversationId === next.conversationId && delivery.status === "injected") : [];
+      if (interrupted && !failed) for (const queued of this.store.inputs(meta.conversationId)) if (queued.status === "queued" && queued.epoch === meta.epoch) this.store.putInput({ ...queued, epoch: next.epoch });
+      const retryDeliveryIds = failed ? new Set([failed.id, ...(failed.deliveryIds ?? [])]) : undefined;
+      const pendingReports = next.role === "router" ? this.store.deliveries().filter((delivery) => delivery.targetConversationId === next.conversationId && (delivery.status === "injected" || delivery.status === "failed") && (!retryDeliveryIds || retryDeliveryIds.has(delivery.id))) : [];
+      for (const delivery of pendingReports) if (delivery.status === "failed") this.store.updateDelivery({ ...delivery, status: "injected" });
+      const retryRequirements = failed && original?.source !== "report"
+        ? `\nOriginal requirements (attachments, if any, are included with this message):\n${original?.text ?? failed.text}`
+        : "";
       const resumeText = pendingReports.length
-        ? `Continue the unfinished work. Review these existing result updates and summarize them for the user; do not repeat completed work.\n${pendingReports.map((delivery) => delivery.text).join("\n\n")}`
-        : interrupted && meta.role === "worker"
-          ? `The application exited while this work was running. Inspect the existing conversation, actual workspace files and external effects first; tool calls may have partially or fully succeeded. Continue only the unfinished work in this same workspace, without repeating completed actions. If the work is already complete, verify and report its existing result. Ask only if a real missing answer blocks progress. Original interrupted requirements:\n${original?.text ?? interrupted.text}`
-          : "Continue the unfinished work from the current conversation.";
-      this.store.putInput({ id: `resume:${next.conversationId}:${next.epoch}`, conversationId: next.conversationId, epoch: next.epoch, source: "resume", text: resumeText, ...(interrupted ? { recoveryOf: interrupted.id, rootInputId: interrupted.rootInputId ?? interrupted.id, images: interrupted.images, memoryRefs: interrupted.memoryRefs } : {}), ...(pendingReports.length ? { deliveryIds: pendingReports.map((delivery) => delivery.id) } : {}), status: "queued", createdAt: Date.now() });
+        ? `Continue the unfinished work. Review these existing result updates and summarize them for the user; do not repeat completed work.${retryRequirements}\n${pendingReports.map((delivery) => delivery.text).join("\n\n")}`
+        : failed
+          ? `The previous request failed. Inspect the existing conversation, actual workspace files and external effects first; tool calls may have partially or fully succeeded. Continue only the unfinished work in this SAME conversation, without repeating completed actions or creating replacement Workers. If work was already dispatched, reuse its existing conversation and result. Original requirements (attachments, if any, are included with this message):\n${original?.text ?? failed.text}`
+          : interrupted && meta.role === "worker"
+            ? `The application exited while this work was running. Inspect the existing conversation, actual workspace files and external effects first; tool calls may have partially or fully succeeded. Continue only the unfinished work in this same workspace, without repeating completed actions. If the work is already complete, verify and report its existing result. Ask only if a real missing answer blocks progress. Original interrupted requirements:\n${original?.text ?? interrupted.text}`
+            : "Continue the unfinished work from the current conversation.";
+      this.store.putInput({ id: `resume:${next.conversationId}:${next.epoch}`, conversationId: next.conversationId, epoch: next.epoch, source: "resume", text: resumeText, ...(interrupted ? { recoveryOf: interrupted.id, rootInputId: interrupted.rootInputId ?? interrupted.id, images: original?.images ?? interrupted.images, memoryRefs: original?.memoryRefs ?? interrupted.memoryRefs } : {}), ...(pendingReports.length ? { deliveryIds: pendingReports.map((delivery) => delivery.id) } : {}), status: "queued", createdAt });
     });
     this.#kick();
     return this.getWorkSnapshot();
@@ -479,9 +518,23 @@ export class BotRuntime {
       const active: Active = { meta, inputId: input.id, controller, promise: Promise.resolve() };
       this.#active.set(meta.conversationId, active);
       active.promise = this.#execute(active, input).catch((error) => {
-        this.#error = error instanceof Error ? error.message : String(error);
+        const message = error instanceof Error ? error.message : String(error);
         const receipt = this.store.input(input.id);
-        if (receipt?.status === "running") this.#change(() => this.store.putInput({ ...receipt, status: "failed", completedAt: Date.now(), error: this.#error }));
+        const current = this.store.conversation(meta.conversationId);
+        if (!receipt || receipt.status !== "running" || current?.epoch !== meta.epoch) return;
+        try {
+          this.#saveResult(current, receipt, { id: `result:${receipt.id}`, conversationId: current.conversationId, inputId: receipt.id, epoch: current.epoch, status: "failed", summary: message, createdAt: Date.now() });
+          this.#change(() => {
+            this.store.putInput({ ...receipt, status: "failed", completedAt: Date.now(), error: message });
+            for (const id of new Set([receipt.id, ...(receipt.deliveryIds ?? [])])) {
+              const delivery = this.store.delivery(id);
+              if (delivery?.targetConversationId === current.conversationId && delivery.status === "injected") this.store.updateDelivery({ ...delivery, status: "failed" });
+            }
+          });
+        } catch (persistenceError) {
+          // An unreadable/unwritable store is infrastructure failure, not a turn error.
+          this.#error = persistenceError instanceof Error ? persistenceError.message : String(persistenceError);
+        }
       }).finally(() => {
         this.#active.delete(meta.conversationId);
         this.#change(() => {});
@@ -524,13 +577,11 @@ export class BotRuntime {
       if (delivery && outcome.status !== "completed") this.store.updateDelivery({ ...delivery, status: "failed" });
       // Explicit resume consumes existing updates without creating another Worker or
       // reinjecting the old input. New arrivals are not part of this receipt.
-      if (outcome.status === "completed") for (const id of settled.deliveryIds ?? []) {
+      for (const id of settled.deliveryIds ?? []) {
         const resumed = this.store.delivery(id);
-        if (resumed?.status === "injected" && resumed.targetConversationId === current.conversationId) this.store.updateDelivery({ ...resumed, status: "delivered" });
+        if (resumed?.status === "injected" && resumed.targetConversationId === current.conversationId) this.store.updateDelivery({ ...resumed, status: outcome.status === "completed" ? "delivered" : "failed" });
       }
     });
-    if (outcome.status === "completed") this.#error = undefined;
-    if (outcome.status !== "completed") this.#error = outcome.error ?? "Vivi 会话执行未完成";
     if (delivery && outcome.status === "completed") this.#emitDelivery({ ...delivery, status: "delivered" });
     if (outcome.status === "completed" && active.meta.role === "router") this.#announceCompletion(current.conversationId, input.id, [delivery?.id, ...(settled.deliveryIds ?? [])]);
   }

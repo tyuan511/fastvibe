@@ -3,8 +3,8 @@
     "active": "Active · {{count}}",
     "finished": "Finished · {{count}}",
     "back": "Back to Vivi",
-    "conversations": "Work conversations",
-    "empty": "No work conversations yet",
+    "conversations": "Tasks",
+    "empty": "No tasks yet",
     "emptyConversation": "This work conversation has no messages yet",
     "noReply": "No replies yet",
     "cardStatus": {"queued": "Queued", "working": "Working", "waiting": "Needs your answer", "paused": "Paused", "completed": "Completed", "failed": "Failed", "interrupted": "Interrupted", "blocked": "Needs more information", "unconfirmed": "Unconfirmed", "idle": "Not started"},
@@ -15,7 +15,7 @@
     "supplement": "Add a requirement…"
   },
   "tabs": {
-    "bot-tasks": "Work conversations",
+    "bot-tasks": "Tasks",
     "bot-task": "Task details",
     "git": "Changes",
     "terminal": "Terminal",

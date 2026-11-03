@@ -37,7 +37,9 @@ Vivi 现在采用“长期 Router 会话 + 持久 Worker 会话 + 薄持久编�
 
 主聊天是简短汇报入口，默认一两句话：承接只说已安排什么，完成只说结果，遇到阻塞或需要用户决定时说清关键事项。默认不重复需求、执行计划、根因、代码位置和测试清单；只有用户明确追问才展开。`vivi-voice.ts` 统一定义这条规则，工具说明和每次请求的实时上下文共同携带，继续或压缩后仍适用。Worker 将详细说明写在自己的会话正文中，`bot_report.summary` 仅放简短结论，证据和产物继续通过独立字段完整保存，用户可在任务详情查看。
 
-报错、失败、未确认结果和提问/确认共用同一条简短规则：失败只给真实问题与一个有用的下一步，不转贴错误原文、调用栈、尝试清单或诊断；确认只问一个具体问题，保留必要选项、范围及不可恢复的后果，不附执行回顾和后续计划。问题正文不做机械截断。主聊天的加载、发送、停止和回答错误由 `vivi-feedback.ts` 映射为简短的中英文文案；原始错误仍保留在状态、任务详情或诊断日志中。运行错误只显示一次，不在页面顶部和输入框上方重复提示。
+报错、失败、未确认结果和提问/确认共用同一条简短规则：模型汇报失败只给真实问题与一个有用的下一步，不转贴调用栈、尝试清单或诊断；确认只问一个具体问题，保留必要选项、范围及不可恢复的后果，不附执行回顾和后续计划。问题正文不做机械截断。加载、发送、停止和回答错误由 `vivi-feedback.ts` 映射为简短的中英文文案。
+
+执行错误跟随对应对话显示，复用普通会话的 `AssistantErrorNotice`（结论、详情、复制），不挂在主聊天或任务列表顶部。Router 的失败使用持久聊天 feed 中的失败结果行，Worker 在执行详情中显示；超时若被 SDK 记成 abort，则按持久输入回执中的真实错误显示一次。`WorkSnapshot.executionErrors` 从各会话的最新失败回执派生可重试目标；按钮通过 `bot.continueConversation({ conversationId, inputId })` 继续同一会话，不是刷新快照。宿主校验请求归属与 epoch，运行中、待答、暂停或有更新请求时拒绝旧错误重试；重复点击不重复启动。Router 汇报失败后重试复用已有 failed/injected 投递，成功再标 delivered，不重新运行已经 ready 的 Worker。`/clear` 仍只隐藏主聊天 feed，不从失败快照重建已清空的错误行。全局 `WorkSnapshot.error` 只承载存储、广播等基础设施错误。
 
 - `WorkSnapshot.progress` 从持久输入、当前 epoch、待答问题与结果推导每个会话的进度，不增加 Task / Run / Attempt 层级。开始与完成时间随输入保存，切页和重连不重置计时。快照更新通过带 revision 的事件触发读取，终态不能被旧失败或迟到快照覆盖。
 - 发送中的用户行和承接状态只在设备本地存在；宿主接收后采用同一个请求 ID 的持久行。失败撤回乐观行并保留草稿和附件。临时状态位于对话末尾，不写进聊天记录，也不把历史回复标成流式。
@@ -58,7 +60,7 @@ Vivi 自带常开记忆，独立于设置中的普通长期记忆，没有用户
 
 ## 界面与宠物
 
-- `/vivi` 是独立入口，保留普通会话的 `activeId`。主聊天读取 `WorkSnapshot.messages` 映射出的独立 Router 聊天 feed，不读取 Router 的 SDK transcript，也不做“完整 transcript + 前端过滤”；思考、工具调用、运行中/中断/失败的执行记录以及 Worker 内部回执天然留在后台。右侧打开工作会话后仍可查看对应 Worker 的完整真实转写。
+- `/vivi` 是独立入口，保留普通会话的 `activeId`。主聊天读取 `WorkSnapshot.messages` 映射出的独立 Router 聊天 feed，不读取 Router 的 SDK transcript，也不做“完整 transcript + 前端过滤”；思考、工具调用以及 Worker 内部回执留在后台，Router 的执行失败由 feed 中对应错误行呈现。右侧打开工作会话后仍可查看对应 Worker 的完整真实转写。
 - 右侧面板展示工作会话列表；打开后直接绑定 `conversationId`，通过 `engine.getSnapshot(conversationId)` / `engine.getState(conversationId)` 读取自己的会话状态。
 - 工作会话详情复用标准 `MessageList` 与完整 `Composer`，支持附件、队列、停止和继续，并跟随普通主会话模型。关闭面板不会停止会话，切换会话不会丢失草稿。
 - 不再提供任务详情、Attempt 选择或任务弹窗。问题卡片和结果状态引用持久编排记录，但内容仍回到对应真实会话。
@@ -87,7 +89,7 @@ FASTVIBE_IROH_BIN=/Users/yuantang/code/fastvibe/resources/iroh/fastvibe-iroh pnp
 
 工作会话详情只在提前返回之前调用一次 `useBotSnapshot`，会话与结果共享同一份快照。无头 Chromium 在亮色、暗色下均通过延迟 Worker snapshot 的「加载中 → 完成」检查，没有 React Hook 顺序错误。
 
-浏览器预览使用 `src/renderer` 作为 Vite root：`mock.html?vivi=1&lang=zh#/vivi`，空状态使用 `vivi=empty`；`vivi=progress|result|recovery` 分别展示并行进度与阶段汇报、完成结果、失败后继续。预览数据是脱敏 fixture，未作为真实供应商端到端证明。
+浏览器预览使用 `src/renderer` 作为 Vite root：`mock.html?vivi=1&lang=zh#/vivi`，空状态使用 `vivi=empty`；`vivi=progress|result|recovery` 分别展示并行进度与阶段汇报、完成结果、失败后继续；`vivi=execution-error` 展示主聊天和 Worker 详情中的行内执行错误及重试。预览数据是脱敏 fixture，未作为真实供应商端到端证明。
 
 对话反馈实现验证：完整测试 **2210 项通过，0 失败，0 跳过**；类型检查、注入脚本检查及 Electron/Vite 构建通过。真实 SDK 脚本模型覆盖阶段工具不会结束工作、输入与 epoch 绑定、报告收尾与后续补充；运行时回归覆盖汇报限频去重、快捷查询、停止竞争、同实例恢复和重启后的结果接续。无头 Chromium 覆盖中英文、亮暗主题、1280px / 390px 的阶段与结果布局，发送失败回滚、等待期间离开页面、重试去重、草稿保留、并行展开、暂停/继续和原会话补充入口，无渲染异常或横向溢出。
 

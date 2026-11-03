@@ -1,4 +1,4 @@
-import type { BotApi, BotChanged, BotConversationMeta, BotAttention, BotChatMessage, BotProgress, BotResult, WorkSnapshot } from "@shared/bot";
+import type { BotApi, BotChanged, BotConversationMeta, BotAttention, BotChatMessage, BotExecutionError, BotProgress, BotResult, WorkSnapshot } from "@shared/bot";
 import type { ChatMessage, EngineEvent } from "@shared/types";
 
 export function createBotFixture(cwd: string, english = false, empty = false, scenario = "sample"): BotApi {
@@ -18,11 +18,13 @@ export function createBotFixture(cwd: string, english = false, empty = false, sc
     { id: "a1", role: "assistant", text: word("我会分别处理这两件事，完成后把文档交给你。", "I'll work on both tasks and bring you the finished documents."), tools: [], parts: [], createdAt: now - 90000 },
   ]], [workerId, [{ id: "wu1", role: "user", text: word("编写新用户入门说明", "Write a getting-started guide"), tools: [], parts: [], createdAt: now - 60000 }]]]);
   let revision = 1;
+  let chatGeneration = 0;
   const chatMessages: BotChatMessage[] = empty ? [] : [
     { id: "u1", conversationId: routerId, role: "user", text: word("整理一下这个项目本周的发布记录，再帮我写一份新用户说明。", "Prepare this week's release notes and a getting-started guide for this project."), createdAt: now - 100000, inputId: "u1" },
     { id: "a1", conversationId: routerId, role: "assistant", text: word("我会分别处理这两件事，完成后把文档交给你。", "I'll work on both tasks and bring you the finished documents."), createdAt: now - 90000, inputId: "u1" },
   ];
   const results: BotResult[] = [];
+  const executionErrors: BotExecutionError[] = [];
   const progress: BotProgress[] = empty ? [] : conversations.filter((item) => item.role === "worker").map((item) => ({ conversationId: item.conversationId, inputId: `input:${item.conversationId}`, role: item.role, title: item.title, phase: item.paused ? "waiting" : "working", detail: word("正在核对已有材料", "Checking the available material"), startedAt: now - 18000, updatedAt: now, queuedCount: 0 }));
   const conversationPreviews: Record<string, { text: string; updatedAt: number }> = empty ? {} : {
     "vivi-worker-release": { text: word("已核对本周的提交和发布记录，正在补充安装说明与兼容性注意事项。", "Checked this week's commits and releases. I'm filling in the installation notes and compatibility details."), updatedAt: now - 90_000 },
@@ -53,11 +55,25 @@ export function createBotFixture(cwd: string, english = false, empty = false, sc
       chatMessages.push({ id: "result-message", conversationId: item.conversationId, role: "assistant", kind: "result", title: item.title, result, text: result.summary!, createdAt: now });
     }
   }
+  if (scenario === "execution-error") {
+    attention.length = 0;
+    for (const conversation of conversations) conversation.paused = false;
+    for (const item of progress) item.phase = "failed";
+    for (const conversationId of [routerId, "vivi-worker-release"]) {
+      const inputId = `failed:${conversationId}`;
+      const error = conversationId === routerId ? "Vivi execution timed out" : "503: Our servers are currently overloaded. Please try again later.";
+      executionErrors.push({ conversationId, inputId, error, startedAt: now - 100_000, createdAt: now });
+      const result: BotResult = { id: `result:${inputId}`, conversationId, inputId, epoch: 0, status: "failed", summary: error, createdAt: now };
+      results.push(result);
+      chatMessages.push({ id: `chat:${inputId}`, conversationId, inputId, role: "assistant", kind: "result", result, text: error, createdAt: now });
+    }
+  }
   const running = () => progress.some((item) => ["accepted", "understanding", "planning", "delegating", "working", "summarizing"].includes(item.phase));
-  const snapshot = (): WorkSnapshot => ({ revision, routerConversationId: routerId, conversations: structuredClone(conversations), attention: structuredClone(attention), results: structuredClone(results), progress: structuredClone(progress), conversationPreviews: structuredClone(conversationPreviews), deliveries: [], messages: structuredClone(chatMessages) });
+  const snapshot = (): WorkSnapshot => ({ revision, chatGeneration, routerConversationId: routerId, conversations: structuredClone(conversations), attention: structuredClone(attention), results: structuredClone(results), progress: structuredClone(progress), conversationPreviews: structuredClone(conversationPreviews), executionErrors: structuredClone(executionErrors), deliveries: [], messages: structuredClone(chatMessages) });
   const emit = (conversationId?: string) => { revision++; listeners.forEach((listener) => listener({ revision, conversationId, activity: { running: running(), waiting: attention.some((item) => item.status === "pending"), conversationId } })); };
   const api: BotApi = {
     getWorkSnapshot: async () => snapshot(),
+    clearChat: async () => { chatMessages.length = 0; chatGeneration++; emit(); return snapshot(); },
     getActivity: async () => ({ running: running(), waiting: attention.some((item) => item.status === "pending"), conversationId: routerId }),
     onChanged: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     onNavigate: () => () => {},
@@ -77,7 +93,19 @@ export function createBotFixture(cwd: string, english = false, empty = false, sc
     ask: async (input) => { const item: BotAttention = { id: `attention:${input.requestId ?? Date.now()}`, conversationId: input.conversationId, inputId: input.requestId, epoch: 0, question: input.question, status: "pending", createdAt: Date.now() }; attention.push(item); emit(input.conversationId); return item; },
     answer: async ({ attentionId, answer }) => { const item = attention.find((entry) => entry.id === attentionId); if (!item) throw new Error("Question is no longer pending"); item.answer = answer; item.status = "resolved"; const conversation = conversations.find((entry) => entry.conversationId === item.conversationId); if (conversation) conversation.paused = false; emit(item.conversationId); return snapshot(); },
     stopConversation: async ({ conversationId }) => { const conversation = conversations.find((entry) => entry.conversationId === conversationId); if (conversation) conversation.paused = true; emit(conversationId); return snapshot(); },
-    continueConversation: async ({ conversationId }) => { const conversation = conversations.find((entry) => entry.conversationId === conversationId); if (conversation) conversation.paused = false; const state = progress.find((item) => item.conversationId === conversationId); if (state) { state.phase = "working"; state.startedAt = Date.now(); state.inputId = `resume:${Date.now()}`; } emit(conversationId); return snapshot(); },
+    continueConversation: async ({ conversationId, inputId }) => {
+      if (inputId) {
+        const index = executionErrors.findIndex((item) => item.conversationId === conversationId && item.inputId === inputId);
+        if (index < 0) return snapshot();
+        executionErrors.splice(index, 1);
+        if (conversationId === routerId) chatMessages.push({ id: `retry:${inputId}`, conversationId, inputId: `resume:${inputId}`, role: "assistant", text: word("已根据保存的结果重新整理完成。", "Summarized the saved results successfully."), createdAt: Date.now() });
+      }
+      const conversation = conversations.find((entry) => entry.conversationId === conversationId);
+      if (conversation) conversation.paused = false;
+      const state = progress.find((item) => item.conversationId === conversationId);
+      if (state) { state.phase = inputId ? "completed" : "working"; state.startedAt = Date.now(); state.inputId = `resume:${Date.now()}`; }
+      emit(conversationId); return snapshot();
+    },
     stopAll: async () => { progress.forEach((item) => { if (["accepted", "understanding", "planning", "delegating", "working", "summarizing"].includes(item.phase)) item.phase = "paused"; }); conversations.forEach((conversation) => { if (conversation.role === "worker") conversation.paused = true; }); emit(); return snapshot(); },
   };
   return api;

@@ -38,6 +38,8 @@ export type BotChatMessage = {
   attachments?: ChatAttachment[];
   inputId?: string;
   createdAt: number;
+  /** Display generation only; old rows remain available to runtime bookkeeping. */
+  historyGeneration?: number;
   kind?: "message" | "progress" | "status" | "result";
   title?: string;
   result?: BotResult;
@@ -115,6 +117,8 @@ export type BotDelivery = {
   createdAt: number;
 };
 export type BotConversationPreview = { text: string; updatedAt: number };
+/** Latest failed input that can still be resumed in its own conversation. */
+export type BotExecutionError = { conversationId: string; inputId: string; error: string; createdAt: number; startedAt?: number };
 export type WorkSnapshot = {
   revision: number;
   routerConversationId?: string;
@@ -123,10 +127,14 @@ export type WorkSnapshot = {
   results: BotResult[];
   deliveries: BotDelivery[];
   messages: BotChatMessage[];
+  /** Advances when visible main-chat history is cleared; defaults to zero on older hosts. */
+  chatGeneration?: number;
   /** Derived from durable input receipts; optional for older hosts. */
   progress?: BotProgress[];
   /** Bounded latest assistant prose from each Worker's selected transcript branch. */
   conversationPreviews?: Record<string, BotConversationPreview>;
+  executionErrors?: BotExecutionError[];
+  /** Runtime infrastructure failure, separate from per-conversation execution errors. */
   error?: string;
 };
 export type BotActivity = { running: boolean; waiting: boolean; conversationId?: string };
@@ -190,13 +198,14 @@ export type BotHost = {
 
 export interface BotApi {
   getWorkSnapshot(): Promise<WorkSnapshot>;
+  clearChat(): Promise<WorkSnapshot>;
   submit(input: BotSubmitRequest): Promise<WorkSnapshot>;
   createWork(input: BotCreateWorkRequest): Promise<BotConversationMeta>;
   report(input: BotReportRequest): Promise<BotResult>;
   ask(input: { conversationId: string; requestId?: string; question: string }): Promise<BotAttention>;
   answer(input: { attentionId: string; answer: string }): Promise<WorkSnapshot>;
   stopConversation(input: { conversationId: string; callerConversationId?: string }): Promise<WorkSnapshot>;
-  continueConversation(input: { conversationId: string }): Promise<WorkSnapshot>;
+  continueConversation(input: { conversationId: string; inputId?: string }): Promise<WorkSnapshot>;
   stopAll(): Promise<WorkSnapshot>;
   getActivity(): Promise<BotActivity>;
   onChanged(listener: (event: BotChanged) => void): () => void;

@@ -10,6 +10,7 @@ let pending = false;
 export function adoptBotSnapshot(snapshot: WorkSnapshot): void {
   const current = store.getState().snapshot;
   if (current && snapshot.revision < current.revision) return;
+  // Runtime infrastructure errors remain global; execution failures have their own rows.
   store.setState({ snapshot, loading: false, error: snapshot.error ?? null });
 }
 

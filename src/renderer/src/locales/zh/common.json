@@ -47,6 +47,7 @@
     "resultTruncated": "… 已截断 {{count}} 个字符"
   },
   "tool": {
+    "workReport": "汇报工作结果",
     "read": {
       "running": "正在读取",
       "done": "读取"

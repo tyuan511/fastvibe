@@ -37,6 +37,12 @@ export class BotStore {
   putDelivery(value: BotDelivery): boolean { return this.db.run("INSERT INTO bot_outbox(id,conversation_id,target_conversation_id,status,created_at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", value.id, value.conversationId, value.targetConversationId, value.status, value.createdAt, JSON.stringify(value)).changes > 0; }
   updateDelivery(value: BotDelivery): void { this.db.run("UPDATE bot_outbox SET status=?, data=? WHERE id=?", value.status, JSON.stringify(value), value.id); }
   chatMessage(id: string): BotChatMessage | undefined { return one<BotChatMessage>(this.db.get<Row>("SELECT data FROM bot_chat_messages WHERE id=?", id)); }
+  get chatGeneration(): number { return Number(this.meta("chatGeneration") ?? 0); }
+  /** Only the main feed is hidden. Keep rows for reply deduplication and result bookkeeping. */
+  clearChat(): void { this.setMeta("chatGeneration", String(this.chatGeneration + 1)); }
+  visibleChatMessages(): BotChatMessage[] {
+    return many(this.db.all<Row>("SELECT data FROM bot_chat_messages WHERE COALESCE(json_extract(data,'$.historyGeneration'),0)=? ORDER BY created_at,id", this.chatGeneration));
+  }
   chatMessages(): BotChatMessage[] { return many(this.db.all<Row>("SELECT data FROM bot_chat_messages ORDER BY created_at,id")); }
   hasChatMessage(inputId: string, role: BotChatMessage["role"], kind?: BotChatMessage["kind"]): boolean {
     const rows = this.db.all<Row>("SELECT data FROM bot_chat_messages WHERE input_id=? AND role=?", inputId, role);
@@ -45,9 +51,17 @@ export class BotStore {
       return kind === undefined || (message.kind ?? "message") === kind;
     });
   }
-  putChatMessage(value: BotChatMessage): void { this.db.run("INSERT INTO bot_chat_messages(id,conversation_id,role,input_id,created_at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", value.id, value.conversationId, value.role, value.inputId ?? null, value.createdAt, JSON.stringify(value)); }
+  putChatMessage(value: BotChatMessage): void {
+    const stored = this.chatGeneration ? { ...value, historyGeneration: this.chatGeneration } : value;
+    this.db.run("INSERT INTO bot_chat_messages(id,conversation_id,role,input_id,created_at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", value.id, value.conversationId, value.role, value.inputId ?? null, value.createdAt, JSON.stringify(stored));
+  }
 
-  updateChatMessage(value: BotChatMessage): void { this.db.run("UPDATE bot_chat_messages SET data=? WHERE id=?", JSON.stringify(value), value.id); }
+  updateChatMessage(value: BotChatMessage): void {
+    // Updating an old result must not move its hidden row into the new display generation.
+    const original = this.chatMessage(value.id);
+    const stored = { ...value, historyGeneration: original?.historyGeneration ?? 0 };
+    this.db.run("UPDATE bot_chat_messages SET data=? WHERE id=?", JSON.stringify(stored), value.id);
+  }
 
   recover(): void {
     this.transaction(() => {

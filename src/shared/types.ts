@@ -263,6 +263,8 @@ export type ChatMessage = {
   bot?: {
     kind: "message" | "progress" | "status" | "result";
     conversationId: string;
+    /** Failed input addressed by this error row; retry continues this same conversation. */
+    inputId?: string;
     title?: string;
     result?: import("./bot.ts").BotResult;
   };

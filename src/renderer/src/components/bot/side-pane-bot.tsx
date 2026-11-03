@@ -15,10 +15,11 @@ import { engine, getCommands, onEvent } from "@/lib/engine-client";
 import { attachmentPromptSuffix, attachmentsToImages } from "@/lib/attachments";
 import { BotConversationAvatar } from "./bot-conversation-avatar";
 import { botConversationCards } from "@/lib/bot-conversation-card";
+import { viviConversationMessages } from "@/lib/vivi-chat";
 import { folderName, ConversationCard } from "./bot-status";
 import { useBotSnapshot } from "./use-bot-snapshot";
 import type { BotConversationMeta } from "@shared/bot";
-import type { ChatAttachment, ChatMessage, ConversationSnapshot, EngineSessionState } from "@shared/types";
+import type { ChatAttachment, ConversationSnapshot, EngineSessionState } from "@shared/types";
 
 function useConversationData(conversationId: string) {
   const [data, setData] = useState<{ snapshot: ConversationSnapshot; state: EngineSessionState } | null>(null);
@@ -53,7 +54,7 @@ export function SidePaneBotTasks(): JSX.Element {
   }, []);
   const conversations = snapshot ? botConversationCards(snapshot) : [];
   return <div className="min-h-0 flex-1 overflow-y-auto p-3">
-    {error ? <p role="alert" className="wrap-anywhere py-2 text-sm text-destructive">{error}</p> : null}
+    {error && !snapshot ? <p role="alert" className="wrap-anywhere py-2 text-sm text-destructive">{error}</p> : null}
     {loading && !snapshot ? <div className="flex justify-center py-8"><Spinner /></div> : null}
     {!loading && !conversations.length ? <p className="py-8 text-center text-sm text-muted-foreground">{t("bot.empty")}</p> : null}
     <div className="flex flex-col gap-3">{conversations.map((item) => <ConversationCard key={item.conversation.conversationId} item={item} onOpen={(conversation) => open(conversation.conversationId, titleOf(conversation))} />)}</div>
@@ -78,8 +79,9 @@ function ConversationPane({ conversationId, tab }: { conversationId: string; tab
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const sendLock = useRef(false);
-  const messages: ChatMessage[] = data?.snapshot.messages ?? [];
   const working = Boolean(data?.snapshot.running);
+  const failure = working ? undefined : workSnapshot?.executionErrors?.find((item) => item.conversationId === conversationId);
+  const messages = viviConversationMessages(data?.snapshot.messages ?? [], failure);
   const avatarStatus = workSnapshot ? botConversationCards(workSnapshot).find((item) => item.conversation.conversationId === conversationId)?.status : undefined;
   const projectName = conversation?.project ? projects.find((project) => project.cwd === conversation.project)?.name || folderName(conversation.project) : "";
   const send = async () => {

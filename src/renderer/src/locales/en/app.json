@@ -1,5 +1,6 @@
 {
  "viviBot": {
+  "clearDescription": "Clear main chat messages; keep context and memory",
   "needsRecovery": "{{count}} tasks need attention",
   "sectionActive": "In progress",
   "sectionFinished": "Recent tasks",
@@ -17,6 +18,8 @@
   "backgroundHint": "Tasks continue when you leave this page and pause when FastVibe quits.",
   "ready": "Ready when you are",
   "feedback": {
+   "clear": "Could not clear messages. Please try again.",
+   "command": "Vivi only supports the /clear command.",
    "load": "I couldn't load the messages. Please try again.",
    "send": "The message couldn't be sent. Your draft is still here; please try again.",
    "stop": "I couldn't confirm whether work stopped. Check the task details before trying again.",
@@ -46,7 +49,7 @@
   "waitingCount": "{{count}} questions need your answer",
   "waitingCount_one": "{{count}} question needs your answer",
   "waitingCount_other": "{{count}} questions need your answer",
-  "tasks": "Your tasks",
+  "tasks": "Tasks",
   "noTasks": "Hand over a task to see its progress and results here.",
   "taskDetails": "Task details",
   "noExecutionYet": "The execution history will appear here when work begins.",

@@ -196,6 +196,7 @@ const ALLOWED = new Set<string>([
   Ipc.botGetActivity,
   Ipc.botGetWorkSnapshot,
   Ipc.botSubmit,
+  Ipc.botClearChat,
   Ipc.botCreateWork,
   Ipc.botReport,
   Ipc.botAsk,

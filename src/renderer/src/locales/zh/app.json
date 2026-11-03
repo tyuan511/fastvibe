@@ -1,5 +1,6 @@
 {
  "viviBot": {
+  "clearDescription": "清空主聊天消息，保留上下文和记忆",
   "needsRecovery": "有 {{count}} 件事需要继续",
   "sectionActive": "正在进行",
   "sectionFinished": "最近任务",
@@ -17,6 +18,8 @@
   "backgroundHint": "离开这个页面后任务仍会继续，退出 FastVibe 后暂停。",
   "ready": "随时可以开始",
   "feedback": {
+   "clear": "消息没能清空，请重试。",
+   "command": "Vivi 仅支持 /clear 命令。",
    "load": "暂时没能读取消息，请重试。",
    "send": "这条消息没能发送，内容还在，可以重试。",
    "stop": "没能确认是否已停止，请查看任务详情后再试。",
@@ -42,7 +45,7 @@
    "responseFailed": "操作没能送出，内容还在，请重试。"
   },
   "waitingCount": "有 {{count}} 个问题等你回答",
-  "tasks": "交办的事情",
+  "tasks": "任务",
   "noTasks": "交办一件事后，可以在这里查看进度和结果。",
   "taskDetails": "任务详情",
   "noExecutionYet": "执行开始后，过程会显示在这里。",

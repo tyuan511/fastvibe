@@ -39,6 +39,54 @@ async function harness(t: TestContext, responses: Parameters<ReturnType<typeof c
   return { session, run, get reports() { return reports; } };
 }
 
+test("/clear 经过真实 SDK 宿主只清可见消息，下一次请求仍有原上下文且没有命令文本", async (t) => {
+  const db = openDatabase(":memory:");
+  t.after(() => db.close());
+  const store = new BotStore(db);
+  let requests = 0;
+  let ordinaryCommands = 0;
+  let h: Awaited<ReturnType<typeof harness>>;
+  const bot = new BotRuntime(store, {
+    createConversation: async () => ({ conversationId: "router:1" }),
+    execute: ({ text }) => h.run(text),
+    snapshot: async () => ({ messages: h.session.messages } as never),
+    messages: async () => [], resolveProject: () => "/unused",
+    changed: () => {}, abort: async () => { await h.session.abort(); },
+  });
+  h = await harness(t, [
+    (context) => { requests++; assert.match(JSON.stringify(context.messages), /先前的要求/); return fauxAssistantMessage("先前的回复"); },
+    (context) => {
+      requests++;
+      const material = JSON.stringify(context.messages);
+      assert.match(material, /先前的要求/);
+      assert.match(material, /先前的回复/);
+      assert.match(material, /新的要求/);
+      assert.doesNotMatch(material, /\/clear/);
+      return fauxAssistantMessage("新的回复");
+    },
+  ], "router", (pi) => { pi.registerCommand("goal", { description: "Ordinary command", handler: async () => { ordinaryCommands++; } }); }, bot);
+  bot.start();
+  t.after(() => bot.stop());
+  const wait = async (id: string) => { for (let i = 0; i < 300; i++) { if (store.input(id)?.status === "completed") return; await new Promise((resolve) => setTimeout(resolve, 2)); } throw new Error("SDK input did not settle"); };
+  await bot.submit({ requestId: "first", text: "先前的要求" });
+  await wait("first");
+  const entries = JSON.stringify(h.session.sessionManager.getBranch());
+  await bot.submit({ requestId: "clear", text: "/clear" });
+  await assert.rejects(bot.submit({ requestId: "ordinary", text: "/goal" }), /仅支持|only supports/);
+  assert.equal(requests, 1);
+  assert.equal(ordinaryCommands, 0);
+  assert.equal(JSON.stringify(h.session.sessionManager.getBranch()), entries, "清空没有改写 SDK 分支");
+  assert.deepEqual((await bot.getWorkSnapshot()).messages, []);
+  await bot.submit({ requestId: "next", text: "新的要求" });
+  await wait("next");
+  assert.equal(requests, 2);
+  assert.deepEqual((await bot.getWorkSnapshot()).messages.map((message) => message.text), ["新的要求", "新的回复"]);
+  await bot.stop();
+  // A direct ordinary SDK command still executes; only the Vivi entry rejected it.
+  await h.session.prompt("/goal");
+  assert.equal(ordinaryCommands, 1);
+});
+
 test("structured bot_report 结束 SDK 回合且不要求 prose", async (t) => {
   const h = await harness(t, [fauxAssistantMessage([fauxToolCall("bot_report", { outcome: "ready", summary: "完成", evidence: ["已检查"], artifacts: [] })], { stopReason: "toolUse" })]);
   const result = await h.run(); assert.equal(result.status, "completed"); assert.equal(result.text, ""); assert.equal(h.reports, 1); assert.equal(h.session.isIdle, true);

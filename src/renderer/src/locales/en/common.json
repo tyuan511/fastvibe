@@ -47,6 +47,7 @@
     "resultTruncated": "… truncated {{count}} characters"
   },
   "tool": {
+    "workReport": "Report work results",
     "read": {
       "running": "Reading",
       "done": "Read"

@@ -4,6 +4,7 @@ export const Ipc = {
   botGetActivity: "bot:get-activity",
   botGetWorkSnapshot: "bot:get-work-snapshot",
   botSubmit: "bot:submit",
+  botClearChat: "bot:clear-chat",
   botCreateWork: "bot:create-work",
   botReport: "bot:report",
   botAsk: "bot:ask",

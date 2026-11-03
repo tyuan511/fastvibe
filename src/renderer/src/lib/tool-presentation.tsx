@@ -125,6 +125,12 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
   const statusLabel = tool.status === "error" ? (i18n.t("common:tool.failed") as string) : undefined;
   const view: ToolView = { family, icon: ICONS[family], label, statusLabel, running };
 
+  if (tool.name === "bot_report") {
+    view.label = i18n.t("common:tool.workReport") as string;
+    view.title = view.label;
+    return view;
+  }
+
   switch (family) {
     case "read":
     case "edit":
