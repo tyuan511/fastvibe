@@ -54,6 +54,30 @@ class AndroidUpdateTest {
         assertNull(versionFromRef("refs/tags/app-v0.5.12/evil"))
     }
     @Test
+    fun buildsUpdateUrlsForEachChannel() {
+        val version = "0.5.12"
+        val name = apkAssetName(version)
+        assertEquals(
+            "https://github.com/tyuan511/fastvibe.git/info/refs?service=git-upload-pack",
+            refsUrl(UpdateChannel.GITHUB),
+        )
+        assertEquals(
+            "https://ghfast.top/https://github.com/tyuan511/fastvibe/releases/download/app-v$version/$name",
+            apkDownloadUrl(version, name, UpdateChannel.GHFAST),
+        )
+        assertEquals(
+            "https://gh-proxy.com/https://github.com/tyuan511/fastvibe/releases/tag/app-v$version",
+            releasePageUrl(version, UpdateChannel.GH_PROXY),
+        )
+    }
+
+    @Test
+    fun unknownUpdateChannelFallsBackToOfficial() {
+        assertEquals(UpdateChannel.GITHUB, UpdateChannel.fromKey("missing"))
+        assertEquals(UpdateChannel.GITHUB, UpdateChannel.fromKey(null))
+    }
+
+    @Test
     fun buildsLegacyCompatibleArm64ReleaseUrls() {
         val version = "0.5.12"
         val name = "FastVibe-app-v0.5.12-arm64-v8a.apk"

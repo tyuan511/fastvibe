@@ -73,6 +73,8 @@ internal fun MobileSettingsScreen(
     themeKey: String,
     onTheme: (String) -> Unit,
     onCheckUpdates: () -> Unit,
+    updateChannel: UpdateChannel = UpdateChannel.GITHUB,
+    onUpdateChannel: (UpdateChannel) -> Unit = {},
     contentTop: Dp = 0.dp,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -86,6 +88,8 @@ internal fun MobileSettingsScreen(
         @Suppress("DEPRECATION")
         packageInfo.versionCode.toLong()
     }
+
+    var showUpdateChannels by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -136,6 +140,8 @@ internal fun MobileSettingsScreen(
                     MobileSettingsRow("版本", "${packageInfo.versionName} ($versionCode)")
                     MobileSettingsDivider()
                     MobileSettingsRow("更新", "检查新版本", onClick = onCheckUpdates)
+                    MobileSettingsDivider()
+                    MobileSettingsRow("更新通道", updateChannel.label, onClick = { showUpdateChannels = true })
                 }
             }
             Spacer(Modifier.height(22.dp))
@@ -157,6 +163,34 @@ internal fun MobileSettingsScreen(
                 }
             }
             Spacer(Modifier.height(22.dp))
+        }
+    }
+    if (showUpdateChannels) {
+        GlassBottomSheet(onDismissRequest = { showUpdateChannels = false }) {
+            Column(
+                Modifier.fillMaxWidth().padding(start = 22.dp, end = 22.dp, top = 18.dp, bottom = 22.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("更新通道", fontSize = 18.sp, lineHeight = 26.5.sp, fontWeight = FontWeight.Bold)
+                Text("选择检查和下载更新时使用的来源。", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                UpdateChannel.entries.forEach { channel ->
+                    Row(
+                        Modifier.fillMaxWidth().defaultMinSize(minHeight = 52.dp)
+                            .glassClick(onClick = {
+                                onUpdateChannel(channel)
+                                showUpdateChannels = false
+                            })
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(channel.label, Modifier.weight(1f), fontSize = 16.sp, lineHeight = 23.5.sp)
+                        if (channel == updateChannel) {
+                            MobileSettingsIcon(R.drawable.fv_check, Modifier.size(20.dp), MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            }
         }
     }
 }
