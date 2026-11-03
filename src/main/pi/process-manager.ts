@@ -4240,6 +4240,7 @@ export class PiProcessManager {
           submit: (input) => this.bot.submit(input),
           routeMessage: (input) => this.bot.routeMessage(input),
           reply: (input) => this.bot.reply(input),
+          progress: (input) => this.bot.progress(input),
           createWork: (input) => this.bot.createWork(input),
           report: (input) => this.bot.report(input),
           ask: (input) => this.bot.ask(input),

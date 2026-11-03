@@ -142,6 +142,7 @@ const compactNoticeCache = new WeakMap<object, ChatMessage>();
 const singleRowCache = new WeakMap<ChatMessage, MessageRow>();
 
 function splitCompacts(message: ChatMessage): ChatMessage[] {
+  if (message.bot) return [message];
   if (message.kind === "compact" || message.role !== "assistant" || !message.parts?.some((part) => part.kind === "compact")) {
     return [message];
   }
@@ -224,7 +225,7 @@ function buildRowsFrom(
     for (const message of splitCompactsCached(messages[sourceIndex])) {
       const last = rows.at(-1);
       const lastSpan = spans.at(-1);
-      if (message.role === "assistant" && last && last.messages[0].role === "assistant" && lastSpan) {
+      if (message.role === "assistant" && !message.bot && last && last.messages[0].role === "assistant" && !last.messages[0].bot && lastSpan) {
         // The previous row may belong to the settled prefix. Clone only its
         // tail-facing shell before adding a streamed assistant message.
         rows[rows.length - 1] = { id: last.id, messages: [...last.messages, message] };

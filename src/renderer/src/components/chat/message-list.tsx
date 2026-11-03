@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import { useTranslation } from "react-i18next";
 import { MessageGroup } from "@/components/ui/message";
@@ -468,6 +468,7 @@ export function MessageList({
   onEdit,
   onFork,
   emptyState,
+  footer,
   onAddSelectionToConversation,
   onAskSelectionInSideChat,
 }: {
@@ -485,6 +486,7 @@ export function MessageList({
   /** Omit in read-only/secondary panes so their transcripts cannot fork the main catalog. */
   onFork?: (entryId: string) => void;
   emptyState?: JSX.Element | null;
+  footer?: ReactNode;
   onAddSelectionToConversation?: (text: string) => void;
   onAskSelectionInSideChat?: (text: string) => void;
 }): JSX.Element {
@@ -730,7 +732,7 @@ export function MessageList({
   // Only a reader who was following the live edge is moved; history readers keep place.
   useLayoutEffect(() => {
     if (followingRef.current && turns.length > 0) scrollToEnd();
-  }, [messages, scrollToEnd, totalSize, turns.length, virtualRows.length]);
+  }, [footer, messages, scrollToEnd, totalSize, turns.length, virtualRows.length]);
 
   useEffect(() => {
     if (!navigationTarget || navigationTarget === navigated.current || navigationTarget.conversationId !== conversationId || loading) return;
@@ -844,6 +846,7 @@ export function MessageList({
                     );
                   })}
                   </div>
+                  {footer}
                 </MessageScrollerContent>
               </MessageScrollerViewport>
               {/* A single turn has nothing to navigate between. The highlight comes from

@@ -259,6 +259,13 @@ export type ChatMessage = {
    */
   runStartedAt?: number;
   kind?: "message" | "notice" | "compact" | "custom";
+  /** Vivi's durable chat feed: keeps progress and result rows separate from SDK runs. */
+  bot?: {
+    kind: "message" | "progress" | "status" | "result";
+    conversationId: string;
+    title?: string;
+    result?: import("./bot.ts").BotResult;
+  };
   /** Extension custom message (`pi.sendMessage`): the plugin's own type id. */
   customType?: string;
   /** Structured spans of the extension's registered message renderer. */

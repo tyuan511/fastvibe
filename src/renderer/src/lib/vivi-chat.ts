@@ -8,12 +8,13 @@ import type { ChatMessage } from "../../../shared/types.ts";
 export function botChatMessages(messages: readonly BotChatMessage[]): ChatMessage[] {
   return messages.map((message) => ({
     id: message.id,
-    role: message.role,
+    role: message.kind && message.kind !== "message" ? "system" : message.role,
     text: message.text,
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     tools: [],
     parts: [{ kind: "text", text: message.text }],
     createdAt: message.createdAt,
     kind: "message",
+    bot: { kind: message.kind ?? "message", conversationId: message.conversationId, title: message.title, result: message.result },
   }));
 }

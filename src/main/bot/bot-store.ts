@@ -38,15 +38,25 @@ export class BotStore {
   updateDelivery(value: BotDelivery): void { this.db.run("UPDATE bot_outbox SET status=?, data=? WHERE id=?", value.status, JSON.stringify(value), value.id); }
   chatMessage(id: string): BotChatMessage | undefined { return one<BotChatMessage>(this.db.get<Row>("SELECT data FROM bot_chat_messages WHERE id=?", id)); }
   chatMessages(): BotChatMessage[] { return many(this.db.all<Row>("SELECT data FROM bot_chat_messages ORDER BY created_at,id")); }
-  hasChatMessage(inputId: string, role: BotChatMessage["role"]): boolean { return Boolean(this.db.get("SELECT 1 FROM bot_chat_messages WHERE input_id=? AND role=? LIMIT 1", inputId, role)); }
+  hasChatMessage(inputId: string, role: BotChatMessage["role"], kind?: BotChatMessage["kind"]): boolean {
+    const rows = this.db.all<Row>("SELECT data FROM bot_chat_messages WHERE input_id=? AND role=?", inputId, role);
+    return rows.some((row) => {
+      const message = JSON.parse(row.data) as BotChatMessage;
+      return kind === undefined || (message.kind ?? "message") === kind;
+    });
+  }
   putChatMessage(value: BotChatMessage): void { this.db.run("INSERT INTO bot_chat_messages(id,conversation_id,role,input_id,created_at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", value.id, value.conversationId, value.role, value.inputId ?? null, value.createdAt, JSON.stringify(value)); }
+
+  updateChatMessage(value: BotChatMessage): void { this.db.run("UPDATE bot_chat_messages SET data=? WHERE id=?", JSON.stringify(value), value.id); }
 
   recover(): void {
     this.transaction(() => {
       let changed = false;
       for (const input of this.inputs()) if (input.status === "running" || input.status === "accepted") { this.putInput({ ...input, status: "uncertain", error: "应用在执行期间退出，请核对现场后继续" }); changed = true; }
       for (const meta of this.conversations()) {
-        if (!this.inputs(meta.conversationId).some((input) => input.status === "uncertain")) continue;
+        const currentInputs = this.inputs(meta.conversationId).filter((input) => input.epoch === meta.epoch && input.intent !== "status");
+        const latest = currentInputs.filter((input) => input.status !== "queued").at(-1);
+        if (!latest || latest.status !== "uncertain") continue;
         if (meta.paused) continue;
         this.putConversation({ ...meta, paused: true, updatedAt: Date.now() });
         changed = true;

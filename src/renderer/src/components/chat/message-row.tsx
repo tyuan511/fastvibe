@@ -41,6 +41,7 @@ import { ModelChangeNotice } from "./model-change-notice";
 import { RunCollapse, RunProgress } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
 import { isRemoteRef } from "@/lib/remote-project";
+import { ViviChatRow } from "@/components/bot/vivi-chat-row";
 
 function AttachmentStrip({
   items,
@@ -669,6 +670,7 @@ function ChatMessageRowImpl({
   }, [parts, processOverflow]);
 
   if (message.role === "system") {
+    if (message.bot) return <ViviChatRow message={message} />;
     if (message.kind === "compact") {
       return <CompactNotice message={message} />;
     }

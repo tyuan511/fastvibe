@@ -3836,6 +3836,14 @@ locale charmap        →   US-ASCII
 
 验证见 `test/bot-runtime.test.ts`（停止/重启、图片持久化、输入项目隔离）、`test/bot-engine.test.ts`（真实 SDK 图片请求、Router 补充进入原 Worker）及 `docs/vivi-bot-implementation.md`。
 
+## Vivi 对话反馈
+
+Vivi 主聊天的临时承接与真实进度来自 `WorkSnapshot.progress`，按输入回执、epoch、待答问题和结果推导，不从用户可见文本猜测，不增加 Task / Run / Attempt 层级。发送中的乐观用户行用请求 ID 与持久 feed 去重，失败撤回并保留附件；临时状态不落盘，历史回复不假装流式。开始时间随输入保存，切页、重连不重置。
+
+Router 和 Worker 共用 `bot_progress` 上报真实阶段，有价值的阶段成果才用 `milestone` 进入聊天，同一用户请求最多三条并去重、限频。最终报告包含摘要、证据和产物；阶段行与结果行不合并进普通 SDK 回复，也不进入「用时」折叠。结果、进度和内部投递不触发宠物消息，宠物仍只消费显式 Router 回复。
+
+明确的简短进度问句与「查看进度」直接读当前事实，不排队调用模型、不恢复已暂停工作；混合新要求或附件的输入仍交给模型。失败、未确认交付和中断不得呈现为成功，已有产物保留，继续沿用同一会话。扩展每轮捕获 input ID 与 epoch，不以工具调用 ID 代替，停止后的迟到进度和报告不能影响新一轮。详见 `docs/vivi-bot-implementation.md`，验证包括 `test/bot-conversation-progress.test.ts` 的真实 SDK 流程。
+
 ## Vivi 桌面宠物
 
 `main/vivi/pet-window.ts` 管理两个独立透明窗口：模型窗口始终只有宠物大小，通知窗口只装文字。`surface` 的坐标属于通知窗口；模型 canvas 始终位于自己窗口的 `(0, 0)`。不要再为气泡扩缩模型窗口：原生 frame 更新和渲染进程 canvas 偏移是两次绘制，拖动开始、落地以及屏幕边缘换侧时会瞬间跳位。通知窗口跟随相同的全屏父窗口，移动期间隐藏，销毁时独立清理。

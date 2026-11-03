@@ -105,7 +105,7 @@ flowchart TB
 | 待送消息 | 稳定 requestId、来源、目标 conversationId、payload 引用、交付阶段。最终输入只有会话队列一份权威副本；编排表只保存创建/投递意图和回执 |
 | 问题 | attentionId、conversationId、所属输入/代次、问题与答复、pending/resolved/withdrawn。提问会结束当前自动回合并释放名额，答复作为同一会话的新输入 |
 | 结果 | resultId、conversationId、branch/entry 锚点、覆盖的输入序号、ready/blocked/failed/idle 等结论、短摘要及产物/证据引用 |
-| 用户消息 | messageId、Router conversationId、role、展示 text、attachments、inputId、createdAt。文件、粘贴与图片附件可恢复，模型可见元数据不进入正文。只保存用户输入和 Router `bot_reply`，是 Vivi 主聊天的唯一持久来源 |
+| 用户消息 | messageId、conversationId、role、展示 text、attachments、inputId、createdAt。用户输入、Router `bot_reply`、限频的阶段成果、快捷状态回复与关联结果的卡片都保存在独立 feed；文件、粘贴与图片附件可恢复，模型可见元数据不进入正文。短暂承接不落盘 |
 | 待汇报 | resultId → Router 会话/目标渠道、是否进入 Router、是否已有 `bot_reply`；内部 delivery 与用户消息分开 |
 
 “工作已完成”不再是一个独立 Task 行的永久终态。工作会话可以完成一轮交付后继续聊；新输入使此前结果只代表此前范围，不代表最新要求已满足。
@@ -119,7 +119,7 @@ flowchart TB
 3. 投递分为已接受、已入会话队列、已进入持久转写、已有结果覆盖。工具返回成功不直接代表模型处理完毕。
 4. 用户消息 feed 与 Router/Worker 输入分别用稳定 requestId 对账；用户消息不需要从 SDK transcript 反向寻找，内部输入仍保持可恢复的会话队列。
 5. Worker 的 ready 只覆盖它实际消费的输入。执行中又来了新要求，旧结果可供查看，但不能清掉新消息或宣布最新要求已完成。
-6. 结果先写存储/转写锚点，再持久入 Router inbox。Router 忙时安全注入或排队；Router 处理后必须显式调用 `bot_reply` 才能进入用户 feed。若已持久注入但还没有最终汇报，恢复时继续处理该事件，不重复注入。
+6. 结果先写存储与用户 feed 的结构化结果行，再持久入 Router inbox。Router 忙时安全注入或排队；Router 的自然语言汇总必须显式调用 `bot_reply`。若已持久注入但还没有最终汇报，恢复时继续处理该事件，不重复注入。
 7. 这保证可恢复和逻辑去重，不承诺模型只调用一次或任意外部操作 exactly-once。用户 feed 消息按 messageId 去重；内部 UI/宠物事件按稳定 deliveryId 或 messageId 去重，未来外部渠道按该渠道回执能力处理崩溃窗口。
 
 ## 6. 并发、停止、恢复与问题
@@ -149,11 +149,13 @@ flowchart TB
 
 ## 7. 用户看到什么
 
-主入口仍是一个 Vivi 聊天，提供简短的反馈。按需打开最近工作会话列表，列表只有会话名称、状态和打开入口；没有独立任务详情页、Attempt 下拉、验收元数据管理表单。主聊天直接读取 `bot_chat_messages` 中的用户输入与 Router `bot_reply`，只显示反馈、已安排或已更新工作的总结和必要的问题反馈，不显示安排过程；需要查看执行细节时进入右侧 Worker 会话。
+主入口仍是一个 Vivi 聊天。发送时立即显示本地用户行与临时承接，宿主接收后用持久行替换；对话末尾展示真实阶段、简短说明与耗时，离开页面后回来不重置。按需打开最近工作会话列表，列表只有会话名称、真实状态和打开入口；没有独立任务详情页、Attempt 下拉或验收元数据管理表单。
 
-右侧打开完整真实会话，用户可以读过程、改要求、加附件、停止和继续。必要的结果证据在回复中，产物沿用现有预览；执行失败沿用现有错误行。主聊天不展示执行过程，用户需要细节时进入对应的 Worker 会话。
+主聊天读取独立的 `bot_chat_messages`：普通用户/Router 回复、少量有价值的阶段成果、快捷状态问答与结果卡。阶段成果最多三条并去重、限频；完整思考、工具和日志仍在右侧 Worker 会话。结果卡带摘要、验证与产物，失败或交付未确认时保留已有成果，提供查看执行、补充要求和继续处理。
 
-问题、失败和有用结果由 Router 决定是否通过 `bot_reply` 汇报与通知。普通进度只更新内部状态；Worker delivery 不直接触发用户完成消息。宠物读取显式 Router message 和聚合事实，不拥有执行或结果存储。
+明确的简短进度问句与「查看进度」直接读事实，不排到模型后面，也不恢复暂停工作。用户可以在后台执行期间继续交代新事情。临时阶段不依赖定时轮播，不编造完成比例或预计时间。
+
+Router 的显式 `bot_reply` 负责自然语言汇总与通知；普通进度、快捷查询和结果卡不会直接触发宠物完成消息。宠物读取显式 Router message 和聚合事实，不拥有执行或结果存储。
 
 ## 8. 范围与不采用的方案
 

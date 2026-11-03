@@ -765,7 +765,7 @@ const vivi = {
 };
 
 const api = {
-  bot: createBotFixture(PREVIEW_CWD, params.get("lang") === "en", params.get("vivi") === "empty"),
+  bot: createBotFixture(PREVIEW_CWD, params.get("lang") === "en", params.get("vivi") === "empty", params.get("vivi") ?? "sample"),
   schedules: createScheduleFixture(params.get("tasks") === "sample"),
   vivi,
   engine: {

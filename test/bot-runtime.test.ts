@@ -194,10 +194,28 @@ test("恢复将 running 输入标成 uncertain 并暂停会话，不自动重放
   } finally { await f.runtime.stop(); f.db.close(); }
 });
 
-test("activity 只读取持久事实，不需要加载会话正文", async () => {
-  const f = fixture(); const changed: BotChanged[] = []; f.host.changed = (event) => changed.push(event);
-  try { f.runtime.start(); await f.runtime.submit({ requestId: "a", text: "你好" }); assert.equal(typeof f.runtime.activity().running, "boolean"); assert.ok(changed.some((event) => event.activity)); }
-  finally { await f.runtime.stop(); f.db.close(); }
+test("activity 从消息入队到执行结束持续忙碌，不会在开始执行时误报空闲", async () => {
+  for (const outcome of [done, { status: "failed", text: "", error: "upstream unavailable" } satisfies BotExecutionOutcome]) {
+    const f = fixture();
+    const execution = deferred<BotExecutionOutcome>();
+    f.behavior(() => execution.promise);
+    try {
+      f.runtime.start();
+      const snapshot = await f.runtime.submit({ requestId: "a", text: "你好" });
+      assert.equal(snapshot.messages.at(-1)?.role, "user");
+      await until(() => f.calls.length === 1);
+      assert.equal(f.store.input("a")?.status, "running");
+      const states = f.events.flatMap((event) => event.activity ? [event.activity.running] : []);
+      const firstBusy = states.indexOf(true);
+      assert.ok(firstBusy >= 0, "入队就应广播工作中");
+      assert.ok(states.slice(firstBusy).every(Boolean), "queued → running 不能广播空闲");
+      assert.equal(f.runtime.activity().running, true);
+      execution.resolve(outcome);
+      await until(() => !f.runtime.activity().running);
+      assert.equal(f.events.at(-1)?.activity?.running, false);
+      assert.equal(f.store.input("a")?.status, outcome.status === "completed" ? "completed" : "failed");
+    } finally { execution.resolve(done); await f.runtime.stop(); f.db.close(); }
+  }
 });
 
 test("停止全部后新请求恢复 Router，重启与重复请求不重放旧工作", async () => {
@@ -281,4 +299,132 @@ test("每条 Router 输入都忽略外部 project 并使用默认工作区", asy
 
  test("自然语言后续输入可以继续同一个 Router 会话", async () => {
   const f = fixture(); try { f.runtime.start(); await f.runtime.submit({ requestId: "a", text: "第一条" }); await f.runtime.submit({ requestId: "b", text: "停止之前的工作" }); assert.equal(f.store.conversations()[0].role, "router"); assert.equal(f.store.inputs().length, 2); } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("快捷进度查询不执行模型、不恢复暂停且重复请求不新增消息", async () => {
+  const f = fixture();
+  try {
+    await f.runtime.submit({ requestId: "first", text: "写报告" });
+    await f.runtime.stopAll();
+    const routerId = f.store.routerConversationId!;
+    const before = f.store.chatMessages().length;
+    await f.runtime.submit({ requestId: "status", text: "现在到哪了？" });
+    await f.runtime.submit({ requestId: "status", text: "现在到哪了？" });
+    assert.equal(f.store.chatMessages().length, before + 2);
+    assert.equal(f.store.chatMessages().at(-1)?.kind, "status");
+    assert.equal(f.store.conversation(routerId)?.paused, true);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.store.input("status")?.intent, "status");
+  } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("同一个Runtime停止后再启动会恢复中断状态，不把迟到完成当成功", async () => {
+  const f = fixture();
+  const gate = deferred<BotExecutionOutcome>();
+  f.behavior((input) => { input.signal.addEventListener("abort", () => gate.resolve(done), { once: true }); return gate.promise; });
+  try {
+    f.runtime.start();
+    await f.runtime.submit({ requestId: "restart", text: "工作" });
+    await until(() => f.calls.length === 1);
+    await f.runtime.stop();
+    assert.equal(f.store.input("restart")?.status, "uncertain");
+    f.runtime.start();
+    assert.equal(f.store.conversations()[0].paused, true);
+    assert.equal(f.runtime.activity().running, false);
+    assert.equal(f.calls.length, 1);
+  } finally { gate.resolve(done); await f.runtime.stop(); f.db.close(); }
+});
+
+test("重启后的显式继续处理已有结果并结算投递，不重新执行Worker", async () => {
+  const f = fixture();
+  try {
+    await f.runtime.submit({ requestId: "original", text: "整理文档" });
+    const router = f.store.routerConversationId!;
+    f.store.putInput({ ...f.store.input("original")!, status: "completed" });
+    const worker = await f.runtime.createWork({ requestId: "worker-input", title: "文档", text: "写文档" });
+    f.store.putInput({ ...f.store.input("worker-input")!, status: "completed" });
+    f.store.putResult({ id: "ready-result", conversationId: worker.conversationId, inputId: "worker-input", epoch: 0, status: "ready", summary: "文档已完成", artifacts: ["/output/guide.md"], createdAt: 10 });
+    f.store.putDelivery({ id: "delivery:ready-result", conversationId: worker.conversationId, targetConversationId: router, resultId: "ready-result", status: "injected", text: "[Worker result ready] 文档已完成；产物 /output/guide.md", createdAt: 11 });
+    f.store.putInput({ id: "delivery:ready-result", conversationId: router, epoch: 0, source: "report", text: "文档已完成", status: "running", createdAt: f.store.input("original")!.createdAt + 10 });
+    f.runtime.start();
+    assert.equal(f.store.conversation(router)?.paused, true);
+    assert.equal(f.calls.length, 0, "恢复时不能自动重放");
+    await f.runtime.continueConversation({ conversationId: router });
+    await until(() => f.store.delivery("delivery:ready-result")?.status === "delivered");
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].conversationId, router);
+    assert.match(f.calls[0].text, /文档已完成/);
+    assert.match(f.calls[0].text, /guide.md/);
+    assert.equal(f.store.results(worker.conversationId).length, 1);
+    assert.equal(f.store.conversations().length, 2);
+  } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("Router 最终回复落盘后收到停止，终态写入不能覆盖停止回执", async () => {
+  const f = fixture();
+  f.host.changed = (event) => {
+    f.events.push(event);
+    if (event.message) void f.runtime.stopConversation({ conversationId: event.message.conversationId });
+  };
+  try {
+    f.runtime.start();
+    await f.runtime.submit({ requestId: "stop-after-reply", text: "处理" });
+    await until(() => f.store.conversations()[0]?.paused === true && !f.runtime.activity().running);
+    assert.equal(f.store.input("stop-after-reply")?.status, "uncertain");
+    assert.equal(f.store.conversations()[0].epoch, 1);
+  } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("同一用户请求跨工作会话的阶段汇报最多三条，并去重限频", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 100_000 });
+  const f = fixture();
+  const gate = deferred<BotExecutionOutcome>();
+  f.behavior(() => gate.promise);
+  try {
+    f.runtime.start();
+    await f.runtime.submit({ requestId: "root", text: "整理两份文档" });
+    await until(() => f.calls.length === 1);
+    const router = f.store.routerConversationId!;
+    const worker = await f.runtime.createWork({ requestId: "child", title: "检查文档", text: "检查链接" });
+    await until(() => f.calls.length === 2);
+    const milestone = (conversationId: string, requestId: string, text: string) => f.runtime.progress({ conversationId, requestId, epoch: 0, phase: "working", text, milestone: true });
+    await milestone(router, "root", "已收集文件清单");
+    await milestone(worker.conversationId, "child", "已检查第一份文档");
+    assert.equal(f.store.chatMessages().filter((item) => item.kind === "progress").length, 1, "过密消息不能刷屏");
+    t.mock.timers.setTime(102_001);
+    await milestone(worker.conversationId, "child", "已检查第二份文档");
+    t.mock.timers.setTime(104_002);
+    await milestone(router, "root", "已汇总检查结果");
+    t.mock.timers.setTime(106_003);
+    await milestone(worker.conversationId, "child", "已完成最后检查");
+    const reports = f.store.chatMessages().filter((item) => item.kind === "progress");
+    assert.equal(reports.length, 3);
+    assert.ok(reports.every((item) => item.inputId === "root"));
+  } finally { gate.resolve(done); await f.runtime.stop(); f.db.close(); }
+});
+
+test("进度里程碑不会吞掉最终回复，停止后的旧epoch回报无效", async () => {
+  const f = fixture();
+  const gate = deferred<BotExecutionOutcome>();
+  f.behavior(() => gate.promise);
+  try {
+    f.runtime.start();
+    await f.runtime.submit({ requestId: "work", text: "处理" });
+    await until(() => f.calls.length === 1);
+    const id = f.store.routerConversationId!;
+    await f.runtime.progress({ conversationId: id, requestId: "work", epoch: 0, phase: "planning", text: "已核对文件清单", milestone: true });
+    const revision = f.store.revision;
+    await f.runtime.progress({ conversationId: id, requestId: "work", epoch: 0, phase: "planning", text: "已核对文件清单", milestone: true });
+    assert.equal(f.store.revision, revision);
+    assert.equal(f.store.chatMessages().filter((message) => message.kind === "progress").length, 1);
+    gate.resolve(done);
+    await until(() => !f.runtime.activity().running);
+    assert.equal(f.store.chatMessages().at(-1)?.text, "完成");
+    assert.equal(f.store.chatMessages().at(-1)?.kind, "message");
+    await f.runtime.stopConversation({ conversationId: id });
+    await assert.rejects(f.runtime.report({ conversationId: id, requestId: "work", epoch: 0, summary: "迟到结果", outcome: "ready" }), /回合已结束/);
+    await assert.rejects(f.runtime.reply({ conversationId: id, requestId: "work", epoch: 0, text: "迟到回复" }), /回合已结束/);
+    await f.runtime.progress({ conversationId: id, requestId: "work", epoch: 0, phase: "working", text: "迟到进度" });
+    assert.equal(f.store.chatMessages().some((message) => /迟到/.test(message.text)), false);
+  } finally { gate.resolve(done); await f.runtime.stop(); f.db.close(); }
 });

@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { BotAttention, BotChanged, BotChatMessage, BotConversationMeta, BotExecutionOutcome, BotHost, BotInput, BotReportRequest, BotResult, BotSubmitRequest, BotActivity, WorkSnapshot } from "../../shared/bot.ts";
+import type { BotAttention, BotChanged, BotChatMessage, BotConversationMeta, BotExecutionOutcome, BotHost, BotInput, BotProgressRequest, BotReportRequest, BotResult, BotSubmitRequest, BotActivity, BotProgress, WorkSnapshot } from "../../shared/bot.ts";
 import { extractPromptAttachments, stripPromptMetadata } from "../../shared/attachment-metadata.ts";
 import type { ChatAttachment, PromptImage } from "../../shared/types.ts";
 import { VIVI_BOT_ID } from "../../shared/bot.ts";
 import { BotStore } from "./bot-store.ts";
+import { uiText } from "../engine/ui-text.ts";
+import { deriveBotProgress, isStatusQuestion, statusTextForProgress } from "./bot-progress.ts";
 
 export type BotContext = import("../../shared/bot.ts").BotContext;
 
@@ -66,14 +68,45 @@ export class BotRuntime {
     await Promise.allSettled(active.map((job) => this.host.abort(job.meta.conversationId)));
     await Promise.allSettled(active.map((job) => job.promise));
     this.#active.clear();
+    this.#recovered = false;
   }
   activity(): BotActivity {
     const waiting = this.store.attentions().some((item) => item.status === "pending");
     const first = this.#active.values().next().value as Active | undefined;
-    return { running: this.#active.size > 0 || this.store.inputs().some((input) => input.status === "queued"), waiting, conversationId: first?.meta.conversationId };
+    // The input becomes running before the active job is registered. Keep that
+    // transition busy too, otherwise the last queued input broadcasts idle.
+    return { running: this.#active.size > 0 || this.store.inputs().some((input) => input.status === "queued" || input.status === "running"), waiting, conversationId: first?.meta.conversationId };
   }
   async getWorkSnapshot(): Promise<WorkSnapshot> {
-    return { revision: this.store.revision, routerConversationId: this.store.routerConversationId, conversations: this.store.conversations(), attention: this.store.attentions(), results: this.store.results(), deliveries: this.store.deliveries(), messages: this.store.chatMessages(), error: this.#error };
+    const conversations = this.store.conversations();
+    const inputs = this.store.inputs();
+    const attention = this.store.attentions();
+    const results = this.store.results();
+    return { revision: this.store.revision, routerConversationId: this.store.routerConversationId, conversations, attention, results, deliveries: this.store.deliveries(), messages: this.store.chatMessages(), progress: conversations.map((conversation) => deriveBotProgress(conversation, inputs, attention, results)), error: this.#error };
+  }
+
+  async progress(input: BotProgressRequest): Promise<WorkSnapshot> {
+    const meta = this.#meta(input.conversationId);
+    const active = this.#active.get(meta.conversationId);
+    const requestId = input.requestId ?? active?.inputId;
+    const current = requestId ? this.store.input(requestId) : undefined;
+    if (!active || !current || active.inputId !== current.id || current.status !== "running" || current.epoch !== meta.epoch || (input.epoch !== undefined && input.epoch !== current.epoch) || meta.paused || active.controller.signal.aborted) return this.getWorkSnapshot();
+    if (!["understanding", "planning", "working", "summarizing"].includes(input.phase)) throw new Error("Unknown Vivi progress phase");
+    const text = textOf(input.text, "进度说明", 4000);
+    const old = current.progress;
+    if (old?.phase === input.phase && old.text === text && (!input.milestone || old.milestone)) return this.getWorkSnapshot();
+    const now = Date.now();
+    const rootInputId = current.rootInputId ?? current.id;
+    const priorMilestones = this.store.chatMessages().filter((message) => message.kind === "progress" && message.inputId === rootInputId);
+    const duplicate = priorMilestones.some((message) => message.text === text);
+    const throttled = priorMilestones.some((message) => now - message.createdAt < 2_000);
+    this.#change(() => {
+      this.store.putInput({ ...current, rootInputId, progress: { phase: input.phase, text, ...(input.milestone ? { milestone: true } : {}), updatedAt: now } });
+      if (input.milestone && !duplicate && priorMilestones.length < 3 && !throttled) {
+        this.store.putChatMessage({ id: `chat:progress:${current.id}:${now}`, conversationId: meta.conversationId, role: "assistant", text, inputId: rootInputId, createdAt: now, kind: "progress", title: "Vivi" });
+      }
+    });
+    return this.getWorkSnapshot();
   }
 
   async createWork(input: { requestId: string; title: string; text: string }): Promise<BotConversationMeta> {
@@ -88,7 +121,7 @@ export class BotRuntime {
     const conversationId = typeof created === "string" ? created : created.conversationId;
     const now = Date.now();
     const meta: BotConversationMeta = { conversationId, role: "worker", owner: VIVI_BOT_ID, creationKey: key, epoch: 0, paused: false, createdAt: now, updatedAt: now, title, project };
-    this.#change(() => { this.store.putConversation(meta); this.store.putInput({ id: input.requestId, conversationId: meta.conversationId, epoch: 0, source: "router", text, status: "queued", createdAt: now }); });
+    this.#change(() => { this.store.putConversation(meta); this.store.putInput({ id: input.requestId, conversationId: meta.conversationId, epoch: 0, source: "router", text, status: "queued", createdAt: now, rootInputId: this.#routerInput()?.rootInputId ?? this.#routerInput()?.id }); });
     this.#kick();
     return meta;
   }
@@ -99,6 +132,7 @@ export class BotRuntime {
     const requestId = textOf(input.requestId, "请求标识", 200);
     const images = imagesOf(input.images);
     const text = typeof input.text === "string" && !input.text.trim() && images?.length ? "" : textOf(input.text, "消息");
+    const statusRequest = source === "user" && !images?.length && extractPromptAttachments(input.text).length === 0 && (input.intent === "status" || isStatusQuestion(input.text));
     let meta = input.conversationId ? this.#meta(input.conversationId) : undefined;
     if (!meta) {
       const routerId = this.store.routerConversationId;
@@ -114,14 +148,15 @@ export class BotRuntime {
     }
     const prior = this.store.input(requestId);
     if (prior) {
-      if (prior.text !== text || prior.conversationId !== meta.conversationId || JSON.stringify(prior.images ?? []) !== JSON.stringify(images ?? [])) throw new Error("相同请求标识不能提交不同内容");
+      if (prior.text !== text || prior.conversationId !== meta.conversationId || JSON.stringify(prior.images ?? []) !== JSON.stringify(images ?? []) || prior.intent !== (statusRequest ? "status" : undefined)) throw new Error("相同请求标识不能提交不同内容");
       return this.getWorkSnapshot();
     }
+    if (statusRequest) return this.#submitStatus(meta, requestId, input.text);
     if (meta.paused && meta.role !== "router") throw new Error("会话已暂停，请先继续");
     const now = Math.max(Date.now(), (this.store.chatMessages().at(-1)?.createdAt ?? 0) + 1);
     this.#change(() => {
       if (meta!.paused) this.store.putConversation({ ...meta!, paused: false, updatedAt: now });
-      this.store.putInput({ id: requestId, conversationId: meta!.conversationId, epoch: meta!.epoch, source, text, images, status: "queued", createdAt: now });
+      this.store.putInput({ id: requestId, conversationId: meta!.conversationId, epoch: meta!.epoch, source, text, images, status: "queued", createdAt: now, rootInputId: source === "router" ? (this.#routerInput()?.rootInputId ?? this.#routerInput()?.id) : requestId });
       if (source === "user") {
         this.store.putChatMessage({
           id: `chat:user:${requestId}`,
@@ -140,11 +175,32 @@ export class BotRuntime {
     return this.getWorkSnapshot();
   }
 
-  async reply(input: { conversationId: string; text: string }): Promise<BotChatMessage> {
+  async #submitStatus(meta: BotConversationMeta, requestId: string, originalText: string): Promise<WorkSnapshot> {
+    const now = Math.max(Date.now(), (this.store.chatMessages().at(-1)?.createdAt ?? 0) + 1);
+    const text = originalText.trim();
+    const conversations = this.store.conversations();
+    const inputs = this.store.inputs();
+    const attention = this.store.attentions(meta.role === "worker" ? meta.conversationId : undefined);
+    const results = this.store.results();
+    const progresses = conversations.filter((conversation) => meta.role === "router" || conversation.conversationId === meta.conversationId).map((conversation) => deriveBotProgress(conversation, inputs, attention, results)).filter((item) => item.conversationId !== meta.conversationId || item.phase !== "idle");
+    const reply = statusTextForProgress(progresses, attention, process.env.FASTVIBE_UI_LANGUAGE !== "en");
+    this.#change(() => {
+      this.store.putInput({ id: requestId, conversationId: meta.conversationId, epoch: meta.epoch, source: "user", text, status: "completed", createdAt: now, completedAt: now, intent: "status" });
+      this.store.putChatMessage({ id: `chat:user:${requestId}`, conversationId: meta.conversationId, role: "user", text, inputId: requestId, createdAt: now, kind: "message" });
+      this.store.putChatMessage({ id: `chat:status:${requestId}`, conversationId: meta.conversationId, role: "assistant", text: reply, inputId: requestId, createdAt: now + 1, kind: "status", title: "Vivi" });
+    });
+    return this.getWorkSnapshot();
+  }
+
+  async reply(input: { conversationId: string; text: string; requestId?: string; epoch?: number }): Promise<BotChatMessage> {
     const meta = this.#meta(input.conversationId);
     if (meta.role !== "router") throw new Error("只有 Router 可以向 Vivi 聊天发送消息");
+    const active = this.#active.get(meta.conversationId);
+    const requestId = input.requestId ?? active?.inputId;
+    const current = requestId ? this.store.input(requestId) : undefined;
+    if (!active || !current || active.inputId !== current.id || current.status !== "running" || current.epoch !== meta.epoch || (input.epoch !== undefined && input.epoch !== current.epoch) || meta.paused || active.controller.signal.aborted) throw new Error("Vivi 当前回合已结束，不能发送这条回复");
     const createdAt = Math.max(Date.now(), (this.store.chatMessages().at(-1)?.createdAt ?? 0) + 1);
-    const message: BotChatMessage = { id: `chat:assistant:${randomUUID()}`, conversationId: meta.conversationId, role: "assistant", text: textOf(input.text, "回复", 16000), inputId: this.#active.get(meta.conversationId)?.inputId, createdAt };
+    const message: BotChatMessage = { id: `chat:assistant:${randomUUID()}`, conversationId: meta.conversationId, role: "assistant", text: textOf(input.text, "回复", 16000), inputId: current.id, createdAt, kind: "message" };
     this.#change(() => this.store.putChatMessage(message));
     this.#emitMessage(message);
     return message;
@@ -152,24 +208,43 @@ export class BotRuntime {
 
   async report(input: BotReportRequest): Promise<BotResult> {
     const meta = this.#meta(input.conversationId);
+    const request = input as BotReportRequest & { epoch?: number };
+    const active = this.#active.get(meta.conversationId);
+    const requestId = request.requestId ?? active?.inputId;
+    const current = requestId ? this.store.input(requestId) : undefined;
+    if (!active || !current || active.inputId !== current.id || current.status !== "running" || current.epoch !== meta.epoch || (request.epoch !== undefined && request.epoch !== current.epoch) || meta.paused || active.controller.signal.aborted) throw new Error("Vivi 当前回合已结束，不能提交结果");
+    const existingResult = this.store.results(meta.conversationId).find((item) => item.inputId === current.id && item.epoch === current.epoch && item.status !== "idle");
+    if (existingResult) return existingResult;
     const summary = textOf(input.summary, "结果摘要", 16000);
     const status = input.outcome ?? "idle";
     if (!["idle", "ready", "blocked", "failed", "uncertain"].includes(status)) throw new Error("未知的结果状态");
-    const result: BotResult = { id: `result:${randomUUID()}`, conversationId: meta.conversationId, inputId: input.requestId, epoch: meta.epoch, status, summary, evidence: input.evidence ?? [], artifacts: input.artifacts ?? [], createdAt: Date.now() };
-    this.#change(() => this.store.putResult(result));
-    if (meta.role === "worker" && status !== "idle") {
-      const router = this.store.routerConversationId;
-      if (router) {
-        const delivery = { id: `delivery:${result.id}`, conversationId: meta.conversationId, targetConversationId: router, status: "pending" as const, text: `[Worker result ${result.status}] ${summary}`, resultId: result.id, createdAt: Date.now() };
-        this.#change(() => this.store.putDelivery(delivery));
-      }
-    }
+    const result: BotResult = { id: `result:${randomUUID()}`, conversationId: meta.conversationId, inputId: current.id, epoch: current.epoch, status, summary, evidence: input.evidence ?? [], artifacts: input.artifacts ?? [], createdAt: Date.now() };
+    this.#saveResult(meta, current, result);
     return result;
   }
 
-  async ask(input: { conversationId: string; requestId?: string; question: string }): Promise<BotAttention> {
+  #saveResult(meta: BotConversationMeta, current: BotInput, result: BotResult): void {
+    this.#change(() => {
+      this.store.putResult(result);
+      const message: BotChatMessage = { id: `chat:result:${current.id}`, conversationId: meta.conversationId, role: "assistant", text: result.summary ?? "", inputId: current.id, createdAt: result.createdAt, kind: "result", title: meta.title ?? "Vivi", result };
+      if (this.store.chatMessage(message.id)) this.store.updateChatMessage(message);
+      else this.store.putChatMessage(message);
+      const router = this.store.routerConversationId;
+      if (meta.role === "worker" && result.status !== "idle" && router) {
+        const evidence = result.evidence?.length ? `\nEvidence: ${result.evidence.join("; ")}` : "";
+        const artifacts = result.artifacts?.length ? `\nArtifacts: ${result.artifacts.join("; ")}` : "";
+        this.store.putDelivery({ id: `delivery:${result.id}`, conversationId: meta.conversationId, targetConversationId: router, status: "pending", text: `[Worker result ${result.status}] ${result.summary}${evidence}${artifacts}`, resultId: result.id, createdAt: Date.now() });
+      }
+    });
+  }
+
+  async ask(input: { conversationId: string; requestId?: string; question: string; epoch?: number }): Promise<BotAttention> {
     const meta = this.#meta(input.conversationId);
-    const attention: BotAttention = { id: `attention:${randomUUID()}`, conversationId: meta.conversationId, inputId: input.requestId, epoch: meta.epoch, question: textOf(input.question, "问题", 4000), status: "pending", createdAt: Date.now() };
+    const active = this.#active.get(meta.conversationId);
+    const requestId = input.requestId ?? active?.inputId;
+    const current = requestId ? this.store.input(requestId) : undefined;
+    if (!active || !current || active.inputId !== current.id || current.status !== "running" || current.epoch !== meta.epoch || (input.epoch !== undefined && input.epoch !== current.epoch) || meta.paused || active.controller.signal.aborted) throw new Error("Vivi 当前回合已结束，不能提出问题");
+    const attention: BotAttention = { id: `attention:${randomUUID()}`, conversationId: meta.conversationId, inputId: current.id, epoch: current.epoch, question: textOf(input.question, "问题", 4000), status: "pending", createdAt: Date.now() };
     this.#change(() => { this.store.putAttention(attention); this.store.putConversation({ ...meta, paused: true, updatedAt: Date.now() }); });
     return attention;
   }
@@ -197,6 +272,8 @@ export class BotRuntime {
     const meta = this.#meta(input.conversationId);
     this.#change(() => {
       this.store.putConversation({ ...meta, epoch: meta.epoch + 1, paused: true, updatedAt: Date.now() });
+      for (const attention of this.store.attentions(meta.conversationId)) if (attention.status === "pending") this.store.putAttention({ ...attention, status: "withdrawn" });
+      for (const delivery of this.store.deliveries()) if ((delivery.conversationId === meta.conversationId || delivery.targetConversationId === meta.conversationId) && (delivery.status === "pending" || delivery.status === "injected")) this.store.updateDelivery({ ...delivery, status: "failed" });
       for (const item of this.store.inputs(meta.conversationId)) {
         if (item.status === "queued") this.store.putInput({ ...item, status: "canceled" });
         else if (item.status === "running") this.store.putInput({ ...item, status: "uncertain", error: "会话已停止，请核对现场后继续" });
@@ -209,10 +286,16 @@ export class BotRuntime {
   }
   async continueConversation(input: { conversationId: string }): Promise<WorkSnapshot> {
     const meta = this.#meta(input.conversationId);
+    if (!meta.paused && (this.#active.has(meta.conversationId) || this.store.inputs(meta.conversationId).some((item) => item.epoch === meta.epoch && item.status === "queued"))) return this.getWorkSnapshot();
+    if (this.store.attentions(meta.conversationId).some((item) => item.status === "pending")) throw new Error(uiText("请先回答当前问题。", "Please answer the pending question first."));
     this.#change(() => {
       this.store.putConversation({ ...meta, paused: false, epoch: meta.epoch + 1, updatedAt: Date.now() });
       const next = this.#meta(meta.conversationId);
-      this.store.putInput({ id: `resume:${next.conversationId}:${next.epoch}`, conversationId: next.conversationId, epoch: next.epoch, source: "resume", text: "Continue the unfinished work from the current conversation.", status: "queued", createdAt: Date.now() });
+      const pendingReports = next.role === "router" ? this.store.deliveries().filter((delivery) => delivery.targetConversationId === next.conversationId && delivery.status === "injected") : [];
+      const resumeText = pendingReports.length
+        ? `Continue the unfinished work. Review these existing result updates and summarize them for the user; do not repeat completed work.\n${pendingReports.map((delivery) => delivery.text).join("\n\n")}`
+        : "Continue the unfinished work from the current conversation.";
+      this.store.putInput({ id: `resume:${next.conversationId}:${next.epoch}`, conversationId: next.conversationId, epoch: next.epoch, source: "resume", text: resumeText, ...(pendingReports.length ? { deliveryIds: pendingReports.map((delivery) => delivery.id) } : {}), status: "queued", createdAt: Date.now() });
     });
     this.#kick();
     return this.getWorkSnapshot();
@@ -230,8 +313,12 @@ export class BotRuntime {
     const active = this.#active.get(conversationId);
     const input = active ? this.store.input(active.inputId) : undefined;
     return {
-      role: meta?.role ?? "worker", conversationId, active: Boolean(meta && !meta.paused), phase: meta && !meta.paused ? "running" : "inactive",
-      ...(meta?.role === "router" ? { input: input ? { requestId: input.id } : undefined, conversations: this.store.conversations() } : {}),
+      role: meta?.role ?? "worker", conversationId, active: Boolean(active && input && input.status === "running" && meta && !meta.paused), phase: meta && meta.paused ? "waiting" : active && input?.status === "running" ? "running" : "inactive",
+      input: input ? { requestId: input.id, epoch: input.epoch } : undefined,
+      conversations: this.store.conversations(),
+      progress: this.store.conversations().filter((item) => meta?.role === "router" || item.conversationId === conversationId).map((item) => deriveBotProgress(item, this.store.inputs(), this.store.attentions(), this.store.results())),
+      results: meta?.role === "router" ? this.store.results() : this.store.results(conversationId),
+      attention: this.store.attentions(meta?.role === "router" ? undefined : conversationId).filter((item) => item.status === "pending"),
     };
   }
 
@@ -259,39 +346,63 @@ export class BotRuntime {
     }
     for (const meta of this.store.conversations()) {
       if (meta.paused || this.#active.has(meta.conversationId)) continue;
-      const input = this.store.inputs(meta.conversationId).find((item) => item.status === "queued" && item.epoch === meta.epoch);
+      const input = this.store.inputs(meta.conversationId).filter((item) => item.status === "queued" && item.epoch === meta.epoch).sort((a, b) => Number(a.source === "report") - Number(b.source === "report") || a.createdAt - b.createdAt)[0];
       if (!input) continue;
-      this.#change(() => this.store.putInput({ ...input, status: "running" }));
+      const phase = meta.role === "router" ? input.source === "report" ? "summarizing" : "understanding" : "working";
+      const detail = phase === "summarizing"
+        ? uiText("正在整理已有结果。", "Putting the available results together.")
+        : phase === "understanding"
+          ? uiText("正在理解你的要求。", "Understanding your request.")
+          : uiText("正在处理这件事。", "Working on this request.");
+      this.#change(() => this.store.putInput({ ...input, status: "running", startedAt: input.startedAt ?? Date.now(), progress: input.progress ?? { phase, text: detail, updatedAt: Date.now() } }));
       const controller = new AbortController();
       const active: Active = { meta, inputId: input.id, controller, promise: Promise.resolve() };
       this.#active.set(meta.conversationId, active);
-      active.promise = this.#execute(active, input).finally(() => { this.#active.delete(meta.conversationId); this.#emit(); this.#kick(); });
+      active.promise = this.#execute(active, input).catch((error) => {
+        this.#error = error instanceof Error ? error.message : String(error);
+        const receipt = this.store.input(input.id);
+        if (receipt?.status === "running") this.#change(() => this.store.putInput({ ...receipt, status: "failed", completedAt: Date.now(), error: this.#error }));
+      }).finally(() => { this.#active.delete(meta.conversationId); this.#change(() => {}); this.#kick(); });
     }
   }
   async #execute(active: Active, payload: BotInput): Promise<void> {
     let outcome: BotExecutionOutcome;
     try { outcome = await this.host.execute({ conversationId: active.meta.conversationId, requestId: active.inputId, text: payload.text, images: payload.images, epoch: active.meta.epoch, signal: active.controller.signal }); }
     catch (error) { outcome = { status: active.controller.signal.aborted ? "interrupted" : "failed", text: "", error: error instanceof Error ? error.message : String(error) }; }
+    if (active.controller.signal.aborted) outcome = { status: "interrupted", text: outcome.text, error: uiText("处理已中断，已有结果仍保留，可以继续。", "Work was interrupted; existing results are kept and can be continued.") };
     const current = this.store.conversation(active.meta.conversationId);
     const input = this.store.input(active.inputId);
     if (!current || !input || current.epoch !== active.meta.epoch || input.status === "canceled") return;
     const delivery = this.store.delivery(active.inputId);
+    // Fallback persistence must happen while the receipt is still running. The public
+    // reply/report methods deliberately reject stale calls after Stop; calling them
+    // after the terminal input update would reject every ordinary SDK completion.
+    if (active.meta.role === "router" && outcome.status === "completed" && outcome.text.trim() && !current.paused) {
+      if (!this.store.hasChatMessage(active.inputId, "assistant", "message")) await this.reply({ conversationId: active.meta.conversationId, text: outcome.text, requestId: active.inputId, epoch: active.meta.epoch });
+    }
+    if ((active.meta.role === "worker" || outcome.status !== "completed") && !current.paused) {
+      const previous = this.store.results(active.meta.conversationId).filter((result) => result.inputId === active.inputId && result.epoch === active.meta.epoch).at(-1);
+      if (!previous || outcome.status !== "completed") {
+        this.#saveResult(current, input, { id: previous?.id ?? `result:${input.id}`, conversationId: current.conversationId, inputId: input.id, epoch: current.epoch, status: outcome.status === "completed" ? "idle" : outcome.status === "interrupted" ? "uncertain" : "failed", summary: outcome.error ?? (outcome.text.trim() || uiText("执行结束，但没有确认完成的结果。", "Execution ended without a confirmed result.")), evidence: previous?.evidence, artifacts: previous?.artifacts, createdAt: Date.now() });
+      }
+    }
+    // reply() yields after persistence. A Stop in that gap owns the receipt now.
+    const settled = this.store.input(active.inputId);
+    if (this.store.conversation(current.conversationId)?.epoch !== active.meta.epoch || settled?.status !== "running") return;
+    const settledAt = Date.now();
     this.#change(() => {
-      this.store.putInput({ ...input, status: outcome.status === "completed" ? "completed" : outcome.status === "interrupted" ? "uncertain" : "failed", error: outcome.error });
-      if (outcome.status !== "completed") this.store.putResult({ id: `result:${active.inputId}`, conversationId: active.meta.conversationId, inputId: active.inputId, epoch: active.meta.epoch, status: outcome.status === "interrupted" ? "uncertain" : "failed", summary: outcome.error, createdAt: Date.now() });
+      this.store.putInput({ ...settled, status: outcome.status === "completed" ? "completed" : outcome.status === "interrupted" ? "uncertain" : "failed", completedAt: settledAt, error: outcome.error });
       if (delivery && outcome.status === "completed") this.store.updateDelivery({ ...delivery, status: "delivered" });
       if (delivery && outcome.status !== "completed") this.store.updateDelivery({ ...delivery, status: "failed" });
+      // Explicit resume consumes existing updates without creating another Worker or
+      // reinjecting the old input. New arrivals are not part of this receipt.
+      if (outcome.status === "completed") for (const id of settled.deliveryIds ?? []) {
+        const resumed = this.store.delivery(id);
+        if (resumed?.status === "injected" && resumed.targetConversationId === current.conversationId) this.store.updateDelivery({ ...resumed, status: "delivered" });
+      }
     });
     if (outcome.status === "completed") this.#error = undefined;
     if (outcome.status !== "completed") this.#error = outcome.error ?? "Vivi 会话执行未完成";
     if (delivery && outcome.status === "completed") this.#emitDelivery({ ...delivery, status: "delivered" });
-    if (outcome.status === "completed" && outcome.text.trim()) {
-      if (active.meta.role === "router") {
-        if (!this.store.hasChatMessage(active.inputId, "assistant")) await this.reply({ conversationId: active.meta.conversationId, text: outcome.text });
-      } else {
-        // A Worker without a structured report still gets an internal result for Router.
-        await this.report({ conversationId: active.meta.conversationId, requestId: active.inputId, summary: outcome.text, outcome: "idle" });
-      }
-    }
   }
 }

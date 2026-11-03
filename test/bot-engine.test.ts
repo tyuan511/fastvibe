@@ -21,7 +21,7 @@ async function harness(t: TestContext, responses: Parameters<ReturnType<typeof c
   let reports = 0;
   const service: BotSessionService = {
     contextFor: (conversationId) => ({ role, conversationId, active: true, phase: reports ? "reported" : "running" }),
-    submit: async () => ({}), routeMessage: async () => ({}), reply: async () => ({}), createWork: async () => ({}),
+    submit: async () => ({}), routeMessage: async () => ({}), reply: async () => ({}), progress: async () => ({}), createWork: async () => ({}),
     report: async () => { reports++; return {}; }, ask: async () => ({}),
     stopConversation: async () => ({}), continueConversation: async () => ({}),
     ...serviceOverride,
@@ -67,6 +67,7 @@ test("超时取消 preflight 并返回 failed", async (t) => {
 test("Router/Worker 工具白名单符合会话角色", () => {
   for (const name of ["spawn_agent", "question", "dag_add_tasks", "worktree_create", "fastvibe_config_apply"]) { assert.equal(botToolAllowed("worker", name), false); assert.equal(botToolAllowed("router", name), false); }
   for (const name of ["read", "bash", "codemode", "tool_search", "bot_report", "bot_ask_user"]) assert.equal(botToolAllowed("worker", name), true);
+  for (const role of ["router", "worker"] as const) assert.equal(botToolAllowed(role, "bot_progress"), true);
   assert.equal(botToolAllowed("router", "bot_create_work"), true); assert.equal(botToolAllowed("router", "codemode"), false);
   assert.equal(botToolAllowed("router", "bot_send_message"), true); assert.equal(botToolAllowed("router", "bot_reply"), true); assert.equal(botToolAllowed("worker", "bot_send_message"), false);
 });
@@ -111,6 +112,7 @@ test("真实 SDK Router 将补充要求送入原 Worker，且不新增会话", a
     submit: (input) => bot.submit(input),
     routeMessage: (input) => bot.routeMessage(input),
     reply: (input) => bot.reply(input),
+    progress: (input) => bot.progress(input),
     createWork: (input) => bot.createWork(input),
   });
   const host: BotHost = {

@@ -9,7 +9,7 @@ Vivi 现在采用“长期 Router 会话 + 持久 Worker 会话 + 薄持久编�
 - `BotStore` 只保存编排事实；会话正文、模型状态、队列、挂起 UI 和实时事件仍归引擎及会话转写所有。
 - `conversationId` 是 Worker 的稳定身份。首次创建使用 `creationKey` 幂等恢复；补充、回答、继续和结果回报都沿用同一个会话。
 - `epoch` 是停止与恢复边界。停止先持久化暂停和新 epoch，再中止 SDK；旧执行的迟到结果不能重新激活会话。
-- Worker 结果先写入结果表，再写入 Router outbox。投递进入 Router 的真实会话后只产生内部 `BotChanged.delivery`；Router 必须通过 `bot_reply` 产生用户消息，显式消息才产生 `BotChanged.message`。
+- Worker 结果先写入结果表，并在用户 feed 保存关联结果、验证信息和产物的结果消息，再写入 Router outbox。Router 仍通过 `bot_reply` 给出自然语言汇总；内部 `BotChanged.delivery`、阶段进度和结果卡不直接触发宠物消息，宠物只消费显式 Router 回复。
 - 问题跨重启保留。回答会进入同一 Worker 会话的新 epoch；旧问题不能重复回答。
 - 进程退出时 running/accepted 输入变成 `uncertain`，所属会话暂停，不自动重放可能已经产生外部副作用的执行。显式继续会在原会话中创建恢复输入。
 - 停止全部后，新 `requestId` 的用户输入会重新开放 Router；重复旧请求不会恢复 Router，也不重放已取消输入或恢复 Worker。Worker 仍需显式继续。
@@ -21,7 +21,16 @@ Vivi 现在采用“长期 Router 会话 + 持久 Worker 会话 + 薄持久编�
 
 `PiProcessManager` 为 Router 和 Worker 创建 `bot-router` / `bot-worker` catalog 会话，使用现有 SDK 的持久转写、压缩、取消和按会话读取能力。BotRuntime 只负责创建会话、接受输入、控制 epoch、调度执行和投递结果。
 
-`bot-session-extension.ts` 使用 SDK 工具与事件机制：Router 可以读取当前会话上下文、创建工作会话、通过 `bot_send_message` 向原 Worker 投递补充要求、通过 `bot_reply` 向 Vivi 用户发送一条简短反馈、停止或继续指定会话；Worker 可以报告结果或持久化问题。普通文本收尾只作为兼容兜底转成 Router 消息，新的 Router 指令应使用 `bot_reply`，不能依赖 transcript 作为用户界面。
+`bot-session-extension.ts` 使用 SDK 工具与事件机制：Router 可以读取当前会话上下文、创建工作会话、通过 `bot_send_message` 向原 Worker 投递补充要求、通过 `bot_reply` 向 Vivi 用户发送一条简短反馈、停止或继续指定会话；Worker 可以报告结果或持久化问题。两种角色都能通过 `bot_progress` 上报真实阶段与有用的中间成果。进度不结束回合，最终回复、报告和问题才结束；每轮捕获输入 ID 和 epoch，不能把工具调用 ID 当作输入 ID，停止后的迟到调用不得更新下一轮。普通文本收尾只作为兼容兜底转成 Router 消息，新的 Router 指令应使用 `bot_reply`，不能依赖 transcript 作为用户界面。
+
+## 对话反馈
+
+- `WorkSnapshot.progress` 从持久输入、当前 epoch、待答问题与结果推导每个会话的进度，不增加 Task / Run / Attempt 层级。开始与完成时间随输入保存，切页和重连不重置计时。快照更新通过带 revision 的事件触发读取，终态不能被旧失败或迟到快照覆盖。
+- 发送中的用户行和承接状态只在设备本地存在；宿主接收后采用同一个请求 ID 的持久行。失败撤回乐观行并保留草稿和附件。临时状态位于对话末尾，不写进聊天记录，也不把历史回复标成流式。
+- 排队、理解、规划、安排、执行、等待回答与汇总必须来自真实状态或 `bot_progress`。没有真实阶段变化时不轮播文字，不编造步骤数、百分比或预计完成时间。
+- 阶段成果可保存成 `kind: progress` 的简短消息；同一用户请求最多三条，重复与过密消息被限制。最终 `kind: result` 保存摘要、状态、验证与产物；两种消息都独立成行，不合并进 SDK 的多轮回复或「用时」折叠。
+- 「查看进度」和明确的简短状态问句直接读取当前事实并生成 `kind: status` 回复，不排到模型后面、不唤醒暂停的工作。带新要求或附件的普通消息仍按正常输入处理。
+- 部分完成、失败、中断与未确认交付分别呈现，并保留已有产物。继续处理沿用原会话；回答问题、补充要求和停止全部使用同一业务 API。
 
 ## 界面与宠物
 
@@ -44,7 +53,7 @@ Bot 业务通过中立调用表和 `engine` capability 暴露，桌面与 headle
 ```bash
 pnpm typecheck
 pnpm exec electron-vite build
-node --test test/bot-engine.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-notifications.test.ts test/bot-pet.test.ts
+node --test test/bot-engine.test.ts test/bot-conversation-progress.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-progress.test.ts test/vivi-chat.test.ts test/bot-notifications.test.ts test/bot-pet.test.ts
 FASTVIBE_IROH_BIN=/Users/yuantang/code/fastvibe/resources/iroh/fastvibe-iroh pnpm test
 ```
 
@@ -54,7 +63,9 @@ FASTVIBE_IROH_BIN=/Users/yuantang/code/fastvibe/resources/iroh/fastvibe-iroh pnp
 
 工作会话详情只在提前返回之前调用一次 `useBotSnapshot`，会话与结果共享同一份快照。无头 Chromium 在亮色、暗色下均通过延迟 Worker snapshot 的「加载中 → 完成」检查，没有 React Hook 顺序错误。
 
-浏览器预览使用 `src/renderer` 作为 Vite root：`mock.html?vivi=1&lang=zh#/vivi`，空状态使用 `vivi=empty`。预览数据是脱敏 fixture，未作为真实供应商端到端证明。
+浏览器预览使用 `src/renderer` 作为 Vite root：`mock.html?vivi=1&lang=zh#/vivi`，空状态使用 `vivi=empty`；`vivi=progress|result|recovery` 分别展示并行进度与阶段汇报、完成结果、失败后继续。预览数据是脱敏 fixture，未作为真实供应商端到端证明。
+
+对话反馈实现验证：完整测试 **2210 项通过，0 失败，0 跳过**；类型检查、注入脚本检查及 Electron/Vite 构建通过。真实 SDK 脚本模型覆盖阶段工具不会结束工作、输入与 epoch 绑定、报告收尾与后续补充；运行时回归覆盖汇报限频去重、快捷查询、停止竞争、同实例恢复和重启后的结果接续。无头 Chromium 覆盖中英文、亮暗主题、1280px / 390px 的阶段与结果布局，发送失败回滚、等待期间离开页面、重试去重、草稿保留、并行展开、暂停/继续和原会话补充入口，无渲染异常或横向溢出。
 
 ## 后续阶段
 

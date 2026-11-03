@@ -6,13 +6,14 @@ import type { ChatAttachment } from "@shared/types";
 export const useBotComposerState = create<{
   draft: string;
   attachments: ChatAttachment[];
+  optimistic: import("@shared/bot").BotChatMessage | null;
   sending: boolean;
   error: string | null;
   request: BotSubmitRequest | null;
   setDraft: (draft: string) => void;
   setAttachments: (attachments: ChatAttachment[]) => void;
 }>((set) => ({
-  draft: "", attachments: [], sending: false, error: null, request: null,
+  draft: "", attachments: [], optimistic: null, sending: false, error: null, request: null,
   setDraft: (draft) => set({ draft }),
   setAttachments: (attachments) => set({ attachments }),
 }));
