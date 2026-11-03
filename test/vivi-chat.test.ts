@@ -14,6 +14,20 @@ test("Vivi 主聊天只读取独立的 Router 用户消息通道", () => {
   assert.deepEqual(visible.map((message) => message.parts), [[{ kind: "text", text: "帮我整理项目" }], [{ kind: "text", text: "已安排 Worker 处理。" }]]);
 });
 
+test("Vivi 主聊天保留用户附件并只显示清理后的文字", () => {
+  const messages: BotChatMessage[] = [{
+    id: "u-image",
+    conversationId: "router",
+    role: "user",
+    text: "",
+    attachments: [{ id: "image:1:0", kind: "image", name: "image-1.png", mimeType: "image/png", dataUrl: "data:image/png;base64,aW1hZ2U=" }],
+    createdAt: 1,
+  }];
+  const [visible] = botChatMessages(messages);
+  assert.equal(visible.text, "");
+  assert.deepEqual(visible.attachments, messages[0].attachments);
+});
+
 test("独立消息通道不会把 Worker transcript 或内部交付混进 Vivi", () => {
   const messages: BotChatMessage[] = [{ id: "a", conversationId: "router", role: "assistant", text: "任务已更新。", createdAt: 1 }];
   assert.deepEqual(botChatMessages(messages).map((message) => message.text), ["任务已更新。"]);

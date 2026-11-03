@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationSnapshot, PromptImage } from "./types.ts";
+import type { ChatAttachment, ChatMessage, ConversationSnapshot, PromptImage } from "./types.ts";
 
 export const VIVI_BOT_ID = "vivi";
 export type BotConversationRole = "router" | "worker";
@@ -13,6 +13,7 @@ export type BotChatMessage = {
   conversationId: string;
   role: "user" | "assistant";
   text: string;
+  attachments?: ChatAttachment[];
   inputId?: string;
   createdAt: number;
 };

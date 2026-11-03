@@ -14,6 +14,7 @@ Vivi 现在采用“长期 Router 会话 + 持久 Worker 会话 + 薄持久编�
 - 进程退出时 running/accepted 输入变成 `uncertain`，所属会话暂停，不自动重放可能已经产生外部副作用的执行。显式继续会在原会话中创建恢复输入。
 - 停止全部后，新 `requestId` 的用户输入会重新开放 Router；重复旧请求不会恢复 Router，也不重放已取消输入或恢复 Worker。Worker 仍需显式继续。
 - 输入的图片写入 `BotInput` 的 JSON，和文字、目标会话一起参与幂等校验。纯图片输入有效，图片经 Host 和 `runBotSession` 传给 SDK 的 `prompt(..., { images })`。
+- 用户 feed 的 `text` 只保存展示正文，复用 `stripPromptMetadata` / `extractPromptAttachments` 将文件路径和长粘贴还原为附件；图片以 `ChatAttachment` 随消息持久化并传给标准聊天附件条。解析使用 trim 之前的原始提示，纯文件、纯粘贴和纯图片消息重开后仍保留附件；模型队列中的文字和图片保持原样。
 - Router 的实时上下文只携带当前执行输入的 `requestId` 与已知会话；排队中的输入不会改变当前执行。Router 和 Worker 都固定使用运行时的 `vivi/outputs` 工作区，外部输入与工具调用不能覆盖这个目录。
 
 ## 引擎与工具
@@ -48,6 +49,8 @@ FASTVIBE_IROH_BIN=/Users/yuantang/code/fastvibe/resources/iroh/fastvibe-iroh pnp
 ```
 
 首轮 review 修复后的验证基线：完整测试 **2192 项通过，0 失败，0 跳过**；类型检查、注入脚本检查和 Electron/Vite 构建通过。新增回归覆盖停止后的 Router 接单与 Worker 保持暂停、图片持久化与真实 SDK 图片请求、独立用户消息 feed、Worker 内部投递不泄漏到主聊天、`bot_reply` 结束 Router 回合，以及真实 SDK Router 向原 Worker 投递补充要求。
+
+附件 review 修复后的验证：完整测试 **2194 项通过，0 失败，0 跳过**；类型检查、注入脚本检查和 Electron/Vite 构建通过。附件回归覆盖混合文字/文件/粘贴/图片、只有附件的消息、重复提交，以及 SQLite 关闭重开后经 `WorkSnapshot.messages` 到 `botChatMessages` 的完整链路。
 
 工作会话详情只在提前返回之前调用一次 `useBotSnapshot`，会话与结果共享同一份快照。无头 Chromium 在亮色、暗色下均通过延迟 Worker snapshot 的「加载中 → 完成」检查，没有 React Hook 顺序错误。
 

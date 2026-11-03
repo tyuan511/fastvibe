@@ -10,6 +10,7 @@ export function botChatMessages(messages: readonly BotChatMessage[]): ChatMessag
     id: message.id,
     role: message.role,
     text: message.text,
+    ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     tools: [],
     parts: [{ kind: "text", text: message.text }],
     createdAt: message.createdAt,

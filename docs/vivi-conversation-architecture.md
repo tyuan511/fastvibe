@@ -105,7 +105,7 @@ flowchart TB
 | 待送消息 | 稳定 requestId、来源、目标 conversationId、payload 引用、交付阶段。最终输入只有会话队列一份权威副本；编排表只保存创建/投递意图和回执 |
 | 问题 | attentionId、conversationId、所属输入/代次、问题与答复、pending/resolved/withdrawn。提问会结束当前自动回合并释放名额，答复作为同一会话的新输入 |
 | 结果 | resultId、conversationId、branch/entry 锚点、覆盖的输入序号、ready/blocked/failed/idle 等结论、短摘要及产物/证据引用 |
-| 用户消息 | messageId、Router conversationId、role、text、inputId、createdAt。只保存用户输入和 Router `bot_reply`，是 Vivi 主聊天的唯一持久来源 |
+| 用户消息 | messageId、Router conversationId、role、展示 text、attachments、inputId、createdAt。文件、粘贴与图片附件可恢复，模型可见元数据不进入正文。只保存用户输入和 Router `bot_reply`，是 Vivi 主聊天的唯一持久来源 |
 | 待汇报 | resultId → Router 会话/目标渠道、是否进入 Router、是否已有 `bot_reply`；内部 delivery 与用户消息分开 |
 
 “工作已完成”不再是一个独立 Task 行的永久终态。工作会话可以完成一轮交付后继续聊；新输入使此前结果只代表此前范围，不代表最新要求已满足。

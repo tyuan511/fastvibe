@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { openDatabase } from "../src/main/engine/db.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openDatabase, openDatabaseConnection, type Db } from "../src/main/engine/db.ts";
+import { botChatMessages } from "../src/renderer/src/lib/vivi-chat.ts";
 import { BotRuntime } from "../src/main/bot/bot-runtime.ts";
 import { BotStore } from "../src/main/bot/bot-store.ts";
 import type { BotChanged, BotExecutionOutcome, BotHost } from "../src/shared/bot.ts";
@@ -10,8 +14,7 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 async function until(check: () => boolean): Promise<void> { for (let i = 0; i < 300; i++) { if (check()) return; await tick(); } throw new Error("condition did not settle"); }
 function withExternalProject<T extends object>(value: T, project: string): T { return { ...value, project } as T; }
-function fixture() {
-  const db = openDatabase(":memory:");
+function fixture(db: Db = openDatabase(":memory:")) {
   const store = new BotStore(db);
   const events: BotChanged[] = [];
   const calls: Array<Parameters<BotHost["execute"]>[0]> = [];
@@ -66,6 +69,52 @@ test("Vivi 用户消息与 Router 回复写入独立 feed，路由给 Worker 的
     await f.runtime.routeMessage({ requestId: "feed-route", conversationId: worker.conversationId, text: "补充要求" });
     assert.equal(f.store.chatMessages().some((message) => message.text === "补充要求"), false);
   } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("附件用户消息经数据库重开、snapshot 和聊天映射后仍完整，模型元数据不进入正文", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vivi-feed-attachments-"));
+  const file = join(dir, "state.db");
+  const f = fixture(openDatabaseConnection(file));
+  const suffix = '\n\n<fastvibe-attachments>\n- /tmp/report.md\n</fastvibe-attachments>\n\n<fastvibe-pasted-text>\n[{"name":"notes.txt","content":"粘贴内容"}]\n</fastvibe-pasted-text>';
+  const images = [{ type: "image" as const, mimeType: "image/png", data: "aW1hZ2U=" }];
+  let reopened: Db | undefined;
+  try {
+    const mixed = { requestId: "mixed", text: `请看这些内容${suffix}`, images };
+    const filesOnly = { requestId: "files-only", text: suffix };
+    const imageOnly = { requestId: "image-only", text: "", images };
+    for (const request of [mixed, filesOnly, imageOnly]) {
+      await f.runtime.submit(request);
+      await f.runtime.submit(request);
+      assert.equal(f.store.input(request.requestId)?.text, request.text.trim());
+      assert.deepEqual(f.store.input(request.requestId)?.images, request.images);
+    }
+    f.behavior(async () => ({ status: "completed", text: "" }));
+    f.runtime.start();
+    await until(() => f.store.inputs().every((input) => input.status === "completed"));
+    assert.deepEqual(f.calls.map(({ text, images }) => ({ text, images })), [mixed, filesOnly, imageOnly].map(({ text, images }) => ({ text: text.trim(), images })));
+    const before = await f.runtime.getWorkSnapshot();
+    await f.runtime.stop();
+    f.db.close();
+    reopened = openDatabaseConnection(file);
+    const restored = new BotRuntime(new BotStore(reopened), f.host);
+    const snapshot = await restored.getWorkSnapshot();
+    assert.deepEqual(snapshot.messages, before.messages);
+    const visible = botChatMessages(snapshot.messages);
+    assert.deepEqual(visible.map((message) => message.text), ["请看这些内容", "", ""]);
+    assert.deepEqual(visible.map((message) => message.attachments?.length), [3, 2, 1]);
+    assert.deepEqual(visible[0].attachments?.map((item) => [item.kind, item.name, item.path, item.text]), [
+      ["file", "report.md", "/tmp/report.md", undefined],
+      ["file", "notes.txt", undefined, "粘贴内容"],
+      ["image", "image-1.png", undefined, undefined],
+    ]);
+    assert.equal(visible[0].attachments?.[2]?.dataUrl, "data:image/png;base64,aW1hZ2U=");
+    assert.equal(visible[2].attachments?.[0]?.dataUrl, "data:image/png;base64,aW1hZ2U=");
+    assert.ok(visible.every((message) => !message.parts?.some((part) => part.kind === "text" && part.text.includes("fastvibe-"))));
+  } finally {
+    await f.runtime.stop();
+    if (reopened) reopened.close(); else f.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("Router 创建稳定 Worker，会话结果写入 outbox 并成功投递一次", async () => {
@@ -188,6 +237,8 @@ test("图片输入跨 Runtime 重建保留附件且参与幂等校验", async ()
     await assert.rejects(f.runtime.submit({ requestId: "invalid", text: "图片", images: [{}] as never }), /图片附件格式无效/);
     const stored = new BotStore(f.db);
     assert.deepEqual(stored.input("image-only")?.images, images);
+    assert.equal(stored.chatMessage("chat:user:image-only")?.text, "");
+    assert.equal(stored.chatMessage("chat:user:image-only")?.attachments?.[0]?.dataUrl, "data:image/png;base64,aW1hZ2U=");
     restarted = new BotRuntime(stored, f.host);
     restarted.start();
     await until(() => stored.input("image-only")?.status === "completed");

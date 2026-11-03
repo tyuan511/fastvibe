@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { BotAttention, BotChanged, BotChatMessage, BotConversationMeta, BotExecutionOutcome, BotHost, BotInput, BotReportRequest, BotResult, BotSubmitRequest, BotActivity, WorkSnapshot } from "../../shared/bot.ts";
-import type { PromptImage } from "../../shared/types.ts";
+import { extractPromptAttachments, stripPromptMetadata } from "../../shared/attachment-metadata.ts";
+import type { ChatAttachment, PromptImage } from "../../shared/types.ts";
 import { VIVI_BOT_ID } from "../../shared/bot.ts";
 import { BotStore } from "./bot-store.ts";
 
@@ -19,6 +20,25 @@ const imagesOf = (images: unknown): PromptImage[] | undefined => {
     return { type: "image", data: image.data, mimeType: image.mimeType };
   });
 };
+
+function imageExtension(mimeType: string): string {
+  const subtype = mimeType.slice("image/".length).split("+", 1)[0].toLowerCase();
+  return subtype === "jpeg" ? "jpg" : subtype || "png";
+}
+
+function displayAttachments(requestId: string, text: string, images: PromptImage[] | undefined): ChatAttachment[] | undefined {
+  const attachments = extractPromptAttachments(text);
+  for (const [index, image] of (images ?? []).entries()) {
+    attachments.push({
+      id: `image:${requestId}:${index}`,
+      kind: "image",
+      name: `image-${index + 1}.${imageExtension(image.mimeType)}`,
+      mimeType: image.mimeType,
+      dataUrl: `data:${image.mimeType};base64,${image.data}`,
+    });
+  }
+  return attachments.length ? attachments : undefined;
+}
 
 type Active = { meta: BotConversationMeta; inputId: string; controller: AbortController; promise: Promise<void> };
 
@@ -102,7 +122,19 @@ export class BotRuntime {
     this.#change(() => {
       if (meta!.paused) this.store.putConversation({ ...meta!, paused: false, updatedAt: now });
       this.store.putInput({ id: requestId, conversationId: meta!.conversationId, epoch: meta!.epoch, source, text, images, status: "queued", createdAt: now });
-      if (source === "user") this.store.putChatMessage({ id: `chat:user:${requestId}`, conversationId: meta!.conversationId, role: "user", text, inputId: requestId, createdAt: now });
+      if (source === "user") {
+        this.store.putChatMessage({
+          id: `chat:user:${requestId}`,
+          conversationId: meta!.conversationId,
+          role: "user",
+          // Parse the original prompt before textOf trims the leading blank line
+          // that anchors metadata-only file/paste submissions.
+          text: stripPromptMetadata(input.text).trim(),
+          attachments: displayAttachments(requestId, input.text, images),
+          inputId: requestId,
+          createdAt: now,
+        });
+      }
     });
     this.#kick();
     return this.getWorkSnapshot();
