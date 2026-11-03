@@ -509,19 +509,30 @@ private fun ThreadScreen(
     val scrollScope = rememberCoroutineScope()
     val nearBottom = !listState.canScrollForward
     var firstLoaded by remember(id) { mutableStateOf(false) }
+    var composerHeight by remember { mutableStateOf(80.dp) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+
+    suspend fun scrollToBottom(animated: Boolean) {
+        val index = listState.layoutInfo.totalItemsCount - 1
+        if (index < 0) return
+        val viewportHeight = (listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset).coerceAtLeast(0)
+        val anchorHeight = with(density) { 1.dp.roundToPx() }
+        val offset = -(viewportHeight - anchorHeight).coerceAtLeast(0)
+        if (animated) listState.animateScrollToItem(index, offset)
+        else listState.scrollToItem(index, offset)
+    }
+
     LaunchedEffect(id, snapshot?.conversationId, messages.isNotEmpty()) {
         if (!firstLoaded && snapshot?.conversationId == id && messages.isNotEmpty()) {
-            listState.scrollToItem(messages.lastIndex + if (snapshot.historyBeforeEntryId != null) 1 else 0)
+            scrollToBottom(animated = false)
             firstLoaded = true
         }
     }
     LaunchedEffect(id, messages.size, snapshot?.seq) {
         if (firstLoaded && messages.isNotEmpty() && nearBottom && !controller.state.loadingHistory) {
-            listState.animateScrollToItem(messages.lastIndex + if (snapshot?.historyBeforeEntryId != null) 1 else 0)
+            scrollToBottom(animated = true)
         }
     }
-    var composerHeight by remember { mutableStateOf(80.dp) }
-    val density = androidx.compose.ui.platform.LocalDensity.current
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
@@ -559,15 +570,14 @@ private fun ThreadScreen(
                 ) { output -> controller.readFile(output) { uri -> shareUri(context, uri) } }
             }
             snapshot?.turnEvents?.forEachIndexed { index, event -> item(key = "event:$index") { Text(event, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+            item(key = "thread-bottom-anchor") { Spacer(Modifier.height(1.dp)) }
         }
         if (firstLoaded && messages.isNotEmpty() && !nearBottom) {
             Box(
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 12.dp),
             ) {
                 GlassIconButton(R.drawable.fv_chevron_down, "滚动到底部", onClick = {
-                    scrollScope.launch {
-                        listState.animateScrollToItem(messages.lastIndex + if (snapshot?.historyBeforeEntryId != null) 1 else 0)
-                    }
+                    scrollScope.launch { scrollToBottom(animated = true) }
                 })
             }
         }
