@@ -763,12 +763,12 @@ export class PiProcessManager {
       { legacyFile: this.#paths.schedulesFile },
     );
     this.bot = new BotRuntime(new BotStore(this.#db), {
-      createConversation: async ({ kind, key, project }) => ({ conversationId: await this.#createBotConversation(kind, key, project) }),
+      createConversation: async ({ kind, key }) => ({ conversationId: await this.#createBotConversation(kind, key) }),
       execute: ({ conversationId, text, images, signal }) => this.#executeBotConversation(conversationId, text, signal, images),
       snapshot: (id) => this.getSnapshot(id),
       messages: (id) => this.getConversationMessages(id),
       abort: (id) => this.abort(id),
-      resolveProject: (project) => this.#resolveBotProject(project),
+      resolveProject: () => this.#resolveBotProject(),
       changed: (event) => broadcast(Ipc.botChanged, event),
     });
     this.#memory.attach({
@@ -795,23 +795,33 @@ export class PiProcessManager {
   conversationCwd(id: unknown): string | undefined { return typeof id === "string" ? this.#catalog.get(id)?.cwd : undefined; }
   isBotConversation(id: string): boolean { const item = this.#catalog.get(id); return Boolean(item && botRole(item)); }
 
-  #resolveBotProject(project?: string): string {
-    if (project) {
-      const known = this.#catalog.listProjects().find((item) => item.cwd === project && item.kind !== "remote");
-      if (!known || !statSync(known.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error(uiText("Vivi 的项目目录不可用，请重新选择", "Vivi's project is unavailable; choose it again"));
-      return realpathSync(known.cwd);
-    }
+  #resolveBotProject(): string {
     const cwd = join(this.#paths.runtimeRoot, "vivi", "outputs");
     mkdirSync(cwd, { recursive: true });
     return cwd;
   }
 
-  async #createBotConversation(role: "router" | "worker", key: string, cwd?: string): Promise<string> {
+  async #reuseMainModel(session: AgentSession): Promise<void> {
+    const active = this.#activeId ? this.#catalog.get(this.#activeId) : undefined;
+    if (!active || botRole(active)) return;
+    const main = this.#sessions.get(active.id)?.session.model;
+    if (!main || main.provider === "unknown" || !this.#models) return;
+    const model = this.#models.find(main.provider, main.id);
+    if (!model || !this.#models.hasConfiguredAuth(model)) return;
+    const current = session.model;
+    if (current && current.provider === model.provider && current.id === model.id) return;
+    try { await session.setModel(model); } catch {
+      // The main session can briefly point at a provider while it is being refreshed.
+      // Keep the existing Vivi model for this turn; the next turn retries the handoff.
+    }
+  }
+
+  async #createBotConversation(role: "router" | "worker", key: string): Promise<string> {
     await this.#ensureReady();
     const botKey = `${role}:${key}`;
     let conversation = this.#catalog.listAll().find((item) => item.botKey === botKey && item.kind === `bot-${role}`);
     if (!conversation) {
-      const directory = cwd ?? this.#resolveBotProject();
+      const directory = this.#resolveBotProject();
       const project = this.#catalog.listProjects().find((item) => {
         if (item.kind === "remote") return false;
         try { return realpathSync(item.cwd) === directory; } catch { return false; }
@@ -831,6 +841,7 @@ export class PiProcessManager {
     const conversation = this.#catalog.get(id);
     if (!conversation || !botRole(conversation)) throw new Error("Unknown Vivi conversation");
     const managed = await this.#ensureSession(conversation);
+    await this.#reuseMainModel(managed.session);
     if (!managed.session.model || managed.session.model.provider === "unknown") throw new Error(uiText("还没有可用的模型", "No model is available"));
     try {
       return await runBotSession(managed.session, text, {
@@ -4227,6 +4238,8 @@ export class PiProcessManager {
         factory: botSessionExtension({ role: bot, conversationId: conversation.id, service: {
           contextFor: (id) => this.bot.contextFor(id),
           submit: (input) => this.bot.submit(input),
+          routeMessage: (input) => this.bot.routeMessage(input),
+          reply: (input) => this.bot.reply(input),
           createWork: (input) => this.bot.createWork(input),
           report: (input) => this.bot.report(input),
           ask: (input) => this.bot.ask(input),

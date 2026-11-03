@@ -430,7 +430,7 @@ export function createFastVibeApi(t: ApiTransport) {
       getActivity: (): Promise<BotActivity> => t.invoke(Ipc.botGetActivity),
       getWorkSnapshot: (): Promise<WorkSnapshot> => t.invoke(Ipc.botGetWorkSnapshot),
       submit: (input: BotSubmitRequest): Promise<WorkSnapshot> => t.invoke(Ipc.botSubmit, input),
-      createWork: (input: { requestId: string; title: string; text: string; project?: string }): Promise<BotConversationMeta> => t.invoke(Ipc.botCreateWork, input),
+      createWork: (input: { requestId: string; title: string; text: string }): Promise<BotConversationMeta> => t.invoke(Ipc.botCreateWork, input),
       report: (input: BotReportRequest): Promise<BotResult> => t.invoke(Ipc.botReport, input),
       ask: (input: { conversationId: string; requestId?: string; question: string }): Promise<BotAttention> => t.invoke(Ipc.botAsk, input),
       answer: (input: { attentionId: string; answer: string }): Promise<WorkSnapshot> => t.invoke(Ipc.botAnswer, input),

@@ -270,6 +270,7 @@ export function Composer({
   project,
   newSession,
   hideProjectPicker = false,
+  hideModelPicker = false,
   commands,
   queued,
   queuePause,
@@ -333,6 +334,8 @@ export function Composer({
   newSession?: boolean;
   /** Hide the project chip entirely (auxiliary chats inherit the parent workspace). */
   hideProjectPicker?: boolean;
+  /** Hide the model/thinking control when a surface always follows its host model. */
+  hideModelPicker?: boolean;
   commands: SlashCommand[];
   queued: QueuedPrompt[];
   queuePause: QueuePauseReason | null;
@@ -1153,20 +1156,22 @@ export function Composer({
             </span>
           ) : null}
 
-          <ModelThinkingSelect
-            models={models}
-            model={model}
-            thinkingLevel={thinkingLevel}
-            readOnly={readOnly}
-            emptyModelLabel={models.length === 0 ? t("composer.addModel") : t("composer.pickModel")}
-            onManageModels={onManageModels}
-            onModelChange={(next) => {
-              if (next) onModelChange(next.provider, next.id);
-            }}
-            onThinkingChange={(level) => {
-              if (level !== "auto") onThinkingChange(level);
-            }}
-          />
+          {hideModelPicker ? null : (
+            <ModelThinkingSelect
+              models={models}
+              model={model}
+              thinkingLevel={thinkingLevel}
+              readOnly={readOnly}
+              emptyModelLabel={models.length === 0 ? t("composer.addModel") : t("composer.pickModel")}
+              onManageModels={onManageModels}
+              onModelChange={(next) => {
+                if (next) onModelChange(next.provider, next.id);
+              }}
+              onThinkingChange={(level) => {
+                if (level !== "auto") onThinkingChange(level);
+              }}
+            />
+          )}
 
           {/* A run and a compaction are stopped the same way, so the mark that decides
               whether there is something to stop is `working`, not `streaming`: a manual

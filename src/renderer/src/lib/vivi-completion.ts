@@ -1,5 +1,5 @@
 import type { ChatMessage } from "../../../shared/types.ts";
-import type { BotDelivery } from "../../../shared/bot.ts";
+import type { BotChatMessage } from "../../../shared/bot.ts";
 
 /** Read the completed turn's final request, never earlier progress prose. */
 export function completedViviReply(messages: readonly ChatMessage[]): string {
@@ -23,15 +23,15 @@ export class ViviCompletionState {
   #deliveries = new Set<string>();
   completion: ViviCompletion | undefined;
 
-  /** A Bot delivery is already the final result; do not re-read a Router that may have moved on. */
-  deliver(delivery: Pick<BotDelivery, "id" | "conversationId" | "text">, visible: boolean): boolean {
-    if (this.#deliveries.has(delivery.id)) return false;
-    this.#deliveries.add(delivery.id);
+  /** A Router chat message is already the final result; do not re-read a transcript that may have moved on. */
+  deliver(message: Pick<BotChatMessage, "id" | "conversationId" | "text">, visible: boolean): boolean {
+    if (this.#deliveries.has(message.id)) return false;
+    this.#deliveries.add(message.id);
     if (this.#deliveries.size > 256) this.#deliveries.delete(this.#deliveries.values().next().value!);
     this.#pending = undefined;
-    if (!visible || !delivery.text.trim()) return false;
+    if (!visible || !message.text.trim()) return false;
     this.completion = {
-      conversationId: delivery.conversationId, text: delivery.text.trim(), revision: ++this.#revision,
+      conversationId: message.conversationId, text: message.text.trim(), revision: ++this.#revision,
     };
     return true;
   }

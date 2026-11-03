@@ -295,7 +295,21 @@ function v12(db: Db): void {
   `);
 }
 
+function v13(db: Db): void {
+  db.exec(`
+    CREATE TABLE bot_chat_messages (
+      id              TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES bot_conversations(conversation_id),
+      role            TEXT NOT NULL,
+      input_id        TEXT,
+      created_at      INTEGER NOT NULL,
+      data            TEXT NOT NULL
+    );
+    CREATE INDEX bot_chat_messages_created ON bot_chat_messages(created_at, id);
+  `);
+}
+
 /** The whole schema, in order. Its length is the version this build of the app knows. */
-export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12];
+export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

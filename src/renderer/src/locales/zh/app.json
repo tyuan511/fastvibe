@@ -16,7 +16,7 @@
   "supplementPlaceholder": "补充这件事的要求…",
   "backgroundHint": "离开这个页面后任务仍会继续，退出 FastVibe 后暂停。",
   "ready": "随时可以开始",
-  "thinking": "正在安排",
+  "executionFailed": "这次处理没有完成，你可以继续交代。",
   "workingCount": "正在处理 {{count}} 件事",
   "waitingCount": "有 {{count}} 个问题等你回答",
   "tasks": "交办的事情",

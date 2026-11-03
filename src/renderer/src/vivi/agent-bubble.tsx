@@ -7,7 +7,6 @@ import { applyUiLanguage } from "@/lib/i18n";
 import { applyThemePreferences } from "@/lib/themes";
 import { ViviCompletionState } from "@/lib/vivi-completion";
 import { ViviNotificationLifetime } from "@/lib/vivi-notification";
-import { engine } from "@/lib/engine-client";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import type { ViviSnapshot } from "@shared/vivi";
@@ -44,31 +43,15 @@ function ViviBubble(): JSX.Element | null {
   const change = useCallback(() => redraw((value) => value + 1), []);
 
   useEffect(() => {
-    let alive = true;
     listeners.add(change);
-    const off = api.engine.onEvent((event) => {
-      const previous = completions.current.completion;
-      const request = completions.current.event(event);
-      if (previous !== completions.current.completion) change();
-      if (!request) return;
-      const snapshot = surface.snapshot;
-      // Foreground/disabled completions are consumed where they arrive, even if
-      // focus changes while the transcript read would have been in flight.
-      if (!snapshot?.visible || !snapshot.settings.enabled || snapshot.settings.messages === false || snapshot.appFocused === true) return;
-      void engine.getSnapshot(request.conversationId, 2).then((snapshot) => {
-        if (alive && completions.current.accept(request, snapshot)) change();
-      }).catch(() => {
-        // An unreadable completion produces no notice, never a progress/error message.
-      });
-    });
     const offBot = api.bot.onChanged((event) => {
-      if (!event.delivery) return;
+      if (!event.message || event.message.role !== "assistant") return;
       const snapshot = surface.snapshot;
       const eligible = Boolean(snapshot?.visible && snapshot.settings.enabled && snapshot.settings.messages !== false && snapshot.appFocused !== true);
-      if (completions.current.deliver(event.delivery, eligible)) change();
+      if (completions.current.deliver(event.message, eligible)) change();
     });
     const theme = api.settings.onChanged((settings) => applyThemePreferences(settings as Parameters<typeof applyThemePreferences>[0]));
-    return () => { alive = false; listeners.delete(change); off(); offBot(); theme(); };
+    return () => { listeners.delete(change); offBot(); theme(); };
   }, [change]);
 
   const { snapshot, moving } = surface;

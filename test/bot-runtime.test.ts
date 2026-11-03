@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { openDatabase } from "../src/main/engine/db.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openDatabase, openDatabaseConnection, type Db } from "../src/main/engine/db.ts";
+import { botChatMessages } from "../src/renderer/src/lib/vivi-chat.ts";
 import { BotRuntime } from "../src/main/bot/bot-runtime.ts";
 import { BotStore } from "../src/main/bot/bot-store.ts";
 import type { BotChanged, BotExecutionOutcome, BotHost } from "../src/shared/bot.ts";
@@ -9,47 +13,115 @@ const done: BotExecutionOutcome = { status: "completed", text: "完成" };
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((yes) => { resolve = yes; }); return { promise, resolve }; }
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 async function until(check: () => boolean): Promise<void> { for (let i = 0; i < 300; i++) { if (check()) return; await tick(); } throw new Error("condition did not settle"); }
-function fixture() {
-  const db = openDatabase(":memory:");
+function withExternalProject<T extends object>(value: T, project: string): T { return { ...value, project } as T; }
+function fixture(db: Db = openDatabase(":memory:")) {
   const store = new BotStore(db);
   const events: BotChanged[] = [];
   const calls: Array<Parameters<BotHost["execute"]>[0]> = [];
   let behavior: BotHost["execute"] = async () => done;
   const ids = new Map<string, string>();
+  const resolvedProjects: string[] = [];
   const host: BotHost = {
     createConversation: async ({ kind, key }) => { const id = ids.get(key) ?? `${kind}:${ids.size + 1}`; ids.set(key, id); return { conversationId: id }; },
     execute: async (input) => { calls.push(input); return behavior(input); },
     snapshot: async (conversationId) => ({ conversationId, messages: [], running: false } as never),
     messages: async () => [], abort: async () => {},
-    resolveProject: (project) => { if (project === "bad") throw new Error("not a project"); return project ?? "/output"; },
+    resolveProject: () => { resolvedProjects.push("/output"); return "/output"; },
     changed: (event) => events.push(event),
   };
   const runtime = new BotRuntime(store, host);
-  return { db, store, runtime, host, events, calls, behavior: (fn: typeof behavior) => { behavior = fn; } };
+  return { db, store, runtime, host, events, calls, resolvedProjects, behavior: (fn: typeof behavior) => { behavior = fn; } };
 }
 
- test("会话提交幂等、稳定创建键和项目校验", async () => {
+ test("Vivi 忽略外部 project，Router 和 Worker 固定使用默认工作区", async () => {
   const f = fixture();
   try {
     f.runtime.start();
-    await f.runtime.submit({ requestId: "r1", text: "整理报告", project: "/project" });
-    await f.runtime.submit({ requestId: "r1", text: "整理报告", project: "/project" });
+    await f.runtime.submit(withExternalProject({ requestId: "r1", text: "整理报告" }, "/project"));
+    await f.runtime.submit(withExternalProject({ requestId: "r1", text: "整理报告" }, "bad"));
     assert.equal(f.store.conversations().length, 1);
     assert.equal(f.store.inputs().length, 1);
+    assert.equal("project" in (f.store.input("r1") as object), false);
+    assert.equal(f.resolvedProjects[0], "/output");
     await assert.rejects(f.runtime.submit({ requestId: "r1", text: "不同内容" }), /不同内容/);
-    await assert.rejects(f.runtime.submit({ requestId: "r2", text: "工作", project: "bad" }), /not a project/);
+    const worker = await f.runtime.createWork(withExternalProject({ requestId: "w1", title: "工作", text: "整理" }, "/other"));
+    assert.equal(worker.project, "/output");
+    assert.equal(f.resolvedProjects.at(-1), "/output");
     const restarted = new BotRuntime(new BotStore(f.db), f.host);
-    await restarted.submit({ requestId: "r1", text: "整理报告", project: "/project" });
-    assert.equal(f.store.conversations().length, 1);
+    await restarted.submit(withExternalProject({ requestId: "r1", text: "整理报告" }, "/another"));
+    assert.equal(f.store.conversations().length, 2);
     await restarted.stop();
   } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("Vivi 用户消息与 Router 回复写入独立 feed，路由给 Worker 的输入不进入 feed", async () => {
+  const f = fixture();
+  try {
+    f.behavior(async (input) => {
+      if (input.conversationId.startsWith("router:")) await f.runtime.reply({ conversationId: input.conversationId, text: "已安排任务。" });
+      return done;
+    });
+    f.runtime.start();
+    await f.runtime.submit({ requestId: "feed-user", text: "安排任务" });
+    await until(() => f.store.input("feed-user")?.status === "completed");
+    assert.deepEqual(f.store.chatMessages().map((message) => [message.role, message.text]), [["user", "安排任务"], ["assistant", "已安排任务。"]]);
+    const worker = await f.runtime.createWork({ requestId: "feed-worker", title: "后台任务", text: "执行后台任务" });
+    await f.runtime.routeMessage({ requestId: "feed-route", conversationId: worker.conversationId, text: "补充要求" });
+    assert.equal(f.store.chatMessages().some((message) => message.text === "补充要求"), false);
+  } finally { await f.runtime.stop(); f.db.close(); }
+});
+
+test("附件用户消息经数据库重开、snapshot 和聊天映射后仍完整，模型元数据不进入正文", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vivi-feed-attachments-"));
+  const file = join(dir, "state.db");
+  const f = fixture(openDatabaseConnection(file));
+  const suffix = '\n\n<fastvibe-attachments>\n- /tmp/report.md\n</fastvibe-attachments>\n\n<fastvibe-pasted-text>\n[{"name":"notes.txt","content":"粘贴内容"}]\n</fastvibe-pasted-text>';
+  const images = [{ type: "image" as const, mimeType: "image/png", data: "aW1hZ2U=" }];
+  let reopened: Db | undefined;
+  try {
+    const mixed = { requestId: "mixed", text: `请看这些内容${suffix}`, images };
+    const filesOnly = { requestId: "files-only", text: suffix };
+    const imageOnly = { requestId: "image-only", text: "", images };
+    for (const request of [mixed, filesOnly, imageOnly]) {
+      await f.runtime.submit(request);
+      await f.runtime.submit(request);
+      assert.equal(f.store.input(request.requestId)?.text, request.text.trim());
+      assert.deepEqual(f.store.input(request.requestId)?.images, request.images);
+    }
+    f.behavior(async () => ({ status: "completed", text: "" }));
+    f.runtime.start();
+    await until(() => f.store.inputs().every((input) => input.status === "completed"));
+    assert.deepEqual(f.calls.map(({ text, images }) => ({ text, images })), [mixed, filesOnly, imageOnly].map(({ text, images }) => ({ text: text.trim(), images })));
+    const before = await f.runtime.getWorkSnapshot();
+    await f.runtime.stop();
+    f.db.close();
+    reopened = openDatabaseConnection(file);
+    const restored = new BotRuntime(new BotStore(reopened), f.host);
+    const snapshot = await restored.getWorkSnapshot();
+    assert.deepEqual(snapshot.messages, before.messages);
+    const visible = botChatMessages(snapshot.messages);
+    assert.deepEqual(visible.map((message) => message.text), ["请看这些内容", "", ""]);
+    assert.deepEqual(visible.map((message) => message.attachments?.length), [3, 2, 1]);
+    assert.deepEqual(visible[0].attachments?.map((item) => [item.kind, item.name, item.path, item.text]), [
+      ["file", "report.md", "/tmp/report.md", undefined],
+      ["file", "notes.txt", undefined, "粘贴内容"],
+      ["image", "image-1.png", undefined, undefined],
+    ]);
+    assert.equal(visible[0].attachments?.[2]?.dataUrl, "data:image/png;base64,aW1hZ2U=");
+    assert.equal(visible[2].attachments?.[0]?.dataUrl, "data:image/png;base64,aW1hZ2U=");
+    assert.ok(visible.every((message) => !message.parts?.some((part) => part.kind === "text" && part.text.includes("fastvibe-"))));
+  } finally {
+    await f.runtime.stop();
+    if (reopened) reopened.close(); else f.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("Router 创建稳定 Worker，会话结果写入 outbox 并成功投递一次", async () => {
   const f = fixture();
   try {
     f.behavior(async (input) => {
-      if (input.conversationId.startsWith("router:")) { await f.runtime.createWork({ requestId: "w1", title: "报告", text: "写报告", project: "/project" }); return done; }
+      if (input.conversationId.startsWith("router:")) { await f.runtime.createWork(withExternalProject({ requestId: "w1", title: "报告", text: "写报告" }, "/project")); return done; }
       await f.runtime.report({ conversationId: input.conversationId, requestId: input.requestId, outcome: "ready", summary: "报告已写好", evidence: ["已检查"], artifacts: ["/project/report.md"] });
       return done;
     });
@@ -152,29 +224,31 @@ test("停止全部后新请求恢复 Router，重启与重复请求不重放旧�
   } finally { await restarted?.stop(); await f.runtime.stop(); f.db.close(); }
 });
 
-test("图片输入跨 Runtime 重建保留附件，图片与项目均参与幂等校验", async () => {
+test("图片输入跨 Runtime 重建保留附件且参与幂等校验", async () => {
   const f = fixture();
   let restarted: BotRuntime | undefined;
   const images = [{ type: "image" as const, mimeType: "image/png", data: "aW1hZ2U=" }];
   try {
-    await f.runtime.submit({ requestId: "image-only", text: "  ", images, project: "/project" });
-    await f.runtime.submit({ requestId: "image-only", text: "", images, project: "/project" });
-    await assert.rejects(f.runtime.submit({ requestId: "image-only", text: "", images: [{ ...images[0], data: "b3RoZXI=" }], project: "/project" }), /不同内容/);
-    await assert.rejects(f.runtime.submit({ requestId: "image-only", text: "", images, project: "/other" }), /不同内容/);
+    await f.runtime.submit(withExternalProject({ requestId: "image-only", text: "  ", images }, "/project"));
+    await f.runtime.submit(withExternalProject({ requestId: "image-only", text: "", images }, "/project"));
+    await assert.rejects(f.runtime.submit(withExternalProject({ requestId: "image-only", text: "", images: [{ ...images[0], data: "b3RoZXI=" }] }, "/project")), /不同内容/);
+    await f.runtime.submit(withExternalProject({ requestId: "image-only", text: "", images }, "/other"));
     await assert.rejects(f.runtime.submit({ requestId: "empty", text: "", images: [] }), /消息不能为空/);
     await assert.rejects(f.runtime.submit({ requestId: "invalid", text: "图片", images: [{}] as never }), /图片附件格式无效/);
     const stored = new BotStore(f.db);
     assert.deepEqual(stored.input("image-only")?.images, images);
+    assert.equal(stored.chatMessage("chat:user:image-only")?.text, "");
+    assert.equal(stored.chatMessage("chat:user:image-only")?.attachments?.[0]?.dataUrl, "data:image/png;base64,aW1hZ2U=");
     restarted = new BotRuntime(stored, f.host);
     restarted.start();
     await until(() => stored.input("image-only")?.status === "completed");
     assert.deepEqual(f.calls[0].images, images);
     assert.equal(f.calls[0].text, "");
-    assert.equal(f.calls[0].project, "/project");
+    assert.equal("project" in (f.calls[0] as object), false);
   } finally { await restarted?.stop(); await f.runtime.stop(); f.db.close(); }
 });
 
-test("每条 Router 输入使用自己的项目，排队选择不会污染当前上下文", async () => {
+test("每条 Router 输入都忽略外部 project 并使用默认工作区", async () => {
   const f = fixture();
   const gate = deferred<BotExecutionOutcome>();
   const seen: Array<string | undefined> = [];
@@ -182,23 +256,24 @@ test("每条 Router 输入使用自己的项目，排队选择不会污染当前
     f.behavior(async (input) => {
       if (!input.conversationId.startsWith("router:")) return done;
       const context = f.runtime.contextFor(input.conversationId);
-      seen.push(context.input?.project);
+      assert.equal(context.input && "project" in context.input, false);
+      seen.push(undefined);
       assert.equal(context.input?.requestId, input.requestId);
       if (input.requestId === "a") return gate.promise;
-      await f.runtime.createWork({ requestId: `work-${input.requestId}`, title: "整理项目", text: "整理这个项目" });
+      await f.runtime.createWork(withExternalProject({ requestId: `work-${input.requestId}`, title: "整理项目", text: "整理这个项目" }, "/worker-project"));
       return done;
     });
     f.runtime.start();
-    await f.runtime.submit({ requestId: "a", text: "整理这个项目", project: "/project-a" });
+    await f.runtime.submit(withExternalProject({ requestId: "a", text: "整理这个项目" }, "/project-a"));
     await until(() => seen.length === 1);
-    await f.runtime.submit({ requestId: "b", text: "整理这个项目", project: "/project-b" });
-    await f.runtime.submit({ requestId: "c", text: "整理默认输出目录" });
-    assert.equal(f.runtime.contextFor(f.store.routerConversationId!).input?.project, "/project-a");
+    await f.runtime.submit(withExternalProject({ requestId: "b", text: "整理这个项目" }, "/project-b"));
+    await f.runtime.submit(withExternalProject({ requestId: "c", text: "整理默认输出目录" }, "/project-c"));
+    assert.equal(f.runtime.contextFor(f.store.routerConversationId!).input && "project" in f.runtime.contextFor(f.store.routerConversationId!).input!, false);
     gate.resolve(done);
     await until(() => seen.length === 3);
-    assert.deepEqual(seen, ["/project-a", "/project-b", undefined]);
-    assert.equal(f.store.input("b")?.project, "/project-b");
-    assert.equal(f.store.conversationByKey("work:work-b")?.project, "/project-b");
+    assert.deepEqual(seen, [undefined, undefined, undefined]);
+    assert.equal("project" in (f.store.input("b") as object), false);
+    assert.equal(f.store.conversationByKey("work:work-b")?.project, "/output");
     await until(() => Boolean(f.store.conversationByKey("work:work-c")));
     assert.equal(f.store.conversationByKey("work:work-c")?.project, "/output");
   } finally { gate.resolve(done); await f.runtime.stop(); f.db.close(); }

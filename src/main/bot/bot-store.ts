@@ -1,5 +1,5 @@
 import type { Db } from "../engine/db.ts";
-import type { BotAttention, BotConversationMeta, BotDelivery, BotInput, BotResult } from "../../shared/bot.ts";
+import type { BotAttention, BotChatMessage, BotConversationMeta, BotDelivery, BotInput, BotResult } from "../../shared/bot.ts";
 
 type Row = { data: string };
 const one = <T>(row?: Row): T | undefined => row ? JSON.parse(row.data) as T : undefined;
@@ -36,6 +36,10 @@ export class BotStore {
   deliveries(status?: BotDelivery["status"]): BotDelivery[] { return many(this.db.all<Row>(status ? "SELECT data FROM bot_outbox WHERE status=? ORDER BY created_at,id" : "SELECT data FROM bot_outbox ORDER BY created_at,id", ...(status ? [status] : []))); }
   putDelivery(value: BotDelivery): boolean { return this.db.run("INSERT INTO bot_outbox(id,conversation_id,target_conversation_id,status,created_at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", value.id, value.conversationId, value.targetConversationId, value.status, value.createdAt, JSON.stringify(value)).changes > 0; }
   updateDelivery(value: BotDelivery): void { this.db.run("UPDATE bot_outbox SET status=?, data=? WHERE id=?", value.status, JSON.stringify(value), value.id); }
+  chatMessage(id: string): BotChatMessage | undefined { return one<BotChatMessage>(this.db.get<Row>("SELECT data FROM bot_chat_messages WHERE id=?", id)); }
+  chatMessages(): BotChatMessage[] { return many(this.db.all<Row>("SELECT data FROM bot_chat_messages ORDER BY created_at,id")); }
+  hasChatMessage(inputId: string, role: BotChatMessage["role"]): boolean { return Boolean(this.db.get("SELECT 1 FROM bot_chat_messages WHERE input_id=? AND role=? LIMIT 1", inputId, role)); }
+  putChatMessage(value: BotChatMessage): void { this.db.run("INSERT INTO bot_chat_messages(id,conversation_id,role,input_id,created_at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING", value.id, value.conversationId, value.role, value.inputId ?? null, value.createdAt, JSON.stringify(value)); }
 
   recover(): void {
     this.transaction(() => {

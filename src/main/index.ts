@@ -663,12 +663,12 @@ app.whenReady().then(async () => {
     syncScheduleTray(backgroundWorkEnabled(), openWindow, () => app.quit());
     const event = payload as BotChanged;
     notifyBotAttention();
-    if (event.delivery) {
-      const delivery = event.delivery;
-      getViviPetWindow().setMood("success", delivery.conversationId);
+    if (event.message?.role === "assistant") {
+      const message = event.message;
+      getViviPetWindow().setMood("success", message.conversationId);
       if (![...windows].some((window) => !window.isDestroyed() && window.isFocused()) && notificationEnabled(readNotificationSettings(), "notifyDone")) {
-        presentNotification({ setting: "notifyDone", title: uiText("Vivi 已完成任务", "Vivi finished your task"), body: delivery.text.slice(0, 400), conversationId: delivery.conversationId }, {
-          windows: () => windows, createWindow: () => createWindow(`/vivi?conversation=${encodeURIComponent(delivery.conversationId)}`), openConversation: async (conversationId) => openViviWindow(conversationId),
+        presentNotification({ setting: "notifyDone", title: uiText("Vivi 已完成任务", "Vivi finished your task"), body: message.text.slice(0, 400), conversationId: message.conversationId }, {
+          windows: () => windows, createWindow: () => createWindow("/vivi"), openConversation: async () => openViviWindow(),
         });
       }
     }

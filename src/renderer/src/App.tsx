@@ -1876,7 +1876,7 @@ export function App(): JSX.Element {
               <SidePane narrow parentId={VIVI_PANE_SCOPE} canSideChat={false} onNewChat={onSidePaneNewChat} onError={setError} />
             ) : viviOpen ? (
               <Suspense fallback={<main className="flex min-h-0 flex-1" />}>
-                <ViviPage projects={projects} sidebarCollapsed={sidebarCollapsed} onExpandSidebar={() => setSidebarCollapsed(false)} onManageModels={() => navigate("/settings/providers")} />
+                <ViviPage mainModel={session?.model} sidebarCollapsed={sidebarCollapsed} onExpandSidebar={() => setSidebarCollapsed(false)} onManageModels={() => navigate("/settings/providers")} />
               </Suspense>
             ) : pluginsOpen ? (
               <main className="flex min-h-0 min-w-0 flex-1 flex-col">
