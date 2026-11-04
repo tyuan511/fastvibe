@@ -750,7 +750,8 @@ function ChatMessageRowImpl({
       );
     }
     if (part.kind === "tool") {
-      const shown = previewsOf(part);
+      // Image generation presents its own result grid; keep generic links only in the fold strip.
+      const shown = part.tool.name === "generate_image" ? [] : previewsOf(part);
       return (
         <Fragment key={`tool-${part.tool.id}`}>
           <PartSlot>

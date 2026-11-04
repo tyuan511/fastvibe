@@ -35,6 +35,7 @@ Electron + React 桌面客户端，面向 Code / Office / Cowork；默认引擎�
 | 运行标记、Stop/Continue、队列、handoff、压缩 | [会话生命周期](docs/engineering/session-lifecycle.md) |
 | 布局、主题/玻璃、字号、滚动条、i18n、路由、菜单、设置 | [界面合同](docs/engineering/ui.md) |
 | 文件树、Git、文件预览、Office、图片/HTML 交付 | [工作区与媒体](docs/engineering/workspace-and-media.md) → [OfficeCLI](docs/office-officecli.md) |
+| 图片生成、图片协议、模型可用性与 Agent 生图工具 | [图片生成工作台](docs/image-generation.md) |
 | Markdown、Shiki/diff、Mermaid、HTML 清洗、数学 | [渲染合同](docs/engineering/markdown.md) |
 | 转写气泡、错误/中止、折叠、思考、技能、附件、上下文统计 | [转写呈现](docs/engineering/transcript.md) |
 | 供应商/OAuth、协议/URL、模型热更新、思考、轻量请求、models.dev | [模型合同](docs/engineering/models.md) |

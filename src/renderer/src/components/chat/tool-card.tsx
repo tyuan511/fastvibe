@@ -22,6 +22,7 @@ import { QuestionAnswers } from "./question-answers";
 import { TodoChecklist } from "./todo-list";
 import { ToolRow } from "./tool-row";
 import { AgentActionCard } from "./agent-action-card";
+import { ImageGenerationCard } from "./image-generation-card";
 import { agentToolAction } from "@/lib/agent-tool";
 import { useTranscriptConversation } from "./conversation-context";
 import { cn } from "@/lib/utils";
@@ -452,6 +453,7 @@ export const ToolCard = memo(function ToolCard({
 }): JSX.Element {
   const cwd = useWorkspacePath();
   if (agentToolAction(tool.name)) return <AgentActionCard tool={tool} showIcon={showIcon}><ToolDetail tool={tool} running={tool.status === "running"} /></AgentActionCard>;
+  if (tool.name === "generate_image") return <ImageGenerationCard tool={tool} showIcon={showIcon}><ToolDetail tool={tool} running={tool.status === "running"} /></ImageGenerationCard>;
   const view = describeTool(tool, cwd);
   const running = tool.status === "running";
   // read / search / list are single-line rows in zcode: the subject opens the file

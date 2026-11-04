@@ -101,6 +101,7 @@ import { isAbortOutcome, isCompactionCancelled } from "@shared/abort";
  * router validates `#/settings/:section` on every navigation); only the panes are
  * deferred, and they load while the route's own transition runs.
  */
+const ImageWorkbench = lazy(async () => ({ default: (await import("@/components/images/image-workbench")).ImageWorkbench }));
 const ViviPage = lazy(async () => ({ default: (await import("@/components/bot/vivi-page")).ViviPage }));
 const SettingsDialog = lazy(async () => ({
   default: (await import("@/components/settings/settings-dialog")).SettingsDialog,
@@ -270,6 +271,7 @@ export function App(): JSX.Element {
   const pluginsOpen = Boolean(useMatch("/plugins"));
   const tasksOpen = Boolean(useMatch(TASKS_PATH));
   const viviOpen = Boolean(useMatch("/vivi"));
+  const imagesOpen = Boolean(useMatch("/images"));
   useEffect(() => window.fastvibe.bot.onNavigate(({ runId }) => {
     navigate(runId ? `/vivi?run=${encodeURIComponent(runId)}` : "/vivi");
   }), [navigate]);
@@ -327,7 +329,7 @@ export function App(): JSX.Element {
   // A phone has no width to give the sidebar or the right pane; the first overlays
   // (`CollapsiblePanel overlay`) and the second is simply not there.
   const narrow = useIsNarrowViewport();
-  const paneMaximized = !narrow && storedPaneMaximized;
+  const paneMaximized = !imagesOpen && !narrow && storedPaneMaximized;
   // Vivi owns its pane tabs. This is navigation only: the ordinary conversation
   // remains active in the engine, and regains its own pane on return.
   useLayoutEffect(() => {
@@ -1380,7 +1382,7 @@ export function App(): JSX.Element {
       applyOpen(opened);
       if (source === "user") revealConversation(id);
       else if (source === "remote") revealConversation(id, true);
-      else if (source === "restore" && !/\/(settings|plugins|tasks|vivi)/.test(window.location.hash)) revealConversation(id, true);
+      else if (source === "restore" && !/\/(settings|plugins|tasks|vivi|images)/.test(window.location.hash)) revealConversation(id, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1718,6 +1720,7 @@ export function App(): JSX.Element {
   const onSidebarOpenMarket = useStable(() => navigate("/plugins"));
   const onSidebarOpenTasks = useStable(() => navigate(TASKS_PATH));
   const onSidebarOpenVivi = useStable(() => navigate("/vivi"));
+  const onSidebarOpenImages = useStable(() => navigate("/images"));
   const onSidebarSearch = useStable(() => setCommandOpen(true));
   const onSidePaneNewChat = useStable(() => void handleNewChat());
 
@@ -1840,7 +1843,7 @@ export function App(): JSX.Element {
           <Sidebar
             projects={projects}
             conversations={conversations}
-            activeId={viviOpen ? null : openingId ?? activeId}
+            activeId={viviOpen || imagesOpen ? null : openingId ?? activeId}
             running={running}
             waitingForUser={waitingForUser}
             failedInBackground={failedInBackground}
@@ -1862,6 +1865,8 @@ export function App(): JSX.Element {
             tasksActive={tasksOpen}
             onOpenVivi={onSidebarOpenVivi}
             viviActive={viviOpen}
+            imagesActive={imagesOpen}
+            onOpenImages={onSidebarOpenImages}
             onSearch={onSidebarSearch}
           />
           {narrow || sidebarCollapsed ? null : <ResizableHandle data-pane-edge="sidebar" />}
@@ -1872,7 +1877,11 @@ export function App(): JSX.Element {
             inert={paneMaximized || undefined}
             aria-hidden={paneMaximized || undefined}
           >
-            {viviOpen && narrow && !paneCollapsed ? (
+            {imagesOpen ? (
+              <Suspense fallback={<main className="flex min-h-0 flex-1" />}>
+                <ImageWorkbench sidebarCollapsed={sidebarCollapsed} onExpandSidebar={() => setSidebarCollapsed(false)} onOpenConversation={(id) => { void handleOpen(id, "user"); }} />
+              </Suspense>
+            ) : viviOpen && narrow && !paneCollapsed ? (
               <SidePane narrow parentId={VIVI_PANE_SCOPE} canSideChat={false} onNewChat={onSidePaneNewChat} onError={setError} />
             ) : viviOpen ? (
               <Suspense fallback={<main className="flex min-h-0 flex-1" />}>
@@ -2036,8 +2045,8 @@ export function App(): JSX.Element {
               at all. The conversation is what a narrow screen is for. A maximised pane
               has swallowed the conversation column, so its splitter has nothing to
               resize against either. */}
-          {narrow || paneCollapsed || paneMaximized ? null : <ResizableHandle data-pane-edge="side-pane" />}
-          {narrow ? null : (
+          {imagesOpen || narrow || paneCollapsed || paneMaximized ? null : <ResizableHandle data-pane-edge="side-pane" />}
+          {imagesOpen || narrow ? null : (
             <SidePane
               cwd={viviOpen ? undefined : active?.project ? active.cwd : activeProject?.cwd}
               project={viviOpen ? undefined : active?.project}

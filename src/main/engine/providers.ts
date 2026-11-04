@@ -1,9 +1,10 @@
+import { isImageApi } from "../../shared/image-model.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { readFileSync, writeFileSync } from "node:fs";
 import { INPUT_MODALITIES, PROVIDER_APIS, THINKING_EFFORT_LEVELS, type CostTier, type FastVibeModel, type ModelCost, type ModelPrice, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel, type ThinkingLevel } from "@shared/types";
 import { catalogPrice, enrichModel, loadModelsDev, type ModelsDevIndex } from "./models-dev";
-import { findNativeProvider, listNativeProviders, mergeNativeModels, selectedNativeModels } from "./native-providers";
+import { findNativeProvider, listNativeProviders, mergeNativeModels } from "./native-providers";
 import { piProviderModelsEntry } from "./pi-global-sync.ts";
 import { engineModelBaseUrl } from "./provider-url";
 import { automaticModelApi } from "./model-api";
@@ -244,10 +245,10 @@ export async function fetchProviderModels(
   apiKey: string,
   api?: string,
 ): Promise<ProviderModel[]> {
-  const base = engineModelBaseUrl(baseUrl, api ?? "");
+  const base = engineModelBaseUrl(baseUrl, api === "image-gemini" ? "google-generative-ai" : api ?? "");
   if (!/^https?:\/\//.test(base)) throw new Error("Base URL 需以 http(s):// 开头");
 
-  const listed = api === "google-generative-ai"
+  const listed = api === "google-generative-ai" || api === "image-gemini"
     ? await fetchGeminiModels(base, apiKey)
     : await fetchOpenAiStyleModels(base, apiKey);
   if (listed.length === 0) throw new Error("没有返回任何模型");
@@ -326,7 +327,7 @@ async function getJson(url: string, headers: Record<string, string>): Promise<un
  * text-only) rather than blocking the model.
  */
 function enrichOne(index: ModelsDevIndex, id: string, apiName: string, providerApi?: string): ProviderModel {
-  const api = automaticModelApi(id, providerApi);
+  const api = isImageApi(providerApi) ? undefined : automaticModelApi(id, providerApi);
   return {
     ...enrichModel(index, id, apiName || id),
     thinkingFormat: inferThinkingFormat(id),
@@ -397,7 +398,7 @@ export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
   const connected = connectedProviderIds(paths, keys);
   const writable = providers.filter(
     (provider) => connected.has(provider.id) &&
-      (provider.kind !== "native" || provider.models.some((model) => model.edited === true)),
+      (provider.kind !== "native" || provider.models.some((model) => model.edited === true || isImageApi(model.api ?? provider.api))),
   );
   writeFileSync(paths.modelsJson, renderModelsJson(writable), "utf8");
 
@@ -407,7 +408,7 @@ export function applyProviders(paths: FastVibePaths): FastVibeModel[] {
   return providers
     .filter((provider) => connected.has(provider.id))
     .flatMap((provider) =>
-      orderProviderModels(provider.models, provider.modelOrder).map((model) => ({
+      orderProviderModels(provider.models, provider.modelOrder).filter((model) => !isImageApi(model.api ?? provider.api)).map((model) => ({
         provider: provider.id,
         providerName: provider.name,
         id: model.id,
@@ -556,10 +557,7 @@ export async function addNativeProvider(
     enabled: true,
     // Re-read through the catalog so a stale renderer payload cannot smuggle in
     // models the SDK no longer ships.
-    models: selectedNativeModels(
-      id,
-      models.map((model) => model.id),
-    ),
+    models: mergeNativeModels(id, models),
   });
   writeProviders(paths, providers);
   if (key) await setProviderKey(paths, apiKeyEnv, key);
@@ -689,14 +687,19 @@ export async function refreshProviderModels(
   const provider = readProviders(paths).find((item) => item.id === id);
   if (!provider) throw new Error("供应商不存在");
   if (paths.engineMode === "global") return provider.models;
-  if (provider.kind === "native") return findNativeProvider(id)?.models ?? [];
+  const preserveImages = (models: ProviderModel[]): ProviderModel[] => {
+    const images = provider.models.filter((model) => isImageApi(model.api ?? provider.api));
+    const saved = new Map(images.map((model) => [model.id, model]));
+    return [...models.map((model) => saved.get(model.id) ?? model), ...images.filter((image) => !models.some((model) => model.id === image.id))];
+  };
+  if (provider.kind === "native") return preserveImages(findNativeProvider(id)?.models ?? []);
   const keys = await loadProviderKeys(paths);
   const models = await fetchProviderModels(provider.baseUrl, keys[provider.apiKeyEnv] ?? "", provider.api);
   if (provider.kind === "custom" && !provider.gateway) {
     const probe = await probeGateway(provider.baseUrl);
     if (probe) setProviderGateway(paths, id, probe);
   }
-  return models;
+  return preserveImages(models);
 }
 
 /** Record what the gateway probe found. Ignored for anything but a custom entry. */
@@ -747,7 +750,7 @@ function hydrateProvider(value: StoredProviderInput): StoredProvider {
       api: native.api,
       // Keep the selected roster, but let the SDK refresh every unedited row and
       // re-apply edited metadata on top of the current catalog entry.
-      models: mergeNativeModels(value.id, base.models.filter((model) => live.has(model.id))),
+      models: mergeNativeModels(value.id, base.models.filter((model) => live.has(model.id) || isImageApi(model.api))),
     };
   }
 

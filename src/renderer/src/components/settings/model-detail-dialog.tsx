@@ -24,6 +24,8 @@ import {
 import { cleanError } from "@/lib/ipc-error";
 import { thinkingLabel } from "@/lib/thinking-levels";
 import { cn } from "@/lib/utils";
+import { isImageApi } from "@shared/image-model";
+import { PROVIDER_API_SHORT } from "./providers-settings-types";
 import {
   DEFAULT_THINKING_LEVELS,
   PROVIDER_APIS,
@@ -38,12 +40,7 @@ import {
 /** Not an api: the model inherits whichever protocol its provider uses. */
 const INHERIT_API = "inherit";
 
-const API_LABELS: Record<ProviderApi, string> = {
-  "openai-completions": "Chat Completions",
-  "openai-responses": "Responses",
-  "anthropic-messages": "Messages",
-  "google-generative-ai": "Gemini",
-};
+const API_LABELS = PROVIDER_API_SHORT;
 
 function sourceLabel(source: string): string {
   if (source === "native") return i18n.t("settings:modelDetail.engineBuiltin") as string;
@@ -100,12 +97,10 @@ export function ModelDetailDialog({
   onClose: () => void;
   onSave: (next: ProviderModel) => Promise<void>;
 }): JSX.Element {
-  // Native models remain owned by the SDK, but Main persists the editable metadata as
-  // a `models.json.modelOverrides` entry. Provider identity and protocol stay read-only
-  // because they determine which native auth and streaming implementation is used.
+  // Native chat protocols stay inherited; image protocols can be selected per model.
   const { t } = useTranslation("settings");
   const editable = provider !== undefined;
-  const protocolEditable = editable && provider?.kind !== "native";
+  const protocolEditable = editable;
   const model = target?.model;
 
   const [name, setName] = useState("");
@@ -127,6 +122,8 @@ export function ModelDetailDialog({
     setBusy(false);
   }, [model]);
 
+  const imageModel = isImageApi(api === INHERIT_API ? provider?.api : api);
+  const protocolChoices = PROVIDER_APIS.filter((item) => provider?.kind !== "native" || isImageApi(item) || item === model?.api);
   const reasoning = traits.has("reasoning");
 
   function toggleTrait(key: TraitKey, on: boolean): void {
@@ -138,21 +135,21 @@ export function ModelDetailDialog({
     });
     // Levels are meaningless without reasoning; keep the selection for the moment the
     // user re-enables it, but the saved model drops them.
-      }
+  }
 
   async function submit(): Promise<void> {
     if (!model) return;
     const contextWindow = Number.parseInt(context.trim(), 10);
     const maxTokens = Number.parseInt(output.trim(), 10);
-    if (!Number.isFinite(contextWindow) || contextWindow <= 0) {
+    if (!imageModel && (!Number.isFinite(contextWindow) || contextWindow <= 0)) {
       toast.error(t("modelDetail.contextInvalid"));
       return;
     }
-    if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
+    if (!imageModel && (!Number.isFinite(maxTokens) || maxTokens <= 0)) {
       toast.error(t("modelDetail.outputInvalid"));
       return;
     }
-    if (reasoning && levels.size === 0) {
+    if (!imageModel && reasoning && levels.size === 0) {
       toast.error(t("modelDetail.needEffort"));
       return;
     }
@@ -164,11 +161,8 @@ export function ModelDetailDialog({
       await onSave({
         ...model,
         name: name.trim() || model.id,
-        contextWindow,
-        maxTokens,
-        reasoning,
-        input,
-        thinkingLevels: reasoning ? THINKING_EFFORT_LEVELS.filter((level) => levels.has(level)) : undefined,
+        ...(!imageModel ? { contextWindow, maxTokens, reasoning, input,
+          thinkingLevels: reasoning ? THINKING_EFFORT_LEVELS.filter((level) => levels.has(level)) : undefined } : {}),
         edited: true,
         ...(protocolEditable
           ? (api === INHERIT_API ? { api: undefined } : { api: api as ProviderApi })
@@ -216,7 +210,7 @@ export function ModelDetailDialog({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={INHERIT_API}>{t("modelDetail.followProvider", { api: apiLabel(provider?.api ?? "") })}</SelectItem>
-                    {PROVIDER_APIS.map((item) => (
+                    {protocolChoices.map((item) => (
                       <SelectItem key={item} value={item}>
                         {API_LABELS[item]}
                       </SelectItem>
@@ -224,11 +218,11 @@ export function ModelDetailDialog({
                   </SelectContent>
                 </Select>
               ) : (
-                <ReadValue>{apiLabel(model.api ?? provider?.api ?? "")}</ReadValue>
+                <ReadValue>{apiLabel(model.api ?? "")}</ReadValue>
               )}
             </Row>
 
-            <div className="grid grid-cols-2 gap-3">
+            {!imageModel ? <><div className="grid grid-cols-2 gap-3">
               <Row label={t("modelDetail.context")}>
                 <Input
                   value={context}
@@ -296,7 +290,7 @@ export function ModelDetailDialog({
 
             <p className="text-xs text-muted-foreground">
               {t("modelDetail.source", { source: sourceLabel(model.source ?? "") })}
-            </p>
+            </p></> : null}
           </div>
         ) : null}
 

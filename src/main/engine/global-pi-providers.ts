@@ -1,7 +1,8 @@
+import { isImageApi } from "../../shared/image-model.ts";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { type ModelRegistry, readStoredCredential } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { ModelRuntime, type ModelRegistry, readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { getSupportedThinkingLevels, InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import type { FastVibeModel, ProviderModel } from "@shared/types";
 import { findNativeProvider, listNativeProviders } from "./native-providers";
 import { escapePiConfigSecret, piProviderModelsEntry } from "./pi-global-sync";
@@ -55,10 +56,13 @@ export function readGlobalPiProviders(paths: FastVibePaths): GlobalProvider[] {
         edited: true,
       } as ProviderModel;
     }) : (native?.models ?? []).map((model) => ({ ...model, ...bag(bag(raw.modelOverrides)[model.id]), edited: true }));
+    const images = Array.isArray(raw.fastvibeImageModels) ? raw.fastvibeImageModels as ProviderModel[] : [];
+    const imageIds = new Set(images.map((model) => model.id));
     return {
       id, kind: native ? "native" : "custom", name: String(raw.name ?? native?.name ?? id),
-      baseUrl: String(raw.baseUrl ?? native?.baseUrl ?? ""), api: String(raw.api ?? native?.api ?? "openai-completions"),
-      apiKeyEnv: id, enabled: raw.enabled !== false, models,
+      baseUrl: String(raw.baseUrl ?? native?.baseUrl ?? ""), api: String(raw.fastvibeImageApi ?? raw.api ?? native?.api ?? "openai-completions"),
+      apiKeyEnv: id, enabled: raw.enabled !== false,
+      models: [...models.filter((model) => !imageIds.has(model.id)), ...images],
     };
   });
 }
@@ -69,21 +73,65 @@ export function updateGlobalPiProvider(paths: FastVibePaths, provider: GlobalPro
   const entries = bag(config.providers);
   const previous = bag(entries[provider.id]);
   const next = { ...previous };
-  for (const key of ["name", "baseUrl", "api", "enabled"] as const) {
+  for (const key of ["name", "baseUrl", "enabled"] as const) {
     if (changed.includes(key)) next[key] = provider[key];
   }
-  if (changed.includes("models") || changed.includes("modelOrder")) {
+  if (changed.some((key) => ["models", "modelOrder", "api", "baseUrl"].includes(key))) {
     const rendered = piProviderModelsEntry(provider) ?? {};
+    for (const key of ["fastvibeImageApi", "fastvibeImageModels"]) {
+      delete next[key];
+      if (rendered[key] !== undefined) next[key] = rendered[key];
+    }
+    if (provider.kind !== "native") {
+      next.api = rendered.api ?? "openai-completions";
+      next.authHeader = rendered.authHeader ?? true;
+    }
     if (provider.kind === "native") {
+      // An extension-only entry still needs a valid SDK configuration anchor.
+      if (rendered.baseUrl !== undefined) next.baseUrl = rendered.baseUrl;
       const old = bag(previous.modelOverrides);
       next.modelOverrides = Object.fromEntries(Object.entries(bag(rendered.modelOverrides)).map(([id, value]) => [id, { ...bag(old[id]), ...bag(value) }]));
     } else {
       const old = new Map((Array.isArray(previous.models) ? previous.models : []).map((model) => [bag(model).id, bag(model)]));
-      next.models = (Array.isArray(rendered.models) ? rendered.models : []).map((model) => ({ ...old.get(bag(model).id), ...bag(model) }));
+      next.models = (Array.isArray(rendered.models) ? rendered.models : []).map((model) => {
+        const prior = { ...old.get(bag(model).id) };
+        for (const key of ["api", "baseUrl", "compat", "thinkingLevelMap"]) delete prior[key];
+        return { ...prior, ...bag(model) };
+      });
     }
   }
   config.providers = { ...entries, [provider.id]: next };
   writeObject(paths.modelsJson, config);
+}
+
+/** Resolve generic image credentials without ever loading OAuth into a runtime.
+ * Keep pi's API-key priority: stored api_key, models.json expression, native env.
+ * A synthetic generic provider lets pi evaluate stored key expressions too, without
+ * inheriting subscription-specific auth, headers or endpoint behavior. */
+export async function resolveGlobalPiImageKey(paths: FastVibePaths, providerId: string): Promise<string | undefined> {
+  const stored = readStoredCredential(providerId, paths.oauthFile);
+  const configured = bag(bag(readObject(paths.modelsJson).providers)[providerId]).apiKey;
+  const expression = stored?.type === "api_key" ? stored.key : configured;
+  const runtime = await ModelRuntime.create({
+    credentials: new InMemoryCredentialStore(), modelsPath: null,
+    modelsStore: new InMemoryModelsStore(), allowModelNetwork: false, refreshOnCreate: false,
+  });
+  try {
+    if (stored?.type === "api_key" || typeof configured === "string") {
+      // A stored credential owns the provider even if its expression is empty or
+      // unresolved: do not silently switch to another billable credential.
+      if (typeof expression !== "string" || !expression) return undefined;
+      const genericId = "fastvibe-image-key-resolver";
+      runtime.registerProvider(genericId, { api: "openai-completions", apiKey: expression, models: [] });
+      return (await runtime.getAuth(genericId, { env: stored?.type === "api_key" ? stored.env : undefined }))?.auth.apiKey || undefined;
+    }
+    // No credentials were loaded, so this can only use the native API-key
+    // handler's environment lookup. OAuth has no token to read or refresh.
+    return (await runtime.getAuth(providerId))?.auth.apiKey || undefined;
+  } catch {
+    // SDK expression failures can include the credential command itself.
+    return undefined;
+  }
 }
 
 export async function setGlobalPiKey(paths: FastVibePaths, id: string, key: string): Promise<void> {
@@ -92,8 +140,8 @@ export async function setGlobalPiKey(paths: FastVibePaths, id: string, key: stri
   if (key.trim()) auth[id] = { type: "api_key", key: key.trim() };
   else if (current?.type === "api_key") delete auth[id];
   writeObject(paths.oauthFile, auth);
-  // An existing models.json key takes precedence over auth.json. Explicit key edits
-  // retire that expression; unrelated edits leave it byte-for-byte unchanged.
+  // Explicit key edits retire the models.json expression as a fallback;
+  // unrelated edits leave it byte-for-byte unchanged.
   const config = readObject(paths.modelsJson);
   const entries = bag(config.providers);
   if ("apiKey" in bag(entries[id])) {
@@ -113,8 +161,12 @@ export async function removeGlobalPiProvider(paths: FastVibePaths, id: string): 
   delete auth[id];
   writeObject(paths.oauthFile, auth);
 }
-export function globalPiModels(registry: ModelRegistry): FastVibeModel[] {
-  return registry.getAvailable().filter((model) => registry.hasConfiguredAuth(model)).map((model) => ({
+export function globalPiModels(registry: ModelRegistry, paths: FastVibePaths): FastVibeModel[] {
+  const providers = readGlobalPiProviders(paths);
+  const excluded = new Set(providers.flatMap((provider) => provider.models
+    .filter((model) => !provider.enabled || isImageApi(model.api ?? provider.api))
+    .map((model) => `${provider.id}/${model.id}`)));
+  return registry.getAvailable().filter((model) => !excluded.has(`${model.provider}/${model.id}`) && registry.hasConfiguredAuth(model)).map((model) => ({
     provider: model.provider, providerName: findNativeProvider(model.provider)?.name ?? model.provider,
     id: model.id, name: model.name,
     thinkingLevels: getSupportedThinkingLevels(model).filter((level) => level !== "off"),

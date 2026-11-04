@@ -8,6 +8,7 @@ import type { FastVibePaths } from "../src/main/engine/paths.ts";
 import * as types from "../src/shared/types.ts";
 import * as order from "../src/shared/model-order.ts";
 import * as urls from "../src/main/engine/provider-url.ts";
+import * as imageModels from "../src/shared/image-model.ts";
 import * as modelApi from "../src/main/engine/model-api.ts";
 
 /**
@@ -38,6 +39,7 @@ const CATALOG: Record<string, { contextWindow: number; maxTokens: number; cost: 
 
 function loadProviders() {
   const deps: Record<string, unknown> = {
+    "../../shared/image-model.ts": imageModels,
     "@shared/types": types,
     "@shared/model-order": order,
     "./provider-url": urls,

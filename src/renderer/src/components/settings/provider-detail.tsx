@@ -28,6 +28,7 @@ import { cleanError } from "@/lib/ipc-error";
 import { cn } from "@/lib/utils";
 import { PROVIDER_APIS, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
 import { OAuthExtraUsageNote } from "./oauth-extra-usage-note";
+import { isImageApi } from "@shared/image-model";
 import { PROVIDER_API_ITEMS, PROVIDER_API_SHORT } from "./providers-settings-types";
 import { OpenAIQuota } from "./openai-quota";
 import { ModelCheckButton, useModelChecks, type ModelCheckState } from "./provider-test";
@@ -67,6 +68,7 @@ function ProviderModelRow({
   reorderLabel,
   dragProps,
   testControl,
+  imageModel = false,
   overlay = false,
 }: {
   model: ProviderModel;
@@ -75,6 +77,7 @@ function ProviderModelRow({
   reorderLabel: string;
   dragProps?: HTMLAttributes<HTMLDivElement>;
   testControl?: ReactNode;
+  imageModel?: boolean;
   overlay?: boolean;
 }): JSX.Element {
   return (
@@ -93,12 +96,12 @@ function ProviderModelRow({
           {PROVIDER_API_SHORT[model.api]}
         </Badge>
       ) : null}
-      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+      {!imageModel ? <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
         {contextLabel(model.contextWindow)}
-      </span>
+      </span> : null}
       {overlay ? null : (
         <div className="flex cursor-default items-center gap-2 [&_button]:cursor-pointer" title="" onMouseDown={(event) => event.stopPropagation()} onTouchStart={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-          {testControl}
+          {imageModel ? null : testControl}
           <Button size="icon-xs" variant="ghost" onClick={onRemove} aria-label={i18n.t("settings:providers.removeModel") as string}>
             <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} />
           </Button>
@@ -116,6 +119,7 @@ function SortableProviderModelRow({
   reorderLabel,
   check,
   onCheck,
+  imageModel,
 }: {
   model: ProviderModel;
   disabled: boolean;
@@ -125,6 +129,7 @@ function SortableProviderModelRow({
   reorderLabel: string;
   check?: ModelCheckState;
   onCheck: () => void;
+  imageModel?: boolean;
 }): JSX.Element {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: model.id,
@@ -145,6 +150,7 @@ function SortableProviderModelRow({
     >
       <ProviderModelRow
         model={model}
+        imageModel={imageModel}
         onEdit={onEdit}
         onRemove={onRemove}
         reorderLabel={reorderLabel}
@@ -425,6 +431,7 @@ export function ProviderDetail({
                   <SortableProviderModelRow
                     key={model.id}
                     model={model}
+                    imageModel={isImageApi(model.api ?? provider.api)}
                     disabled={saving}
                     check={checks[model.id]}
                     onCheck={() => runCheck(model)}
@@ -450,6 +457,7 @@ export function ProviderDetail({
               {activeModel ? (
                 <ProviderModelRow
                   model={activeModel}
+                  imageModel={isImageApi(activeModel.api ?? provider.api)}
                   onEdit={() => undefined}
                   onRemove={() => undefined}
                   reorderLabel={t("providers.reorderModel", { name: providerModelLabel(activeModel) })}

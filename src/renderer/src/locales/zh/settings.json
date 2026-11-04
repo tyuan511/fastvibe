@@ -187,6 +187,11 @@
   "engineSwitchFailed": "引擎切换失败：{{error}}",
   "engineDesc": "当前内嵌的 Pi coding agent。"
  },
+ "defaultImageModel": {
+  "title": "默认图片模型",
+  "desc": "用于图片工作台和智能体生成图片。",
+  "auto": "自动选择图片模型"
+ },
  "defaultModel": {
   "title": "会话模型",
   "desc": "新建对话使用这个模型和推理强度，单个对话仍可临时切换。",
@@ -423,6 +428,11 @@
   "unavailableChat": "已删除或其他会话"
  },
  "providers": {
+  "imageGpt": "图片-GPT",
+  "imageGemini": "图片-Gemini",
+  "imageGrok": "图片-Grok",
+  "manualModelId": "手动输入模型 ID",
+  "addManualModel": "添加模型",
   "balance": "余额",
   "enableProvider": "启用 {{name}}",
   "dragHint": "拖动调整顺序，也可按 Alt + ↑ / ↓",

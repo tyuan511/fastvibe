@@ -309,7 +309,26 @@ function v13(db: Db): void {
   `);
 }
 
+function v14(db: Db): void {
+  db.exec(`
+    CREATE TABLE image_sessions (
+      id TEXT PRIMARY KEY,
+      updated_at INTEGER NOT NULL,
+      data TEXT NOT NULL
+    );
+    CREATE TABLE image_tasks (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL UNIQUE,
+      session_id TEXT NOT NULL REFERENCES image_sessions(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      data TEXT NOT NULL
+    );
+    CREATE INDEX image_tasks_session ON image_tasks(session_id, created_at, id);
+    CREATE TABLE image_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  `);
+}
+
 /** The whole schema, in order. Its length is the version this build of the app knows. */
-export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13];
+export const MIGRATIONS: Array<(db: Db) => void> = [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

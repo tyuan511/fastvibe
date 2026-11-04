@@ -18,6 +18,7 @@ import type { FastVibeModel, NativeProviderConfig, ProviderConfig, ProviderModel
 import { ModelDetailDialog, type ModelDetailTarget } from "./model-detail-dialog";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import { DefaultModelSelect } from "./default-model-select";
+import { imageModelsFromProviders, isUsableImageModel } from "@shared/image-model";
 import { OAuthLoginDialog, type OAuthTarget } from "./oauth-login-dialog";
 import { GatewayCredentialDialog } from "./gateway-credential-dialog";
 import { EMPTY_ADD, type AddState, type PickerState } from "./providers-settings-types";
@@ -118,6 +119,9 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
     }
   }
 
+  const imageModels: FastVibeModel[] = imageModelsFromProviders(providers).filter(isUsableImageModel).map((model) => ({
+    provider: model.providerId!, providerName: providers.find((provider) => provider.id === model.providerId)?.name ?? model.providerId!, id: model.model, name: model.name,
+  }));
   const draggingProvider = providers.find((provider) => providerSortId(provider.id) === draggingProviderId);
   const needle = query.trim().toLocaleLowerCase();
   const visibleProviders = providers.filter((provider) =>
@@ -169,6 +173,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
             />
           }
         />
+        <SettingsRow title={t("defaultImageModel.title")} description={t("defaultImageModel.desc")} control={<DefaultModelSelect models={imageModels} value={settings.defaultImageModel} emptyLabel={t("defaultImageModel.auto")} ariaLabel={t("defaultImageModel.title")} onChange={(model) => updateSettings({ defaultImageModel: model })} />} />
         <ProjectDefaultsSection models={models} />
       </SettingsGroup>
 

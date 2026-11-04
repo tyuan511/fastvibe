@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } fro
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ScrollArea as ScrollAreaPrimitive } from "@base-ui/react/scroll-area";
-import { Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, Clock01Icon, MessageSquarePlusIcon, PanelLeftCloseIcon, PencilEdit02Icon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Image01Icon, Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, Clock01Icon, MessageSquarePlusIcon, PanelLeftCloseIcon, PencilEdit02Icon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
   DragOverlay,
@@ -104,6 +104,8 @@ export const Sidebar = memo(function Sidebar({
   tasksActive,
   onOpenVivi,
   viviActive,
+  imagesActive = false,
+  onOpenImages,
   onSearch,
 }: {
   projects: Project[];
@@ -138,6 +140,8 @@ export const Sidebar = memo(function Sidebar({
   tasksActive: boolean;
   onOpenVivi: () => void;
   viviActive: boolean;
+  imagesActive?: boolean;
+  onOpenImages?: () => void;
   onSearch: () => void;
 }): JSX.Element {
   const { t } = useTranslation("app");
@@ -613,6 +617,15 @@ export const Sidebar = memo(function Sidebar({
                 {botActivity?.running ? <RunningMark className="size-3.5" /> : null}
                 {botActivity?.waiting ? <span className="text-xs text-warning">{t("sidebar.waitingAction")}</span> : null}
               </span>
+            </Button>
+            <Button
+              variant="ghost"
+              aria-current={imagesActive ? "page" : undefined}
+              className={cn("h-8 pointer-coarse:h-10 w-full justify-start gap-2.5 px-2 text-sm font-normal hover:bg-sidebar-accent/50", imagesActive && "bg-sidebar-accent font-medium")}
+              onClick={() => { onOpenImages?.(); dismissDrawer(); }}
+            >
+              <HugeiconsIcon strokeWidth={2} icon={Image01Icon} className="size-3.5 text-muted-foreground" />
+              {t("images:title")}
             </Button>
             <button
               type="button"

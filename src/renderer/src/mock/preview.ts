@@ -39,6 +39,9 @@ import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
 import { setTranscriptDisplay } from "@/lib/transcript-display";
 import { createBotFixture, createViviPendingUiFixture } from "./bot-fixture";
 import { createScheduleFixture } from "./schedule-fixture";
+import { createImageFixture, imageToolFixture, IMAGE_FIXTURE_PROVIDERS } from "./image-fixture";
+import { imageModelsFromProviders, imageModelKey } from "@shared/image-model";
+import type { ProviderModel, ProviderApi } from "@shared/types";
 import { gitTreeFixture } from "./git-tree-fixture";
 import { gitHistoryFixture } from "./git-history-fixture";
 
@@ -81,6 +84,7 @@ function inlineFixture() {
 /** The thread the harness answers with: a math or inline-preview fixture instead of the default. */
 function transcriptFixture() {
   if (website) return fixtureMessages;
+  if (params.has("imageTool")) return imageToolFixture(params.get("imageTool")!);
   if (params.get("math") === "1") return [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
   if (params.get("diff") === "1") return DIFF_FENCE_MESSAGES;
   if (params.get("mermaid") === "1") return MERMAID_MESSAGES;
@@ -100,6 +104,7 @@ if (website && websiteScene === "models") window.location.hash = "#/settings/pro
 if (website && websiteScene === "market") window.location.hash = "#/plugins";
 if (params.get("tasks") === "sample") window.location.hash = "#/tasks";
 if (params.has("vivi")) window.location.hash = "#/vivi";
+if (params.has("images")) window.location.hash = "#/images";
 const theme = params.get("theme");
 const pane = params.get("pane");
 const scroll = params.get("scroll");
@@ -150,6 +155,7 @@ try {
 }
 
 const initialSettings: Record<string, unknown> = {
+  ...(params.has("images") && params.get("images") !== "unconfigured" ? { defaultImageModel: { provider: "image-openai", id: "gpt-image-1" } } : {}),
   thinkingLevel: "high",
   sendOnEnter: true,
   ...(website || params.has("lang") || params.get("mobile") === "1" || params.has("resources") ? { uiLanguage: websiteLanguage, aiLanguage: websiteLanguage } : {}),
@@ -167,6 +173,12 @@ const initialSettings: Record<string, unknown> = {
   // query, which is what swaps the preview for tree + preview side by side.
   sidePaneWidth: website ? (websiteScene === "files" ? 760 : 460) : 384,
 };
+
+if (params.has("images") && params.get("images") !== "unconfigured") PROVIDERS.push(...IMAGE_FIXTURE_PROVIDERS.map((provider) => ({
+  ...provider,
+  ...(params.get("images") === "disabled" ? { enabled: false } : {}),
+  ...(params.get("images") === "keyless" ? { hasKey: false, hasOAuth: true } : {}),
+})));
 
 // Optional mock disk for checking resource visibility across reloads. The real
 // app uses settings.json; preview cases get an isolated, explicitly named key.
@@ -213,7 +225,7 @@ function mockSession(conversationId?: string): EngineSessionState {
     ...fixtureSession,
     // `?live=1`: the reply is still in flight, which is the only state in which a thought
     // counts as live and its row animates.
-    ...(params.get("live") === "1" ? { running: true, isStreaming: true } : {}),
+    ...(params.get("live") === "1" || ["running", "progress"].includes(params.get("imageTool") ?? "") ? { running: true, isStreaming: true } : {}),
     // `?suggest=1`: a 回复推荐 is on offer, so the composer's placeholder and its Tab hint can be seen.
     ...(params.get("suggest") === "1" ? { suggestion: "帮我把这次改动补上单元测试" } : {}),
     ...mockSessionOverrides,
@@ -485,7 +497,7 @@ function skillForced(messages: ChatMessage[]): ChatMessage[] {
  * here — module scope — because the app asks `engine:getRunning` *before* it opens the
  * conversation, so a set filled in during `open` would arrive one step too late.
  */
-const runningIds = new Set<string>(params.get("running") === "1" || params.get("waiting") === "1" ? [fixtureActiveId] : []);
+const runningIds = new Set<string>(params.get("running") === "1" || params.get("waiting") === "1" || ["running", "progress"].includes(params.get("imageTool") ?? "") ? [fixtureActiveId] : []);
 
 function parkedPrompts(): Array<Record<string, unknown>> {
   if (params.get("waiting") !== "1") return [];
@@ -556,6 +568,7 @@ const openResult = (id: string): ConversationOpenResult => {
   if (!website && isActive && params.get("blank") === "1") messages = blankProse(messages);
   if (!website && isActive && params.get("chips") === "many") messages = manyEdits(messages);
   if (!website && isActive && params.get("skill") === "1") messages = skillForced(messages);
+  if (!website && isActive && params.has("imageTool")) messages = imageToolFixture(params.get("imageTool")!);
   return {
     ...snapshot(),
     conversation,
@@ -564,7 +577,7 @@ const openResult = (id: string): ConversationOpenResult => {
     // sidebar mark (`working`); `engine:getRunning` only seeds the map before the
     // conversation is opened, and a settled-looking state reply would clear it again.
     state: isActive
-      ? { ...fixtureSession, messageCount: messages.length, running: params.get("running") === "1" }
+      ? { ...fixtureSession, messageCount: messages.length, running: params.get("running") === "1" || ["running", "progress"].includes(params.get("imageTool") ?? "") }
       : { ...fixtureSession, messageCount: 0 },
     status: { state: "ready", cwd: fixtureCwd },
     // `?skill=1` also parks one forced-skill prompt in the follow-up queue, which is drawn
@@ -802,6 +815,11 @@ if (viviRequestsPreview) {
 }
 
 const api = {
+  images: createImageFixture(!["empty", "unconfigured"].includes(params.get("images") ?? ""), () => {
+    if (params.get("images") === "config-error") throw new Error("图片配置暂时无法读取");
+    const pin = initialSettings.defaultImageModel as { provider: string; id: string } | undefined;
+    return { models: imageModelsFromProviders(PROVIDERS), ...(pin ? { defaultModelId: imageModelKey(pin.provider, pin.id) } : {}) };
+  }),
   bot: botFixture,
   schedules: createScheduleFixture(params.get("tasks") === "sample"),
   vivi,
@@ -919,7 +937,7 @@ const api = {
     },
     getSnapshot: async (conversationId?: string) => ({
       conversationId: conversationId ?? fixtureActiveId,
-      messages: conversationId && conversationId !== fixtureActiveId ? fixtureMessages.slice(0, 2) : fixtureMessages,
+      messages: conversationId && conversationId !== fixtureActiveId ? fixtureMessages.slice(0, 2) : transcriptFixture(),
       running: runningIds.has(conversationId ?? fixtureActiveId),
       queue: skillQueue(conversationId ?? fixtureActiveId, !conversationId || conversationId === fixtureActiveId),
       pendingUi: allParkedPrompts().filter((request) => request.conversationId === (conversationId ?? fixtureActiveId)),
@@ -995,12 +1013,14 @@ const api = {
             : { unlimited: false, available: 18155.71 },
     }),
     add: async () => PROVIDERS,
-    update: async (patch: { id: string; enabled?: boolean; name?: string }) => {
+    update: async (patch: { id: string; enabled?: boolean; name?: string; models?: ProviderModel[]; api?: ProviderApi }) => {
       const index = PROVIDERS.findIndex((provider) => provider.id === patch.id);
       if (index >= 0) PROVIDERS[index] = {
         ...PROVIDERS[index],
         ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
         ...(patch.name !== undefined ? { name: patch.name } : {}),
+        ...(patch.models !== undefined ? { models: patch.models } : {}),
+        ...(patch.api !== undefined ? { api: patch.api } : {}),
       };
       return [...PROVIDERS];
     },
@@ -1227,6 +1247,7 @@ const api = {
     initial: initialSettings,
     load: async () => initialSettings,
     save: async (settings: Record<string, unknown>) => {
+      Object.assign(initialSettings, settings);
       if (resourcePersistenceKey && typeof settings.resourcePanelOpen === "boolean") {
         try { localStorage.setItem(resourcePersistenceKey, String(settings.resourcePanelOpen)); } catch { /* preview only */ }
       }

@@ -187,6 +187,11 @@
   "engineSwitchFailed": "Could not switch engine: {{error}}",
   "engineDesc": "The Pi coding agent embedded in this install."
  },
+ "defaultImageModel": {
+  "title": "Default image model",
+  "desc": "Used to generate images in the workbench and by agents.",
+  "auto": "Choose automatically"
+ },
  "defaultModel": {
   "title": "Chat model",
   "desc": "New conversations start on this model and reasoning level; a single chat can still be switched.",
@@ -425,6 +430,11 @@
   "unavailableChat": "Deleted or other chats"
  },
  "providers": {
+  "imageGpt": "Image-GPT",
+  "imageGemini": "Image-Gemini",
+  "imageGrok": "Image-Grok",
+  "manualModelId": "Enter a model ID manually",
+  "addManualModel": "Add model",
   "balance": "Balance",
   "enableProvider": "Enable {{name}}",
   "dragHint": "Drag to reorder, or press Alt + ↑ / ↓",

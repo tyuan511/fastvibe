@@ -2,6 +2,8 @@ import i18next from "i18next";
 import { initReactI18next } from "react-i18next";
 
 import enApp from "@/locales/en/app.json";
+import enImages from "@/locales/en/images.json";
+import zhImages from "@/locales/zh/images.json";
 import enChat from "@/locales/en/chat.json";
 import enCommon from "@/locales/en/common.json";
 import enSchedules from "@/locales/en/schedules.json";
@@ -26,14 +28,14 @@ import { detectSystemLanguage, htmlLang, type UiLanguage } from "./language";
  * render translated text must still call `useTranslation` so a language switch
  * re-renders them.
  */
-export const I18N_NAMESPACES = ["common", "app", "chat", "settings", "sidepane", "schedules"] as const;
+export const I18N_NAMESPACES = ["common", "app", "chat", "settings", "sidepane", "schedules", "images"] as const;
 
 export const i18n = i18next;
 
 void i18n.use(initReactI18next).init({
   resources: {
-    zh: { common: zhCommon, app: zhApp, chat: zhChat, settings: zhSettings, sidepane: zhSidepane, schedules: zhSchedules },
-    en: { common: enCommon, app: enApp, chat: enChat, settings: enSettings, sidepane: enSidepane, schedules: enSchedules },
+    zh: { common: zhCommon, app: zhApp, chat: zhChat, settings: zhSettings, sidepane: zhSidepane, schedules: zhSchedules, images: zhImages },
+    en: { common: enCommon, app: enApp, chat: enChat, settings: enSettings, sidepane: enSidepane, schedules: enSchedules, images: enImages },
   },
   // The pre-mount default; `applyUiLanguage` stamps the persisted choice from
   // `main.tsx` before the first render, exactly like the theme.

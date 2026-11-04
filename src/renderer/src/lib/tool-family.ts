@@ -29,7 +29,7 @@ export function familyOf(name: string): ToolFamily {
   const key = name.trim().toLowerCase();
   if (!key) return "other";
   if (key === "codemode") return "codemode";
-  if (key === "present") return "present";
+  if (key === "present" || key === "generate_image") return "present";
   if (key.startsWith("mcp") || key.includes("__")) return "mcp";
   if (key.startsWith("browser_")) return "browser";
   if (/^(read|read_file|readfile|view|cat)$/.test(key)) return "read";
