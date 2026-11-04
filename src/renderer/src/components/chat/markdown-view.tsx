@@ -21,6 +21,8 @@ import { markdownMedia } from "@/lib/markdown-media";
 import { cn } from "@/lib/utils";
 import { DiffView } from "./diff-view";
 import { InlineMediaItem } from "./inline-preview";
+import { MermaidBlock } from "./mermaid-block";
+import { isClosedMermaidFence } from "@/lib/mermaid-source";
 
 /**
  * Markdown, with math and raw HTML.
@@ -71,6 +73,7 @@ const MarkdownCodeGutter = memo(function MarkdownCodeGutter({ lines }: { lines: 
 });
 
 const MarkdownPathContext = createContext<ReadonlySet<string>>(new Set());
+const MarkdownSourceContext = createContext("");
 
 export const CodeBlock = memo(function CodeBlock({ language, code, scrollClassName }: {
   language?: string;
@@ -214,13 +217,22 @@ const MARKDOWN_COMPONENTS: Components = {
   ),
   td: ({ children }) => <td className="border-b border-border px-2 py-1.5 align-top">{children}</td>,
   pre: ({ node, children }) => {
+    const source = useContext(MarkdownSourceContext);
     // Block code always has a pre parent, even for empty or unlabelled single-line fences.
     const codeNode = node?.children.find((child) => child.type === "element" && child.tagName === "code");
     if (!codeNode || codeNode.type !== "element") return <pre>{children}</pre>;
     const classes = codeNode.properties.className;
     const className = Array.isArray(classes) ? classes.join(" ") : String(classes ?? "");
     const language = /language-([^\s]+)/.exec(className)?.[1];
-    return <CodeBlock language={language} code={nodeText(children).replace(/\n$/, "")} />;
+    const code = nodeText(children).replace(/\n$/, "");
+    if (language && /^(mermaid|mmd)$/i.test(language)) {
+      const start = node?.position?.start.offset;
+      const end = node?.position?.end.offset;
+      const complete = start !== undefined && end !== undefined
+        && isClosedMermaidFence(source.slice(start, end));
+      return <MermaidBlock code={code} complete={complete} />;
+    }
+    return <CodeBlock language={language} code={code} />;
   },
   code: ({ children }) => {
     const validPaths = useContext(MarkdownPathContext);
@@ -289,14 +301,16 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, headingIds }: { text: 
   const validPaths = useValidatedMarkdownPaths(deferred, cwd);
   return (
     <MarkdownPathContext.Provider value={validPaths}>
-      <Markdown
-        remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={headingIds ? REHYPE_PLUGINS_WITH_HEADING_IDS : REHYPE_PLUGINS}
-        components={MARKDOWN_COMPONENTS}
-        urlTransform={urlTransform}
-      >
-        {deferred}
-      </Markdown>
+      <MarkdownSourceContext.Provider value={deferred}>
+        <Markdown
+          remarkPlugins={REMARK_PLUGINS}
+          rehypePlugins={headingIds ? REHYPE_PLUGINS_WITH_HEADING_IDS : REHYPE_PLUGINS}
+          components={MARKDOWN_COMPONENTS}
+          urlTransform={urlTransform}
+        >
+          {deferred}
+        </Markdown>
+      </MarkdownSourceContext.Provider>
     </MarkdownPathContext.Provider>
   );
 });

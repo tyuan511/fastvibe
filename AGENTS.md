@@ -1044,6 +1044,17 @@ rather than highlighted (below).
 - 切仓库和卸载后丢弃迟到的读取结果；刷新也重读已选文件的 diff。历史 commit 是不可变的，工作区轮询不应重置历史分页。
 - 验证：`test/source-control.test.ts` 使用临时真实仓库覆盖新文件、部分暂存、重命名、根提交、分支和子目录；`test/diff.test.ts` 覆盖并排对齐和 hunk 内伪装成文件头的代码行；`test/git-change-selection.test.ts` 覆盖每轮改动 chips 给的绝对路径能落到真正包含它的分组。`test/git-change-tree.test.ts` 和 `test/git-graph.test.ts` 覆盖紧凑目录和真实拓扑；`mock.html?pane=git&git=large&maximize=1&lang=zh` 提供百文件与分叉/合并预览。
 
+### Mermaid 图表
+
+桌面共用的 `MarkdownView` 将 `mermaid` / `mmd` 围栏渲染成图表，普通聊天、Vivi 和 Markdown 文件预览共用。
+`mermaid-block.tsx` 只在原始围栏闭合后按需加载 `lib/mermaid-renderer.ts`；未闭合、语法错误或超过 24,000 字符时保留源码，复制始终复制完整源码。成功后可切换图表 / 源码。
+
+- 渲染器串行执行 Mermaid 的配置与布局，取消或替换后的迟到结果不发布；临时 DOM 在 finally 中清理。
+- 配色取 `themes.ts` 的语义 token，`useThemeId` 监听具体主题 id，同为暗色的主题切换也重新渲染。默认节点为低饱和主题色浅底与细描边、圆角，连线使用柔和中性色；关闭渐变与阴影。图表容器使用轻底色和无分隔线工具栏，时序图不重复底部参与者。
+- 使用 strict 模式，锁定安全与主题配置，禁用 HTML 标签；生成 SVG 再经 DOMPurify 清理，以 data URL 图片显示，不插入应用 DOM、不绑定点击回调，不放宽 Markdown HTML 白名单或生产 CSP。SVG 用 viewBox 设置固有尺寸，避免图片默认 300px 把文字缩小。
+- Mermaid 与 DOMPurify 属于 renderer 的 devDependencies，动态加载后由 Vite 打包；无需 CDN。
+- 预览：`mock.html?mermaid=1&theme=light|dark`；围栏闭合规则在 `test/mermaid-source.test.ts`，实际布局与 CSP 需要浏览器验证。手机端使用独立 Markdown 渲染器。
+
 ### 回复里的原始 HTML
 
 A reply that writes `<kbd>`, `<br/>`, `<details>` or `<div align="center">` renders it as

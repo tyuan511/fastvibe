@@ -51,7 +51,7 @@ function subscribeThemeKind(notify: () => void): () => void {
   observer ??= new MutationObserver(() => {
     subscribers.forEach((listener) => listener());
   });
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme-kind"] });
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme-kind", "data-theme"] });
   return () => {
     subscribers.delete(notify);
     if (!subscribers.size) {
@@ -59,6 +59,15 @@ function subscribeThemeKind(notify: () => void): () => void {
       observer = null;
     }
   };
+}
+
+/** Concrete palette identity, including switches between two themes of the same kind. */
+function themeId(): string {
+  return document.documentElement.dataset.theme ?? (isDarkTheme() ? "github-dark" : "github-light");
+}
+
+export function useThemeId(): string {
+  return useSyncExternalStore(subscribeThemeKind, themeId, () => "github-light");
 }
 
 export function useIsDarkTheme(): boolean {

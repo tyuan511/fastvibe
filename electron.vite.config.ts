@@ -102,6 +102,7 @@ export default defineConfig({
         "src/components/dag/dag-dialog.tsx",
         "src/components/settings/settings-dialog.tsx",
         "src/components/layout/side-pane-terminal.tsx",
+        "src/lib/mermaid-renderer.ts",
       ],
     },
     build: {

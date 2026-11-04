@@ -595,6 +595,49 @@ pnpm test
 \`\`\`
 `;
 
+const MERMAID_REPLY = [
+  "流程图支持中文标签：",
+  "```mermaid",
+  "flowchart LR",
+  "  A[收到请求] --> B{需要工具？}",
+  "  B -->|需要| C[执行工具]",
+  "  C --> D[生成回复]",
+  "  B -->|不需要| D",
+  "```",
+  "",
+  "时序图：",
+  "~~~mmd",
+  "sequenceDiagram",
+  "  participant U as 用户",
+  "  participant A as 智能体",
+  "  U->>A: 发送消息",
+  "  A-->>U: 返回结果",
+  "~~~",
+  "",
+  "语法错误保留源码：",
+  "```mermaid",
+  "flowchart LR",
+  "  A[尚未完成",
+  "```",
+  "",
+  "流式围栏未闭合时保留源码：",
+  "```mermaid",
+  "flowchart TD",
+  "  A[正在输出] --> B[等待闭合围栏]",
+].join("\n");
+
+/** `?mermaid=1`: valid flow/sequence, invalid source, and an open streaming fence. */
+export const MERMAID_MESSAGES: ChatMessage[] = [
+  {
+    id: "msg-mermaid-u", role: "user", text: "用 Mermaid 画一下消息流程。", tools: [],
+    parts: [{ kind: "text", text: "用 Mermaid 画一下消息流程。" }], createdAt: NOW - 41_000,
+  },
+  {
+    id: "msg-mermaid-a", role: "assistant", text: MERMAID_REPLY, tools: [],
+    parts: [{ kind: "text", text: MERMAID_REPLY }], createdAt: NOW - 40_000, completedAt: NOW - 38_000,
+  },
+];
+
 /**
  * `?diff=1` — a ```diff fence in a reply. The fence's own card already paints `bg-muted/40`,
  * so the diff rows must not lay a 10% tint over that (it reads as a muddy grey band); the

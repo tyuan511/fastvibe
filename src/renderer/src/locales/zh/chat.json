@@ -71,6 +71,13 @@
     "subagents": "智能体",
     "running": "运行中"
   },
+  "mermaid": {
+    "diagram": "图表",
+    "source": "源码",
+    "alt": "Mermaid 图表",
+    "invalid": "图表语法有误，已显示源码。",
+    "tooLarge": "图表过大，已显示源码。"
+  },
   "handoff": {
     "needChat": "还没有对话可以交接"
   },

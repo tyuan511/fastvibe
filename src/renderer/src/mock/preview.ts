@@ -20,6 +20,7 @@ import {
   INLINE_OFFICE_MESSAGES,
   MATH_MESSAGES,
   DIFF_FENCE_MESSAGES,
+  MERMAID_MESSAGES,
   MODELS,
   PREVIEW_CWD,
   PROJECTS,
@@ -82,6 +83,7 @@ function transcriptFixture() {
   if (website) return fixtureMessages;
   if (params.get("math") === "1") return [...MESSAGES.slice(0, 2), ...MATH_MESSAGES];
   if (params.get("diff") === "1") return DIFF_FENCE_MESSAGES;
+  if (params.get("mermaid") === "1") return MERMAID_MESSAGES;
   if (params.get("error") === "1") return ERROR_MESSAGES;
   if (params.get("error") === "plain") return PLAIN_ERROR_MESSAGES;
   if (params.get("prompt") === "1") return PROMPT_MESSAGES;
@@ -539,6 +541,7 @@ const openResult = (id: string): ConversationOpenResult => {
   if (!website && isActive && params.get("error") === "plain") messages = PLAIN_ERROR_MESSAGES;
   if (!website && isActive && params.get("prompt") === "1") messages = PROMPT_MESSAGES;
   if (!website && isActive && params.get("diff") === "1") messages = DIFF_FENCE_MESSAGES;
+  if (!website && isActive && params.get("mermaid") === "1") messages = MERMAID_MESSAGES;
   const inline = inlineFixture();
   if (isActive && inline) messages = inline;
   // `?older=1` ages the thread so the footers have to name their day. Every fixture is

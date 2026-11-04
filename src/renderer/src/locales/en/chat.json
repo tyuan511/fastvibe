@@ -71,6 +71,13 @@
     "subagents": "Agents",
     "running": "Running"
   },
+  "mermaid": {
+    "diagram": "Diagram",
+    "source": "Source",
+    "alt": "Mermaid diagram",
+    "invalid": "Unable to render this diagram. Showing the source instead.",
+    "tooLarge": "This diagram is too large. Showing the source instead."
+  },
   "handoff": {
     "needChat": "There is no conversation to hand off"
   },
