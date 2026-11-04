@@ -2,6 +2,8 @@
 
 状态：**评估，未实施**。数据截至 2026-10-23。本文所有数字都是实测或可复核的（命令、文件路径、issue 编号、crates.io/GitHub API 响应）。
 
+文档迁移说明：本文引用的旧根 `AGENTS.md` 模块细节、故障与测量已移至 [工程合同索引](engineering/README.md)；原研究日期和验证边界保持不变。
+
 参考对象：`openai/codex`（`codex-rs`，Rust + app-server 架构）、`zed-industries/zed`（`crates/gpui`）。
 另附 `can1357/oh-my-pi` 的实测结论，因为它常被认为「是 Rust agent」，实际不是。
 
@@ -498,7 +500,7 @@ mock 预览参数                 48 个（preview.ts 1,860 行 fixture 桥）
 
 #### 6.1 一个反直觉但重要的观察：UI 侧的性能问题**已经被修完了**
 
-AGENTS.md「上下文用量」一节记录了实测与修复：
+[转写呈现合同](engineering/transcript.md) 的「上下文用量」一节（原根 `AGENTS.md`）记录了实测与修复：
 
 > Three things grew with the number of tool calls in the reply being streamed (measured by replaying 5 → 400 calls and then 300 text deltas in an offscreen window: **main-thread busy 0.6 s → 2.4 s**, long tasks from 400 calls on; **now 0.8 s → 1.0 s, none**).
 

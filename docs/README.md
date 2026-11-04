@@ -2,6 +2,20 @@
 
 本目录保留当前实现、持续维护的协议/操作说明，以及明确标注边界的外部研究。产品介绍见 [中文 README](../README.zh-CN.md) / [English README](../README.md)，仓库约定见 [AGENTS.md](../AGENTS.md)。
 
+## 工程开发合同（按需阅读）
+
+根 `AGENTS.md` 只保留全项目硬规则与任务入口；原有的模块约束、实现原因、故障案例、历史测量与回归指引已迁到 [engineering/README.md](engineering/README.md)。修改模块前按任务选择文档，不把整个目录作为常驻提示词加载。
+
+| 领域 | 工程合同 |
+| --- | --- |
+| 引擎、协议与恢复 | [架构与调用表](engineering/architecture.md)、[会话生命周期](engineering/session-lifecycle.md)、[持久化](engineering/storage.md) |
+| 手机与远程 | [Flutter / Rust / iroh](engineering/mobile.md)、[远程服务与账号](engineering/remote-access.md) |
+| 界面与交付 | [UI / 主题 / 布局](engineering/ui.md)、[转写呈现](engineering/transcript.md)、[Markdown / 图表](engineering/markdown.md)、[文件 / Git / Office / 媒体](engineering/workspace-and-media.md) |
+| 模型、工具与自动化 | [供应商与模型](engineering/models.md)、[扩展 / 技能 / MCP](engineering/extensions.md)、[Agent Team / Goal / 定时任务 / 历史 DAG](engineering/automation.md) |
+| 记忆、Vivi 与应用维护 | [记忆与 Vivi 补充约束](engineering/memory-and-vivi.md)、[桌面运行环境](engineering/desktop-runtime.md)、[开发 / 依赖 / 发布 / 验证](engineering/development.md) |
+
+专项设计与工程接入约束的关系、当前实现与历史资料的边界见工程索引；以下设计、协议与研究入口继续保留。
+
 ## 当前架构与功能
 
 | 文档 | 内容与维护入口 |
@@ -25,6 +39,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [App Server 协议](app-server-protocol.md) | 外层鉴权、App Protocol、快照与事件、能力和第三方客户端边界 |
+| [iroh 中继节点列表](iroh-relay-nodes.md) | 完整节点列表、兼容回退、刷新撤销与桌面/手机传递合同 |
 | [Agent runtime](agent-runtime.md) | SSH 无头运行时的版本与发布 |
 | [发布记录](release/README.md) | 桌面和移动端版本说明；已发布内容作为历史记录保留 |
 | [Flutter 手机端](../apps/mobile/README.md) | Flutter UI、Rust core、构建与真实协议验证 |
