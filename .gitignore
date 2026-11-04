@@ -73,3 +73,5 @@ promo/
 # Local loading-motion previews and screenshots, not application source.
 /design-demos/loading/
 .zcode
+apps/mobile/ios/.xcode-final/
+apps/mobile/ios/.xcode-sim-build/

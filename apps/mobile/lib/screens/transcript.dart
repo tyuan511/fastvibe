@@ -8,6 +8,7 @@ import '../chat/image_note.dart';
 import '../chat/markdown_chunks.dart';
 import '../chat/markdown_view.dart';
 import '../chat/message.dart';
+import '../chat/file_transfer.dart';
 import '../chat/output_files.dart';
 import '../chat/output_files_row.dart';
 import '../chat/process_group.dart';
@@ -54,6 +55,7 @@ class TranscriptView extends StatefulWidget {
     required this.onOlder,
     this.onLoadContent,
     this.onOpenFile,
+    this.transfer,
     this.bottomInset = 0,
   });
 
@@ -72,6 +74,10 @@ class TranscriptView extends StatefulWidget {
 
   /// Open a file a reply produced. Null where there is no machine to read it from.
   final void Function(OutputFile file)? onOpenFile;
+
+  /// Reads a generated picture from the machine for its inline strip; null where
+  /// there is no connection.
+  final FileTransfer? transfer;
 
   /// How far the footer below reaches into this view. The list runs under it, so its content
   /// is padded by that much rather than clipped at the footer's edge.
@@ -230,6 +236,7 @@ class _TranscriptViewState extends State<TranscriptView> {
             live: widget.running && row.newest && row.last,
             onLongPress: widget.onLongPress,
             onOpenFile: row.last ? widget.onOpenFile : null,
+            transfer: row.last ? widget.transfer : null,
           ),
           if (row.last &&
               message.deferredIds.isNotEmpty &&
@@ -519,6 +526,7 @@ class MessageRow extends StatelessWidget {
     required this.onLongPress,
     this.blocks,
     this.onOpenFile,
+    this.transfer,
   });
 
   final ChatMessage message;
@@ -530,6 +538,9 @@ class MessageRow extends StatelessWidget {
 
   /// Open a file this reply produced; drawn under the reply, on its last row, once it is settled.
   final void Function(OutputFile file)? onOpenFile;
+
+  /// Reads a generated picture from the machine for its inline strip.
+  final FileTransfer? transfer;
 
   /// The first assistant row of a turn — it carries the reply's name.
   final bool turnStart;
@@ -570,6 +581,7 @@ class MessageRow extends StatelessWidget {
       live: live,
       onLongPress: onLongPress,
       onOpenFile: onOpenFile,
+      transfer: transfer,
     );
   }
 }
@@ -677,6 +689,7 @@ class _AssistantRow extends StatelessWidget {
     required this.onLongPress,
     this.blocks,
     this.onOpenFile,
+    this.transfer,
   });
 
   final ChatMessage message;
@@ -684,6 +697,9 @@ class _AssistantRow extends StatelessWidget {
   /// The blocks to draw, when the list has already cut the reply up; null draws it whole.
   final List<RenderBlock>? blocks;
   final void Function(OutputFile file)? onOpenFile;
+
+  /// Reads a generated picture from the machine for its inline strip.
+  final FileTransfer? transfer;
   final Palette palette;
   final TurnMeta? meta;
   final bool turnStart;
@@ -771,6 +787,8 @@ class _AssistantRow extends StatelessWidget {
       steps: steps,
       palette: palette,
       live: live && isLast,
+      transfer: transfer,
+      onOpenFile: onOpenFile,
     ),
     ErrorBlock(:final text) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),

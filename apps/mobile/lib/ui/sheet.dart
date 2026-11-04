@@ -83,11 +83,16 @@ class AppSheetHeader extends StatelessWidget {
     this.subtitle,
     this.leading,
     this.onBack,
+    this.showClose = true,
   });
   final String title;
   final String? subtitle;
   final Widget? leading;
   final VoidCallback? onBack;
+
+  /// Sheets close by dragging or tapping outside; a sheet whose body already has
+  /// primary actions may drop the redundant ✕.
+  final bool showClose;
 
   @override
   Widget build(BuildContext context) {
@@ -128,16 +133,17 @@ class AppSheetHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          IconAction(
-            icon: onBack != null ? AppIcons.arrowLeft : AppIcons.cancel,
-            tone: IconTone.field,
-            size: 40,
-            tooltip: t(
-              onBack != null ? 'dag.back' : 'common.close',
-              context: context,
+          if (showClose)
+            IconAction(
+              icon: onBack != null ? AppIcons.arrowLeft : AppIcons.cancel,
+              tone: IconTone.field,
+              size: 40,
+              tooltip: t(
+                onBack != null ? 'dag.back' : 'common.close',
+                context: context,
+              ),
+              onPressed: onBack ?? () => Navigator.of(context).pop(),
             ),
-            onPressed: onBack ?? () => Navigator.of(context).pop(),
-          ),
         ],
       ),
     );

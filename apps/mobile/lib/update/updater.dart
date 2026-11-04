@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_info.dart';
 import '../i18n/core.dart';
+import '../ui/preferences.dart';
 import 'release.dart';
 
 /// Android self-update from GitHub Releases: the APK is downloaded into the cache
@@ -99,6 +100,7 @@ Future<AppRelease?> _check(bool force) async {
     final release = await findNewerRelease(
       appVersion,
       supportedAbis: device.supportedAbis,
+      channel: Preferences.instance.updateChannel,
     );
     final at = DateTime.now().millisecondsSinceEpoch;
     await _writeCache(release, at);
@@ -256,6 +258,23 @@ Future<void> clearSkippedVersion() async {
   await prefs.remove(_skippedKey);
 }
 
+/// Forget what the last check concluded, per channel: a cached answer would keep the
+/// old channel's result fresh for [_checkFresh] and a backoff could sit there from an
+/// answer the channel switch was meant to leave behind. An in-flight check from the
+/// old channel is detached; its write still lands, but the next forced check
+/// overwrites it.
+Future<void> resetUpdateCheck() async {
+  _inflight = null;
+  _settled = null;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_cacheKey);
+    await prefs.remove(_backoffKey);
+  } catch (_) {
+    // The in-memory reset alone makes the next check a real one for this process.
+  }
+}
+
 Future<Directory> _apkDirectory() async {
   final cache = await getTemporaryDirectory();
   final directory = Directory('${cache.path}/updates');
@@ -285,7 +304,7 @@ Future<File> downloadApk(
     ),
   );
   await dio.download(
-    release.apkUrl,
+    Preferences.instance.updateChannel.rewrite(release.apkUrl),
     target.path,
     cancelToken: cancelToken,
     onReceiveProgress: (received, total) {

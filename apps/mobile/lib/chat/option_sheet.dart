@@ -59,6 +59,7 @@ Future<void> showOptionSheet(
   List<SheetGroup> groups = const <SheetGroup>[],
   String? value,
   ValueChanged<String>? onSelect,
+  bool showClose = true,
 }) {
   final all = <SheetGroup>[
     ...groups,
@@ -76,6 +77,7 @@ Future<void> showOptionSheet(
       searchable: total > _searchThreshold,
       value: value,
       onSelect: onSelect,
+      showClose: showClose,
     ),
   );
 }
@@ -88,6 +90,7 @@ class _OptionSheetBody extends StatefulWidget {
     required this.searchable,
     required this.value,
     required this.onSelect,
+    this.showClose = true,
   });
 
   final String title;
@@ -96,6 +99,7 @@ class _OptionSheetBody extends StatefulWidget {
   final bool searchable;
   final String? value;
   final ValueChanged<String>? onSelect;
+  final bool showClose;
 
   @override
   State<_OptionSheetBody> createState() => _OptionSheetBodyState();
@@ -139,7 +143,11 @@ class _OptionSheetBodyState extends State<_OptionSheetBody> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          AppSheetHeader(title: widget.title, subtitle: widget.subtitle),
+          AppSheetHeader(
+            title: widget.title,
+            subtitle: widget.subtitle,
+            showClose: widget.showClose,
+          ),
           if (widget.searchable) ...<Widget>[
             SearchField(
               controller: _query,

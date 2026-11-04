@@ -11,6 +11,7 @@ import '../ui/icons.dart';
 import '../ui/kit.dart';
 import '../ui/preferences.dart';
 import '../notifications/local.dart';
+import '../update/channel.dart';
 import '../update/release_notes_sheet.dart';
 import '../update/updater.dart';
 
@@ -133,6 +134,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 )
               : null,
         ),
+      ],
+    );
+  }
+
+  /// 检查与下载更新走哪个源。Switching drops the previous channel's cached answer and
+  /// checks again right away, so the choice takes effect on the spot.
+  Future<void> _pickUpdateChannel() async {
+    final preferences = Preferences.instance;
+    final current = preferences.updateChannel;
+    await showOptionSheet(
+      context,
+      title: t('update.channel'),
+      subtitle: t('update.channelHint'),
+      value: current.id,
+      showClose: false,
+      options: <SheetOption>[
+        for (final channel in updateChannels)
+          SheetOption(
+            value: channel.id,
+            label: t(channel.nameKey),
+            description: t(channel.descriptionKey),
+            onSelect: () async {
+              if (channel == current) return;
+              await preferences.setUpdateChannel(channel);
+              await resetUpdateCheck();
+              await _checkForUpdates();
+            },
+          ),
       ],
     );
   }
@@ -328,6 +357,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           trailing: _checking
                               ? DesktopSpinner(size: 16, color: palette.muted)
                               : null,
+                        ),
+                        SettingsRow(
+                          icon: AppIcons.download,
+                          label: t('update.channel', context: context),
+                          value: t(
+                            preferences.updateChannel.nameKey,
+                            context: context,
+                          ),
+                          onTap: _pickUpdateChannel,
                         ),
                       ],
                       SettingsRow(

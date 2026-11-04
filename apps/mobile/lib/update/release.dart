@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import '../app_info.dart';
 import '../i18n/core.dart';
+import 'channel.dart';
 
 /// Finding the newest Android build on GitHub.
 ///
@@ -276,18 +277,32 @@ Map<String, String> get _requestHeaders => <String, String>{
 /// is recent; otherwise it is `docs/release/app-v<version>.md` at that tag. Null when
 /// the version was never published. Unlike [findNewerRelease] this needs no APK, so it
 /// answers on iOS too.
-Future<String?> fetchReleaseNotes(String version, {http.Client? client}) async {
+Future<String?> fetchReleaseNotes(
+  String version, {
+  http.Client? client,
+  UpdateChannel channel = channelGithub,
+}) async {
   final httpClient = client ?? http.Client();
   try {
-    final atom = await _send(httpClient, Uri.parse(_atomUrl));
-    if (atom.statusCode == 403 || atom.statusCode == 429) {
-      throw GitHubStatusError(atom.statusCode);
+    // A feed the channel cannot read (the ghfast mirror refuses `.atom`, GitHub rate
+    // limits) still leaves the raw file, which nothing blocks.
+    String? fromAtom;
+    try {
+      final atom = await _send(
+        httpClient,
+        Uri.parse(channel.rewrite(_atomUrl)),
+      );
+      if (atom.statusCode >= 200 && atom.statusCode < 300) {
+        fromAtom = notesFromAtom(atom.body, version);
+      }
+    } catch (_) {
+      // Noted below by asking the file instead.
     }
-    if (atom.statusCode >= 200 && atom.statusCode < 300) {
-      final notes = notesFromAtom(atom.body, version);
-      if (notes != null) return notes;
-    }
-    final file = await _send(httpClient, Uri.parse(_notesFileUrl(version)));
+    if (fromAtom != null) return fromAtom;
+    final file = await _send(
+      httpClient,
+      Uri.parse(channel.rewrite(_notesFileUrl(version))),
+    );
     if (file.statusCode == 404) return null;
     _requireOk(file);
     return notesForDisplay(file.body);
@@ -311,14 +326,22 @@ class GitHubStatusError extends Error {
 /// The newest published phone build strictly newer than `currentVersion`, or null when
 /// this install is current. Throws on a network or GitHub failure, so a caller can tell
 /// "up to date" from "could not check".
+///
+/// The stored [AppRelease.apkUrl] stays the canonical github.com address; the channel
+/// is applied again when the file is fetched, so a release found on one mirror still
+/// downloads fine after the user picks another.
 Future<AppRelease?> findNewerRelease(
   String currentVersion, {
   http.Client? client,
   List<String> supportedAbis = const [],
+  UpdateChannel channel = channelGithub,
 }) async {
   final httpClient = client ?? http.Client();
   try {
-    final refs = await _send(httpClient, Uri.parse(_refsUrl));
+    final refs = await _send(
+      httpClient,
+      Uri.parse(channel.rewrite(_refsUrl)),
+    );
     _requireOk(refs);
     // The advertisement is pkt-line and may carry a null; latin1 keeps every byte.
     final newer = versionsFromAdvertisement(latin1.decode(refs.bodyBytes))
@@ -326,12 +349,12 @@ Future<AppRelease?> findNewerRelease(
         .toList();
 
     for (final version in newer.take(_maxTagsTried)) {
-      final apk = await _publishedApk(httpClient, version, supportedAbis);
+      final apk = await _publishedApk(httpClient, version, supportedAbis, channel);
       if (apk == null) continue;
       return AppRelease(
         version: version,
         tag: '$releaseTagPrefix$version',
-        notes: await _notesOrEmpty(httpClient, version),
+        notes: await _notesOrEmpty(httpClient, version, channel),
         pageUrl: releasePageUrl(version),
         apkUrl: apkDownloadUrl(version, apk.name),
         apkName: apk.name,
@@ -348,11 +371,12 @@ Future<({String name, int size})?> _publishedApk(
   http.Client client,
   String version,
   List<String> supportedAbis,
+  UpdateChannel channel,
 ) async {
   for (final name in apkCandidates(version, supportedAbis)) {
     final response = await _send(
       client,
-      Uri.parse(apkDownloadUrl(version, name)),
+      Uri.parse(channel.rewrite(apkDownloadUrl(version, name))),
       head: true,
     );
     // 404: the tag is pushed but CI has not published this file yet.
@@ -366,9 +390,14 @@ Future<({String name, int size})?> _publishedApk(
 
 /// Notes are decoration on the update prompt. A feed that cannot be read must not
 /// turn a found release into a failed check.
-Future<String> _notesOrEmpty(http.Client client, String version) async {
+Future<String> _notesOrEmpty(
+  http.Client client,
+  String version,
+  UpdateChannel channel,
+) async {
   try {
-    return await fetchReleaseNotes(version, client: client) ?? '';
+    return await fetchReleaseNotes(version, client: client, channel: channel) ??
+        '';
   } catch (_) {
     return '';
   }

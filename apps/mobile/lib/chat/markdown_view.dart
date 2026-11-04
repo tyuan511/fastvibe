@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:gpt_markdown/custom_widgets/code_field.dart' show CodeField;
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../i18n/core.dart';
 import '../theme/theme.dart';
+import 'mermaid_block.dart';
 
 /// The theme data and style sheet, built once per palette, size and language.
 ///
@@ -155,6 +157,22 @@ class MarkdownView extends StatelessWidget {
           letterSpacing: 0.1,
         ),
         styleSheet: theme.styleSheet,
+        // A `mermaid` fence becomes a diagram (once its fence closes); every other
+        // fence keeps the package's own code block, with the same resolved style
+        // `codeBlockWidget` would apply.
+        codeBuilder: (context, name, code, closed) {
+          if (isMermaidFence(name)) {
+            return MermaidBlock(code: code, closed: closed, palette: palette);
+          }
+          final style = (theme.styleSheet.codeBlock ?? const CodeBlockStyle())
+              .resolve(Theme.of(context).colorScheme);
+          return CodeField(
+            name: name,
+            codes: code,
+            style: style,
+            highlightCode: closed || (style.highlightWhileStreaming ?? true),
+          );
+        },
         onLinkTap: (url, title) {
           final uri = Uri.tryParse(url);
           if (uri == null ||

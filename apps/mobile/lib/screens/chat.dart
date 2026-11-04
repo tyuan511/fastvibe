@@ -987,25 +987,37 @@ class _ChatScreenState extends State<ChatScreen> {
   /// A file this reply produced. The machine reads it, relative to this conversation's
   /// directory, and sends it in slices — the phone never learns where it lives.
   void _openFile(OutputFile file) {
-    final remote = _remote;
-    if (remote == null) return;
-    final serverId = Connection.instance.server?.id;
+    if (_remote == null) return;
     showOutputFile(
       context,
       file: file,
-      transfer: FileTransfer(
-        call: (method, payload, timeoutMs) {
-          final connection = Connection.instance;
-          final current = connection.client;
-          if (connection.server?.id != serverId || current == null) {
-            throw TransportError('closed', t('conn.notConnected'));
-          }
-          return current.call(method, payload, timeoutMs);
-        },
-        conversationId: _conversationId,
-        serverId: serverId ?? '',
-      ),
+      transfer: _transferFor(Connection.instance.server?.id),
     );
+  }
+
+  /// One sliced-file reader for this conversation, guarded so a device change
+  /// mid-read aborts instead of mixing two machines' files.
+  FileTransfer _transferFor(String? serverId) {
+    return FileTransfer(
+      call: (method, payload, timeoutMs) {
+        final connection = Connection.instance;
+        final current = connection.client;
+        if (connection.server?.id != serverId || current == null) {
+          throw TransportError('closed', t('conn.notConnected'));
+        }
+        return current.call(method, payload, timeoutMs);
+      },
+      conversationId: _conversationId,
+      serverId: serverId ?? '',
+    );
+  }
+
+  /// The reader the transcript's inline generated images load through; absent
+  /// when no machine is connected, and the strip stays away with it.
+  FileTransfer? get _transcriptTransfer {
+    final remote = _remote;
+    if (remote == null) return null;
+    return _transferFor(Connection.instance.server?.id);
   }
 
   Future<void> _messageAction(ChatMessage message) async {
@@ -1137,6 +1149,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                         ? _loadMessageContent
                                         : null,
                                     onOpenFile: _openFile,
+                                    transfer: _transcriptTransfer,
                                   ),
                           ),
                         ],

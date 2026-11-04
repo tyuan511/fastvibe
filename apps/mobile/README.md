@@ -74,6 +74,8 @@ bash tool/build.sh --release
 
 Flutter outputs APKs in `apps/mobile/build/app/outputs/flutter-apk/`. The release asset remains `FastVibe-app-vX.Y.Z-arm64-v8a.apk` plus its SHA256 file. `pubspec.yaml` and `android/version.properties` must agree on version/build number; the Rust crate version tracks the mobile release. This migration retains version `0.5.14+514`.
 
+In-app updates (`lib/update/`) read the repo's git tag advertisement, probe the release APK and download it. 设置 → 更新通道 picks the source: GitHub by default, plus the `gh-proxy.com` and `ghfast.top` mirrors selected by benchmark (full-file SHA256 verified). Mirrors are URL-prefix proxies for the github.com and raw.githubusercontent.com endpoints, so the check/notes/download flow is channel-independent — the stored release keeps the canonical URL and the channel is applied when fetching. Switching channels drops the cached check result and re-checks; the system installer still rejects an APK not signed like the installed app, whatever the source.
+
 ## iOS
 
 ```sh

@@ -5,8 +5,11 @@ import '../i18n/core.dart';
 import '../theme/theme.dart';
 import '../ui/icons.dart';
 import 'codemode.dart';
+import 'file_transfer.dart';
 import 'message.dart';
+import 'output_files.dart' show OutputFile;
 import 'tool_details.dart';
+import 'tool_images.dart' show imageTaskView, ToolImageStrip;
 
 /// Mobile keeps each tool call to one compact transcript row.
 ///
@@ -29,6 +32,7 @@ enum ToolFamily {
   mcp,
   codemode,
   browser,
+  present,
   other,
 }
 
@@ -50,6 +54,7 @@ const Map<ToolFamily, (String, String)> _labels =
       ToolFamily.mcp: ('tool.mcp', 'tool.mcpRunning'),
       ToolFamily.codemode: ('tool.codemode', 'tool.codemodeRunning'),
       ToolFamily.browser: ('tool.browser', 'tool.browserRunning'),
+      ToolFamily.present: ('tool.present', 'tool.presentRunning'),
       ToolFamily.other: ('tool.other', 'tool.otherRunning'),
     };
 
@@ -70,6 +75,7 @@ const Map<ToolFamily, List<List<dynamic>>> _icons =
       ToolFamily.mcp: AppIcons.plug,
       ToolFamily.codemode: AppIcons.code,
       ToolFamily.browser: AppIcons.chrome,
+      ToolFamily.present: AppIcons.image,
       ToolFamily.other: AppIcons.wrench,
     };
 
@@ -119,6 +125,7 @@ ToolFamily familyOf(String name) {
   if (key.isEmpty) return ToolFamily.other;
   if (key.startsWith('dag_')) return ToolFamily.agent;
   if (key == 'codemode') return ToolFamily.codemode;
+  if (key == 'present' || key == 'generate_image') return ToolFamily.present;
   if (key.startsWith('mcp') || key.contains('__')) return ToolFamily.mcp;
   if (key.startsWith('browser_')) return ToolFamily.browser;
   if (RegExp(r'^(read|read_file|readfile|view|cat)$').hasMatch(key)) {
@@ -219,6 +226,17 @@ ToolSummary summarize(ToolBlock tool) {
     );
   }
 
+  // Vivi's report is a conclusion, not a call to inspect: the row is the sentence.
+  if (tool.name == 'bot_report') {
+    return ToolSummary(
+      family: family,
+      label: t('tool.workReport'),
+      subject: '',
+      error: error,
+      running: running,
+    );
+  }
+
   switch (family) {
     case ToolFamily.read:
     case ToolFamily.edit:
@@ -242,7 +260,12 @@ ToolSummary summarize(ToolBlock tool) {
       subject = argString(tool.args, _searchKeys);
       if (subject.isEmpty) subject = _friendlyName(tool.name);
       final glob = argString(tool.args, <String>['glob']);
-      if (glob.isNotEmpty) context = glob;
+      if (glob.isNotEmpty) {
+        context = glob;
+      } else {
+        // A conversation search names the chat it read; the id is the only handle.
+        context = argString(tool.args, <String>['conversationId']);
+      }
     case ToolFamily.web:
       subject = argString(tool.args, <String>[
         'query',
@@ -311,14 +334,25 @@ ToolSummary summarize(ToolBlock tool) {
         subject = t('tool.updateList');
       }
     case ToolFamily.agent:
-      final roles = _agentRoles(tool.args);
-      subject = roles.isNotEmpty ? _compactRoles(roles) : t('tool.agent');
-      if (roles.length > 1) {
-        context = t(
-          'tool.tasks',
-          vars: <String, Object?>{'count': roles.length},
-        );
+      final action = _agentActionOf(tool.name);
+      if (action != null) {
+        // Each control call has its own verb, as the desktop's action cards do; the
+        // subject is who it acted on, resolved from the identities persisted with the
+        // call — the phone keeps no registry to resolve thread ids against.
+        final phase = running ? 'running' : (error ? 'error' : 'done');
+        label = t('tool.agentAction.$action.$phase');
+        final names = _agentThreadNames(tool);
+        if (names.isNotEmpty) {
+          subject = _compactNames(names);
+        } else if (tool.name == 'spawn_agent') {
+          subject = argString(tool.args, <String>['task_name', 'agent_type']);
+        } else {
+          subject = _compactNames(_agentRoles(tool.args));
+        }
+        break;
       }
+      final roles = _agentRoles(tool.args);
+      subject = roles.isNotEmpty ? _compactNames(roles) : t('tool.agent');
     case ToolFamily.codemode:
       // The script is the call: the row says what it is for and how many tools it ran.
       final summary = codemodeSummary(codemodeCode(tool.args));
@@ -349,6 +383,36 @@ ToolSummary summarize(ToolBlock tool) {
           tool.name.replaceFirst(RegExp(r'^browser_'), ''),
         );
       }
+    case ToolFamily.present:
+      if (tool.name == 'generate_image') {
+        label = t(running ? 'tool.imageGenerating' : 'tool.imageGeneration');
+        var prompt = argString(tool.args, <String>['prompt']);
+        if (prompt.isEmpty) {
+          final taskPrompt = _asRecord(_asRecord(tool.details)?['task'])?['prompt'];
+          if (taskPrompt is String) prompt = taskPrompt.trim();
+        }
+        subject = prompt;
+        break;
+      }
+      // The row says what was shown and how much; the files themselves are the
+      // reply's output row, exactly as the desktop's present summary counts them.
+      final items = _presentItems(tool);
+      if (items.isEmpty) {
+        subject = tool.name;
+        break;
+      }
+      final first = _asRecord(items.first);
+      final title = first == null ? '' : argString(first, <String>['title']);
+      final ref = first == null ? '' : argString(first, <String>['ref', 'source']);
+      subject = title.isNotEmpty
+          ? title
+          : (ref.isNotEmpty ? _basename(ref) : tool.name);
+      if (items.length > 1) {
+        context = t(
+          'tool.presentCount',
+          vars: <String, Object?>{'count': items.length},
+        );
+      }
     case ToolFamily.mcp:
     case ToolFamily.other:
       subject = _friendlyName(tool.name);
@@ -374,6 +438,8 @@ class ToolCard extends StatefulWidget {
     required this.palette,
     this.divider = false,
     this.live = false,
+    this.transfer,
+    this.onOpenFile,
   });
 
   final ToolBlock tool;
@@ -382,6 +448,11 @@ class ToolCard extends StatefulWidget {
 
   /// The reply is still streaming, so an in-progress todo keeps its busy mark.
   final bool live;
+
+  /// Reads a generated picture from the machine for its inline strip; null where
+  /// there is no connection and the strip stays away.
+  final FileTransfer? transfer;
+  final void Function(OutputFile file)? onOpenFile;
 
   @override
   State<ToolCard> createState() => _ToolCardState();
@@ -547,6 +618,17 @@ class _ToolCardState extends State<ToolCard> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           row,
+          if (tool.name == 'generate_image' &&
+              widget.transfer != null &&
+              widget.onOpenFile != null &&
+              !imageTaskView(tool).isEmpty)
+            ToolImageStrip(
+              key: ValueKey('images-${tool.id}'),
+              tool: tool,
+              palette: palette,
+              transfer: widget.transfer!,
+              onOpenFile: widget.onOpenFile!,
+            ),
           if (!open && errorPreview.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(36, 0, 28, 10),
@@ -803,15 +885,73 @@ List<String> _agentRoles(Object? args) {
   return roles;
 }
 
-String _compactRoles(List<String> roles) {
+/// At most two distinct names, then a count — a wide fan-out would otherwise repeat a
+/// role five times and push the count off screen. The expanded details list every run.
+String _compactNames(List<String> names) {
   final counts = <String, int>{};
-  for (final role in roles) {
-    counts[role] = (counts[role] ?? 0) + 1;
+  for (final name in names) {
+    counts[name] = (counts[name] ?? 0) + 1;
   }
-  return counts.entries
+  final distinct = counts.entries.toList();
+  final shown = distinct
       .take(2)
       .map(
         (entry) => entry.value > 1 ? '${entry.key} ×${entry.value}' : entry.key,
       )
       .join(', ');
+  if (distinct.length > 2) {
+    return t('tool.agentMore', vars: <String, Object?>{
+      'shown': shown,
+      'count': names.length,
+    });
+  }
+  return shown;
+}
+
+/// The control verbs a team run offers, mirroring the desktop's agent action cards.
+const Map<String, String> _agentActions = <String, String>{
+  'spawn_agent': 'spawn',
+  'wait_agent': 'wait',
+  'send_message': 'send',
+  'followup_task': 'followup',
+  'interrupt_agent': 'interrupt',
+  'list_agents': 'list',
+};
+
+String? _agentActionOf(String name) => _agentActions[name.trim().toLowerCase()];
+
+/// Thread names a control call acted on — the identities the engine persisted with the
+/// call itself. Falls back empty; the caller then names roles or the call's arguments.
+List<String> _agentThreadNames(ToolBlock tool) {
+  final details = _asRecord(tool.details);
+  final names = <String>[];
+  void addName(Object? value) {
+    if (value is String && value.trim().isNotEmpty) names.add(value.trim());
+  }
+
+  if (tool.name == 'spawn_agent') {
+    final thread = _asRecord(details?['thread']);
+    if (thread != null) {
+      addName(thread['name'] is String ? thread['name'] : thread['agent']);
+    }
+    return names;
+  }
+  final threads = details?['threads'];
+  if (threads is List) {
+    for (final item in threads) {
+      addName(_asRecord(item)?['name']);
+    }
+  }
+  if (names.isEmpty) addName(_asRecord(details?['result'])?['name']);
+  return names;
+}
+
+/// What a `present` call delivered, in call order — `details.items` when the engine
+/// filed it, the arguments otherwise.
+List<Object?> _presentItems(ToolBlock tool) {
+  final fromDetails = _asRecord(tool.details)?['items'];
+  final list = fromDetails is List
+      ? fromDetails
+      : _asRecord(tool.args)?['items'];
+  return list is List ? list : const <Object?>[];
 }

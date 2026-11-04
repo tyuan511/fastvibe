@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -10,6 +11,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fastvibe_mobile/chat/composer.dart';
 import 'package:fastvibe_mobile/chat/message.dart';
+import 'package:fastvibe_mobile/chat/output_files.dart';
+import 'package:fastvibe_mobile/chat/file_transfer.dart';
 import 'package:fastvibe_mobile/chat/tool_card.dart';
 import 'package:fastvibe_mobile/chat/tool_details.dart';
 import 'package:fastvibe_mobile/i18n/core.dart';
@@ -423,6 +426,278 @@ void main() {
       },
     );
   }
+
+  test('families follow the desktop classifier for the newer tools', () {
+    expect(familyOf('present'), ToolFamily.present);
+    expect(familyOf('generate_image'), ToolFamily.present);
+    expect(familyOf('spawn_agent'), ToolFamily.agent);
+    expect(familyOf('bot_report'), ToolFamily.other);
+  });
+
+  test('a conversation search names the chat it read', () {
+    final summary = summarize(
+      ToolBlock(
+        id: 'search',
+        name: 'conversation_search',
+        status: 'done',
+        args: {'conversationId': 'conv-42'},
+      ),
+    );
+    expect(summary.context, 'conv-42');
+  });
+
+  testWidgets('present row names the first item and counts the rest', (
+    tester,
+  ) async {
+    await _pumpCard(
+      tester,
+      ToolBlock(
+        id: 'present',
+        name: 'present',
+        status: 'done',
+        details: {
+          'items': [
+            {'ref': '/Users/ai/report.md', 'title': '验收报告'},
+            {'ref': '/Users/ai/chart.png'},
+          ],
+        },
+      ),
+    );
+    expect(find.text('展示'), findsOneWidget);
+    expect(find.text('验收报告'), findsOneWidget);
+    expect(find.text('共 2 项'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget is HugeIcon && widget.icon == AppIcons.image,
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('generate_image row shows the prompt and its phases', (
+    tester,
+  ) async {
+    await _pumpCard(
+      tester,
+      ToolBlock(
+        id: 'image',
+        name: 'generate_image',
+        status: 'running',
+        args: {'prompt': '一只戴耳机的水獭'},
+      ),
+      live: true,
+    );
+    expect(find.text('生成中'), findsOneWidget);
+    expect(find.text('一只戴耳机的水獭'), findsOneWidget);
+
+    await _pumpCard(
+      tester,
+      ToolBlock(
+        id: 'image',
+        name: 'generate_image',
+        status: 'done',
+        details: {
+          'task': {
+            'id': 'task-1',
+            'prompt': '夕阳下的玻璃塔',
+            'images': [
+              {'path': '/Users/ai/1.png'},
+            ],
+          },
+        },
+      ),
+    );
+    expect(find.text('图片生成'), findsOneWidget);
+    expect(find.text('夕阳下的玻璃塔'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('bot_report row is the report sentence', (tester) async {
+    await _pumpCard(
+      tester,
+      ToolBlock(id: 'report', name: 'bot_report', status: 'done'),
+    );
+    expect(find.text('汇报工作结果'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('agent control calls carry their action verb and target', (
+    tester,
+  ) async {
+    await _pumpCard(
+      tester,
+      ToolBlock(
+        id: 'spawn',
+        name: 'spawn_agent',
+        status: 'done',
+        details: {
+          'thread': {
+            'id': 'agent-1',
+            'agent': 'worker',
+            'name': '伏案',
+            'status': 'idle',
+          },
+        },
+      ),
+    );
+    expect(find.text('已创建智能体'), findsOneWidget);
+    expect(find.text('伏案'), findsOneWidget);
+
+    await _pumpCard(
+      tester,
+      ToolBlock(id: 'wait', name: 'wait_agent', status: 'running'),
+      live: true,
+    );
+    expect(find.text('正在等待智能体完成'), findsOneWidget);
+
+    await _pumpCard(
+      tester,
+      ToolBlock(
+        id: 'interrupt',
+        name: 'interrupt_agent',
+        status: 'error',
+        result: 'agent is closing',
+      ),
+    );
+    expect(find.text('中断智能体'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('an agent fan-out collapses to two names plus a count', () {
+    final summary = summarize(
+      ToolBlock(
+        id: 'wait',
+        name: 'wait_agent',
+        status: 'done',
+        details: {
+          'threads': [
+            {'id': 'a', 'name': 'scout'},
+            {'id': 'b', 'name': 'scout'},
+            {'id': 'c', 'name': 'researcher'},
+            {'id': 'd', 'name': 'writer'},
+          ],
+        },
+      ),
+    );
+    expect(summary.label, '已结束等待智能体');
+    expect(summary.subject, 'scout ×2, researcher 等 4 个');
+  });
+
+  test('generated pictures do not join the files the reply produced', () {
+    // The inline strip under the call is the picture's home; the output-file row
+    // is for files the reply wrote or presented.
+    final files = collectOutputFiles([
+      ToolBlock(
+        id: 'image',
+        name: 'generate_image',
+        status: 'done',
+        details: {
+          'task': {
+            'images': [
+              {'path': '/Users/ai/gen/a.png'},
+            ],
+          },
+        },
+      ),
+    ]);
+    expect(files, isEmpty);
+  });
+
+  Uint8List testPng() => base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  );
+
+  /// A `workspace:read-file` that answers every path with one small PNG slice.
+  FileTransfer fakeTransfer() {
+    return FileTransfer(
+      call: (method, payload, timeoutMs) async {
+        expect(method, 'workspace:read-file');
+        final request = payload as Map;
+        return <String, Object?>{
+          'size': testPng().length,
+          'data': base64Encode(testPng()),
+          'eof': true,
+          'mtimeMs': 1,
+          'offset': request['offset'],
+        };
+      },
+      conversationId: 'conv',
+    );
+  }
+
+  testWidgets('generated pictures render inline under their call', (
+    tester,
+  ) async {
+    final opened = <String>[];
+    await _pumpCard(
+      tester,
+      ToolBlock(
+        id: 'image',
+        name: 'generate_image',
+        status: 'done',
+        args: {'prompt': '一只戴耳机的水獭', 'count': 2},
+        details: {
+          'task': {
+            'status': 'succeeded',
+            'options': {'aspectRatio': '1:1'},
+            'images': [
+              {'path': '/Users/ai/gen/a.png'},
+              {'path': '/Users/ai/gen/b.png'},
+            ],
+          },
+        },
+      ),
+      transfer: fakeTransfer(),
+      onOpenFile: (file) => opened.add(file.path),
+    );
+    await tester.pumpAndSettle();
+    // `cacheWidth` wraps the memory image in a ResizeImage, so match on the widget.
+    final tiles = find.byType(Image);
+    expect(tiles, findsNWidgets(2));
+    await tester.tap(tiles.first);
+    await tester.pump();
+    expect(opened, <String>['/Users/ai/gen/a.png']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a generating call shows its pending slots', (tester) async {
+    await _pumpCard(
+      tester,
+      ToolBlock(
+        id: 'image',
+        name: 'generate_image',
+        status: 'running',
+        args: {'prompt': '赛博朋克的灯塔', 'count': 2},
+      ),
+      live: true,
+      transfer: fakeTransfer(),
+      onOpenFile: (_) {},
+    );
+    expect(find.text('正在构思画面…'), findsNWidgets(2));
+    expect(find.byType(Image), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('without a machine there is no strip', (tester) async {
+    await _pumpCard(
+      tester,
+      ToolBlock(
+        id: 'image',
+        name: 'generate_image',
+        status: 'done',
+        details: {
+          'task': {
+            'images': [
+              {'path': '/Users/ai/gen/a.png'},
+            ],
+          },
+        },
+      ),
+    );
+    expect(find.byType(Image), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 void _viewport(WidgetTester tester, Size size) {
@@ -437,6 +712,8 @@ Future<void> _pumpCard(
   ToolBlock tool, {
   bool live = false,
   double textScale = 1,
+  FileTransfer? transfer,
+  void Function(OutputFile file)? onOpenFile,
 }) async {
   await tester.pumpWidget(
     _surface(
@@ -444,7 +721,13 @@ Future<void> _pumpCard(
       Scaffold(
         body: Align(
           alignment: Alignment.topCenter,
-          child: ToolCard(tool: tool, palette: light, live: live),
+          child: ToolCard(
+            tool: tool,
+            palette: light,
+            live: live,
+            transfer: transfer,
+            onOpenFile: onOpenFile,
+          ),
         ),
       ),
       textScale: textScale,

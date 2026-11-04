@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../update/channel.dart';
+
 /// Settings that belong to this phone, not to the machine it connects to: the theme,
-/// whether taps buzz, and whether background activity raises local notifications.
-/// (The language is `i18n/core.dart`.) Read once before the first screen draws.
+/// whether taps buzz, whether background activity raises local notifications, and
+/// which source updates come from. (The language is `i18n/core.dart`.) Read once
+/// before the first screen draws.
 enum ThemePreference { system, light, dark }
 
 class Preferences extends ChangeNotifier {
@@ -17,12 +20,15 @@ class Preferences extends ChangeNotifier {
   ThemePreference _theme = ThemePreference.system;
   bool _haptics = true;
   bool _notifications = true;
+  UpdateChannel _updateChannel = channelGithub;
 
   ThemePreference get theme => _theme;
 
   bool get haptics => _haptics;
 
   bool get notifications => _notifications;
+
+  UpdateChannel get updateChannel => _updateChannel;
 
   ThemeMode get themeMode => switch (_theme) {
     ThemePreference.system => ThemeMode.system,
@@ -45,6 +51,7 @@ class Preferences extends ChangeNotifier {
       };
       _haptics = prefs.getBool('$_key.haptics') ?? true;
       _notifications = prefs.getBool('$_key.notifications') ?? true;
+      _updateChannel = channelFromId(prefs.getString('$_key.updateChannel'));
     } catch (_) {
       // An unreadable preference file leaves the defaults, which are usable.
     }
@@ -68,6 +75,12 @@ class Preferences extends ChangeNotifier {
     await _write();
   }
 
+  Future<void> setUpdateChannel(UpdateChannel value) async {
+    _updateChannel = value;
+    notifyListeners();
+    await _write();
+  }
+
   Future<void> _write() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -75,6 +88,7 @@ class Preferences extends ChangeNotifier {
       await prefs.setString('$_key.theme', _theme.name);
       await prefs.setBool('$_key.haptics', _haptics);
       await prefs.setBool('$_key.notifications', _notifications);
+      await prefs.setString('$_key.updateChannel', _updateChannel.id);
     } catch (_) {
       // A preference that cannot be written still applies for this run.
     }

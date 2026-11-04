@@ -43,6 +43,10 @@ abstract final class AppIcons {
   static const filePlus = HugeIcons.strokeRoundedFilePlus;
   static const fileText = HugeIcons.strokeRoundedFileText;
   static const imageAdd = HugeIcons.strokeRoundedImageAdd01;
+  static const image = HugeIcons.strokeRoundedImage01;
+  static const flow = HugeIcons.strokeRoundedFlow;
+  static const eye = HugeIcons.strokeRoundedEye;
+  static const sourceCode = HugeIcons.strokeRoundedSourceCode;
   static const folder = HugeIcons.strokeRoundedFolder01;
   static const folderTree = HugeIcons.strokeRoundedFolderTree;
   static const globe = HugeIcons.strokeRoundedGlobe02;

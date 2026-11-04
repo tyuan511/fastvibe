@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../theme/theme.dart';
+import 'file_transfer.dart';
 import 'message.dart';
+import 'output_files.dart' show OutputFile;
 import 'thinking.dart';
 import 'tool_card.dart';
 
@@ -17,6 +19,8 @@ class ProcessGroup extends StatelessWidget {
     required this.steps,
     required this.palette,
     this.live = false,
+    this.transfer,
+    this.onOpenFile,
   });
 
   final List<ProcessStep> steps;
@@ -24,6 +28,10 @@ class ProcessGroup extends StatelessWidget {
 
   /// The reply is still streaming, so a trailing thinking row is in progress.
   final bool live;
+
+  /// Reads a generated picture from the machine; null where there is no connection.
+  final FileTransfer? transfer;
+  final void Function(OutputFile file)? onOpenFile;
 
   @override
   Widget build(BuildContext context) {
@@ -57,6 +65,8 @@ class ProcessGroup extends StatelessWidget {
       palette: palette,
       divider: divider,
       live: live,
+      transfer: transfer,
+      onOpenFile: onOpenFile,
     ),
   };
 }
