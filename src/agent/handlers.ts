@@ -7,6 +7,7 @@ import { Ipc } from "@shared/ipc";
 import type { AgentConfigSyncPayload } from "@shared/agent-config";
 import { broadcast } from "../main/ipc/broadcast";
 import { registerBotIpc } from "../main/ipc/bot-handlers";
+import { registerImagesIpc } from "../main/ipc/image-handlers";
 import { registerScheduleIpc } from "../main/ipc/schedule-handlers";
 import { handle, handlerChannels, type CallerContext } from "../main/ipc/registry";
 import type { PiProcessManager } from "../main/pi/process-manager";
@@ -151,6 +152,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.enginePromptConversation, (payload: { id: string; message: string; images?: Array<{ type: "image"; data: string; mimeType: string }> }) => engine.promptConversation(payload.id, payload.message, payload.images));
   handle(Ipc.engineGetConversationMessages, (payload: { id: string }) => engine.getConversationMessages(payload.id));
   registerBotIpc(engine);
+  registerImagesIpc(engine);
   registerScheduleIpc(engine);
   handle(Ipc.conversationsList, () => engine.listWorkspace());
   handle(Ipc.conversationsCreate, (payload?: { project?: string; activate?: boolean; reuseEmpty?: boolean }) => engine.createConversation(payload?.project, {
@@ -259,12 +261,14 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
     const next = payload && typeof payload === "object" ? payload : {};
     writeAppSettings(paths, next);
     if (toolModeSettingsChanged(previous, next)) void engine.refreshToolModes().catch(() => undefined);
+    if (JSON.stringify(previous.defaultImageModel) !== JSON.stringify(next.defaultImageModel)) engine.imageModelsChanged();
     return undefined;
   });
   handle(Ipc.settingsClear, () => {
     const previous = readAppSettings(paths);
     clearAppSettings(paths);
     if (toolModeSettingsChanged(previous, {})) void engine.refreshToolModes().catch(() => undefined);
+    if (previous.defaultImageModel) engine.imageModelsChanged();
   });
   handle(Ipc.appGetInfo, () => ({
     version: process.env.FASTVIBE_VERSION ?? "agent",

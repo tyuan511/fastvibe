@@ -228,6 +228,12 @@ export function describeTool(tool: ToolCallBlock, cwd?: string): ToolView {
       return view;
     }
     case "present": {
+      if (tool.name === "generate_image") {
+        view.label = i18n.t(running ? "images:status.generating" : "images:title") as string;
+        view.subject = argString(tool.args, ["prompt"]);
+        view.title = view.subject;
+        return view;
+      }
       // What is shown is drawn under the call; the row only says how many.
       const items = asRecord(tool.details)?.items ?? asRecord(tool.args)?.items;
       const list = Array.isArray(items) ? items : [];

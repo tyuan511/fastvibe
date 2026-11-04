@@ -29,7 +29,7 @@ import {
 import { providerLabel } from "@/lib/provider-label";
 import { cn } from "@/lib/utils";
 import { ProviderIcon } from "@/components/provider-icon";
-import { PROVIDER_APIS, type NativeProviderConfig, type ProviderApi, type ProviderConfig } from "@shared/types";
+import { PROVIDER_APIS, type NativeProviderConfig, type ProviderApi, type ProviderConfig, type ProviderModel } from "@shared/types";
 import { ModelPicker } from "./model-picker";
 import { PROVIDER_API_ITEMS, type AddMode, type AddState, type PickerState } from "./providers-settings-types";
 import { Field } from "./provider-field";
@@ -82,11 +82,12 @@ export function AddProviderDialog({
           </DialogDescription>
         </DialogHeader>
         {state?.candidates ? (
+          <><ManualModelEntry defaultApi={state.api} onAdd={(model) => onPatch({ candidates: [...state.candidates!.filter((item) => item.id !== model.id), model], selected: new Set(state.selected).add(model.id) })} />
           <ModelPicker
             models={state.candidates}
             selected={state.selected}
             onSelectedChange={(selected) => onPatch({ selected })}
-          />
+          /></>
         ) : state ? (
           <div className="min-w-0 space-y-3">
             <div className="flex min-w-0 gap-1 rounded-lg bg-muted/60 p-1">
@@ -351,6 +352,17 @@ function NativeProviderPicker({
     </Field>
   );
 }
+function ManualModelEntry({ defaultApi, onAdd }: { defaultApi?: ProviderApi; onAdd: (model: ProviderModel) => void }): JSX.Element {
+  const { t } = useTranslation("settings");
+  const [id, setId] = useState("");
+  const [api, setApi] = useState<ProviderApi | undefined>(defaultApi);
+  return <div className="flex flex-wrap items-center gap-2">
+    <Input className="min-w-32 flex-1" aria-label={t("providers.manualModelId")} placeholder={t("providers.manualModelId")} value={id} onChange={(event) => setId(event.target.value)} />
+    <Select items={PROVIDER_API_ITEMS} value={api ?? defaultApi ?? "openai-completions"} onValueChange={(value) => setApi(value as ProviderApi)}><SelectTrigger className="max-w-52"><SelectValue /></SelectTrigger><SelectContent>{PROVIDER_APIS.map((item) => <SelectItem key={item} value={item}>{PROVIDER_API_ITEMS[item]}</SelectItem>)}</SelectContent></Select>
+    <Button variant="outline" disabled={!id.trim()} onClick={() => { const modelId = id.trim(); onAdd({ id: modelId, name: modelId, api: api ?? defaultApi, contextWindow: 128000, maxTokens: 8192, reasoning: false, input: ["text"], edited: true }); setId(""); }}>{t("providers.addManualModel")}</Button>
+  </div>;
+}
+
 export function ModelPickDialog({
   state,
   provider,
@@ -380,11 +392,12 @@ export function ModelPickDialog({
             {t("providers.fetching")}
           </div>
         ) : state?.candidates ? (
+          <><ManualModelEntry defaultApi={provider?.api as ProviderApi | undefined} onAdd={(model) => onPatch({ candidates: [...state.candidates!.filter((item) => item.id !== model.id), model], selected: new Set(state.selected).add(model.id) })} />
           <ModelPicker
             models={state.candidates}
             selected={state.selected}
             onSelectedChange={(selected) => onPatch({ selected })}
-          />
+          /></>
         ) : (
           <p className="text-xs text-destructive">{t("providers.fetchFailed")}</p>
         )}

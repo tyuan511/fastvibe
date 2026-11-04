@@ -1,3 +1,4 @@
+import { availableImageTools } from "../engine/image-generation-tool";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
@@ -9,6 +10,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionUIContext,
+  type ExtensionFactory,
   type FileEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ChatMessage, ThinkingTiming } from "@shared/types";
@@ -81,6 +83,7 @@ export type SubagentRunHost = {
   publishSubagentState(subagentId: string, conversationId: string, session: AgentSession): void;
   captureGoalUsage?(conversationId: string): (usage: unknown) => void;
   folderPrompt?(cwd: string): Promise<string | undefined>;
+  imageGeneration?(conversationId: string): ExtensionFactory;
   timeReasoning(
     key: string,
     event: AgentSessionEvent,
@@ -210,6 +213,7 @@ export class SubagentTurnRunner {
         noPromptTemplates: true,
         noSkills: true,
         additionalExtensionPaths: [folderConsent].filter((path): path is string => Boolean(path)),
+        extensionFactories: this.#host.imageGeneration ? [{ name: "fastvibe-image-generation", hidden: true, factory: this.#host.imageGeneration(conversationId) }] : [],
         ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
       });
       await loader.reload();
@@ -226,10 +230,13 @@ export class SubagentTurnRunner {
         configuredModel,
         request.fallbackModel ?? (preferred ? `${preferred.provider}/${preferred.id}` : undefined),
       );
-      const tools =
+      const hasImageTool = loader.getExtensions().extensions.some((extension) => extension.tools.has("generate_image"));
+      const tools = availableImageTools(
         request.tools && request.tools.length > 0
           ? request.tools
-          : ["read", "bash", "edit", "write", "grep", "find", "ls"];
+          : ["read", "bash", "edit", "write", "grep", "find", "ls", ...(this.#host.imageGeneration ? ["generate_image"] : [])],
+        hasImageTool,
+      );
       usedModel = model ? `${model.provider}/${model.id}` : undefined;
       const created = await createAgentSession({
         cwd,

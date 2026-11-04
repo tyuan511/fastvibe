@@ -1,6 +1,10 @@
+import { i18n } from "@/lib/i18n";
 import type { GatewayKind, NativeProviderConfig, ProviderApi, ProviderModel } from "@shared/types";
 
 export const PROVIDER_API_ITEMS: Record<ProviderApi, string> = {
+  get "image-gpt"() { return i18n.t("settings:providers.imageGpt"); },
+  get "image-gemini"() { return i18n.t("settings:providers.imageGemini"); },
+  get "image-grok"() { return i18n.t("settings:providers.imageGrok"); },
   "openai-completions": "OpenAI Chat Completions (/chat/completions)",
   "openai-responses": "OpenAI Responses (/responses)",
   "anthropic-messages": "Anthropic Messages (/v1/messages)",
@@ -9,6 +13,9 @@ export const PROVIDER_API_ITEMS: Record<ProviderApi, string> = {
 
 /** Short label for a model's pinned protocol, where the row is too narrow for the full one. */
 export const PROVIDER_API_SHORT: Record<ProviderApi, string> = {
+  get "image-gpt"() { return i18n.t("settings:providers.imageGpt"); },
+  get "image-gemini"() { return i18n.t("settings:providers.imageGemini"); },
+  get "image-grok"() { return i18n.t("settings:providers.imageGrok"); },
   "openai-completions": "Chat Completions",
   "openai-responses": "Responses",
   "anthropic-messages": "Messages",

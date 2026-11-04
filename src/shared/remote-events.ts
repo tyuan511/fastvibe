@@ -34,6 +34,8 @@ export type RemotePushKind = "catalog" | "engine" | "terminal" | "drop" | "unkno
  */
 export function classifyRemotePush(channel: string): RemotePushKind {
   if (
+    // The image studio belongs to this host, rather than an SSH project binding.
+    channel === Ipc.imagesChanged ||
     channel === Ipc.botNavigate ||
     // Bot workspaces belong to the connected host; SSH project binding does not aggregate them.
     channel === Ipc.botChanged ||

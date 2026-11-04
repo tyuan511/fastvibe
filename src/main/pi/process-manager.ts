@@ -6,6 +6,8 @@ import { dirname, join, resolve, basename } from "node:path";
 import { BotStore } from "../bot/bot-store";
 import { resolveBotWorkspace } from "../bot/bot-workspace";
 import { BotRuntime } from "../bot/bot-runtime";
+import { ImageGenerationService } from "../images/service";
+import { imageGenerationExtension } from "../engine/image-generation-tool";
 import { BotConversationPreviewReader } from "../bot/bot-conversation-preview";
 import { botRole, botSessionExtension } from "../bot/bot-session-extension";
 import { runBotSession } from "../bot/bot-engine-host";
@@ -131,6 +133,7 @@ import {
   scanImportSources,
 } from "../engine/import/runner";
 import { readAppSettings, readDefaultModel, readLightModel, readPreferredModelSettings } from "../engine/runtime-settings";
+import { imageModelsFromProviders, imageModelKey, isImageApi } from "../../shared/image-model";
 import { lightModelFor, pinnedLightModel } from "../engine/light-model";
 import { canTurnThinkingOff, installThinkingOffGuard, modelWithoutThinkingOff, retryWithoutThinkingOff, roomForThinking, suggestionMaxTokens, willSendThinkingOff, withThinkingOff, withThinkingOffFallback } from "../engine/thinking-off";
 import { SUGGESTION_SYSTEM, buildCacheContext, buildSuggestionPrompt, cleanSuggestion, readSuggestionStream, suggestionMaterial, suggestionModeOf, withFinalMessage } from "../engine/reply-suggestion";
@@ -190,7 +193,7 @@ import { testProviderModel } from "../engine/provider-test";
 import { importCcSwitch, scanCcSwitch } from "../engine/cc-switch";
 import { catalogPrice } from "../engine/models-dev";
 import { findNativeProvider } from "../engine/native-providers";
-import { globalPiModels } from "../engine/global-pi-providers";
+import { globalPiModels, resolveGlobalPiImageKey } from "../engine/global-pi-providers";
 import { hasOAuthCredential, OAuthCredentialStore, readOrCreateDeviceId } from "../engine/oauth-store";
 import { priceUsage } from "../engine/pricing";
 import { fetchOpenAIAccountQuota, openAICodexAccountId } from "../engine/openai-quota";
@@ -697,6 +700,7 @@ export class PiProcessManager {
    */
   #mcpConnecting: Promise<void> | null = null;
   /** Bumped each time a connect finishes; a session built under an older number may lack tools. */
+  #imageToolsVersion = 0;
   #mcpVersion = 0;
   #skills: SkillManager;
   #appConfigHost: ((request: AppConfigHostRequest) => Promise<AppConfigHostResult>) | null = null;
@@ -706,6 +710,28 @@ export class PiProcessManager {
   readonly #promptPreparations = new PromptPreparations();
   #subagentManager: SubagentManager;
   readonly bot: BotRuntime;
+  #images: ImageGenerationService | undefined;
+
+  get images(): ImageGenerationService {
+    return this.#images ??= new ImageGenerationService({
+      paths: this.#paths,
+      getConfig: async () => {
+        const models = imageModelsFromProviders(await this.listProviders());
+        const value = readAppSettings(this.#paths).defaultImageModel;
+        const pin = value && typeof value === "object" ? value as { provider?: unknown; id?: unknown } : undefined;
+        return { models, ...(typeof pin?.provider === "string" && typeof pin.id === "string" ? { defaultModelId: imageModelKey(pin.provider, pin.id) } : {}) };
+      },
+      onChanged: (event) => broadcast(Ipc.imagesChanged, event),
+      resolveProviderKey: async (id) => {
+        const provider = readProviders(this.#paths).find((item) => item.id === id && item.enabled);
+        if (!provider) return undefined;
+        const keys = await loadProviderKeys(this.#paths);
+        if (keys[provider.apiKeyEnv]) return keys[provider.apiKeyEnv];
+        if (this.#paths.engineMode !== "global") return undefined;
+        return resolveGlobalPiImageKey(this.#paths, id);
+      },
+    });
+  }
   readonly #viviMemory: ViviMemoryService;
   readonly #scheduledTasks: ScheduledTaskManager;
   /** Live subagent registry and bounded transcript cache. */
@@ -1188,7 +1214,7 @@ export class PiProcessManager {
         onError: (id, error) => console.warn(`[compaction] background summary failed (${id})`, error),
       });
       await this.#models.refresh({ allowNetwork: false });
-      if (this.#paths.engineMode === "global") this.#modelsCache = globalPiModels(this.#models);
+      if (this.#paths.engineMode === "global") this.#modelsCache = globalPiModels(this.#models, this.#paths);
       await this.#mcp.load();
       markStartup("engine-runtime");
       // Servers connect in the background. Awaiting them here put the slowest one (an `npx`
@@ -1216,6 +1242,8 @@ export class PiProcessManager {
   }
 
   async stop(): Promise<void> {
+    await this.#images?.dispose();
+    this.#images = undefined;
     await this.#viviMemory.stop().catch((error) => console.error("[vivi-memory] shutdown failed", error));
     await this.bot.stop().catch((error) => console.error("[bot] shutdown failed; continuing engine cleanup", error));
     this.#promptPreparations.cancel();
@@ -2118,10 +2146,13 @@ export class PiProcessManager {
         // The running session is deliberately left alone. Its next settled event
         // calls us again, after the current tool result has been delivered.
         if (!managed.session.isIdle) continue;
+        const imageVersion = this.#imageToolsVersion;
+        this.#pendingMcpReloads.delete(conversationId);
         try {
           await managed.session.reload();
-          this.#pendingMcpReloads.delete(conversationId);
+          if (imageVersion !== this.#imageToolsVersion) this.#pendingMcpReloads.add(conversationId);
         } catch {
+          this.#pendingMcpReloads.add(conversationId);
           // Keep it pending so a later settled event or settings change can retry.
         }
       }
@@ -3258,7 +3289,7 @@ export class PiProcessManager {
   async setModel(provider: string, modelId: string, conversationId?: string): Promise<EngineSessionState> {
     await this.#ensureReady();
     const model = this.#models?.find(provider, modelId);
-    if (!model) throw new Error(uiText("模型不存在", "Model not found"));
+    if (!model || this.#isImageModel(provider, modelId)) throw new Error(uiText("模型不存在", "Model not found"));
     const session = conversationId ? (await this.#sessionFor(conversationId)).session : await this.#activeSession();
     if (!session) {
       this.#pendingModel = { provider, id: modelId };
@@ -3727,7 +3758,14 @@ export class PiProcessManager {
    * mutable in-memory map and `ModelRegistry.refresh()` re-reads `models.json` in
    * place, so keys, endpoints and model lists can be swapped underneath a live session.
    */
+  imageModelsChanged(): void { this.#images?.modelsChanged(); }
+
   async reloadProviders(): Promise<EngineStatus> {
+    this.imageModelsChanged();
+    this.#imageToolsVersion++;
+    for (const id of this.#sessions.keys()) this.#pendingMcpReloads.add(id);
+    await this.#scheduleMcpReload();
+    if ([...this.#pendingMcpReloads].some((id) => this.#sessions.get(id)?.session.isIdle)) await this.#scheduleMcpReload();
     // Credentials can change during any provider mutation, so never reuse a quota
     // fetched before this reload.
     this.#openAIQuotaCache.clear();
@@ -3741,7 +3779,7 @@ export class PiProcessManager {
       if (!runtime || !registry) return this.#status;
       if (this.#paths.engineMode === "global") {
         await registry.refresh({ allowNetwork: false });
-        this.#modelsCache = globalPiModels(registry);
+        this.#modelsCache = globalPiModels(registry, this.#paths);
         this.#prices = modelPriceIndex(this.#paths);
         await this.#rebindModels();
         return this.#status;
@@ -4198,6 +4236,7 @@ export class PiProcessManager {
     // The MCP tools are read while the extensions load below. If the launch-time connect finishes
     // after that and before this session is registered, nobody reloads it for the tools (the
     // connect's own pass only sees registered sessions), so the check is at registration.
+    const imageVersionAtStart = this.#imageToolsVersion;
     const mcpVersionAtStart = this.#mcpVersion;
     let mark = performance.now();
     const lap = (name: string): void => {
@@ -4220,6 +4259,10 @@ export class PiProcessManager {
       ) : builtinExtensionPaths(),
       additionalSkillPaths: builtinSkillPaths(),
       extensionFactories: [{
+        name: "fastvibe-image-generation",
+        hidden: true,
+        factory: imageGenerationExtension(this.images, conversation.id),
+      }, {
         name: "fastvibe-memory",
         hidden: true,
         factory: this.#memory.extension(),
@@ -4673,7 +4716,7 @@ export class PiProcessManager {
     }));
     this.#installQueueBoundary(conversation.id, result.session);
     this.#sessions.set(conversation.id, managed);
-    if (this.#mcpVersion !== mcpVersionAtStart && this.#mcp.list().some((server) => server.connected)) {
+    if (this.#imageToolsVersion !== imageVersionAtStart || (this.#mcpVersion !== mcpVersionAtStart && this.#mcp.list().some((server) => server.connected))) {
       this.#pendingMcpReloads.add(conversation.id);
       void this.#scheduleMcpReload();
     }
@@ -4684,6 +4727,7 @@ export class PiProcessManager {
     if (this.#paths.engineMode !== "global" && !result.session.autoCompactionEnabled) result.session.setAutoCompactionEnabled(true);
     // A conversation with no history yet starts on the user's pinned 默认模型.
     if (result.session.messages.length === 0) await this.#applyPreferredModel(result.session, conversation.project, Boolean(conversation.scheduledTaskId));
+    if (result.session.model && this.#isImageModel(result.session.model.provider, result.session.model.id)) await this.#rebindModel(conversation.id, result.session);
     const payload: ConversationReadyEvent = {
       id: conversation.id,
       messages: this.#messages(result.session, conversation.id),
@@ -5731,6 +5775,7 @@ export class PiProcessManager {
       emit: (event) => this.#emit(event),
       resolvePendingUi: (conversationId, owner) => this.#resolvePendingUi(conversationId, owner),
       captureGoalUsage: (conversationId) => this.#goalDescendantUsage.capture(conversationId),
+      imageGeneration: (id) => imageGenerationExtension(this.images, id),
       extensionUi: (conversationId, owner) => this.#extensionUi(conversationId, owner),
       publishSubagentState: (subagentId, conversationId, session) => this.#publishSubagentState(subagentId, conversationId, session),
       timeReasoning: (key, event, session, now, file) => this.#timeReasoning(key, event, session, now, file),
@@ -6170,6 +6215,12 @@ export class PiProcessManager {
     await this.#rebindModel(id, managed.session);
   }
 
+  #isImageModel(providerId: string, modelId: string): boolean {
+    const provider = readProviders(this.#paths).find((item) => item.id === providerId);
+    const model = provider?.models.find((item) => item.id === modelId);
+    return Boolean(model && isImageApi(model.api ?? provider?.api));
+  }
+
   async #rebindModel(id: string, session: AgentSession): Promise<void> {
     this.#modelDirty.delete(id);
     const registry = this.#models;
@@ -6179,7 +6230,7 @@ export class PiProcessManager {
     // (`provider: "unknown"`, i.e. a conversation created before anything was
     // connected). It finds nothing here and falls through to the fallback search below,
     // which is how it adopts the provider the user connects afterwards.
-    const refreshed = registry.find(current.provider, current.id);
+    const refreshed = this.#isImageModel(current.provider, current.id) ? undefined : registry.find(current.provider, current.id);
     // Same model, refreshed definition: swap it quietly. A settings edit is not a
     // user model switch, and `setModel()` would append a model_change entry per
     // conversation to every provider edit.
@@ -6194,7 +6245,7 @@ export class PiProcessManager {
     // own providers (never a stray SDK built-in that merely has an env key), and let
     // setModel() record the switch the user did not ask for.
     const preferred = readPreferredModelSettings(this.#paths, this.#catalog.get(id)?.project);
-    let fallback = preferred.model ? registry.find(preferred.model.provider, preferred.model.id) : undefined;
+    let fallback = preferred.model && !this.#isImageModel(preferred.model.provider, preferred.model.id) ? registry.find(preferred.model.provider, preferred.model.id) : undefined;
     if (!fallback) {
       for (const item of this.#modelsCache ?? []) {
         const candidate = registry.find(item.provider, item.id);
@@ -6204,7 +6255,7 @@ export class PiProcessManager {
         }
       }
     }
-    fallback ??= registry.getAvailable()[0];
+    fallback ??= registry.getAvailable().find((candidate) => !this.#isImageModel(candidate.provider, candidate.id));
     if (!fallback) return;
     try {
       await this.#useModel(session, fallback);
@@ -6234,7 +6285,7 @@ export class PiProcessManager {
     const model =
       (pending ? this.#models?.find(pending.provider, pending.id) : undefined) ??
       (preferred.model ? this.#models?.find(preferred.model.provider, preferred.model.id) : undefined);
-    if (model) {
+    if (model && !this.#isImageModel(model.provider, model.id)) {
       try {
         await session.setModel(model);
       } catch {

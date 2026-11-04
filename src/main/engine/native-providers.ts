@@ -1,3 +1,4 @@
+import { isImageApi } from "../../shared/image-model.ts";
 import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { THINKING_LEVELS, type NativeProviderOAuth, type ProviderModel, type ThinkingLevel } from "@shared/types";
@@ -195,21 +196,23 @@ export function selectedNativeModels(id: string, selectedIds: string[]): Provide
 export function mergeNativeModels(id: string, selected: ProviderModel[]): ProviderModel[] {
   const provider = findNativeProvider(id);
   if (!provider) return [];
-  const saved = new Map(selected.map((model) => [model.id, model]));
-  return provider.models
-    .filter((model) => saved.has(model.id))
-    .map((model) => {
-      const override = saved.get(model.id);
-      if (override?.edited !== true) return model;
-      return {
-        ...model,
-        name: override.name,
-        contextWindow: override.contextWindow,
-        maxTokens: override.maxTokens,
-        reasoning: override.reasoning,
-        input: override.input,
-        thinkingLevels: override.thinkingLevels,
-        edited: true,
-      };
-    });
+  const catalog = new Map(provider.models.map((model) => [model.id, model]));
+  return selected.flatMap((override) => {
+    const model = catalog.get(override.id);
+    // Image endpoints can expose ids absent from the SDK's chat catalog.
+    if (isImageApi(override.api)) return [override];
+    if (!model) return [];
+    if (override.edited !== true) return [{ ...model, ...(override.api ? { api: override.api } : {}) }];
+    return [{
+      ...model,
+      name: override.name,
+      contextWindow: override.contextWindow,
+      maxTokens: override.maxTokens,
+      reasoning: override.reasoning,
+      input: override.input,
+      thinkingLevels: override.thinkingLevels,
+      ...(override.api ? { api: override.api } : {}),
+      edited: true,
+    }];
+  });
 }

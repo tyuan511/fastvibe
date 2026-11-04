@@ -5,6 +5,7 @@ import { Ipc, type AppModelsDevInfo } from "@shared/ipc";
 import { broadcast, observe } from "./ipc/broadcast";
 import type { BotChanged } from "../shared/bot";
 import { registerBotIpc } from "./ipc/bot-handlers";
+import { registerImagesIpc } from "./ipc/image-handlers";
 import { dispatch, handle, handlerChannels, observeSlowCalls, type CallerContext } from "./ipc/registry";
 import { registerRemoteIpc, restoreRemoteServer, stopRemoteServer } from "./remote";
 import { runAppConfig } from "./app-config";
@@ -602,6 +603,7 @@ app.whenReady().then(async () => {
   });
   registerScheduleIpc(engine);
   registerBotIpc(engine);
+  registerImagesIpc(engine);
   registerUpdater(
     () => windows,
     () => createWindow(),

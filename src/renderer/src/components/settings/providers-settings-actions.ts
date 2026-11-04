@@ -1,3 +1,4 @@
+import { isImageApi } from "@shared/image-model";
 import { toast } from "sonner";
 import { i18n } from "@/lib/i18n";
 import { cleanError } from "@/lib/ipc-error";
@@ -14,10 +15,11 @@ export async function startAddModels(
 ): Promise<void> {
   setPicker({
     providerId: provider.id,
-    candidates: null,
+    candidates: isImageApi(provider.api) ? provider.models : null,
     selected: new Set(provider.models.map((item) => item.id)),
-    busy: true,
+    busy: !isImageApi(provider.api),
   });
+  if (isImageApi(provider.api)) return;
   try {
     const models = await window.fastvibe.providers.refresh(provider.id);
     const kept = new Set(provider.models.map((item) => item.id));
@@ -31,8 +33,8 @@ export async function startAddModels(
     toast.error(cleanError(err));
     setPicker({
         providerId: provider.id,
-      candidates: null,
-      selected: new Set(),
+      candidates: provider.models,
+      selected: new Set(provider.models.map((item) => item.id)),
       busy: false,
     });
   }
@@ -73,6 +75,10 @@ export async function fetchAddCandidates(
 
   if (!add.name.trim() || !add.baseUrl.trim() || !add.apiKey.trim()) {
     toast.error(i18n.t("settings:providers.needFields") as string);
+    return;
+  }
+  if (isImageApi(add.api)) {
+    setAdd({ ...add, candidates: [], selected: new Set(), busy: false });
     return;
   }
   setAdd({ ...add, busy: true });

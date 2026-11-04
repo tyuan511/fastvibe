@@ -1,3 +1,4 @@
+import { isImageApi } from "../../shared/image-model.ts";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -91,22 +92,29 @@ export function piProviderModelsEntry(
   },
   apiKey?: string,
 ): Record<string, unknown> | undefined {
+  const imageModels = orderProviderModels(provider.models, provider.modelOrder).filter((model) => isImageApi(model.api ?? provider.api));
+  const extensions = {
+    ...(imageModels.length > 0 ? { fastvibeImageModels: imageModels } : {}),
+    ...(isImageApi(provider.api) ? { fastvibeImageApi: provider.api } : {}),
+  };
   if (provider.kind === "native") {
     const modelOverrides = Object.fromEntries(
-      provider.models.filter((model) => model.edited === true).map((model) => [model.id, nativeModelOverride(model)]),
+      provider.models.filter((model) => model.edited === true && !isImageApi(model.api ?? provider.api)).map((model) => [model.id, nativeModelOverride(model)]),
     );
-    return Object.keys(modelOverrides).length > 0 ? { modelOverrides } : undefined;
+    return Object.keys(modelOverrides).length > 0 || imageModels.length > 0
+      ? { ...(imageModels.length > 0 ? { baseUrl: trimBaseUrl(provider.baseUrl) } : {}), modelOverrides, ...extensions } : undefined;
   }
   if (provider.models.length === 0) return undefined;
   const baseUrl = trimBaseUrl(provider.baseUrl);
   return {
     name: provider.name,
     baseUrl,
-    api: provider.api,
+    ...extensions,
+    api: isImageApi(provider.api) ? "openai-completions" : provider.api,
     ...(apiKey ? { apiKey } : {}),
     // Gemini authenticates with `x-goog-api-key` via the SDK client, not Bearer.
     authHeader: provider.api !== "google-generative-ai",
-    models: orderProviderModels(provider.models, provider.modelOrder).map((model) => {
+    models: orderProviderModels(provider.models, provider.modelOrder).filter((model) => !isImageApi(model.api ?? provider.api)).map((model) => {
       const api = model.api ?? provider.api;
       const compat = modelCompat(api, model);
       const thinking = withAdaptiveOff(api, model, thinkingLevelMap(model));
@@ -225,8 +233,12 @@ function mergeModels(current: unknown, request: PiSyncRequest): {
     const existing = providers[provider.id];
     // Folding overrides into an existing native entry keeps that entry's apiKey.
     // Escaping the key here would double every `$` the next time overrides are written.
+    const nativeBase = isRecord(existing) ? { ...existing } : {};
+    // These are projections of the current unified roster, not independent config.
+    delete nativeBase.fastvibeImageModels;
+    delete nativeBase.fastvibeImageApi;
     const next = request.mode !== "replace" && provider.kind === "native" && isRecord(existing)
-      ? { ...existing, ...provider.models }
+      ? { ...nativeBase, ...provider.models }
       : escapeModelsKey(provider.models);
     if (sameJson(existing, next)) continue;
     providers[provider.id] = next;

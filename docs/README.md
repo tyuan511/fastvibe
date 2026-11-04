@@ -24,6 +24,7 @@
 | [Vivi Markdown 记忆](vivi-memory-design.md) | 常开私有记忆、明确更新、提炼、发布、来源与共享遗忘规则 |
 | [普通长期记忆](memory.md) | 可选全局记忆、提炼与整合、读取和引用；不等于 Vivi 记忆 |
 | [多文件夹项目](multi-folder-projects.md) | 主文件夹重键、会话 cwd、额外规则/技能发现、Git 与检查点 |
+| [图片生成工作台](image-generation.md) | 独立图片会话、并行异步任务、GPT/Gemini/Grok 模型、默认模型与 Agent 工具 |
 | [OfficeCLI 集成](office-officecli.md) | 内置二进制、静态/live 预览、引用选中、文件回退、SSH/手机；§7 是升级验收入口 |
 | [从其他 Agent 导入](import-from-other-agents.md) | 源格式证据和唯一写出器契约；各来源当前是否启用以 adapter 注册表为准 |
 | [SQLite 存储](sqlite-storage.md) | 数据/配置边界、事务、旧文件迁移与历史测量；schema 以 `db-schema.ts` 为准 |

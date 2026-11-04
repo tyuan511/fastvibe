@@ -218,7 +218,7 @@ export function collectInlinePreviews(
       out.push({ key: `${tool.id}:${out.length}`, kind, ref, title, explicit });
     };
 
-    if (tool.name === "present") {
+    if (tool.name === "present" || tool.name === "generate_image") {
       for (const item of presentItems(tool)) add(item.ref, true, item.title);
     } else {
       if (isWriteTool(tool.name)) {

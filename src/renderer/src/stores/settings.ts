@@ -70,6 +70,7 @@ export type AppSettings = ProxySettings & {
    * rewrites them to the last used model on every switch.
    */
   defaultModel?: EngineModel;
+  defaultImageModel?: EngineModel;
   /**
    * 轻量模型: the model short side jobs run on — a chat's title, a commit subject, the
    * next-message guess, memory extraction. Absent means "follow each chat's own model",
@@ -242,6 +243,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isFontSize(next.uiFontSize)) delete next.uiFontSize;
   if (!isThinkingLevel(next.thinkingLevel)) delete next.thinkingLevel;
   if (!isEngineModel(next.defaultModel)) delete next.defaultModel;
+  if (!isEngineModel(next.defaultImageModel)) delete next.defaultImageModel;
   if (!isEngineModel(next.lightModel)) delete next.lightModel;
   if (!isProjectDefaultMap(next.projectDefaults)) delete next.projectDefaults;
   if (!isFiniteNumber(next.sidebarWidth)) delete next.sidebarWidth;

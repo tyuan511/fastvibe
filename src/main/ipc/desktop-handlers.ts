@@ -615,6 +615,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     applyKeepAwake(payload);
     // 代码模式 / 工具搜索 reach a session only when it reloads.
     if (toolModeSettingsChanged(previous, payload)) void engine.refreshToolModes().catch(() => undefined);
+    if (JSON.stringify(previous.defaultImageModel) !== JSON.stringify(payload.defaultImageModel)) engine.imageModelsChanged();
     // The component is not in the installer. Turning the switch on is the request
     // to fetch it; turning it off drops a download that has not finished.
     if (payload.computerEnabled === true && previous.computerEnabled !== true) syncComputerComponent(true);
@@ -653,6 +654,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
     refreshApplicationMenu();
     applyKeepAwake({});
     if (toolModeSettingsChanged(previous, {})) void engine.refreshToolModes().catch(() => undefined);
+    if (previous.defaultImageModel) engine.imageModelsChanged();
     if (previous.computerEnabled === true) syncComputerComponent(false);
     paintWindows(windows, {});
     // 恢复默认 is a write like any other: the other windows hold their own copy and

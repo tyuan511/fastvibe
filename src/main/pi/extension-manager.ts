@@ -35,7 +35,7 @@ export const BUILTIN_EXTENSIONS: Array<{ source: string; file: string }> = [
  * extension or starting a process. */
 export const BUILTIN_AGENTS = [
   { id: "explorer", name: "Explorer", description: "Use for specific, well-scoped codebase questions; return fast, authoritative evidence for the parent agent.", tools: ["read", "grep", "find", "ls"] },
-  { id: "worker", name: "Worker", description: "Use for implementation and production work on a clearly owned set of files or modules.", tools: ["read", "grep", "find", "ls", "edit", "write", "bash"] },
+  { id: "worker", name: "Worker", description: "Use for implementation and production work on a clearly owned set of files or modules.", tools: ["read", "grep", "find", "ls", "edit", "write", "bash", "generate_image"] },
 ] as const;
 
 function resourcesRoot(): string {

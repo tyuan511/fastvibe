@@ -1,6 +1,15 @@
 import type { IrohRemoteState } from "./iroh-remote";
 import type { MenuBindings, MenuCommandId } from "./menu-commands.ts";
 export const Ipc = {
+  imagesGetConfig: "images:get-config",
+  imagesSnapshot: "images:snapshot",
+  imagesCreateSession: "images:create-session",
+  imagesRenameSession: "images:rename-session",
+  imagesDeleteSession: "images:delete-session",
+  imagesDeleteTask: "images:delete-task",
+  imagesGenerate: "images:generate",
+  imagesCancel: "images:cancel",
+  imagesChanged: "images:changed",
   botGetActivity: "bot:get-activity",
   botGetWorkSnapshot: "bot:get-work-snapshot",
   botSubmit: "bot:submit",

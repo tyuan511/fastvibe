@@ -1,4 +1,5 @@
 import { Ipc } from "@shared/ipc";
+import type { ImagesApi, ImageGenerateRequest, ImagesChanged } from "./image-generation";
 import type { BotApi, BotActivity, BotChanged, BotCreateWorkRequest, BotReportRequest, BotSubmitRequest, BotConversationMeta, BotResult, BotAttention, WorkSnapshot } from "./bot";
 import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
 import type { ViviBubbleKind, ViviDragMotion, ViviSettings, ViviSnapshot, ViviState } from "./vivi";
@@ -426,6 +427,17 @@ export function createFastVibeApi(t: ApiTransport) {
       onChanged: (listener: (snapshot: WorkspaceSnapshot) => void): (() => void) =>
         t.subscribe(Ipc.workspaceChanged, listener),
     },
+    images: {
+      getConfig: () => t.invoke(Ipc.imagesGetConfig),
+      snapshot: (sessionId?: string) => t.invoke(Ipc.imagesSnapshot, { sessionId }),
+      createSession: (title?: string) => t.invoke(Ipc.imagesCreateSession, { title }),
+      renameSession: (id: string, title: string) => t.invoke(Ipc.imagesRenameSession, { id, title }),
+      deleteSession: (id: string) => t.invoke(Ipc.imagesDeleteSession, { id }),
+      deleteTask: (taskId: string) => t.invoke(Ipc.imagesDeleteTask, { taskId }),
+      generate: (request: ImageGenerateRequest) => t.invoke(Ipc.imagesGenerate, request),
+      cancel: (taskId: string) => t.invoke(Ipc.imagesCancel, { taskId }),
+      onChanged: (listener: (event: ImagesChanged) => void) => t.subscribe(Ipc.imagesChanged, listener),
+    } satisfies ImagesApi,
     bot: {
       getActivity: (): Promise<BotActivity> => t.invoke(Ipc.botGetActivity),
       getWorkSnapshot: (): Promise<WorkSnapshot> => t.invoke(Ipc.botGetWorkSnapshot),

@@ -987,7 +987,7 @@ export type ProviderModel = {
 };
 
 /** Streaming APIs offered in settings; values match pi-coding-agent's `api` field. */
-export const PROVIDER_APIS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"] as const;
+export const PROVIDER_APIS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai", "image-gpt", "image-gemini", "image-grok"] as const;
 
 export type ProviderApi = (typeof PROVIDER_APIS)[number];
 
