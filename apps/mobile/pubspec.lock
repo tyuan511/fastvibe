@@ -231,7 +231,7 @@ packages:
       path: "packages/rust_core"
       relative: true
     source: path
-    version: "0.5.13"
+    version: "0.5.14"
   ffi:
     dependency: "direct main"
     description:

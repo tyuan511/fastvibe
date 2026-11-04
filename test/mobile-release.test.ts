@@ -44,15 +44,15 @@ test("Flutter Android release metadata and updater asset contract stay aligned",
 });
 
 test("Android metadata checker accepts the shipping version and matching tag", () => {
-  const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), "app-v0.5.13"]);
+  const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), "app-v0.5.14"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Android 0\.5\.13 \(versionCode 513\), ABI arm64-v8a/);
+  assert.match(result.stdout, /Android 0\.5\.14 \(versionCode 514\), ABI arm64-v8a/);
 });
 
 test("Android metadata checker rejects a mismatched release tag", () => {
   const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), "app-v0.5.10"]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /does not match app-v0\.5\.13/);
+  assert.match(result.stderr, /does not match app-v0\.5\.14/);
 });
 
 test("signed Flutter release build fails closed before compilation without all signing inputs", () => {

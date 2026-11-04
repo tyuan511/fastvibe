@@ -72,7 +72,7 @@ cd apps/mobile/android
 bash tool/build.sh --release
 ```
 
-Flutter outputs APKs in `apps/mobile/build/app/outputs/flutter-apk/`. The release asset remains `FastVibe-app-vX.Y.Z-arm64-v8a.apk` plus its SHA256 file. `pubspec.yaml` and `android/version.properties` must agree on version/build number; the Rust crate version tracks the mobile release. This migration retains version `0.5.13+513`.
+Flutter outputs APKs in `apps/mobile/build/app/outputs/flutter-apk/`. The release asset remains `FastVibe-app-vX.Y.Z-arm64-v8a.apk` plus its SHA256 file. `pubspec.yaml` and `android/version.properties` must agree on version/build number; the Rust crate version tracks the mobile release. This migration retains version `0.5.14+514`.
 
 ## iOS
 

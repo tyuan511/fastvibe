@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = 'fastvibe_rust_core'
-  s.version = '0.5.13'
+  s.version = '0.5.14'
   s.summary = 'FastVibe shared Rust mobile runtime'
   s.description = 'Links the same account, iroh and App Protocol runtime used by both Flutter platforms.'
   s.homepage = 'https://github.com/tyuan511/fastvibe'

@@ -5,7 +5,7 @@ PODS:
     - Flutter
   - device_info_plus (0.0.1):
     - Flutter
-  - fastvibe_rust_core (0.5.13):
+  - fastvibe_rust_core (0.5.14):
     - Flutter
   - Flutter (1.0.0)
   - flutter_image_compress_common (1.0.0):

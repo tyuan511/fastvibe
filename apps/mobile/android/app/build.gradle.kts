@@ -11,7 +11,7 @@ val mobileVersion = Properties().apply {
 val mobileVersionName = mobileVersion.getProperty("versionName") ?: error("versionName missing from version.properties")
 val mobileVersionCode = mobileVersion.getProperty("versionCode")?.toIntOrNull()
     ?: error("versionCode missing from version.properties")
-require(mobileVersionCode >= 513) { "versionCode must not fall below the current installed release 513" }
+require(mobileVersionCode >= 514) { "versionCode must not fall below the current installed release 514" }
 require(flutter.versionName == mobileVersionName && flutter.versionCode == mobileVersionCode) {
     "Flutter pubspec version and android/version.properties must match"
 }

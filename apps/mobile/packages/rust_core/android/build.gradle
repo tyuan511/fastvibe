@@ -1,5 +1,5 @@
 group = 'dev.fastvibe.rust_core'
-version = '0.5.13'
+version = '0.5.14'
 
 apply plugin: 'com.android.library'
 
