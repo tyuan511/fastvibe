@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fastvibe_mobile/core/runtime.dart';
@@ -105,14 +106,24 @@ char *fv_mobile_core_poll_json(void *handle) {
   test('a blocking native command runs off the Flutter isolate', () async {
     final runtime = NativeCoreRuntime(libraryPath: library);
     await runtime.command('start');
-    var ticks = 0;
-    final ticker = Timer.periodic(
-      const Duration(milliseconds: 20),
-      (_) => ticks++,
-    );
-    await runtime.command('slow');
-    ticker.cancel();
-    expect(ticks, greaterThanOrEqualTo(4));
+    // Probe event-loop liveness with port round trips, not timers: an expired
+    // Timer.periodic can stay undelivered on a loaded CI runner until the awaited
+    // command response has already resumed this test and cancelled the ticker,
+    // while port messages are delivered by exactly the mechanism that resumes the
+    // await below. If the blocking call ever moved onto this isolate, the sends
+    // would queue behind the 200 ms command and none would be handled by now.
+    final loops = ReceivePort();
+    var handled = 0;
+    final subscription = loops.listen((_) {
+      handled++;
+      if (handled < 5) loops.sendPort.send(null);
+    });
+    final pending = runtime.command('slow');
+    loops.sendPort.send(null);
+    await pending;
+    expect(handled, greaterThanOrEqualTo(1));
+    await subscription.cancel();
+    loops.close();
     await runtime.dispose();
   }, skip: !hostSupported);
 
