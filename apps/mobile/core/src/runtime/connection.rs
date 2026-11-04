@@ -4,15 +4,6 @@ use super::*;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[cfg(feature = "iroh-transport")]
-fn redact_transport_error(error: &str, relay_token: &str) -> String {
-    if relay_token.is_empty() {
-        error.to_owned()
-    } else {
-        error.replace(relay_token, "[redacted]")
-    }
-}
-
-#[cfg(feature = "iroh-transport")]
 pub(super) fn report_connection_failure(
     shared: &Arc<SharedCore>,
     generation: u64,
@@ -46,8 +37,7 @@ impl CoreHandle {
             .or_else(|_| required_string(value, "remote_id"))?
             .to_owned();
         let relay_value = value.get("relay").unwrap_or(value);
-        let relay_url = required_string(relay_value, "url")?.to_owned();
-        let relay_token = required_string(relay_value, "token")?.to_owned();
+        let relay_nodes = crate::relay_config::parse_relay_nodes(relay_value)?;
         let remote = remote_id
             .parse::<iroh::EndpointId>()
             .map_err(|error| error.to_string())?;
@@ -73,11 +63,10 @@ impl CoreHandle {
         };
         let shared = Arc::clone(&self.shared);
         self.runtime.spawn(async move {
-            let mut dial = Box::pin(crate::iroh_transport::IrohClient::connect(
+            let mut dial = Box::pin(crate::iroh_transport::IrohClient::connect_relays(
                 key,
                 remote,
-                &relay_url,
-                &relay_token,
+                &relay_nodes,
             ));
             let dial_deadline = tokio::time::sleep(DIAL_TIMEOUT);
             tokio::pin!(dial_deadline);
@@ -103,7 +92,7 @@ impl CoreHandle {
             let client = match client {
                 Ok(client) => client,
                 Err(error) => {
-                    let message = redact_transport_error(&error.to_string(), &relay_token);
+                    let message = crate::relay_config::redact_relay_tokens(&error.to_string(), &relay_nodes);
                     report_connection_failure(&shared, generation, "error", message, None);
                     return;
                 }
@@ -121,7 +110,7 @@ impl CoreHandle {
             let mut transport_failed = false;
             for message in pending_messages {
                 if let Err(error) = writer.send_json(&message).await {
-                    let message = redact_transport_error(&error.to_string(), &relay_token);
+                    let message = crate::relay_config::redact_relay_tokens(&error.to_string(), &relay_nodes);
                     report_connection_failure(
                         &shared,
                         generation,
@@ -157,7 +146,7 @@ impl CoreHandle {
                         command = receiver.recv() => match command {
                             Some(TransportCommand::Message(message)) => {
                                 if let Err(error) = writer.send_json(&message).await {
-                                    let message = redact_transport_error(&error.to_string(), &relay_token);
+                                    let message = crate::relay_config::redact_relay_tokens(&error.to_string(), &relay_nodes);
                                     report_connection_failure(
                                         &shared,
                                         generation,
@@ -178,7 +167,7 @@ impl CoreHandle {
                             Ok(crate::iroh_transport::IrohRead::LegacyAuth) => {
                                 if !hello_sent {
                                     if let Err(error) = writer.send_json(&crate::hello("0.1.0")).await {
-                                        let message = redact_transport_error(&error.to_string(), &relay_token);
+                                        let message = crate::relay_config::redact_relay_tokens(&error.to_string(), &relay_nodes);
                                         report_connection_failure(
                                             &shared,
                                             generation,
@@ -196,7 +185,7 @@ impl CoreHandle {
                             },
                             Ok(crate::iroh_transport::IrohRead::Ping) => {
                                 if let Err(error) = writer.send_control(PONG).await {
-                                    let message = redact_transport_error(&error.to_string(), &relay_token);
+                                    let message = crate::relay_config::redact_relay_tokens(&error.to_string(), &relay_nodes);
                                     report_connection_failure(
                                         &shared,
                                         generation,
@@ -209,7 +198,7 @@ impl CoreHandle {
                             },
                             Ok(crate::iroh_transport::IrohRead::Pong) => shared.push_event(serde_json::json!({"type":"pong"})),
                             Ok(crate::iroh_transport::IrohRead::Close { code, reason }) => {
-                                let reason = redact_transport_error(&reason, &relay_token);
+                                let reason = crate::relay_config::redact_relay_tokens(&reason, &relay_nodes);
                                 let message = if reason.is_empty() {
                                     format!("remote closed connection (code {code})")
                                 } else {
@@ -226,7 +215,7 @@ impl CoreHandle {
                                 break;
                             }
                             Err(error) => {
-                                let message = redact_transport_error(&error.to_string(), &relay_token);
+                                let message = crate::relay_config::redact_relay_tokens(&error.to_string(), &relay_nodes);
                                 report_connection_failure(
                                     &shared,
                                     generation,

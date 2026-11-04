@@ -120,9 +120,9 @@ function assertOk(response, label) {
   return response.result;
 }
 
-test("mobile core C ABI speaks real iroh to desktop AppServer and exercises protocol lifecycle", { timeout: 180_000 }, async (t) => {
+for (const deadFirstRelay of [false, true]) test(`mobile core C ABI speaks real iroh to desktop AppServer and exercises protocol lifecycle${deadFirstRelay ? " with an unavailable first relay" : " (legacy single relay)"}`, { timeout: 180_000 }, async (t) => {
   const library = buildLibraryIfNeeded();
-  const harness = await startHarness();
+  const harness = await startHarness({ deadFirstRelay });
   const core = await startCore(library);
   t.after(async () => {
     await core.stop();
@@ -140,7 +140,7 @@ test("mobile core C ABI speaks real iroh to desktop AppServer and exercises prot
   const connect = assertOk(await core.call({
     action: "connect",
     remoteId: harness.remoteId,
-    relay: { url: harness.relayUrl, token: harness.token },
+    relay: deadFirstRelay ? harness.relayConfig : { url: harness.relayUrl, token: harness.token },
     conversationId: "conversation-1",
   }), "connect");
   assert.equal(connect.remoteId, harness.remoteId);

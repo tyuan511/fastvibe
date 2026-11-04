@@ -150,6 +150,78 @@ fn mobile_response_aliases_decode_server_snake_case() {
     assert_eq!(relay.usage.unwrap().remaining_bytes, 1);
 }
 
+#[cfg(any(feature = "mobile-client", feature = "iroh-transport"))]
+#[test]
+fn relay_node_list_is_authoritative_and_rejects_ambiguous_configuration() {
+    use crate::relay_config::parse_relay_nodes;
+    let first = serde_json::json!({"relay_id":"a","url":"https://a.example/","quic_port":7842,"token":"token-a"});
+    let second = serde_json::json!({"relayId":"b","url":"https://b.example/","quicPort":8842,"token":"token-b"});
+    let legacy = serde_json::json!({"url":"https://legacy.example/","token":"legacy"});
+    let nodes = parse_relay_nodes(&serde_json::json!({
+        "url":"https://legacy.example/","token":"legacy", "relays":[first,second]
+    }))
+    .unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[1].relay_id, "b");
+    assert_eq!(nodes[1].quic_port, Some(8842));
+    assert_eq!(nodes[1].token, "token-b");
+    assert_eq!(parse_relay_nodes(&legacy).unwrap()[0].quic_port, None);
+    for bad in [
+        serde_json::json!([]),
+        serde_json::Value::Null,
+        serde_json::json!([first.clone(), {"relay_id":"bad","url":"https://bad.example/","quic_port":7842,"token":""}]),
+        serde_json::json!([first.clone(), {"relay_id":"bad","url":"https://bad.example/","quic_port":0,"token":"b"}]),
+        serde_json::json!([first.clone(), {"relay_id":"bad","url":"https://bad.example/path","quic_port":7842,"token":"b"}]),
+        serde_json::json!([first.clone(), {"relay_id":"bad","url":"https://b.example/","quic_port":7842}]),
+        serde_json::json!([first.clone(), {"relay_id":"bad","url":"https://a.example","quic_port":7842,"token":"b"}]),
+    ] {
+        let mut config = legacy.clone();
+        config["relays"] = bad;
+        assert!(
+            parse_relay_nodes(&config).is_err(),
+            "must reject authoritative invalid list"
+        );
+    }
+}
+
+#[cfg(feature = "mobile-client")]
+#[test]
+fn mobile_relay_lease_roundtrip_retains_all_nodes_and_node_credentials() {
+    let value = serde_json::json!({
+        "relay_id":"legacy", "url":"https://legacy.example/", "quic_port":7842, "token":"old",
+        "relays":[
+            {"relay_id":"a","url":"https://a.example/","quic_port":7842,"token":"a-token"},
+            {"relay_id":"b","url":"https://b.example/","quic_port":8842,"token":"b-token"}
+        ],
+        "expires_at":"2026-11-04T04:00:00Z"
+    });
+    let config: mobile_client::MobileRelayConfig = serde_json::from_value(value).unwrap();
+    assert_eq!(config.relay_id, "a");
+    assert_eq!(config.token, "a-token");
+    assert_eq!(config.relays.len(), 2);
+    let forwarded = serde_json::to_value(config).unwrap();
+    assert_eq!(forwarded["relays"][1]["relayId"], "b");
+    assert_eq!(forwarded["relays"][1]["quicPort"], 8842);
+    assert_eq!(forwarded["relays"][1]["token"], "b-token");
+    let restored: mobile_client::MobileRelayConfig = serde_json::from_value(forwarded).unwrap();
+    assert_eq!(restored.relays.len(), 2);
+}
+
+#[cfg(any(feature = "mobile-client", feature = "iroh-transport"))]
+#[test]
+fn connection_errors_redact_every_relay_credential() {
+    use crate::relay_config::{parse_relay_nodes, redact_relay_tokens};
+    let nodes = parse_relay_nodes(&serde_json::json!({"relays":[
+        {"relay_id":"a","url":"https://a.example/","quic_port":7842,"token":"secret-a"},
+        {"relay_id":"b","url":"https://b.example/","quic_port":7842,"token":"secret-b"}
+    ]}))
+    .unwrap();
+    assert_eq!(
+        redact_relay_tokens("secret-a refused then secret-b refused", &nodes),
+        "[redacted] refused then [redacted] refused"
+    );
+}
+
 #[cfg(feature = "mobile-client")]
 #[test]
 fn devices_command_projects_desktop_computers_from_full_registry() {
@@ -467,10 +539,17 @@ fn desktop_snapshot_hydrates_camel_case_parts_queue_pause_and_history() {
         "queue":{"conversationId":"c1","revision":4,"items":[],"pause":"manual"},
         "pendingUi":[], "turnEvents":[], "overflowed":false, "seq":42
     });
-    shared.register_rpc(1, PendingRpc {
-        action:"snapshot".into(), method:"engine:get-snapshot".into(),
-        kind:RpcKind::Snapshot { conversation_id:"c1".into() }, created_at:Instant::now(),
-    });
+    shared.register_rpc(
+        1,
+        PendingRpc {
+            action: "snapshot".into(),
+            method: "engine:get-snapshot".into(),
+            kind: RpcKind::Snapshot {
+                conversation_id: "c1".into(),
+            },
+            created_at: Instant::now(),
+        },
+    );
     events::apply_rpc_result(&shared, 1, true, Some(value), None);
     let snapshot = shared.snapshot();
     assert_eq!(snapshot.messages.len(), 1);
@@ -489,12 +568,23 @@ fn malformed_snapshot_is_reported_as_failed_rpc_instead_of_empty_success() {
     let shared = Arc::new(SharedCore::new());
     for (request_id, value) in [
         (1, serde_json::json!({"conversationId":"c1","messages":[]})),
-        (2, serde_json::to_value(TranscriptStore::default().snapshot(Some("other".into()))).unwrap()),
+        (
+            2,
+            serde_json::to_value(TranscriptStore::default().snapshot(Some("other".into())))
+                .unwrap(),
+        ),
     ] {
-        shared.register_rpc(request_id, PendingRpc {
-            action:"snapshot".into(), method:"engine:get-snapshot".into(),
-            kind:RpcKind::Snapshot { conversation_id:"c1".into() }, created_at:Instant::now(),
-        });
+        shared.register_rpc(
+            request_id,
+            PendingRpc {
+                action: "snapshot".into(),
+                method: "engine:get-snapshot".into(),
+                kind: RpcKind::Snapshot {
+                    conversation_id: "c1".into(),
+                },
+                created_at: Instant::now(),
+            },
+        );
         events::apply_rpc_result(&shared, request_id, true, Some(value), None);
         let event = lock(&shared.events).pop_front().unwrap();
         assert_eq!(event["ok"], false);

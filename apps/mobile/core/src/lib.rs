@@ -7,6 +7,9 @@ mod runtime;
 mod support;
 mod transcript;
 
+#[cfg(any(feature = "mobile-client", feature = "iroh-transport"))]
+pub mod relay_config;
+
 #[cfg(feature = "iroh-transport")]
 pub mod iroh_transport;
 #[cfg(feature = "mobile-client")]

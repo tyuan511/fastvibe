@@ -1,3 +1,4 @@
+use crate::relay_config::MobileRelayNode;
 use crate::{
     ALPN, AppMessage, AppServerMessage, FrameAssembler, IncomingFrame, LegacyAuthMessage,
     MAX_FRAGMENT_BYTES, MAX_FRAME_BYTES, PING, PONG, close_frame, control_frame, hello,
@@ -6,6 +7,7 @@ use crate::{
 use iroh::{
     Endpoint, EndpointAddr, RelayConfig, RelayMap, RelayMode, SecretKey, endpoint::presets,
 };
+use iroh_relay::RelayQuicConfig;
 use tokio::io::AsyncWriteExt;
 
 pub const IROH_MAX_FRAGMENT_BYTES: usize = 65_537;
@@ -69,9 +71,11 @@ fn decode_server_frame(
     if let Ok(auth) = serde_json::from_value::<LegacyAuthMessage>(value.clone()) {
         return match auth {
             LegacyAuthMessage::Auth { ok: true, .. } => Ok(Some(IrohRead::LegacyAuth)),
-            LegacyAuthMessage::Auth { ok: false, error, .. } => {
-                Err(error.unwrap_or_else(|| "legacy authentication failed".into()).into())
-            }
+            LegacyAuthMessage::Auth {
+                ok: false, error, ..
+            } => Err(error
+                .unwrap_or_else(|| "legacy authentication failed".into())
+                .into()),
         };
     }
     // Trusted transports can receive legacy broadcasts before their hello is processed.
@@ -106,6 +110,29 @@ pub struct IrohReader {
     stream_buffer: Vec<u8>,
 }
 
+/// Populate both local relay discovery and the peer's candidate paths. Iroh 1.4
+/// retains every Relay transport address and races its initial datagrams, so a
+/// dead first candidate does not consume the whole dial deadline.
+fn relay_routes(
+    remote: iroh::EndpointId,
+    relays: &[MobileRelayNode],
+) -> Result<(RelayMap, EndpointAddr), Box<dyn std::error::Error + Send + Sync>> {
+    if relays.is_empty() {
+        return Err("relay node list must not be empty".into());
+    }
+    let mut configs = Vec::with_capacity(relays.len());
+    let mut addr = EndpointAddr::new(remote);
+    for node in relays {
+        let url = node.url.parse::<iroh::RelayUrl>()?;
+        configs.push(
+            RelayConfig::new(url.clone(), node.quic_port.map(RelayQuicConfig::new))
+                .with_auth_token(node.token.clone()),
+        );
+        addr = addr.with_relay_url(url);
+    }
+    Ok((RelayMap::from_iter(configs), addr))
+}
+
 impl IrohClient {
     pub async fn connect(
         key: SecretKey,
@@ -113,15 +140,31 @@ impl IrohClient {
         relay_url: &str,
         relay_token: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let url = relay_url.parse::<iroh::RelayUrl>()?;
-        let relay = RelayConfig::new(url.clone(), None).with_auth_token(relay_token.to_owned());
+        Self::connect_relays(
+            key,
+            remote,
+            &[MobileRelayNode {
+                relay_id: String::new(),
+                url: relay_url.to_owned(),
+                quic_port: None,
+                token: relay_token.to_owned(),
+            }],
+        )
+        .await
+    }
+
+    pub async fn connect_relays(
+        key: SecretKey,
+        remote: iroh::EndpointId,
+        relays: &[MobileRelayNode],
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let (map, addr) = relay_routes(remote, relays)?;
         let endpoint = Endpoint::builder(presets::Minimal)
             .secret_key(key)
             .alpns(vec![ALPN.to_vec()])
-            .relay_mode(RelayMode::Custom(RelayMap::from_iter([relay])))
+            .relay_mode(RelayMode::Custom(map))
             .bind()
             .await?;
-        let addr = EndpointAddr::new(remote).with_relay_url(url);
         let connection = endpoint.connect(addr, ALPN).await?;
         let (mut send, recv) = connection.open_bi().await?;
         let hello = serde_json::to_vec(&hello("0.1.0"))?;
@@ -290,15 +333,160 @@ mod tests {
 
     #[test]
     fn legacy_broadcast_before_welcome_does_not_abort_handshake() {
-        assert!(decode_server_frame(br#"{"push":"remote:state","payload":{"enabled":true}}"#).unwrap().is_none());
-        assert!(matches!(decode_server_frame(br#"{"type":"auth","ok":true}"#).unwrap(), Some(IrohRead::LegacyAuth)));
-        assert!(matches!(decode_server_frame(br#"{"kind":"pong"}"#).unwrap(), Some(IrohRead::Message(AppServerMessage::Pong))));
+        assert!(
+            decode_server_frame(br#"{"push":"remote:state","payload":{"enabled":true}}"#)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            decode_server_frame(br#"{"type":"auth","ok":true}"#).unwrap(),
+            Some(IrohRead::LegacyAuth)
+        ));
+        assert!(matches!(
+            decode_server_frame(br#"{"kind":"pong"}"#).unwrap(),
+            Some(IrohRead::Message(AppServerMessage::Pong))
+        ));
+    }
+
+    #[test]
+    fn every_relay_is_a_dial_candidate_with_its_own_credential_and_quic_port() {
+        let remote = SecretKey::generate().public();
+        let nodes = vec![
+            MobileRelayNode {
+                relay_id: "dead-first".into(),
+                url: "http://127.0.0.1:1/".into(),
+                quic_port: Some(7842),
+                token: "first-token".into(),
+            },
+            MobileRelayNode {
+                relay_id: "healthy".into(),
+                url: "https://healthy.example/".into(),
+                quic_port: Some(8842),
+                token: "second-token".into(),
+            },
+        ];
+        let (map, addr) = relay_routes(remote, &nodes).unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(addr.relay_urls().count(), 2);
+        for node in &nodes {
+            let url = node.url.parse::<iroh::RelayUrl>().unwrap();
+            assert!(addr.relay_urls().any(|candidate| candidate == &url));
+            let configured = map.get(&url).unwrap();
+            assert_eq!(configured.auth_token.as_deref(), Some(node.token.as_str()));
+            assert_eq!(
+                configured.quic.as_ref().unwrap().port,
+                node.quic_port.unwrap()
+            );
+        }
+        assert!(relay_routes(remote, &[]).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FASTVIBE_TEST_RELAY_BIN pointing to the local relay fixture"]
+    async fn dead_first_relay_still_connects_through_healthy_second_relay() {
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+        struct Child(std::process::Child);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let binary = std::env::var("FASTVIBE_TEST_RELAY_BIN").expect("local relay fixture binary");
+        let mut child = Child(
+            Command::new(binary)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let stdout = child.0.stdout.take().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let result = std::io::BufReader::new(stdout)
+                .read_line(&mut line)
+                .map(|_| line);
+            let _ = sender.send(result);
+        });
+        let ready = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        let healthy_url = ready
+            .trim()
+            .strip_prefix("READY ")
+            .unwrap()
+            .parse::<iroh::RelayUrl>()
+            .unwrap();
+        let server = Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .alpns(vec![ALPN.to_vec()])
+            .clear_ip_transports()
+            .relay_mode(RelayMode::Custom(RelayMap::from_iter([RelayConfig::new(
+                healthy_url.clone(),
+                None,
+            )])))
+            .bind()
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), server.online())
+            .await
+            .unwrap();
+        let server_endpoint = server.clone();
+        let receive = tokio::spawn(async move {
+            let connection = server_endpoint.accept().await.unwrap().await.unwrap();
+            let (_send, mut recv) = connection.accept_bi().await.unwrap();
+            let fragment = read_fragment(&mut recv, &mut Vec::new()).await.unwrap();
+            let mut assembler = FrameAssembler::new(MAX_FRAME_BYTES);
+            let IncomingFrame::Frame { data, .. } = assembler.push(&fragment).unwrap() else {
+                panic!("complete hello frame")
+            };
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&data).unwrap()["kind"],
+                "hello"
+            );
+            connection
+        });
+        let nodes = vec![
+            MobileRelayNode {
+                relay_id: "dead-first".into(),
+                url: "http://127.0.0.1:1/".into(),
+                quic_port: Some(7842),
+                token: "unusable-token".into(),
+            },
+            MobileRelayNode {
+                relay_id: "healthy".into(),
+                url: healthy_url.to_string(),
+                quic_port: Some(7842),
+                token: "healthy-token".into(),
+            },
+        ];
+        let client = tokio::time::timeout(
+            Duration::from_secs(10),
+            IrohClient::connect_relays(SecretKey::generate(), server.id(), &nodes),
+        )
+        .await
+        .expect("healthy second relay must not wait for the first")
+        .unwrap();
+        let connection = tokio::time::timeout(Duration::from_secs(3), receive)
+            .await
+            .unwrap()
+            .unwrap();
+        client.close().await;
+        connection.close(0u32.into(), b"test complete");
+        server.close().await;
     }
 
     #[test]
     fn malformed_messages_and_auth_rejection_are_not_ignored() {
         assert!(decode_server_frame(br#"{"payload":{}}"#).is_err());
-        assert!(decode_server_frame(br#"{"kind":"unknown","push":"remote:state","payload":{}}"#).is_err());
+        assert!(
+            decode_server_frame(br#"{"kind":"unknown","push":"remote:state","payload":{}}"#)
+                .is_err()
+        );
         assert!(decode_server_frame(br#"{"type":"auth","ok":false,"error":"denied"}"#).is_err());
     }
 }

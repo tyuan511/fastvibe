@@ -1,3 +1,5 @@
+mod relay_config;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -97,6 +99,7 @@ type Handles = Arc<Mutex<HashMap<String, ConnectionHandle>>>;
 #[derive(Clone)]
 struct Runtime {
     endpoint: Arc<Mutex<Option<Endpoint>>>,
+    relay_urls: Arc<Mutex<Vec<iroh::RelayUrl>>>,
     connections: Connections,
     handles: Handles,
     next_connection: Arc<AtomicU64>,
@@ -125,6 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let runtime = Runtime {
         endpoint: Arc::new(Mutex::new(None)),
+        relay_urls: Arc::new(Mutex::new(Vec::new())),
         connections: Arc::new(Mutex::new(HashMap::new())),
         handles: Arc::new(Mutex::new(HashMap::new())),
         next_connection: Arc::new(AtomicU64::new(1)),
@@ -184,13 +188,11 @@ async fn handle_command(
                 .clone()
                 .ok_or("identity must be loaded first")?;
             let remote_id = required_string(&command, "remoteId")?.parse::<iroh::EndpointId>()?;
-            let relay_url = required_string(&command, "relayUrl")?;
-            let relay_token = required_string(&command, "relayToken")?;
+            let relays = relay_config::from_command(&command)?;
             let relay_id = required_string(&command, "relayId")?;
-            let endpoint = bind(key, relay_url, &relay_token).await?;
-            let url = relay_url.parse::<iroh::RelayUrl>()?;
+            let endpoint = bind(key, &relays).await?;
             let connection = endpoint
-                .connect(iroh::EndpointAddr::new(remote_id).with_relay_url(url), ALPN)
+                .connect(relay_config::remote_addr(remote_id, &relays), ALPN)
                 .await?;
             let id = format!(
                 "iroh-{}",
@@ -245,11 +247,12 @@ async fn handle_command(
                 let _ = runtime.events.send(json!({"type":"started","endpointId":key.public().to_string(),"alreadyRunning":true}));
                 return Ok(false);
             }
-            let relay_url = required_string(&command, "relayUrl")?;
-            let relay_token = required_string(&command, "relayToken")?;
+            let relays = relay_config::from_command(&command)?;
             let relay_id = required_string(&command, "relayId")?;
             let expires_at = required_string(&command, "expiresAt")?;
-            let endpoint = bind(key, relay_url, &relay_token).await?;
+            let endpoint = bind(key, &relays).await?;
+            *runtime.relay_urls.lock().await =
+                relays.iter().map(|relay| relay.url.clone()).collect();
             let endpoint_id = endpoint.id().to_string();
             *runtime.endpoint.lock().await = Some(endpoint.clone());
             let accept_runtime = runtime.clone();
@@ -264,18 +267,25 @@ async fn handle_command(
             }));
         }
         Some("refresh") => {
-            let relay_url = required_string(&command, "relayUrl")?;
-            let relay_token = required_string(&command, "relayToken")?;
+            let relays = relay_config::from_command(&command)?;
             let endpoint = runtime
                 .endpoint
                 .lock()
                 .await
                 .clone()
                 .ok_or("sidecar is not started")?;
-            let url = relay_url.parse::<iroh::RelayUrl>()?;
-            let config =
-                RelayConfig::new(url.clone(), None).with_auth_token(relay_token.to_owned());
-            endpoint.insert_relay(url, Arc::new(config)).await;
+            let urls: Vec<_> = relays.iter().map(|relay| relay.url.clone()).collect();
+            for config in relays {
+                endpoint
+                    .insert_relay(config.url.clone(), Arc::new(config))
+                    .await;
+            }
+            for previous in runtime.relay_urls.lock().await.iter() {
+                if !urls.contains(previous) {
+                    endpoint.remove_relay(previous).await;
+                }
+            }
+            *runtime.relay_urls.lock().await = urls;
             let _ = runtime.events.send(json!({"type":"refreshed"}));
         }
         Some("send") => {
@@ -361,12 +371,9 @@ async fn handle_command(
 
 async fn bind(
     key: SecretKey,
-    relay_url: &str,
-    relay_token: &str,
+    relays: &[RelayConfig],
 ) -> Result<Endpoint, Box<dyn std::error::Error>> {
-    let relay_url = relay_url.parse::<iroh::RelayUrl>()?;
-    let relay = RelayConfig::new(relay_url, None).with_auth_token(relay_token.to_owned());
-    let map = RelayMap::from_iter([relay]);
+    let map = RelayMap::from_iter(relays.iter().cloned());
     Ok(Endpoint::builder(presets::Minimal)
         .secret_key(key)
         .alpns(vec![ALPN.to_vec()])

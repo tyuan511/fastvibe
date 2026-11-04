@@ -64,19 +64,53 @@ pub struct MobileRelayUsage {
     pub remaining_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MobileRelayConfig {
-    #[serde(alias = "relay_id")]
     pub relay_id: String,
     pub url: String,
-    #[serde(alias = "quic_port")]
     pub quic_port: u16,
     pub token: String,
-    #[serde(alias = "expires_at")]
+    pub relays: Vec<crate::relay_config::MobileRelayNode>,
     pub expires_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<MobileRelayUsage>,
+}
+
+impl<'de> Deserialize<'de> for MobileRelayConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = serde_json::Value::deserialize(deserializer)?;
+        let relays =
+            crate::relay_config::parse_relay_nodes(&raw).map_err(serde::de::Error::custom)?;
+        let first = &relays[0];
+        if first.relay_id.trim().is_empty() || first.quic_port.is_none() {
+            return Err(serde::de::Error::custom(
+                "relay lease requires id and discovery port",
+            ));
+        }
+        let expires_at = raw
+            .get("expiresAt")
+            .or_else(|| raw.get("expires_at"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| serde::de::Error::custom("relay lease requires expiry"))?
+            .to_owned();
+        let usage = raw
+            .get("usage")
+            .filter(|value| !value.is_null())
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            relay_id: first.relay_id.clone(),
+            url: first.url.clone(),
+            quic_port: first.quic_port.expect("validated port"),
+            token: first.token.clone(),
+            relays,
+            expires_at,
+            usage,
+        })
+    }
 }
 
 pub struct AccountClient {

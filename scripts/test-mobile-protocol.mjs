@@ -274,7 +274,7 @@ async function startRelay({ emulatorReachable = false } = {}) {
   return { child, dir, relayUrl };
 }
 
-export async function startHarness({ emulatorReachable = false } = {}) {
+export async function startHarness({ emulatorReachable = false, deadFirstRelay = false } = {}) {
   const temp = await mkdtemp(join(tmpdir(), "fastvibe-mobile-harness-"));
   configureFastVibeUserData(temp);
   const relay = await startRelay({ emulatorReachable });
@@ -315,9 +315,21 @@ export async function startHarness({ emulatorReachable = false } = {}) {
     log: { info(message) { if (process.env.FASTVIBE_MOBILE_HARNESS_DEBUG) process.stderr.write(`[desktop] ${message}\n`); }, warn(message) { if (process.env.FASTVIBE_MOBILE_HARNESS_DEBUG) process.stderr.write(`[desktop warn] ${message}\n`); }, error(message, error) { if (process.env.FASTVIBE_MOBILE_HARNESS_DEBUG) process.stderr.write(`[desktop error] ${message} ${String(error ?? "")}\n`); } },
     heartbeatMs: 500,
   });
+  const relayConfig = {
+    relayId: deadFirstRelay ? "unreachable-primary" : TEST_RELAY_ID,
+    url: deadFirstRelay ? "http://127.0.0.1:9" : advertisedRelayUrl,
+    quicPort: 7842,
+    token: TEST_TOKEN,
+    expiresAt: TEST_EXPIRES_AT,
+    usage: TEST_RELAY_USAGE,
+    ...(deadFirstRelay ? { relays: [
+      { relayId: "unreachable-primary", url: "http://127.0.0.1:9", quicPort: 7842, token: TEST_TOKEN },
+      { relayId: TEST_RELAY_ID, url: advertisedRelayUrl, quicPort: 7842, token: TEST_TOKEN },
+    ] } : {}),
+  };
   const account = {
     async setIrohEndpoint() {},
-    async issueIrohRelay() { return { relayId: TEST_RELAY_ID, url: advertisedRelayUrl, quicPort: 7842, token: TEST_TOKEN, expiresAt: TEST_EXPIRES_AT, usage: TEST_RELAY_USAGE }; },
+    async issueIrohRelay() { return relayConfig; },
     async reportIrohUsage() { return TEST_RELAY_USAGE; },
   };
   const desktop = new IrohRemoteConnection({
@@ -345,7 +357,7 @@ export async function startHarness({ emulatorReachable = false } = {}) {
     await rm(relay.dir, { recursive: true, force: true });
     await rm(temp, { recursive: true, force: true });
   };
-  return { temp, relayUrl: advertisedRelayUrl, accountOrigin, remoteId, token: TEST_TOKEN, state, desktop, remoteServer, appServer: serverWithDispatch, cleanup };
+  return { temp, relayUrl: advertisedRelayUrl, relayConfig, accountOrigin, remoteId, token: TEST_TOKEN, state, desktop, remoteServer, appServer: serverWithDispatch, cleanup };
 }
 
 export function printConnectionInfo(harness) {

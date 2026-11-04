@@ -15,7 +15,7 @@ import {
   splitFrame,
 } from "./frames.ts";
 import type { RemoteSocket } from "../server/server.ts";
-import type { IrohRelayConfig } from "../../shared/iroh-relay.ts";
+import { irohRelayNodes, type IrohRelayConfig } from "../../shared/iroh-relay.ts";
 
 export type IrohSidecarEvent =
   | { type: "identity"; endpointId: string }
@@ -57,6 +57,20 @@ export function irohSidecarBinary(env: NodeJS.ProcessEnv = process.env): string 
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
 }
 
+function relayCommandFields(lease: IrohRelayConfig): SidecarCommand {
+  return {
+    // Older binaries ignore relays and can still read the compatibility fields.
+    relayId: lease.relayId,
+    relayUrl: lease.url,
+    relayToken: lease.token,
+    quicPort: lease.quicPort,
+    expiresAt: lease.expiresAt,
+    relays: irohRelayNodes(lease).map((node) => ({
+      relayId: node.relayId, relayUrl: node.url, relayToken: node.token, quicPort: node.quicPort,
+    })),
+  };
+}
+
 function sidecarMissingError(binary: string): Error {
   return new Error(`找不到 iroh transport: ${binary}。请先运行 pnpm build:iroh，或设置 FASTVIBE_IROH_BIN`);
 }
@@ -81,27 +95,19 @@ export class IrohSidecar extends EventEmitter {
   async startLease(lease: IrohRelayConfig): Promise<void> {
     await this.#command({
       type: "start",
-      relayId: lease.relayId,
-      relayUrl: lease.url,
-      relayToken: lease.token,
-      expiresAt: lease.expiresAt,
-      quicPort: lease.quicPort,
+      ...relayCommandFields(lease),
     }, "started");
   }
 
   async refresh(lease: IrohRelayConfig): Promise<void> {
-    await this.#command({ type: "refresh", relayUrl: lease.url, relayToken: lease.token }, "refreshed");
+    await this.#command({ type: "refresh", ...relayCommandFields(lease) }, "refreshed");
   }
 
   async connect(remoteId: string, lease: IrohRelayConfig): Promise<{ connectionId: string; remoteId: string }> {
     const event = await this.#command({
       type: "connect",
       remoteId,
-      relayId: lease.relayId,
-      relayUrl: lease.url,
-      relayToken: lease.token,
-      expiresAt: lease.expiresAt,
-      quicPort: lease.quicPort,
+      ...relayCommandFields(lease),
     }, "connected", (candidate) => candidate.type === "connected" && candidate.remoteId === remoteId);
     if (event.type !== "connected") throw new Error("iroh sidecar did not acknowledge the connection");
     return { connectionId: event.connectionId, remoteId: event.remoteId };
