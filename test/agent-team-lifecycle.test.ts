@@ -13,12 +13,12 @@ const file = ts.createSourceFile("manager.ts", source, ts.ScriptTarget.Latest, t
 const methods: string[] = [];
 let lastAssistantText = "";
 function visit(node: import("typescript").Node): void {
-  if (ts.isMethodDeclaration(node) && ["#trackAgentThreadRun", "waitAgents"].includes(node.name.getText(file))) methods.push(node.getText(file).replaceAll("#", ""));
+  if (ts.isMethodDeclaration(node) && ["#trackAgentThreadRun", "sendAgentMessage", "followupAgent", "waitAgents"].includes(node.name.getText(file))) methods.push(node.getText(file).replaceAll("#", ""));
   if (ts.isFunctionDeclaration(node) && node.name?.text === "lastAssistantText") lastAssistantText = node.getText(file);
   ts.forEachChild(node, visit);
 }
 visit(file);
-assert.equal(methods.length, 2);
+assert.equal(methods.length, 4);
 assert.ok(lastAssistantText);
 const compiled = ts.transpileModule(`${lastAssistantText}\nclass Harness { ${methods.join("\n")} }`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
@@ -32,14 +32,24 @@ function fixture(t: TestContext) {
   const store = new AgentThreadStore(db);
   const host = new Harness();
   const events: unknown[] = [];
-  Object.assign(host, { agentThreads: store, agentThreadRunIds: new Map(), agentThreadRuns: new Map(), agentThreadWaiters: new Set(), emit: (event: unknown) => events.push(event) });
+  const runs: unknown[] = [];
+  Object.assign(host, {
+    agentThreads: store,
+    agentThreadRunIds: new Map(),
+    agentThreadRuns: new Map(),
+    agentThreadWaiters: new Set(),
+    subagentSessions: new Map(),
+    subagentControls: new Map(),
+    emit: (event: unknown) => events.push(event),
+    runSubagent: (_conversationId: string, request: unknown) => { runs.push(request); return new Promise(() => {}); },
+  });
   const create = (id: string) => store.create({ id, conversationId: "a", task: "inspect", cwd: "/repo", status: "working", currentTurn: 1 });
   const track = (id: string, run: Promise<unknown>) => {
     const runId = `${id}:turn:1`;
     host.agentThreadRunIds.set(id, runId); host.agentThreadRuns.set(id, run);
     host.trackAgentThreadRun(id, runId, 1, run);
   };
-  return { host, store, events, create, track };
+  return { host, store, events, runs, create, track };
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -127,4 +137,32 @@ test("a stale completion cannot clear a newer runner or overwrite its status", a
   assert.equal(f.host.agentThreadRuns.get("worker"), newer);
   assert.equal(f.store.get("worker")?.status, "working");
   assert.deepEqual(f.store.pendingResults("a"), []);
+});
+
+test("followup_task prompts the new turn with the mailbox message, not a short label", async (t) => {
+  const f = fixture(t);
+  f.create("worker");
+  f.store.send("worker", "root", "earlier evidence");
+  // Legacy clients may still attach the old short-label override; it must not win.
+  await f.host.followupAgent({ conversationId: "a", threadId: "worker", message: "Recheck the Electron UI", task: "electron-locate", senderId: "root" });
+  assert.equal(f.runs.length, 1);
+  assert.equal(f.runs[0].task, "Recheck the Electron UI");
+  assert.equal(f.store.get("worker")?.task, "Recheck the Electron UI");
+  assert.equal(f.store.get("worker")?.status, "working");
+  assert.equal(f.store.messages("worker").some((m) => m.kind === "message" && m.text === "Recheck the Electron UI"), true);
+  assert.equal(f.runs[0].systemPrompt.includes("earlier evidence"), true);
+  assert.equal(f.runs[0].systemPrompt.includes("Recheck the Electron UI"), false);
+});
+
+test("a followup to a running thread only steers and does not start a second turn", async (t) => {
+  const f = fixture(t);
+  f.create("worker");
+  let resolve!: (value: unknown) => void;
+  f.track("worker", new Promise((done) => { resolve = done; }));
+  f.host.subagentSessions.set("worker:turn:1", { steer: async () => {} });
+  await f.host.followupAgent({ conversationId: "a", threadId: "worker", message: "Add this correction", senderId: "root" });
+  assert.equal(f.runs.length, 0);
+  assert.equal(f.store.get("worker")?.currentTurn, 1);
+  assert.equal(f.store.messages("worker").some((m) => m.kind === "message" && m.text === "Add this correction"), true);
+  resolve(response());
 });

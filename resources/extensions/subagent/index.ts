@@ -8,7 +8,7 @@ type Host = {
   conversationId?: string;
   spawnAgent?: (request: { parentId?: string; taskName?: string; agent: string; task: string; systemPrompt: string; tools?: string[]; model?: string; fallbackModel?: string; thinkingLevel?: string; forkTurns?: "none" | "all"; cwd: string; signal?: AbortSignal }) => Promise<unknown>;
   sendAgentMessage?: (request: { threadId: string; message: string; senderId: string }) => Promise<unknown>;
-  followupAgent?: (request: { threadId: string; message: string; senderId: string; task?: string }) => Promise<unknown>;
+  followupAgent?: (request: { threadId: string; message: string; senderId: string }) => Promise<unknown>;
   forkTurns?: "none" | "all";
   waitAgents?: (request: { threadIds?: string[]; timeoutMs?: number; signal?: AbortSignal }) => Promise<unknown[]>;
   interruptAgent?: (threadId: string) => Promise<void>;
@@ -117,10 +117,10 @@ export default function (pi: ExtensionAPI): void {
     label: "Follow up agent",
     description: "Start or resume an idle or interrupted agent thread with a concrete follow-up task; this creates a new turn using the thread's latest state.",
     promptGuidelines: [...TOOL_GUIDELINES.followup],
-    parameters: Type.Object({ target: Type.String(), message: Type.String(), task: Type.Optional(Type.String()) }),
+    parameters: Type.Object({ target: Type.String(), message: Type.String() }),
     async execute(_id, params, _signal, _update, ctx) {
       const h = host(ctx); if (!h.followupAgent) return fail("当前宿主不支持 Agent follow-up。");
-      const result = await h.followupAgent({ threadId: params.target, message: params.message, task: params.task, senderId: sender(ctx) });
+      const result = await h.followupAgent({ threadId: params.target, message: params.message, senderId: sender(ctx) });
       return { content: [{ type: "text", text: `已让 ${params.target} 开始下一轮。` }], details: { result } };
     },
   });

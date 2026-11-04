@@ -144,8 +144,8 @@ test("mailbox sends do not start turns and spawn retains its original signal for
   const signal = new AbortController().signal;
   await tools.get("send_message").execute("send", { target: "existing", message: "New evidence" }, signal, undefined, ctx);
   assert.deepEqual(calls, [{ method: "send", request: { threadId: "existing", message: "New evidence", senderId: "parent" } }]);
-  await tools.get("followup_task").execute("followup", { target: "existing", message: "Check partial edits", task: "Finish owned file" }, signal, undefined, ctx);
-  assert.deepEqual(calls[1], { method: "followup", request: { threadId: "existing", message: "Check partial edits", task: "Finish owned file", senderId: "parent" } });
+  await tools.get("followup_task").execute("followup", { target: "existing", message: "Check partial edits" }, signal, undefined, ctx);
+  assert.deepEqual(calls[1], { method: "followup", request: { threadId: "existing", message: "Check partial edits", senderId: "parent" } });
   const spawn = tools.get("spawn_agent");
   await spawn.execute("spawn", { message: "Own src/one.ts", task_name: "owned-work" }, signal, undefined, ctx);
   assert.equal(calls[2].method, "spawn");

@@ -325,7 +325,7 @@ type AgentSpawnRequest = {
   signal?: AbortSignal;
 };
 type AgentMessageRequest = { conversationId: string; threadId: string; message: string; senderId: string };
-type AgentFollowupRequest = AgentMessageRequest & { task?: string };
+type AgentFollowupRequest = AgentMessageRequest;
 type AgentWaitRequest = { conversationId: string; threadIds?: string[]; timeoutMs?: number; signal?: AbortSignal };
 type ScheduleHostRequest =
   | { action: "list" }
@@ -2337,11 +2337,10 @@ export class PiProcessManager {
   async followupAgent(request: AgentFollowupRequest): Promise<AgentThread> {
     const thread = this.#agentThreads.get(request.threadId);
     if (!thread || thread.conversationId !== request.conversationId) throw new Error("找不到这个 Agent thread");
-    const task = request.task?.trim() || request.message.trim();
+    const task = request.message.trim();
     if (!task) throw new Error("followup_task 需要任务内容");
-    await this.sendAgentMessage(request);
-    if (this.#agentThreadRuns.has(thread.id)) return thread;
-    const turn = (thread.currentTurn ?? 1) + 1;
+    // The message is the new turn's prompt and the thread's visible brief, so the
+    // history blob must only cover mailbox messages that came before it.
     const context = this.#agentThreads.messages(thread.id)
       .slice(-20)
       .map((message) => `${message.kind === "result" ? "Agent" : message.senderId}: ${message.text}`)
@@ -2349,6 +2348,9 @@ export class PiProcessManager {
     const systemPrompt = [thread.systemPrompt, context ? `Previous messages in this thread:\n${context}` : ""]
       .filter(Boolean)
       .join("\n\n");
+    await this.sendAgentMessage(request);
+    if (this.#agentThreadRuns.has(thread.id)) return thread;
+    const turn = (thread.currentTurn ?? 1) + 1;
     const runId = `${thread.id}:turn:${turn}`;
     this.#agentThreadRunIds.set(thread.id, runId);
     const next = this.#agentThreads.patch(thread.id, { task, status: "working", currentTurn: turn, startedAt: Date.now(), endedAt: undefined, unread: false });

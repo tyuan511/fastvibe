@@ -147,7 +147,7 @@ export function registerEngineIpc(engine: PiProcessManager): void {
   handle(Ipc.engineGetAgentThreads, async (payload?: { conversationId?: string }) => engine.listAgentThreads(payload?.conversationId));
   handle(Ipc.engineGetAgentThreadMessages, async (payload: { threadId: string; conversationId?: string }) => engine.getAgentThreadMessages(payload.threadId, payload.conversationId));
   handle(Ipc.engineSendAgentMessage, async (payload: { conversationId: string; threadId: string; message: string; senderId: string }) => engine.sendAgentMessage(payload));
-  handle(Ipc.engineFollowupAgent, async (payload: { conversationId: string; threadId: string; message: string; senderId: string; task?: string }) => engine.followupAgent(payload));
+  handle(Ipc.engineFollowupAgent, async (payload: { conversationId: string; threadId: string; message: string; senderId: string }) => engine.followupAgent(payload));
   handle(Ipc.engineWaitAgents, async (payload: { conversationId: string; threadIds?: string[]; timeoutMs?: number }) => engine.waitAgents(payload));
   handle(Ipc.engineInterruptAgent, async (payload: { threadId: string; conversationId?: string }) => engine.interruptAgent(payload.threadId, payload.conversationId));
 

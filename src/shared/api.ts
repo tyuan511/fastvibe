@@ -217,7 +217,7 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineGetAgentThreadMessages, { threadId, conversationId }),
       sendAgentMessage: (payload: { conversationId: string; threadId: string; message: string; senderId: string }): Promise<AgentThreadMessage> =>
         t.invoke(Ipc.engineSendAgentMessage, payload),
-      followupAgent: (payload: { conversationId: string; threadId: string; message: string; senderId: string; task?: string }): Promise<AgentThread> =>
+      followupAgent: (payload: { conversationId: string; threadId: string; message: string; senderId: string }): Promise<AgentThread> =>
         t.invoke(Ipc.engineFollowupAgent, payload),
       waitAgents: (payload: { conversationId: string; threadIds?: string[]; timeoutMs?: number }): Promise<AgentThread[]> =>
         t.invoke(Ipc.engineWaitAgents, payload),
