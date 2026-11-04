@@ -19,6 +19,7 @@ import { uiText } from "../engine/ui-text";
 import { mapEngineMessages } from "../engine/map-messages";
 import type { FastVibePaths } from "../engine/paths";
 import { SubagentManager } from "../engine/subagents";
+import { trackGoalDescendantUsage } from "../engine/goal-descendant-usage";
 import { resolveSubagentModel } from "./subagent-model";
 import { SubagentControl } from "./subagent-control";
 import { ToolDeltaThrottle } from "./tool-delta-throttle";
@@ -78,6 +79,7 @@ export type SubagentRunHost = {
   resolvePendingUi(conversationId?: string, owner?: string): void;
   extensionUi(conversationId: string, owner: string): ExtensionUIContext;
   publishSubagentState(subagentId: string, conversationId: string, session: AgentSession): void;
+  captureGoalUsage?(conversationId: string): (usage: unknown) => void;
   folderPrompt?(cwd: string): Promise<string | undefined>;
   timeReasoning(
     key: string,
@@ -173,6 +175,7 @@ export class SubagentTurnRunner {
     this.#subagentControls.set(subagentId, control);
     let session: AgentSession | undefined;
     let unsubscribe: (() => void) | undefined;
+    let stopGoalUsage: (() => void) | undefined;
     let thrown: unknown;
     let stopReason: string | undefined;
     let errorMessage: string | undefined;
@@ -242,6 +245,9 @@ export class SubagentTurnRunner {
       session = created.session;
       control.bind(session);
       const activeSession = session;
+      if (this.#host.captureGoalUsage) {
+        stopGoalUsage = trackGoalDescendantUsage(activeSession, () => this.#host.captureGoalUsage!(conversationId));
+      }
       // Bind the parent's UI so a prompt raised inside the run renders in the same
       // composer panel as the parent's own.
       await session.bindExtensions({ mode: "rpc", uiContext: this.#extensionUi(conversationId, subagentId) });
@@ -282,6 +288,7 @@ export class SubagentTurnRunner {
       thrown = error;
     }
     unsubscribe?.();
+    stopGoalUsage?.();
     // A delta still held belongs before the run's final lifecycle, not after it.
     this.#toolDeltas.release(subagentId);
     try {

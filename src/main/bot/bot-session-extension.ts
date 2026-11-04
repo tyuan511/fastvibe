@@ -25,7 +25,7 @@ export type BotSessionService = {
 const MEMORY_REFS = Type.Optional(Type.Array(Type.Object({ path: Type.String({ minLength: 1 }), heading: Type.Optional(Type.String({ minLength: 1, maxLength: 160 })), offset: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })) }), { maxItems: 3 }));
 const MEMORY_READ_TOOLS = new Set(["bot_memory_read", "bot_memory_search"]);
 const ROUTER_TOOLS = new Set(["bot_read_context", "bot_create_work", "bot_send_message", "bot_reply", "bot_stop_conversation", "bot_continue_conversation", "bot_memory_update"]);
-const BLOCKED_WORKER = /^(?:spawn_agent|send_message|followup_task|wait_agent|interrupt_agent|list_agents|subagent|question|goal|handoff|schedule_.*|dag_.*|worktree_.*|fastvibe_config_.*)$/;
+const BLOCKED_WORKER = /^(?:spawn_agent|send_message|followup_task|wait_agent|interrupt_agent|list_agents|subagent|question|goal|create_goal|get_goal|update_goal|handoff|schedule_.*|dag_.*|worktree_.*|fastvibe_config_.*)$/;
 export function botToolAllowed(role: "router" | "worker", name: string): boolean { return name === "bot_progress" || MEMORY_READ_TOOLS.has(name) || (role === "router" ? ROUTER_TOOLS.has(name) : !BLOCKED_WORKER.test(name) && !ROUTER_TOOLS.has(name)); }
 
 export function botSessionExtension(options: { role: "router" | "worker"; conversationId: string; service: BotSessionService; projects: () => Array<{ cwd: string; name: string; folders?: string[] }>; }): ExtensionFactory {

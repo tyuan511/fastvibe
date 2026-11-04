@@ -1,0 +1,19 @@
+# Codex goal adaptation
+
+Source: https://github.com/openai/codex/tree/f39e45e4a68db24c649a9b6b12d2e922cba616d1/codex-rs/ext/goal
+
+`continuation.md` and `budget_limit.md` are copied from that commit's `templates/goals/` under Apache-2.0, with `update_plan` renamed to FastVibe's `todo`. The upstream license and notice are preserved in LICENSE.txt and NOTICE.txt.
+
+`../goal.ts` and `state.ts` adapt the state machine, model-facing tool contract and budget semantics to the embedded Pi SDK. There is no text completion marker and no fixed round cap. Continuation is a hidden context input committed by `agent_before_settle`, after SDK retry and compaction recovery, without fabricating a user prompt. Goal context is rebuilt for each model request.
+
+FastVibe differences:
+
+- State lives in the conversation's append-only custom entries, including a null tombstone on clear. Restoration reads all entries, independently of the selected history branch, so rewinding cannot revive a cleared goal. No database schema migration is required.
+- `/goal` without a goal arms the next submitted user message. `/goal <objective>` starts a goal; `pause`, `resume`, `clear` and `budget <total tokens>` control it.
+- User Stop pauses the goal. Reopening, history navigation and resource reload preserve its stored status; restoration itself does not launch a provider request. The next user run or accepted continuation receives fresh steering. Offline time is not counted.
+- Usage includes this session and descendant requests: uncached input (including cache writes) plus output, excluding cache reads. Main's `GoalDescendantUsage` bridge captures the conversation's goal at each descendant provider dispatch and reports each completed request once. The extension persists deltas, including idle results; stale callbacks cannot charge replacement goals. Reload gaps are buffered, and a parent with live descendants is not reclaimed. Time uses a monotonic active-goal clock, including tool execution and active idle intervals, excluding paused and offline intervals.
+- Budgets are user-specified total token allowances, not currency, account quota or model context windows. With no requested budget and no configured host maximum they are unbounded. The optional host ceiling (`FASTVIBE_MAX_GOAL_TOKEN_BUDGET`, or Pi's `--max-goal-token-budget` flag) supplies the default and rejects a larger create/budget update. It is unset by default; no value is inferred from the model.
+- The optional token budget is a soft threshold. Once reached, the next model request receives the upstream wrap-up instructions and automatic goal continuation stops. It does not abort an executing tool.
+- Three consecutive empty automatic turns block a goal; the user-triggered first turn does not count, and nonempty thinking or any tool outcome is activity. Three execution-backend failure turns without a successful tool also block it (text-only intervening turns do not reset that audit). Pi lacks Codex's typed handler-failure outcome, so launch/setup errors of `bash`/`powershell` are identified conservatively; normal nonzero exits, cancellations and pre-execution refusals do not count. A terminal provider error blocks immediately (quota/billing errors use `usage_limited`); transient SDK retries do not.
+- The model audits repeated genuine blockers and full completion through `update_goal`; like Codex this semantic audit is an instruction, not an arbitrary turn counter in the tool handler. Stopped goals can be verified and marked complete without resuming execution. Tool results carry top-level `remainingTokens` and `completionBudgetReport` alongside `goal`.
+- Raising an exhausted budget moves the goal to paused without silently starting work; the user explicitly resumes it. Complete goals can be replaced, unfinished goals must first be cleared.

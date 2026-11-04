@@ -179,7 +179,7 @@ test("超时取消 preflight 并返回 failed", async (t) => {
 });
 
 test("Router/Worker 工具白名单符合会话角色", () => {
-  for (const name of ["spawn_agent", "question", "dag_add_tasks", "worktree_create", "fastvibe_config_apply"]) { assert.equal(botToolAllowed("worker", name), false); assert.equal(botToolAllowed("router", name), false); }
+  for (const name of ["spawn_agent", "question", "create_goal", "get_goal", "update_goal", "dag_add_tasks", "worktree_create", "fastvibe_config_apply"]) { assert.equal(botToolAllowed("worker", name), false); assert.equal(botToolAllowed("router", name), false); }
   for (const name of ["read", "bash", "codemode", "tool_search", "bot_report", "bot_ask_user"]) assert.equal(botToolAllowed("worker", name), true);
   for (const role of ["router", "worker"] as const) assert.equal(botToolAllowed(role, "bot_progress"), true);
   assert.equal(botToolAllowed("router", "bot_create_work"), true); assert.equal(botToolAllowed("router", "codemode"), false);

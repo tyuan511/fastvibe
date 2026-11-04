@@ -837,7 +837,7 @@ export const MODELS: FastVibeModel[] = [
 ];
 
 export const COMMANDS: SlashCommand[] = [
-  { name: "goal", description: "为目标模式设定一个长期目标", source: "extension" },
+  { name: "goal", description: "设置或管理持续目标与 Token 预算", source: "extension" },
   { name: "compact", description: "压缩当前会话的上下文", source: "builtin" },
   { name: "init", description: "为项目生成 AGENTS.md", source: "builtin" },
 ];
@@ -952,7 +952,7 @@ export const SKILL_MARKET_DETAILS: Record<string, string> = {
 };
 
 export const INSTALLED_PACKAGES: ExtensionPackage[] = [
-  { source: "builtin:goal", scope: "user", builtin: true, loaded: true, commands: 1, tools: 1 },
+  { source: "builtin:goal", scope: "user", builtin: true, loaded: true, commands: 1, tools: 3 },
   { source: "builtin:todo", scope: "user", builtin: true, loaded: true, commands: 0, tools: 1 },
   { source: "builtin:folder-consent", scope: "user", builtin: true, loaded: true, commands: 0, tools: 0 },
   { source: "builtin:session-title", scope: "user", builtin: true, loaded: true, commands: 0, tools: 0 },

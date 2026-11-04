@@ -1,387 +1,275 @@
-import type {
-  AgentEndEvent,
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
-  MessageEndEvent,
-  SessionStartEvent,
-} from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+import { executionUnavailable, GoalClock } from "./goal/progress";
+import { escapeObjective, GOAL_CONTEXT, GOAL_CONTINUATION, GOAL_ENTRY, goalResult, goalTokens, isOverBudget, newGoal, restoreGoal, validateBudget, type Goal, type GoalStatus } from "./goal/state";
 
-/**
- * FastVibe's built-in goal mode — a lean replacement for `pi-goal-x`.
- *
- *   /goal <objective>   start pursuing a long-term objective
- *   /goal pause         stop the execution loop
- *   /goal resume        continue a paused objective
- *   /goal clear         drop the objective
- *   /goal               report the current objective
- *
- * Each turn is prompted to compare progress against the objective and list that
- * round's tasks. When the agent finishes a turn without declaring the goal done
- * (a final `GOAL_COMPLETE` marker, stripped before rendering) the loop queues the
- * next round, so a task that needs many turns runs itself to the end. The
- * composer's panel reads the `goal` status payload.
- *
- * The objective belongs to *this* conversation, so it is persisted as a session
- * entry (not in memory, not in a renderer store): a reopened chat gets its goal
- * back from its own transcript. A goal can only run while the user is there to
- * watch it, though — a restart re-opens the goal **paused**, so nothing resumes
- * working behind the user's back after an app relaunch.
- */
-const STATUS_KEY = "goal";
-/** Armed-but-not-started state: shows the composer badge, not the objective panel. */
-const ARMED_STATUS_KEY = "goal-armed";
-const COMPLETE_MARKER = "GOAL_COMPLETE";
-/** Session entry type the objective is persisted under (one per change). */
-const ENTRY_TYPE = "fastvibe-goal";
-/**
- * Rounds a goal may run before it pauses itself and waits for the user.
- *
- * The loop is autonomous and spends the user's tokens, so it needs a stop it does not
- * have to be asked for. It counts one *uninterrupted stretch* — set the goal, or hit
- * 继续, and the count starts again — rather than the goal's lifetime, because a cap
- * that a resume could not clear would make 继续 buy exactly one round. Reaching it is
- * a *pause* rather than an end: 继续 carries on from the same objective and round.
- */
-const ROUND_CAP = 100;
-const OFF = new Set(["clear", "off", "none", "reset"]);
-const T = (zh: string, en: string): string => (process.env.FASTVIBE_UI_LANGUAGE === "en" ? en : zh);
+const continuationTemplate = readFileSync(new URL("./goal/continuation.md", import.meta.url), "utf8");
+const budgetTemplate = readFileSync(new URL("./goal/budget_limit.md", import.meta.url), "utf8");
+const T = (zh: string, en: string): string => process.env.FASTVIBE_UI_LANGUAGE === "en" ? en : zh;
+const UPDATE_DESCRIPTION = `Update the existing goal.
+Set status to paused only at the user's explicit request to pause this goal, never on your own initiative. A later resume revokes that request. Report the returned status and stop goal work. Budget limits take precedence over pausing.
+Set status to complete only when the full objective has actually been achieved and no required work remains. Verify every requirement against current authoritative evidence; a plausible final answer, partial implementation or narrow passing test is not proof.
+Set status to blocked only when the same blocking condition has repeated for at least three consecutive goal turns (including the original/user-triggered turn) and meaningful progress requires user input or an external-state change. After resume, start a fresh blocked audit. Do not use blocked merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification.
+Once that threshold is met, set blocked instead of repeating status reports while leaving the goal active.
+You cannot resume, budget-limit or usage-limit a goal with this tool. Do not mark a goal complete because its budget is nearly exhausted. For a budgeted completed goal, report the final token usage from the tool result.`;
 
-type GoalState = "running" | "paused" | "complete";
+type DescendantAccounting = {
+  setGoal(goalId: string | undefined): void;
+  subscribe(listener: (event: { goalId: string; tokens: number }) => void): () => void;
+};
 
-/** What is written to the session (and therefore what a reopen restores). */
-type GoalRecord = { objective: string; status: GoalState; round: number };
-
-/**
- * How the run that just ended stopped, from its last assistant message.
- *
- * `agent_end` hands extensions the run's whole message list; the last assistant
- * message's `stopReason` is `stop` / `toolUse` / `length` on a turn that finished
- * (whether or not it wrote `GOAL_COMPLETE`), and `error` / `aborted` on one that did
- * not. A missing or unreadable message reads as a clean stop, so an unexpected
- * payload can never be mistaken for a reason to abandon the goal.
- */
-function lastAssistantStopReason(event: AgentEndEvent): string | undefined {
-  const messages = Array.isArray(event.messages) ? event.messages : [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as { role?: string; stopReason?: unknown };
-    if (message?.role !== "assistant") continue;
-    return typeof message.stopReason === "string" ? message.stopReason : undefined;
-  }
-  return undefined;
-}
-
+/** Codex goal lifecycle, adapted to Pi's transactional pre-settlement boundary. */
 export default function goalMode(pi: ExtensionAPI): void {
-  let objective: string | null = null;
-  /** `/goal` was picked without an objective; the next user message becomes it. */
+  let goal: Goal | null = null;
   let armed = false;
-  let status: GoalState = "running";
-  /** 1-based number of the round the agent is on (the panel shows this one). */
-  let round = 1;
-  /**
-   * Rounds run since the user last set or resumed this goal, against `ROUND_CAP`.
-   *
-   * Reset by `/goal <objective>` and `/goal resume`, so the cap limits how long the
-   * goal may work *unattended* without also making 继续 useless: after a pause the
-   * next stretch starts over, while `round` keeps counting up for the panel.
-   */
-  let autonomous = 0;
-  let completed = false;
-  /**
-   * The last settled turn failed, and the run has not started another attempt since.
-   *
-   * Set at `agent_end` when that turn stopped with an error, cleared at `agent_start`.
-   * The SDK retries a transient failure *inside the same run* — it fires `agent_end`
-   * first and then drops the errored message while it backs off — so the failure is
-   * only terminal if the run settles without another `agent_start` having happened.
-   * That is why the verdict is taken at `agent_settled` rather than here.
-   */
-  let failed = false;
+  let requestGoalId: string | undefined;
+  const clock = new GoalClock();
+  let accounting: DescendantAccounting | undefined;
+  let unsubscribe: (() => void) | undefined;
+  let emptyTurns = 0;
+  let automaticTurn = false;
+  let executionFailures = 0;
+  let failedExecution = false;
+  let successfulTool = false;
+  let turnHadActivity = false;
+  let budgetWrapUp = false;
+  let lastAssistant: { stopReason?: string; errorMessage?: string; content?: unknown[] } | undefined;
 
+  pi.registerFlag("max-goal-token-budget", { type: "string", description: "Optional maximum/default token budget for a goal", default: process.env.FASTVIBE_MAX_GOAL_TOKEN_BUDGET });
+  const maximumBudget = (): number | undefined => {
+    const value = pi.getFlag("max-goal-token-budget");
+    if (value === undefined) return undefined;
+    const maximum = Number(value);
+    validateBudget(maximum);
+    return maximum;
+  };
+  const resetAudit = (): void => { emptyTurns = 0; automaticTurn = false; executionFailures = 0; failedExecution = false; successfulTool = false; };
+  const sampleTime = (): void => {
+    const seconds = clock.sample(goal?.status === "active" || budgetWrapUp);
+    if (goal) goal = { ...goal, timeUsedSeconds: seconds };
+  };
   const publish = (ctx: ExtensionContext): void => {
-    if (objective) {
-      ctx.ui.setStatus(STATUS_KEY, JSON.stringify({ objective, status, round }));
-    } else {
-      ctx.ui.setStatus(STATUS_KEY, undefined);
-    }
-    ctx.ui.setStatus(ARMED_STATUS_KEY, armed ? "armed" : undefined);
+    accounting?.setGoal(goal?.status === "active" || budgetWrapUp ? goal?.id : undefined);
+    ctx.ui.setStatus("goal", goal ? JSON.stringify(goal) : undefined);
+    ctx.ui.setStatus("goal-armed", armed ? "armed" : undefined);
   };
-
-  /**
-   * Persist the goal on the session.
-   *
-   * Fire-and-forget: the entry is not context, it is what a later reopen reads
-   * back, so nothing waits on it. It also stands on its own after a `/goal clear`
-   * (nothing is written for "no goal") — the last record wins when read back.
-   */
-  const remember = (): void => {
-    if (!objective) return;
-    pi.appendEntry<GoalRecord>(ENTRY_TYPE, { objective, status, round });
-  };
-
-  const apply = (record: GoalRecord): void => {
-    objective = record.objective;
-    status = record.status;
-    round = record.round;
-  };
-
-  /**
-   * Restore this conversation's goal from its own transcript.
-   *
-   * The last record wins, so a restart gets back whatever the goal was when the
-   * app was closed. It comes back **paused** whenever it was running: a goal is a
-   * long autonomous loop that spends the user's tokens, and re-opening a chat (or
-   * relaunching) must not silently resume one. `complete` stays complete — there
-   * is nothing to resume.
-   */
-  const restore = (ctx: ExtensionContext, pause: boolean): void => {
-    let record: GoalRecord | undefined;
-    for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
-      const data = entry.data as Partial<GoalRecord> | undefined;
-      if (!data || typeof data.objective !== "string" || !data.objective) continue;
-      const state: GoalState =
-        data.status === "paused" || data.status === "complete" ? data.status : "running";
-      // A round was written 1-based; an old record with 0 means the same thing.
-      const roundNo = typeof data.round === "number" && data.round > 1 ? data.round : 1;
-      record = { objective: data.objective, status: state, round: roundNo };
-    }
-    if (!record) return;
-    apply(record);
-    if (pause && status === "running") {
-      status = "paused";
-      pi.appendEntry<GoalRecord>(ENTRY_TYPE, { objective: record.objective, status, round });
-    }
+  const save = (ctx: ExtensionContext): void => {
+    sampleTime();
+    if (goal) goal = { ...goal, updatedAt: Date.now() };
+    // Clear is a durable tombstone, so neither reload nor history navigation revives it.
+    pi.appendEntry<Goal | null>(GOAL_ENTRY, goal ? { ...goal } : null);
     publish(ctx);
   };
-
-  const instructions = (): string => {
-    return [
-      "## 长期目标",
-      `最终目标：${objective}`,
-      `当前是第 ${round} 轮。请先对照最终目标评估当前进展，列出本轮需要完成的任务，然后完成它们。`,
-      `如果目标已完全达成，请在最后一条消息的最后一行单独输出 ${COMPLETE_MARKER}。`,
-    ].join("\n");
+  const setStatus = (status: GoalStatus, ctx: ExtensionContext): void => {
+    if (!goal) return;
+    sampleTime();
+    goal = { ...goal, status };
+    if (status !== "active") { budgetWrapUp = false; resetAudit(); }
+    save(ctx);
   };
-
-  const continuePrompt = (): string =>
-    "继续执行目标。对照最终目标检查当前进展，列出并完成下一批任务；若目标已完全达成，请在最后一行输出 GOAL_COMPLETE。";
-
-  /**
-   * Start a goal turn from a slash command and do not return while it is still idle.
-   *
-   * `pi.sendUserMessage` does not return the prompt promise — the SDK fires it and
-   * swallows a failure. Older builds only marked the session busy after several
-   * awaits, so a command that returned immediately left `prompt("/goal …")` idle and
-   * the host's `waitForIdle()` saw nothing in flight. 1.2.0 marks it busy during
-   * `before_agent_start`; the poll still covers a start that has not landed yet.
-   */
-  const armTurn = async (
-    ctx: ExtensionCommandContext,
-    text: string,
-    deliverAs?: "followUp",
-  ): Promise<void> => {
-    pi.sendUserMessage(text, deliverAs ? { deliverAs } : undefined);
-    for (let i = 0; i < 20 && ctx.isIdle(); i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+  const render = (template: string): string => {
+    if (!goal) return "";
+    const vars: Record<string, string> = {
+      objective: escapeObjective(goal.objective), tokens_used: String(goal.tokensUsed),
+      token_budget: goal.tokenBudget === undefined ? "none" : String(goal.tokenBudget),
+      remaining_tokens: goal.tokenBudget === undefined ? "unbounded" : String(Math.max(0, goal.tokenBudget - goal.tokensUsed)),
+      time_used_seconds: String(goal.timeUsedSeconds),
+    };
+    return template.replace(/{{ (\w+) }}/g, (_, key: string) => vars[key] ?? "");
+  };
+  const result = (completed = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(goalResult(goal, completed)) }], details: goalResult(goal, completed) });
+  const addTokens = (tokens: number, ctx: ExtensionContext): void => {
+    if (!goal) return;
+    goal = { ...goal, tokensUsed: goal.tokensUsed + tokens };
+    if (goal.status !== "complete" && isOverBudget(goal)) {
+      if (goal.status === "active") budgetWrapUp = !ctx.isIdle();
+      goal.status = "budget_limited";
     }
+    save(ctx);
   };
+  const create = (objective: string, budget: number | undefined, ctx: ExtensionContext): void => {
+    if (goal && goal.status !== "complete") throw new Error(T("已有未完成目标，请先清除它或继续执行。", "An unfinished goal exists. Clear or resume it first."));
+    goal = newGoal(objective, budget, maximumBudget());
+    resetAudit();
+    budgetWrapUp = false;
+    clock.reset();
+    armed = false;
+    save(ctx);
+  };
+  const start = async (ctx: ExtensionCommandContext): Promise<void> => {
+    // Hidden internal continuation, never a synthetic user message or title/preview.
+    pi.sendMessage({ customType: GOAL_CONTINUATION, content: "Continue working toward the active thread goal.", display: false }, { triggerTurn: true, deliverAs: "followUp" });
+    for (let i = 0; i < 20 && ctx.isIdle(); i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  pi.registerTool({
+    name: "get_goal", label: T("读取目标", "Read goal"),
+    description: "Get the current goal for this conversation, including status, token budget, uncached token usage (including descendant agents), active elapsed time and remaining tokens.",
+    parameters: Type.Object({}),
+    async execute(_id, _params, _signal, _update, ctx) { if (goal) save(ctx); return result(); },
+  });
+  pi.registerTool({
+    name: "create_goal", executionMode: "sequential", label: T("创建目标", "Create goal"),
+    description: "Create a persistent goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks. Set token_budget only when explicitly requested. Fails if an unfinished goal exists; use update_goal only for status.",
+    parameters: Type.Object({ objective: Type.String({ minLength: 1 }), token_budget: Type.Optional(Type.Integer({ minimum: 1 })) }),
+    async execute(_id, params, _signal, _update, ctx) { create(params.objective, params.token_budget, ctx); return result(); },
+  });
+  pi.registerTool({
+    name: "update_goal", executionMode: "sequential", label: T("更新目标", "Update goal"), description: UPDATE_DESCRIPTION,
+    parameters: Type.Object({ status: StringEnum(["complete", "blocked", "paused"] as const) }),
+    async execute(_id, params, _signal, _update, ctx) {
+      if (!goal) throw new Error("No goal is set.");
+      setStatus(params.status === "complete" ? "complete" : isOverBudget(goal) ? "budget_limited" : params.status, ctx);
+      return result(params.status === "complete");
+    },
+  });
 
   pi.registerCommand("goal", {
-    description: "设置或控制长期目标（/goal <目标>，/goal pause|resume|clear）",
+    description: T("设置持续目标（/goal <目标>，pause|resume|clear|budget <Token 数>）", "Set a persistent goal (/goal <objective>, pause|resume|clear|budget <tokens>)"),
     handler: async (args, ctx) => {
       const text = args.trim();
       const command = text.toLowerCase();
       if (!text) {
-        // Picked from the composer palette without an objective: arm goal mode and
-        // show a badge instead of asking inline. The objective is
-        // the user's next message, so nothing runs until they actually send one.
-        if (!objective) {
-          armed = !armed;
-          publish(ctx);
-          return;
-        }
-        ctx.ui.notify(`目标（${status}，第 ${round} 轮）：${objective}`, "info");
+        if (goal) ctx.ui.notify(`${goal.objective}\n${goal.status} · ${goal.tokensUsed}${goal.tokenBudget === undefined ? "" : ` / ${goal.tokenBudget}`} tokens`, "info");
+        else { armed = !armed; publish(ctx); }
         return;
       }
-      if (OFF.has(command)) {
-        objective = null;
-        armed = false;
-        status = "running";
-        round = 1;
-        autonomous = 0;
-        completed = false;
-        publish(ctx);
+      if (["clear", "off", "none", "reset"].includes(command)) {
+        goal = null; armed = false; requestGoalId = undefined; resetAudit(); budgetWrapUp = false; clock.reset();
+        save(ctx);
         return;
       }
       if (command === "pause") {
-        if (!objective) {
-          ctx.ui.notify(T("尚未设置目标。", "No goal is set."), "warning");
-          return;
-        }
-        status = "paused";
-        remember();
-        publish(ctx);
-        ctx.ui.notify(T("目标已暂停。", "Goal paused."), "info");
+        armed = false;
+        if (goal?.status === "active") setStatus("paused", ctx);
+        else publish(ctx);
+        if (!ctx.isIdle()) { ctx.abort(); await ctx.waitForIdle(); }
         return;
       }
       if (command === "resume") {
-        if (!objective) {
-          ctx.ui.notify(T("尚未设置目标。", "No goal is set."), "warning");
-          return;
-        }
-        if (status === "paused") {
-          status = "running";
-          // The user is here again: this is a new unattended stretch, so the cap starts
-          // over rather than ending the goal one round after every 继续.
-          autonomous = 0;
-          remember();
-          publish(ctx);
-          ctx.ui.notify(T("目标已继续。", "Goal resumed."), "info");
-          // Same `deliverAs` rule as the loop below: the command runs on a session the
-          // engine may still be mid-run on, and a plain prompt would be refused there.
-          await armTurn(ctx, continuePrompt(), "followUp");
-        }
+        if (!goal) { ctx.ui.notify(T("尚未设置目标。", "No goal is set."), "warning"); return; }
+        if (goal.status === "complete" || goal.status === "active") return;
+        await ctx.waitForIdle();
+        // The awaited run may have cleared/replaced the goal or changed its status.
+        const current = goal as Goal | null;
+        if (!current || current.status === "complete" || current.status === "active") return;
+        if (isOverBudget(current)) { ctx.ui.notify(T("目标预算已用完，请先用 /goal budget <Token 数> 增加总预算。", "Increase the total budget with /goal budget <tokens> before resuming."), "warning"); return; }
+        goal = { ...current, status: "active" };
+        resetAudit();
+        save(ctx);
+        await start(ctx);
         return;
       }
-      objective = text;
-      armed = false;
-      status = "running";
-      round = 1;
-      autonomous = 0;
-      completed = false;
-      remember();
-      publish(ctx);
-      await armTurn(ctx, T(`开始执行目标：${text}`, `Start working towards the goal: ${text}`));
+      if (/^budget(?:\s|$)/i.test(text)) {
+        if (!goal) throw new Error(T("尚未设置目标。", "No goal is set."));
+        const budget = Number(text.slice(6).trim());
+        validateBudget(budget, maximumBudget());
+        sampleTime();
+        resetAudit();
+        goal = { ...goal, tokenBudget: budget };
+        if (isOverBudget(goal) && goal.status === "active") { goal.status = "budget_limited"; budgetWrapUp = !ctx.isIdle(); }
+        else if (!isOverBudget(goal) && goal.status === "budget_limited") { goal.status = "paused"; budgetWrapUp = false; }
+        save(ctx);
+        return;
+      }
+      create(text, undefined, ctx);
+      // Keep the user's objective visible in the transcript exactly once.
+      pi.sendUserMessage(text, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
+      for (let i = 0; i < 20 && ctx.isIdle(); i++) await new Promise((resolve) => setTimeout(resolve, 0));
     },
   });
 
-  pi.on("session_start", (event: SessionStartEvent, ctx) => {
-    // A `/goal` picked from the palette arms an in-memory toggle; a brand-new
-    // session has nothing armed and nothing to restore. An in-place `reload` is the
-    // *same* session being re-bound (a provider edit, a metadata refresh), so it must
-    // not count as coming back from a restart and pause a goal that is still running.
-    if (event.reason === "new") return;
-    restore(ctx, event.reason !== "reload");
-  });
-
-  pi.on("before_agent_start", (event, ctx) => {
-    // Armed by a bare `/goal`: the first real user message becomes the objective, so
-    // the goal only exists once the user has actually described it. A custom
-    // `triggerTurn` message (1.2.0 fires this event for those too) is not that.
-    const prompt = event.messageType === "user" ? event.prompt.trim() : "";
-    if (armed && prompt && !prompt.startsWith("/")) {
-      armed = false;
-      objective = prompt;
-      status = "running";
-      round = 1;
-      autonomous = 0;
-      completed = false;
-      remember();
-      publish(ctx);
-    }
-    if (!objective || status !== "running") return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${instructions()}` };
-  });
-
-  pi.on("agent_start", () => {
-    completed = false;
-    // Another attempt (a retry of the failed request, or the queued next round) is
-    // under way, so the previous turn's failure is no longer the last word.
-    failed = false;
-  });
-
-  // Strip the completion marker from the rendered answer, and remember that the
-  // model declared the goal done.
-  pi.on("message_end", (event: MessageEndEvent) => {
-    const message = event.message as { role?: string; content?: unknown };
-    if (message.role !== "assistant" || !Array.isArray(message.content)) return;
-    let changed = false;
-    const content = message.content.map((block) => {
-      const typed = block as { type?: string; text?: string };
-      if (typed.type === "text" && typeof typed.text === "string" && typed.text.includes(COMPLETE_MARKER)) {
-        changed = true;
-        completed = true;
-        return { ...(block as object), text: typed.text.split(COMPLETE_MARKER).join("").replace(/\n{3,}/g, "\n\n").trimEnd() };
-      }
-      return block;
+  const restore = (ctx: ExtensionContext): void => {
+    // The goal belongs to the conversation, independently of the selected history.
+    goal = restoreGoal(ctx.sessionManager.getEntries());
+    armed = false; requestGoalId = undefined; resetAudit(); budgetWrapUp = false;
+    clock.reset(goal?.timeUsedSeconds);
+    sampleTime();
+    publish(ctx);
+  };
+  pi.on("session_start", (_event, ctx) => {
+    unsubscribe?.();
+    accounting = (ctx.ui as typeof ctx.ui & { goalAccounting?: () => DescendantAccounting }).goalAccounting?.();
+    restore(ctx);
+    unsubscribe = accounting?.subscribe(({ goalId, tokens }) => {
+      // A request captured the target at its start. Late results never charge a replacement.
+      if (goal?.id === goalId && Number.isFinite(tokens) && tokens > 0) addTokens(tokens, ctx);
     });
-    if (!changed) return;
-    return { message: { ...(event.message as object), content } as typeof event.message };
+  });
+  pi.on("session_shutdown", (_event, ctx) => {
+    if (goal) save(ctx);
+    clock.sample(false);
+    unsubscribe?.(); unsubscribe = undefined;
+    // Reload can overlap a child's next request. Keep its capture scope until the
+    // new instance restores the persisted status; Main clears deleted/stopped hosts.
+  });
+  pi.on("session_tree", (_event, ctx) => restore(ctx));
+  pi.on("before_agent_start", (event, ctx) => {
+    if (armed && event.messageType === "user" && event.prompt.trim() && !event.prompt.trim().startsWith("/")) create(event.prompt, undefined, ctx);
   });
 
-  pi.on("agent_end", (event: AgentEndEvent, ctx) => {
-    if (!objective || status !== "running") return;
-    if (completed) {
-      status = "complete";
-      completed = false;
-      remember();
-      publish(ctx);
-      ctx.ui.notify(T("目标已完成。", "Goal complete."), "info");
-      return;
-    }
-    // A turn that was stopped by the user must not be continued: re-queueing here
-    // would make 停止 start the goal again.
-    const stopReason = lastAssistantStopReason(event);
-    if (stopReason === "aborted") {
-      status = "paused";
-      failed = false;
-      remember();
-      publish(ctx);
-      ctx.ui.notify(T("目标已停止，点击继续可恢复。", "Goal stopped. Resume it from the panel."), "info");
-      return;
-    }
-    // A failed request is not continued here: the SDK may be about to retry it, and
-    // a queued round would run on top of a request that just failed. `failed` carries
-    // the verdict to `agent_settled`, which is where it becomes terminal.
-    if (stopReason === "error") {
-      failed = true;
-      return;
-    }
-    // The cap is checked before the round is counted: the turn that would have been
-    // queued past it is not part of the stretch, so the panel's round is the last one
-    // actually run rather than one ahead of it.
-    if (autonomous >= ROUND_CAP) {
-      status = "paused";
-      remember();
-      publish(ctx);
-      ctx.ui.notify(
-        T(
-          `已连续执行 ${ROUND_CAP} 轮，目标已暂停。点击继续可接着跑。`,
-          `Ran ${ROUND_CAP} rounds unattended; goal paused. Resume it to keep going.`,
-        ),
-        "warning",
-      );
-      return;
-    }
-    round += 1;
-    autonomous += 1;
-    remember();
-    publish(ctx);
-    // `deliverAs: "followUp"` is not optional: `agent_end` is emitted from inside the
-    // run (the SDK emits it before it retries, compacts or continues), so the session
-    // still reports `isStreaming` and a bare `sendUserMessage` throws 「Agent is
-    // already processing」 — which is how this loop silently stopped after one round.
-    // A follow-up is drained by the same run's post-run pass, so the goal carries on
-    // inside the one run and `agent_settled` still lands once, at its real end.
-    pi.sendUserMessage(continuePrompt(), { deliverAs: "followUp" });
+  // Context is rebuilt for EVERY request (tools, Continue, compaction and reload),
+  // not only before_agent_start. There is only one fresh goal snapshot in the request.
+  pi.on("context", (event) => {
+    const messages = event.messages.filter((m) => !(m.role === "custom" && (m.customType === GOAL_CONTEXT || m.customType === GOAL_CONTINUATION)));
+    sampleTime();
+    const budgetContext = goal?.status === "budget_limited" && budgetWrapUp;
+    requestGoalId = goal?.status === "active" || budgetContext ? goal?.id : undefined;
+    if (!goal || (goal.status !== "active" && !budgetContext)) return { messages };
+    const content = render(goal.status === "active" ? continuationTemplate : budgetTemplate);
+    return { messages: [...messages, { role: "custom" as const, customType: GOAL_CONTEXT, content, display: false, timestamp: Date.now() }] };
   });
-
-  /**
-   * A run that settled on a failed request pauses the goal.
-   *
-   * The verdict waits for `agent_settled` because the SDK retries a transient failure
-   * inside the same run: `agent_end` fires first, and `agent_start` follows if a retry
-   * (or the queued next round) is coming. Settling with `failed` still set means no
-   * attempt followed — the last thing the run did was fail — so the goal pauses and
-   * says so, instead of spending another round on the same broken request.
-   */
-  pi.on("agent_settled", (_event, ctx) => {
-    if (!objective || status !== "running" || !failed) return;
-    failed = false;
-    status = "paused";
-    remember();
-    publish(ctx);
-    ctx.ui.notify(T("目标因错误暂停，点击继续可重试本轮。", "Goal paused on an error. Resume it from the panel."), "warning");
+  pi.on("message_start", (event) => {
+    if (event.message.role === "user") { automaticTurn = false; emptyTurns = 0; }
+  });
+  pi.on("agent_start", () => { lastAssistant = undefined; turnHadActivity = false; failedExecution = false; successfulTool = false; });
+  pi.on("tool_execution_end", (event, ctx) => {
+    turnHadActivity = true;
+    emptyTurns = 0;
+    if (!goal || goal.status !== "active") return;
+    if (!event.isError) { successfulTool = true; executionFailures = 0; }
+    else if (executionUnavailable(event)) failedExecution = true;
+    save(ctx);
+  });
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "assistant") return;
+    lastAssistant = event.message;
+    turnHadActivity ||= event.message.content.some((block) => block.type === "toolCall" || (block.type === "text" && Boolean(block.text.trim())) || (block.type === "thinking" && Boolean(block.thinking.trim())));
+    if (!goal || requestGoalId !== goal.id) return;
+    // The next request receives budget steering; an executing tool is never aborted.
+    addTokens(goalTokens(event.message.usage), ctx);
+    requestGoalId = undefined;
+  });
+  pi.on("agent_before_settle", (event, ctx) => {
+    if (!goal || goal.status !== "active") return;
+    if (event.outcome === "aborted") { setStatus("paused", ctx); return; }
+    if (event.outcome === "error") {
+      const limit = /insufficient_quota|usage.limit|quota.exceeded|billing|credit.balance/i.test(lastAssistant?.errorMessage ?? "");
+      setStatus(limit ? "usage_limited" : "blocked", ctx);
+      return;
+    }
+    if (isOverBudget(goal)) { setStatus("budget_limited", ctx); return; }
+    if (failedExecution && !successfulTool) executionFailures++;
+    if (executionFailures >= 3) { setStatus("blocked", ctx); return; }
+    emptyTurns = automaticTurn && !turnHadActivity && lastAssistant?.stopReason === "stop" ? emptyTurns + 1 : 0;
+    if (emptyTurns >= 3) { setStatus("blocked", ctx); return; }
+    automaticTurn = true;
+    save(ctx);
+    // Pi runs this AFTER retry/compaction recovery and queued user messages. The
+    // boundary commits a hidden input atomically and keeps one run busy until done.
+    // No GOAL_COMPLETE parsing, user-message injection, or arbitrary round cap.
+    return {
+      entries: [{ type: "custom_message" as const, customType: GOAL_CONTINUATION, content: "Continue working toward the active thread goal.", display: false }],
+      continue: true,
+    };
+  });
+  pi.on("agent_settled", (event, ctx) => {
+    sampleTime();
+    budgetWrapUp = false;
+    // Abort during retry backoff can bypass before-settle entirely.
+    if (event.aborted && goal?.status === "active") setStatus("paused", ctx);
+    else if (goal) save(ctx);
   });
 }

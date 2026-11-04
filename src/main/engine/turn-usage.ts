@@ -14,9 +14,9 @@
  * - **A steer starts a new turn.** A follow-up injected mid-run is a user message, and the
  *   work counted from there is the work the latest input set off. That matches what the
  *   reader just asked for.
- * - **A goal round is a turn.** `/goal` continues itself through `sendUserMessage`, so each
- *   round re-baselines 本轮. The extension itself calls those rounds 轮, so the word means
- *   one thing across the app.
+ * - **Goal continuations stay in the user's turn.** `/goal` now appends hidden
+ *   internal inputs rather than synthetic user messages. The turn keeps accumulating
+ *   until the user actually submits a new message.
  * - **Abandoned attempts inside the turn still count.** A failed request that was retried
  *   was billed, and the row is about what this turn cost.
  *

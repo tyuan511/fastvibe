@@ -15,7 +15,10 @@ type Host = {
   listAgentThreads?: () => Promise<unknown[]>;
 };
 
-const scope = StringEnum(["user", "project", "both"] as const, { default: "user" });
+const scope = StringEnum(["user", "project", "both"] as const, {
+  default: "user",
+  description: "Select additional role definitions from user, project, or both. Built-in explorer and worker roles are always available.",
+});
 const fail = (message: string) => ({ content: [{ type: "text" as const, text: message }], details: {}, isError: true });
 const host = (ctx: { ui: unknown }): Host => ctx.ui as Host;
 const sender = (ctx: { ui: unknown }): string => host(ctx).conversationId ?? "root";

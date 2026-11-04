@@ -199,6 +199,7 @@ import type { PiEngineMode, PiEngineState, PiEngineSwitchResult } from "../../sh
 import { switchPiEngine } from "../engine/pi-engine-switch.ts";
 import { DisabledMemoryHost, type MemoryHost } from "../engine/memory-host";
 import { SubagentManager } from "../engine/subagents";
+import { GoalDescendantUsage, type GoalAccountingBridge } from "../engine/goal-descendant-usage";
 import { reduceSubagent } from "@shared/subagent-state";
 import { SubagentControl } from "./subagent-control";
 import { resolveSubagentModel } from "./subagent-model";
@@ -272,6 +273,8 @@ type ManagedSession = { conversationId: string; cwd: string; session: AgentSessi
 type FastVibeExtensionUIContext = ExtensionUIContext & {
   /** The catalog id of the conversation this context serves — what `conversation_search` takes. */
   conversationId: string;
+  /** Only the parent extension can control its conversation's goal accounting. */
+  goalAccounting?: () => GoalAccountingBridge;
   questions(title: string, questions: PermissionQuestion[], opts?: { timeout?: number }): Promise<Array<string | null> | undefined>;
   /**
    * Run one subagent role on a throwaway in-process session. Injected here so the
@@ -472,6 +475,7 @@ export class PiProcessManager {
   #streamWatch: StreamWatch | null = null;
   #readyListeners = new Set<(payload: ConversationReadyEvent) => void>();
   #runtime: ModelRuntime | null = null;
+  #goalDescendantUsage = new GoalDescendantUsage();
   #models: ModelRegistry | null = null;
   #modelsCache: FastVibeModel[] | null = null;
   /** Account quota is remote data; keep it warm for five minutes per provider. */
@@ -1266,6 +1270,7 @@ export class PiProcessManager {
       this.#subagentReasoning.clear();
       this.#reasoningRun.clear();
       await Promise.all(sessions.map(async (item) => { item.unsubscribe(); this.#persist(item.session); await item.session.dispose(); }));
+      this.#goalDescendantUsage.clear();
       this.#models = null;
       this.#runtime = null;
       this.#mcpConnecting = null;
@@ -2476,6 +2481,7 @@ export class PiProcessManager {
     return this.#catalog.snapshot();
   }
   async deleteConversation(id: string): Promise<ConversationDeleteResult> {
+    this.#goalDescendantUsage.delete(id);
     this.#queueRebuilds.add(id);
     this.#bumpQueueEpoch(id);
     const managedBefore = this.#sessions.get(id);
@@ -5725,6 +5731,7 @@ export class PiProcessManager {
       stoppedSubagents: this.#stoppedSubagents,
       emit: (event) => this.#emit(event),
       resolvePendingUi: (conversationId, owner) => this.#resolvePendingUi(conversationId, owner),
+      captureGoalUsage: (conversationId) => this.#goalDescendantUsage.capture(conversationId),
       extensionUi: (conversationId, owner) => this.#extensionUi(conversationId, owner),
       publishSubagentState: (subagentId, conversationId, session) => this.#publishSubagentState(subagentId, conversationId, session),
       timeReasoning: (key, event, session, now, file) => this.#timeReasoning(key, event, session, now, file),
@@ -5776,6 +5783,7 @@ export class PiProcessManager {
       questions: (title, questions, opts) =>
         dialog<Array<string | null> | undefined>("questions", { title, questions, timeout: opts?.timeout }, undefined, opts?.timeout),
       conversationId,
+      ...(owner === conversationId ? { goalAccounting: () => this.#goalDescendantUsage.bridge(conversationId) } : {}),
       runSubagent: (request) => this.#runSubagent(conversationId, request),
       spawnAgent: (request) => this.spawnAgent({ ...request, conversationId }),
       sendAgentMessage: (request) => this.sendAgentMessage({ ...request, conversationId }),
@@ -5914,6 +5922,12 @@ export class PiProcessManager {
     if (!managed) return false;
     if (this.#openingPrompts.has(id)) return false;
     if (this.#busy(id)) return false;
+    // Children can outlive an idle parent. Keep its extensions (including goal
+    // accounting) alive until the runner removes its control during finalization.
+    // Historical metadata alone must never pin a session in memory.
+    for (const subagentId of this.#subagentControls.keys()) {
+      if (this.#subagents.get(subagentId)?.conversationId === id) return false;
+    }
     if (this.#sessionPromises.has(id)) return false;
     if (this.#drainingQueues.has(id)) return false;
     if (this.#messageQueue.all(id).length > 0) return false;

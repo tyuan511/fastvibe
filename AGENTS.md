@@ -1986,9 +1986,9 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
 - 预览：`mock.html?dialog=skills-market#/settings/skills`（`&q=paddle` 看不可安装来源那一行，
   `&lang=en` 看英文不溢出）。
 
-- **Built-ins** — `goal.ts` is FastVibe's own replacement for the `pi-goal-x`
-  package (deliberately not bundled as a dependency). Only `/goal` is registered.
-  There is no plan mode: the harness plans on its own.
+- **Built-ins** — `goal.ts` adapts Codex's persistent goals (source and Apache-2.0
+  attribution in `resources/extensions/goal/NOTICE.md`). It registers `/goal` plus
+  `create_goal`, `get_goal` and `update_goal`. There is no separate plan mode.
   `todo.ts` is always on
   (no slash command): the model replaces the whole list each call.
   `session-title.ts` is also always on: the first user prompt is summarised into
@@ -2017,15 +2017,36 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     it. `test/session-title.test.ts` pins all of it against the real SDK.
   `output-language.ts` is always on: each `before_agent_start` appends the host's
   AI 偏好语言 requirement (from `FASTVIBE_AI_LANGUAGE_PROMPT`) to the system prompt.
-  - **Goal** runs a long-term execution loop: every turn is instructed to compare
-    progress against the objective and take on that round's tasks, and `agent_end`
-    sends a continuation until the model ends with a lone `GOAL_COMPLETE` line
-    (stripped on `message_end`) or the round cap pauses it. Its state travels as a
-    JSON `goal` status that the renderer turns into the control panel above the
-    composer (`GoalPanel`: view / pause / resume / clear). A bare `/goal` (picked
-    from the palette without an objective) only arms the mode: it publishes a
-    `goal-armed` status that the composer shows as a badge in the composer toolbar, and
-    the objective is taken from the user's next message in `before_agent_start`.
+  - **Goal** follows `openai/codex@f39e45e4a68db24c649a9b6b12d2e922cba616d1`:
+    `active / paused / blocked / usage_limited / budget_limited / complete`, explicit
+    model tools, full-objective completion audit and repeated-blocker audit. There is
+    no completion text marker or fixed round cap. Pi's `agent_before_settle` commits
+    hidden continuation input after SDK retry/compaction and queued user work; it
+    does not fabricate a user message or re-baseline 本轮 Token. Every provider request
+    gets fresh goal context, including Continue and after reload/compaction.
+    Custom session entries persist state and null clear tombstones, read across all
+    history branches so rewinding cannot revive a cleared goal. Reopening and resource
+    reload preserve status without starting a request; explicit Stop pauses without
+    self-resuming. Optional token budgets count main and descendant uncached input
+    (including cache writes) plus output, trigger wrap-up steering and prevent another
+    automatic goal turn. `goal-descendant-usage.ts` captures a child's goal at provider
+    dispatch and reports once on completion, buffers reload gaps, and isolates late
+    replies from replacement goals. Live children keep their parent session resident.
+    Active elapsed time uses a monotonic clock and includes tools, but not paused/offline
+    intervals. A missing budget is unbounded unless the operator configures
+    `FASTVIBE_MAX_GOAL_TOKEN_BUDGET` (Pi flag `--max-goal-token-budget`), which supplies
+    the default and caps explicit budgets. No budget is inferred from account/model limits.
+    Three empty automatic turns block (user turns do not count; thinking and tools are
+    activity). Three execution-backend failure turns without any successful tool also
+    block; normal command failures do not. The model's semantic blocked/completion audit
+    stays in the upstream prompt. `update_goal` can complete a stopped goal directly;
+    responses include top-level `remainingTokens` and `completionBudgetReport`.
+    `/goal pause|resume|clear|budget <total tokens>` controls the goal. Bare `/goal`
+    keeps the composer armed badge until the next user prompt supplies the objective.
+    `GoalPanel` renders status and token usage, with pause/clear available during a run.
+    Vivi Router/Worker tools exclude all three goal tools. Verification:
+    `test/goal-mode.test.ts` and `test/goal-descendant-usage.test.ts` use the real SDK
+    with scripted providers; `test/session-reclamation.test.ts` covers live-child retention.
   - **Question** (`question.ts`, always on, main agent only — subagents load no
     extension but `folder-consent`) registers the `question` tool so the agent can stop and
     ask. It takes an array of questions and asks them in one panel (`questions` UI,
@@ -2098,7 +2119,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   came from there (`mac-folder-consent.ts`). Do not re-add a gate here without the
   user asking for one.
 - **Agent Team / Codex-style collaboration** — `resources/extensions/subagent/index.ts` exposes the Codex collaboration actions `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent` and `list_agents`. `spawn_agent` creates a persistent `AgentThread`; it is the internal creation action behind the Agent Team UI, not a separate user-facing page.
-  - **Built-in roles follow Codex's current role model.** `explorer` is for narrow, facts-only codebase questions; `worker` is for owned implementation work and must be told its file/module ownership. FastVibe does not expose planner/reviewer as built-in child roles; review remains a parent-agent responsibility unless a user-installed role provides it. Role frontmatter accepts `model`, `thinkingLevel` and the Codex spelling `model_reasoning_effort`.
+  - **Built-in roles follow Codex's current role model.** `explorer` is for narrow, facts-only codebase questions; `worker` is for owned implementation work and must be told its file/module ownership. FastVibe does not expose planner/reviewer as built-in child roles; review remains a parent-agent responsibility unless a user-installed role provides it. Role frontmatter accepts `model`, `thinkingLevel` and the Codex spelling `model_reasoning_effort`. Built-in roles are available in every `agentScope`; the scope filters only additional user/project role files. Matching definitions retain the precedence built-in → user → project.
   - **Child configuration inherits the parent by default.** A child receives the invoking conversation's model/provider fallback, reasoning level, working directory and runtime context. `fork_turns` accepts `all` or `none` and defaults to `all`; `all` seeds the child `SessionManager.inMemory` with the parent's current branch, while `none` starts with only the child task. Explicit model/reasoning overrides are validated through the configured model registry before the child starts.
   - **Role overrides are bounded.** A role may choose its own model, reasoning level and tool list, but it does not silently escape the parent conversation's cwd or runtime authority. FastVibe has no separate Codex approval/sandbox policy, so the inherited authority is the current FastVibe tool boundary.
   - **Persistent thread identity.** `AgentThreadStore` stores the thread tree, `taskName`, mailbox, status and revision in SQLite. Each thread gets a stable random display name and avatar seed. The Agent Team resource list, lifecycle events, side-pane tab and thread detail all use that identity.
@@ -3452,7 +3473,7 @@ from an event payload. So it is as fresh as the last `reloadActiveState()`.
 - **The rows under the ring have explicit scopes.** 本轮 Token comes from `SessionStats.turn`,
   cut out of the transcript by `engine/turn-usage.ts`:
   everything after the last user message on the current branch — so a steer re-baselines it,
-  each `/goal` round is its own turn, and a failed request that was retried still counts
+  hidden `/goal` continuations remain in the same turn, and a failed request that was retried still counts
   because it was billed. Cache-warm `usage` entries and a compaction's own usage fall inside
   the window and belong to it. 输出速度 uses `SessionStats.lastRequest`: the latest persisted
   assistant request's output divided by that same request's `durationMs`, including first-token

@@ -7,8 +7,8 @@ import {
   Cancel01Icon,
   Delete02Icon,
   InformationSquareIcon,
-  PauseIcon,
-  PlayIcon,
+  PauseCircleIcon,
+  PlayCircleIcon,
   Target01Icon,
 } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
@@ -27,10 +27,13 @@ import { TuiLines } from "./tui-lines";
 const BADGE_STATUS_KEYS = new Set(["goal", "goal-armed", "handoff"]);
 
 async function runExtensionCommand(command: string): Promise<void> {
+  const conversationId = useSessionStore.getState().activeId ?? undefined;
   try {
-    await engine.prompt(command);
-  } catch {
-    // The engine may be busy; the UI updates once the command runs.
+    await engine.prompt(command, { conversationId });
+  } catch (error) {
+    toast.error(i18n.t("chat:goal.commandFailed"), {
+      description: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -95,32 +98,36 @@ export function ExtensionStatusBadges({ disabled }: { disabled?: boolean }): JSX
   );
 }
 
-type GoalState = "running" | "paused" | "complete";
+type GoalState = "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "complete";
 
 type GoalPayload = {
   objective: string;
   status: GoalState;
-  /** 1-based number of the round the agent is on. */
-  round: number;
+  tokenBudget?: number;
+  tokensUsed: number;
 };
 
 function goalStatusMeta(status: GoalState): { label: string; className: string } {
-  const className = status === "running" ? "text-primary" : status === "paused" ? "text-warning" : "text-success";
+  const className = status === "active" ? "text-primary" : status === "complete" ? "text-success" : "text-warning";
   return { label: i18n.t(`chat:goal.${status}`) as string, className };
 }
 
-/** The `goal` status is a JSON payload published by the goal extension. */
+const goalTokens = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+
+/** Accept the old running/round payload while rendering the current goal contract. */
 function parseGoal(raw?: string): GoalPayload | null {
   if (!raw) return null;
   try {
-    const value = JSON.parse(raw) as Partial<GoalPayload>;
-    if (typeof value.objective !== "string" || !value.objective) return null;
-    const status: GoalState =
-      value.status === "paused" || value.status === "complete" ? value.status : "running";
-    // The extension counts rounds from 1 and never reports the cap; an older build
-    // wrote a 0-based count, which is the same round under this label.
-    const round = typeof value.round === "number" && value.round > 1 ? value.round : 1;
-    return { objective: value.objective, status, round };
+    const value = JSON.parse(raw) as Record<string, unknown> | null;
+    if (!value || typeof value.objective !== "string" || !value.objective) return null;
+    const status = value.status === "running" ? "active" : value.status;
+    if (status !== "active" && status !== "paused" && status !== "blocked" &&
+        status !== "usage_limited" && status !== "budget_limited" && status !== "complete") return null;
+    const tokensUsed = typeof value.tokensUsed === "number" && Number.isFinite(value.tokensUsed)
+      ? Math.max(0, value.tokensUsed) : 0;
+    const tokenBudget = typeof value.tokenBudget === "number" && Number.isFinite(value.tokenBudget) && value.tokenBudget > 0
+      ? value.tokenBudget : undefined;
+    return { objective: value.objective, status, tokensUsed, tokenBudget };
   } catch {
     return null;
   }
@@ -128,7 +135,7 @@ function parseGoal(raw?: string): GoalPayload | null {
 
 /**
  * Long-term goal control, shown above the composer as a single row: the target
- * glyph, the status, the round, then the objective — which keeps whatever width is
+ * glyph, the status, token usage, then the objective — which keeps whatever width is
  * left and ellipsises — and the pause/resume + clear actions as icon buttons.
  *
  * One line, not a card: it sits in the composer slot next to the todo panel, and the
@@ -157,13 +164,16 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
         <Badge variant="secondary" className={cn("shrink-0", meta.className)}>
           {meta.label}
         </Badge>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {t("goal.round", { round: goal.round })}
+        <span
+          title={goal.tokenBudget ? t("goal.budgetUsage", { used: goal.tokensUsed, budget: goal.tokenBudget }) : t("goal.tokenUsage", { used: goal.tokensUsed })}
+          className="shrink-0 text-xs text-muted-foreground tabular-nums"
+        >
+          {goalTokens.format(goal.tokensUsed)}{goal.tokenBudget ? ` / ${goalTokens.format(goal.tokenBudget)}` : ""} {t("goal.tokens")}
         </span>
         <span title={goal.objective} className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
           {goal.objective}
         </span>
-        {goal.status === "paused" ? (
+        {goal.status === "paused" || goal.status === "blocked" || goal.status === "usage_limited" ? (
           <IconButton
             size="icon-xs"
             variant="ghost"
@@ -172,18 +182,17 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
             disabled={disabled}
             onClick={() => void runExtensionCommand("/goal resume")}
           >
-            <HugeiconsIcon strokeWidth={2} icon={PlayIcon} className="size-3.5" />
+            <HugeiconsIcon strokeWidth={2} icon={PlayCircleIcon} className="size-3.5" />
           </IconButton>
-        ) : goal.status === "running" ? (
+        ) : goal.status === "active" ? (
           <IconButton
             size="icon-xs"
             variant="ghost"
             label={t("goal.pause")}
             title={t("goal.pause")}
-            disabled={disabled}
             onClick={() => void runExtensionCommand("/goal pause")}
           >
-            <HugeiconsIcon strokeWidth={2} icon={PauseIcon} className="size-3.5" />
+            <HugeiconsIcon strokeWidth={2} icon={PauseCircleIcon} className="size-3.5" />
           </IconButton>
         ) : null}
         <IconButton
@@ -192,7 +201,6 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
           label={t("goal.clear")}
           title={t("goal.clear")}
           className="text-destructive hover:text-destructive"
-          disabled={disabled}
           onClick={() => void runExtensionCommand("/goal clear")}
         >
           <HugeiconsIcon strokeWidth={2} icon={Delete02Icon} className="size-3.5" />

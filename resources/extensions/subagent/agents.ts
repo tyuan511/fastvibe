@@ -144,18 +144,15 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
 	const builtinDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
-	const userAgents = scope === "project" ? [] : [...loadAgentsFromDir(builtinDir, "user"), ...loadAgentsFromDir(userDir, "user")];
+	// Built-in roles are the baseline in every scope. Only additional role files
+	// are scoped; matching user/project definitions keep their override precedence.
+	const builtinAgents = loadAgentsFromDir(builtinDir, "user");
+	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
 	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
 
 	const agentMap = new Map<string, AgentConfig>();
-
-	if (scope === "both") {
-		for (const agent of userAgents) agentMap.set(agent.name, agent);
-		for (const agent of projectAgents) agentMap.set(agent.name, agent);
-	} else if (scope === "user") {
-		for (const agent of userAgents) agentMap.set(agent.name, agent);
-	} else {
-		for (const agent of projectAgents) agentMap.set(agent.name, agent);
+	for (const agent of [...builtinAgents, ...userAgents, ...projectAgents]) {
+		agentMap.set(agent.name, agent);
 	}
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };

@@ -571,7 +571,7 @@ const openResult = (id: string): ConversationOpenResult => {
     // the preview is where that is checked (`?goal=1`).
     extensionStatus:
       isActive && params.get("goal") === "1"
-        ? { goal: JSON.stringify({ objective: GOAL_OBJECTIVE, status: params.get("goalState") ?? "running", round: 3 }) }
+        ? { goal: JSON.stringify({ version: 2, id: "preview-goal", objective: GOAL_OBJECTIVE, status: params.get("goalState") ?? "active", tokenBudget: 100_000, tokensUsed: 12_500, timeUsedSeconds: 95, createdAt: Date.now() - 95_000, updatedAt: Date.now() }) }
         : {},
   };
 };
@@ -817,7 +817,7 @@ const api = {
     compact: async () => fixtureSession,
     getCommands: async () => COMMANDS,
     getExtensions: async () => [
-      { path: "resources/extensions/goal.ts", name: "goal", commands: 1, tools: 0 },
+      { path: "resources/extensions/goal.ts", name: "goal", commands: 1, tools: 3 },
       { path: "resources/extensions/todo.ts", name: "todo", commands: 0, tools: 1 },
       { path: "resources/extensions/folder-consent.ts", name: "folder-consent", commands: 0, tools: 0 },
       { path: "resources/extensions/session-title.ts", name: "session-title", commands: 0, tools: 0 },
