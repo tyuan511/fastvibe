@@ -27,7 +27,7 @@ Get the desktop app from [GitHub Releases](https://github.com/tyuan511/fastvibe/
 
 On macOS, open the DMG and drag FastVibe into Applications. On Windows, run the installer. On Linux, install the DEB or make the AppImage executable before launching it. The desktop app checks for updates; you choose when to download and restart.
 
-The [Android client](apps/mobile/android) and [iOS client](apps/mobile/ios) are native Compose/SwiftUI apps backed by the shared Rust core.
+The [mobile app](apps/mobile) shares one Flutter interface across Android and iOS and calls the Rust core directly through FFI.
 
 ## Get started
 
@@ -94,7 +94,7 @@ pnpm dev
 | `pnpm dist:mac` / `pnpm dist:win` / `pnpm dist:linux` | Package desktop installers |
 | `pnpm sync:models` | Refresh the models.dev snapshot |
 | `pnpm mobile:core:test` | Test the shared Rust mobile core |
-| `pnpm mobile:android` / `pnpm mobile:ios` | Build or test the native mobile clients |
+| `pnpm mobile:android` / `pnpm mobile:ios` | Build the Flutter Android / iOS simulator app with its Rust core |
 
 To preview the renderer in a browser:
 
@@ -115,4 +115,4 @@ resources/            Bundled extensions, skills, icons, and model metadata
 apps/mobile/         Native iOS / Android clients and shared Rust core
 ```
 
-For deeper work, see the [architecture and repository conventions](AGENTS.md), [multi-folder projects](docs/multi-folder-projects.md), [Agent runtime releases](docs/agent-runtime.md), and [native mobile client](apps/mobile/README.md). Report problems through [GitHub Issues](https://github.com/tyuan511/fastvibe/issues), including your app version, operating system, and steps to reproduce.
+For deeper work, see the [architecture and repository conventions](AGENTS.md), [multi-folder projects](docs/multi-folder-projects.md), [Agent runtime releases](docs/agent-runtime.md), and [Flutter mobile client](apps/mobile/README.md). Report problems through [GitHub Issues](https://github.com/tyuan511/fastvibe/issues), including your app version, operating system, and steps to reproduce.

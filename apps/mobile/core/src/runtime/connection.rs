@@ -4,6 +4,16 @@ use super::*;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[cfg(feature = "iroh-transport")]
+struct CloseConnection(iroh::endpoint::Connection);
+
+#[cfg(feature = "iroh-transport")]
+impl Drop for CloseConnection {
+    fn drop(&mut self) {
+        self.0.close(0u32.into(), b"mobile connection retired");
+    }
+}
+
+#[cfg(feature = "iroh-transport")]
 pub(super) fn report_connection_failure(
     shared: &Arc<SharedCore>,
     generation: u64,
@@ -11,6 +21,7 @@ pub(super) fn report_connection_failure(
     message: String,
     code: Option<&str>,
 ) -> bool {
+    let _protocol = lock(&shared.protocol);
     let mut connection = lock(&shared.connection);
     if connection.generation != generation {
         return false;
@@ -29,6 +40,24 @@ pub(super) fn report_connection_failure(
 
 impl CoreHandle {
     #[cfg(feature = "iroh-transport")]
+    async fn scoped_endpoint(
+        pool: &Arc<tokio::sync::Mutex<crate::iroh_transport::IrohEndpointPool>>,
+        shared: &Arc<SharedCore>,
+        generation: u64,
+        key: iroh::SecretKey,
+        nodes: &[crate::relay_config::MobileRelayNode],
+    ) -> Result<iroh::Endpoint, Box<dyn std::error::Error + Send + Sync>> {
+        let mut pool = pool.lock().await;
+        if lock(&shared.connection).generation != generation {
+            return Err("dial cancelled".into());
+        }
+        let endpoint = pool.endpoint(key, nodes).await?;
+        if lock(&shared.connection).generation != generation {
+            return Err("dial cancelled".into());
+        }
+        Ok(endpoint)
+    }
+    #[cfg(feature = "iroh-transport")]
     pub(super) fn command_connect(
         &self,
         value: &serde_json::Value,
@@ -36,8 +65,21 @@ impl CoreHandle {
         let remote_id = required_string(value, "remoteId")
             .or_else(|_| required_string(value, "remote_id"))?
             .to_owned();
-        let relay_value = value.get("relay").unwrap_or(value);
-        let relay_nodes = crate::relay_config::parse_relay_nodes(relay_value)?;
+        let direct_addresses =
+            crate::iroh_transport::parse_direct_addresses(value.get("directAddresses"))?;
+        let prefer_direct = value
+            .get("preferDirect")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if prefer_direct && direct_addresses.is_empty() {
+            return Err("preferDirect requires a local address".into());
+        }
+        // A direct-preferred dial is an explicit mode, not an empty relay lease.
+        let relay_nodes = if prefer_direct {
+            Vec::new()
+        } else {
+            crate::relay_config::parse_relay_nodes(value.get("relay").unwrap_or(value))?
+        };
         let remote = remote_id
             .parse::<iroh::EndpointId>()
             .map_err(|error| error.to_string())?;
@@ -45,6 +87,7 @@ impl CoreHandle {
         let endpoint_id = key.public().to_string();
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let generation = {
+            let _protocol = lock(&self.shared.protocol);
             let mut connection = lock(&self.shared.connection);
             if let Some(existing) = connection.outbound.take() {
                 let _ = existing.send(TransportCommand::Close);
@@ -59,15 +102,53 @@ impl CoreHandle {
                 .map(ToOwned::to_owned);
             connection.outbound = Some(sender);
             self.shared.clear_connection_protocol();
+            self.shared.clear_projection();
             connection.generation
         };
         let shared = Arc::clone(&self.shared);
+        let pool = Arc::clone(&self.endpoint_pool);
+        #[cfg(feature = "mobile-client")]
+        let fallback_account = lock(&self.account)
+            .as_ref()
+            .cloned()
+            .zip(lock(&shared.connection).device_id.clone());
+        #[cfg(feature = "mobile-client")]
+        let registrations = Arc::clone(&self.registrations);
+        let local_endpoint_id = endpoint_id.clone();
         self.runtime.spawn(async move {
-            let mut dial = Box::pin(crate::iroh_transport::IrohClient::connect_relays(
-                key,
-                remote,
-                &relay_nodes,
-            ));
+            let mut dial = Box::pin(async {
+                let endpoint = Self::scoped_endpoint(&pool, &shared, generation, key.clone(), &relay_nodes).await?;
+                if prefer_direct {
+                    let local = tokio::time::timeout(Duration::from_millis(1500),
+                        crate::iroh_transport::IrohClient::connect_on(endpoint, remote, &[], &direct_addresses)).await;
+                    if let Ok(Ok(client)) = local { return Ok(client); }
+                    if lock(&shared.connection).generation != generation { return Err("dial cancelled".into()); }
+                    #[cfg(feature = "mobile-client")]
+                    {
+                        let (account, device_id) = fallback_account.as_ref().ok_or("local route failed; no account for relay fallback")?;
+                        let lease = account.relay(device_id, &local_endpoint_id).await;
+                        let nodes = {
+                            let _protocol = lock(&shared.protocol);
+                            if lock(&shared.connection).generation != generation { return Err("dial cancelled".into()); }
+                            if let Err(error) = &lease {
+                                if error.downcast_ref::<mobile_client::AccountHttpError>()
+                                    .is_some_and(|error| matches!(error.status.as_u16(), 401 | 403 | 404)) {
+                                    *lock(&registrations) = RegistrationCache::default();
+                                }
+                            }
+                            let lease = lease?;
+                            shared.push_event(serde_json::json!({"type":"relay_lease","expiresAt":lease.expires_at}));
+                            lease.relays
+                        };
+                        let endpoint = Self::scoped_endpoint(&pool, &shared, generation, key, &nodes).await?;
+                        return crate::iroh_transport::IrohClient::connect_on(endpoint, remote, &nodes, &direct_addresses).await
+                            .map_err(|error| crate::relay_config::redact_relay_tokens(&error.to_string(), &nodes).into());
+                    }
+                    #[cfg(not(feature = "mobile-client"))]
+                    return Err("local route unavailable".into());
+                }
+                crate::iroh_transport::IrohClient::connect_on(endpoint, remote, &relay_nodes, &direct_addresses).await
+            });
             let dial_deadline = tokio::time::sleep(DIAL_TIMEOUT);
             tokio::pin!(dial_deadline);
             let mut pending_messages = Vec::new();
@@ -98,7 +179,9 @@ impl CoreHandle {
                 }
             };
             let (mut writer, mut reader) = client.split();
+            let _close_connection = CloseConnection(reader.connection.clone());
             {
+                let _protocol = lock(&shared.protocol);
                 let mut connection = lock(&shared.connection);
                 if connection.generation != generation {
                     return;
@@ -163,7 +246,7 @@ impl CoreHandle {
                             }
                         },
                         incoming = reader.read_next() => match incoming {
-                            Ok(crate::iroh_transport::IrohRead::Message(message)) => handle_server_message(&shared, generation, message, &mut writer).await,
+                            Ok(crate::iroh_transport::IrohRead::Message(message)) => handle_server_message(&shared, generation, message),
                             Ok(crate::iroh_transport::IrohRead::LegacyAuth) => {
                                 if !hello_sent {
                                     if let Err(error) = writer.send_json(&crate::hello("0.1.0")).await {
@@ -179,6 +262,7 @@ impl CoreHandle {
                                     }
                                     hello_sent = true;
                                 }
+                                let _protocol = lock(&shared.protocol);
                                 if lock(&shared.connection).generation == generation {
                                     shared.push_event(serde_json::json!({"type":"auth","ok":true}));
                                 }
@@ -196,7 +280,12 @@ impl CoreHandle {
                                     break;
                                 }
                             },
-                            Ok(crate::iroh_transport::IrohRead::Pong) => shared.push_event(serde_json::json!({"type":"pong"})),
+                            Ok(crate::iroh_transport::IrohRead::Pong) => {
+                                let _protocol = lock(&shared.protocol);
+                                if lock(&shared.connection).generation == generation {
+                                    shared.push_event(serde_json::json!({"type":"pong"}));
+                                }
+                            },
                             Ok(crate::iroh_transport::IrohRead::Close { code, reason }) => {
                                 let reason = crate::relay_config::redact_relay_tokens(&reason, &relay_nodes);
                                 let message = if reason.is_empty() {
@@ -204,6 +293,7 @@ impl CoreHandle {
                                 } else {
                                     format!("remote closed connection (code {code}): {reason}")
                                 };
+                                let _protocol = lock(&shared.protocol);
                                 let mut connection = lock(&shared.connection);
                                 if connection.generation != generation {
                                     return;
@@ -230,6 +320,7 @@ impl CoreHandle {
                 }
             }
 
+            let _protocol = lock(&shared.protocol);
             let mut connection = lock(&shared.connection);
             if connection.generation != generation {
                 return;
@@ -240,7 +331,9 @@ impl CoreHandle {
             connection.outbound = None;
             shared.clear_connection_protocol();
         });
-        Ok(serde_json::json!({"status":"connecting","remoteId":remote_id,"endpointId":endpoint_id}))
+        Ok(
+            serde_json::json!({"status":"connecting","remoteId":remote_id,"endpointId":endpoint_id,"generation":generation}),
+        )
     }
 
     #[cfg(not(feature = "iroh-transport"))]
@@ -252,6 +345,7 @@ impl CoreHandle {
     }
 
     pub(super) fn command_disconnect(&self) -> Result<serde_json::Value, String> {
+        let _protocol = lock(&self.shared.protocol);
         let mut connection = lock(&self.shared.connection);
         #[cfg(feature = "iroh-transport")]
         if let Some(sender) = connection.outbound.take() {
@@ -260,8 +354,37 @@ impl CoreHandle {
         connection.generation = connection.generation.wrapping_add(1);
         connection.status = "disconnected".into();
         connection.error = None;
+        connection.conversation_id = None;
         self.shared.clear_connection_protocol();
-        Ok(serde_json::json!({"status":"disconnected"}))
+        self.shared.clear_projection();
+        Ok(serde_json::json!({"status":"disconnected","generation":connection.generation}))
+    }
+
+    pub(super) fn command_clear_account(&self) -> Result<serde_json::Value, String> {
+        self.command_disconnect()?;
+        #[cfg(feature = "iroh-transport")]
+        self.runtime.block_on(async {
+            self.endpoint_pool.lock().await.clear().await;
+        });
+        #[cfg(feature = "mobile-client")]
+        {
+            *lock(&self.account) = None;
+            *lock(&self.login) = None;
+            *lock(&self.registrations) = RegistrationCache::default();
+        }
+        lock(&self.shared.connection).device_id = None;
+        Ok(serde_json::json!({"status":"signed-out"}))
+    }
+
+    pub(super) fn command_network_changed(&self) -> Result<serde_json::Value, String> {
+        #[cfg(feature = "iroh-transport")]
+        self.runtime.block_on(async {
+            let endpoint = self.endpoint_pool.lock().await.current();
+            if let Some(endpoint) = endpoint {
+                endpoint.network_change().await;
+            }
+        });
+        Ok(serde_json::json!({"status":"network-updated"}))
     }
 
     pub(super) fn command_send_message(

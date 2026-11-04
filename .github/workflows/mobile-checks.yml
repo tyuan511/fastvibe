@@ -1,11 +1,11 @@
-name: Native mobile checks
+name: Mobile checks
 
 on:
   push:
     branches: [main]
-    paths: ["apps/mobile/**", "scripts/*mobile-ios.sh", ".github/workflows/mobile-*.yml"]
+    paths: ["apps/mobile/**", "scripts/*mobile*.sh", ".github/workflows/mobile-*.yml"]
   pull_request:
-    paths: ["apps/mobile/**", "scripts/*mobile-ios.sh", ".github/workflows/mobile-*.yml"]
+    paths: ["apps/mobile/**", "scripts/*mobile*.sh", ".github/workflows/mobile-*.yml"]
   workflow_dispatch:
 
 permissions:
@@ -17,10 +17,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --manifest-path apps/mobile/core/Cargo.toml
-      - run: cargo check --manifest-path apps/mobile/core/Cargo.toml --no-default-features
-      - run: cargo check --manifest-path apps/mobile/core/Cargo.toml --no-default-features --features mobile-client
-      - run: cargo check --manifest-path apps/mobile/core/Cargo.toml --no-default-features --features iroh-transport
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/mobile/core
+      - run: cargo test --locked --manifest-path apps/mobile/core/Cargo.toml
+      - run: cargo check --locked --manifest-path apps/mobile/core/Cargo.toml --no-default-features
+      - run: cargo check --locked --manifest-path apps/mobile/core/Cargo.toml --no-default-features --features mobile-client
+      - run: cargo check --locked --manifest-path apps/mobile/core/Cargo.toml --no-default-features --features iroh-transport
+  flutter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.6"
+          cache: true
+      - working-directory: apps/mobile
+        run: |
+          flutter pub get --enforce-lockfile
+          flutter analyze
+          flutter test
   android:
     runs-on: ubuntu-latest
     steps:
@@ -31,12 +47,19 @@ jobs:
         with:
           packages: platform-tools
       - name: Install Android SDK components
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.6"
+          cache: true
       - uses: gradle/actions/setup-gradle@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/mobile/core
       - working-directory: apps/mobile/android
-        run: ./gradlew :app:testDebugUnitTest :native:testDebugUnitTest :app:assembleDebug
+        run: bash tool/build.sh
   ios:
     uses: ./.github/workflows/mobile-ios.yml

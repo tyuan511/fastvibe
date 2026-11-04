@@ -1,7 +1,7 @@
 import { Ipc } from "@shared/ipc";
 import type { BotApi, BotActivity, BotChanged, BotCreateWorkRequest, BotReportRequest, BotSubmitRequest, BotConversationMeta, BotResult, BotAttention, WorkSnapshot } from "./bot";
 import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
-import type { ViviDragMotion, ViviSettings, ViviSnapshot, ViviState } from "./vivi";
+import type { ViviBubbleKind, ViviDragMotion, ViviSettings, ViviSnapshot, ViviState } from "./vivi";
 import type { BrowserLibrary, BrowserClearData, BrowserDownloadAction, BrowserShortcut } from "./browser-workspace";
 import type { SubmitPromptRequest } from "./prompt-submission";
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskPatch, ScheduledTaskRun, ScheduledTaskSnapshot } from "@shared/schedules";
@@ -735,8 +735,10 @@ export function createFastVibeApi(t: ApiTransport) {
       setSettings: (settings: Partial<ViviSettings>): Promise<ViviSettings> => t.invoke(Ipc.viviSetSettings, settings),
       getState: (): Promise<ViviState> => t.invoke(Ipc.viviGetState),
       getSnapshot: (): Promise<ViviSnapshot> => t.invoke(Ipc.viviGetSnapshot),
-      setBubble: (height: number, composerHeight = 0, width?: number): Promise<void> => t.invoke(Ipc.viviSetBubble, { height, composerHeight, width }),
+      setBubble: (height: number, composerHeight = 0, width?: number, kind: ViviBubbleKind = "notification"): Promise<void> => t.invoke(Ipc.viviSetBubble, { height, composerHeight, width, kind }),
       hitTest: (interactive: boolean): Promise<void> => t.invoke(Ipc.viviHitTest, { interactive }),
+      click: (): Promise<void> => t.invoke(Ipc.viviClick),
+      onClicked: (listener: () => void): (() => void) => t.subscribe(Ipc.viviClicked, listener),
       rendererState: (ready: boolean, error?: string): Promise<void> => t.invoke(Ipc.viviRendererState, { ready, error }),
       motionSettled: (at: number): Promise<void> => t.invoke(Ipc.viviMotionSettled, { at }),
       onChanged: (listener: (snapshot: ViviSnapshot) => void): (() => void) => t.subscribe(Ipc.viviChanged, listener),

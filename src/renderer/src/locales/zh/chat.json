@@ -104,10 +104,7 @@
     "running": "正在压缩上下文",
     "cancelled": "上下文压缩已取消",
     "failed": "压缩失败",
-    "done": "已压缩上下文",
-    "backgroundStarted": "正在后台整理上下文",
-    "backgroundDone": "后台上下文已整理完成",
-    "backgroundFailed": "后台整理上下文失败，下一轮将按需压缩"
+    "done": "已压缩上下文"
   },
   "thinking": {
     "running": "正在思考",

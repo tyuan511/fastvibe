@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use iroh::endpoint::presets;
-use iroh::{Endpoint, RelayConfig, RelayMap, RelayMode, SecretKey};
+use iroh::{Endpoint, RelayConfig, RelayMap, RelayMode, SecretKey, Watcher};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::{Mutex, mpsc};
@@ -243,8 +243,13 @@ async fn handle_command(
                 .await
                 .clone()
                 .ok_or("identity must be loaded first")?;
-            if runtime.endpoint.lock().await.is_some() {
-                let _ = runtime.events.send(json!({"type":"started","endpointId":key.public().to_string(),"alreadyRunning":true}));
+            if let Some(endpoint) = runtime.endpoint.lock().await.as_ref() {
+                let _ = runtime.events.send(json!({
+                    "type":"started",
+                    "endpointId":endpoint.id().to_string(),
+                    "directAddresses":direct_addresses(&endpoint.addr()),
+                    "alreadyRunning":true
+                }));
                 return Ok(false);
             }
             let relays = relay_config::from_command(&command)?;
@@ -254,7 +259,13 @@ async fn handle_command(
             *runtime.relay_urls.lock().await =
                 relays.iter().map(|relay| relay.url.clone()).collect();
             let endpoint_id = endpoint.id().to_string();
+            let direct_addresses = direct_addresses(&endpoint.addr());
             *runtime.endpoint.lock().await = Some(endpoint.clone());
+            let address_runtime = runtime.clone();
+            let address_endpoint = endpoint.clone();
+            tokio::spawn(async move {
+                watch_addresses(address_runtime, address_endpoint).await;
+            });
             let accept_runtime = runtime.clone();
             tokio::spawn(async move {
                 accept_loop(accept_runtime, endpoint).await;
@@ -262,6 +273,7 @@ async fn handle_command(
             let _ = runtime.events.send(json!({
                 "type":"started",
                 "endpointId":endpoint_id,
+                "directAddresses":direct_addresses,
                 "relayId":relay_id,
                 "expiresAt":expires_at
             }));
@@ -382,6 +394,29 @@ async fn bind(
         .await?)
 }
 
+fn direct_addresses(addr: &iroh::EndpointAddr) -> Vec<String> {
+    addr.ip_addrs().map(ToString::to_string).collect()
+}
+
+/// The address watcher is event driven and is cancelled with its listening endpoint.
+/// Relay reachability is not required: LAN addresses can be announced immediately.
+async fn watch_addresses(runtime: Runtime, endpoint: Endpoint) {
+    let mut watcher = endpoint.watch_addr();
+    loop {
+        let current = watcher.get();
+        let _ = runtime.events.send(json!({
+            "type":"addresses",
+            "endpointId":endpoint.id().to_string(),
+            "directAddresses":direct_addresses(&current)
+        }));
+        tokio::select! {
+            biased;
+            _ = endpoint.closed() => break,
+            next = watcher.updated() => if next.is_err() { break; },
+        }
+    }
+}
+
 async fn accept_loop(runtime: Runtime, endpoint: Endpoint) {
     loop {
         let incoming = match endpoint.accept().await {
@@ -393,7 +428,7 @@ async fn accept_loop(runtime: Runtime, endpoint: Endpoint) {
             let connection = match incoming.await {
                 Ok(connection) => connection,
                 Err(error) => {
-                    let _ = runtime.events.send(json!({"type":"error","message":format!("incoming connection failed: {error}")}));
+                    let _ = runtime.events.send(json!({"type":"peer_error","message":format!("incoming connection failed: {error}")}));
                     return;
                 }
             };
@@ -405,7 +440,7 @@ async fn accept_loop(runtime: Runtime, endpoint: Endpoint) {
             let (send, mut recv) = match connection.accept_bi().await {
                 Ok(streams) => streams,
                 Err(error) => {
-                    let _ = runtime.events.send(json!({"type":"error","message":format!("incoming stream failed: {error}")}));
+                    let _ = runtime.events.send(json!({"type":"peer_error","message":format!("incoming stream failed: {error}")}));
                     return;
                 }
             };

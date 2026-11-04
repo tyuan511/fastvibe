@@ -113,6 +113,14 @@ impl<'de> Deserialize<'de> for MobileRelayConfig {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{action} failed: {status}")]
+pub(crate) struct AccountHttpError {
+    action: &'static str,
+    pub(crate) status: reqwest::StatusCode,
+}
+
+#[derive(Clone)]
 pub struct AccountClient {
     pub origin: String,
     pub token: Option<String>,
@@ -244,7 +252,11 @@ impl AccountClient {
         let status = response.status();
         let body: serde_json::Value = response.json().await?;
         if !status.is_success() {
-            return Err(format!("device registration failed: {status}").into());
+            return Err(AccountHttpError {
+                action: "device registration",
+                status,
+            }
+            .into());
         }
         body.get("device")
             .and_then(|value| value.get("id").or_else(|| value.get("device_id")))
@@ -271,7 +283,11 @@ impl AccountClient {
             .await?;
         let status = response.status();
         if !status.is_success() {
-            return Err(format!("iroh endpoint registration failed: {status}").into());
+            return Err(AccountHttpError {
+                action: "iroh endpoint registration",
+                status,
+            }
+            .into());
         }
         Ok(())
     }
@@ -285,7 +301,11 @@ impl AccountClient {
         let status = response.status();
         let body: serde_json::Value = response.json().await?;
         if !status.is_success() {
-            return Err(format!("device list request failed: {status}").into());
+            return Err(AccountHttpError {
+                action: "device list request",
+                status,
+            }
+            .into());
         }
         Ok(serde_json::from_value(
             body.get("devices")
@@ -309,7 +329,11 @@ impl AccountClient {
         let status = response.status();
         let body: serde_json::Value = response.json().await?;
         if !status.is_success() {
-            return Err(format!("relay token request failed: {status}").into());
+            return Err(AccountHttpError {
+                action: "relay token request",
+                status,
+            }
+            .into());
         }
         Ok(serde_json::from_value(body)?)
     }

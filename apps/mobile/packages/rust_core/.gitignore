@@ -1,0 +1,4 @@
+android/src/main/jniLibs/
+ios/Frameworks/
+.dart_tool/
+build/

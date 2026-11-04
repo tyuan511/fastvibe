@@ -37,6 +37,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(60);
 const WELCOME_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) struct SharedCore {
+    protocol: Mutex<()>,
     store: Mutex<TranscriptStore>,
     workspace: Mutex<WorkspaceSnapshot>,
     pub(crate) wire_cursors: Mutex<HashMap<String, WireCursor>>,
@@ -94,6 +95,7 @@ impl Default for ConnectionMeta {
 impl SharedCore {
     fn new() -> Self {
         Self {
+            protocol: Mutex::new(()),
             store: Mutex::new(TranscriptStore::default()),
             workspace: Mutex::new(WorkspaceSnapshot::default()),
             wire_cursors: Mutex::new(HashMap::new()),
@@ -145,6 +147,15 @@ impl SharedCore {
         *lock(&self.welcome) = None;
     }
 
+    fn clear_projection(&self) {
+        lock(&self.events).clear();
+        *lock(&self.event_overflowed) = false;
+        *lock(&self.store) = TranscriptStore::default();
+        *lock(&self.workspace) = WorkspaceSnapshot::default();
+        *lock(&self.session_state) = None;
+        *lock(&self.loading_history) = false;
+    }
+
     fn expire_rpcs(&self) -> Vec<(u64, PendingRpc)> {
         let now = Instant::now();
         let mut pending = lock(&self.pending_rpcs);
@@ -185,6 +196,7 @@ impl SharedCore {
             wire_cursors: lock(&self.wire_cursors).clone(),
             loading_history: *lock(&self.loading_history),
             connection: connection.status.clone(),
+            connection_generation: connection.generation,
             session_id: welcome.as_ref().map(|value| value.session_id.clone()),
             capabilities: welcome
                 .as_ref()
@@ -205,6 +217,16 @@ pub(crate) struct LoginState {
     state: String,
 }
 
+#[cfg(feature = "mobile-client")]
+#[derive(Default)]
+struct RegistrationCache {
+    device: Option<(String, String, String, String, Instant)>,
+    endpoint: Option<(String, String, Instant)>,
+}
+
+#[cfg(feature = "mobile-client")]
+const REGISTRATION_TTL: Duration = Duration::from_secs(5 * 60);
+
 pub struct CoreHandle {
     pub(crate) shared: Arc<SharedCore>,
     #[cfg(any(feature = "mobile-client", feature = "iroh-transport"))]
@@ -215,7 +237,13 @@ pub struct CoreHandle {
     login: Mutex<Option<LoginState>>,
     #[cfg(feature = "iroh-transport")]
     identity: Mutex<Option<String>>,
+    #[cfg(feature = "iroh-transport")]
+    endpoint_pool: Arc<tokio::sync::Mutex<crate::iroh_transport::IrohEndpointPool>>,
+    #[cfg(feature = "mobile-client")]
+    registrations: Arc<Mutex<RegistrationCache>>,
 }
 
+#[cfg(all(test, feature = "mobile-client", feature = "iroh-transport"))]
+mod reuse_tests;
 #[cfg(test)]
 mod tests;

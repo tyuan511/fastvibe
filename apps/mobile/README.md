@@ -1,77 +1,107 @@
-# Native FastVibe mobile clients
+# FastVibe mobile — Flutter + Rust
 
-`apps/mobile` contains the rebuilt phone client:
+Android and iOS share one Flutter interface. The grouped lists, flat surfaces, typography and blue accent come from the original Flutter flat design (`67a79709`, restored from the complete `142aa23e` implementation). Native Compose/SwiftUI screens and the JNI/SwiftPM application bridges have been removed.
 
-- `core/`: Rust core shared by both platforms. It owns App Protocol v1, iroh framing, transcript projection, interleaved text/thinking/tool parts, event reduction, and bounded history windows. `src/lib.rs` only declares modules and reexports the stable public surface; `protocol.rs` contains wire and transcript types, `frames.rs` handles logical fragments, `iroh_transport.rs` handles stream boundaries, `transcript.rs` owns projection, `mobile_client.rs` owns account requests, `runtime/` separates state, command dispatch, account commands, connection lifecycle, RPC correlation and event hydration, and `ffi.rs` contains the C ABI.
-- `android/`: Kotlin + Jetpack Compose application plus the `:native` AAR library. The native module builds the Rust core for Android ABIs, links a thin JNI shim, and exposes the same JSON state contract.
-- `ios/`: Swift Package and SwiftUI application. Its C bridge links the Rust XCFramework directly on iOS and exposes the same JSON state contract; host SwiftPM tests can run without that artifact.
+## Layout
 
-The native clients use the account authenticated iroh endpoint as their only remote transport. They do not expose the desktop LAN password/listener as a separate product mode. The iroh QUIC stream carries each App Protocol fragment with a four-byte big-endian length prefix, bounded at 65,537 bytes; both the desktop sidecar and mobile core must use this framing. The mobile sends its initial hello to make the bidirectional stream visible to the desktop, whose socket adapter buffers initial messages until peer authorization and protocol attachment finish.
+- `lib/`: Flutter pages, conversation UI, drafts, attachments and device/account presentation.
+- `lib/core/`: Dart FFI access to the Rust C ABI. A dedicated isolate owns the runtime so synchronous account commands cannot block Flutter's UI isolate.
+- `core/`: Rust account client, iroh transport, App Protocol v1, RPC correlation, transcript projection and bounded event/history state.
+- `packages/rust_core/`: local FFI plugin. Android packages `libfastvibe_mobile_core.so`; iOS links `FastVibeMobileCore.xcframework` and preserves its exported C ABI symbols.
+- `android/`, `ios/`: Flutter hosts, signing, OAuth callback, permissions and system integration. They contain no parallel native product UI.
 
-## iOS packaging
+The UI uses the current account-authenticated iroh connection, not the old Flutter WebRTC or LAN-password stack. The shared C ABI is declared in `core/include/fastvibe_mobile_core.h` and implemented by `core/src/ffi.rs`. JSON commands and polled events pass through the same runtime used by the protocol integration tests.
 
-The Rust ABI is declared manually in `core/include/fastvibe_mobile_core.h` and is
-consumed by the SwiftPM C target under `ios/Sources/FastVibeMobileCoreFFI`.
-Build the device and simulator static libraries and package them as an XCFramework:
+Relay leases carry all configured nodes in `relays`, with a separate credential and QUIC discovery port for each. Rust configures every entry in its `RelayMap` and supplies every relay URL as a peer address candidate. The top-level single-node fields remain for compatibility with older Control/client versions; an explicitly empty or invalid list is an error. `test/mobile-protocol.integration.test.ts` exercises both the legacy single-node response and a real two-node configuration whose first relay is unavailable.
 
-```sh
-pnpm mobile:ios:build
-pnpm mobile:ios:check
-xcodebuild -project apps/mobile/ios/FastVibeApp.xcodeproj -scheme FastVibe \
-  -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
-```
+The App Protocol hello includes `settings`: catalog initialization reads `conversations:list`, `engine:get-running`, `engine:get-pending-ui` and `settings:get`, and the connection health probe also reads settings. A transport connection or welcome alone does not prove these calls are authorized.
 
-The iOS build enables the real `iroh-transport,mobile-client` features by default. The vendored Apple compatibility sources keep iOS interface/address enumeration from `netdev`, while avoiding the BSD `AF_ROUTE` and unavailable `libc::in6_ifreq` paths used by older upstream releases. iroh can therefore gather host candidates and use STUN for a direct path, with relay fallback when NAT traversal cannot establish a direct path. Set `FASTVIBE_IOS_CARGO_FEATURES` only when producing a deliberately different feature variant.
+## Local discovery and connection reuse
 
-The iOS SwiftUI screens follow the approved prototype: login → computers → conversation list → transcript, with settings reached from computers. The shared visual system owns the three-color background, glass surfaces and light/dark tokens. Transcript history, streaming, queue and pending-operation states share one conversation view. Production screens consume the Rust state and account data; reference conversations live only in previews and tests.
+The desktop advertises its iroh QUIC endpoint through Bonjour `_fastvibe-iroh._udp`. TXT records contain `v=1`, `device_id`, `endpoint_id` and comma-separated socket `addrs`; they carry no credentials. The service port is the actual QUIC UDP port, not the HTTP listener's port. Advertisements follow endpoint address changes, account state, the computer name and remote-access lifecycle.
 
-Export 390 × 844 native layout reference images on macOS, in both appearances:
+Flutter uses native NSD/Bonjour (`nsd 5`) on Android and iOS. A **LAN / 局域网** label appears only when both advertised IDs match an official device already in the current account. Selecting it refreshes the account device's endpoint and rechecks the discovery record before forwarding up to eight fresh addresses. Records expire after 60 seconds and are cleared on account, foreground or network changes; lost services are removed immediately. iOS requires the Bonjour service declaration and local-network permission.
 
-```sh
-FASTVIBE_IOS_PREVIEW_DIR="$PWD/apps/mobile/ios/.native-build/previews" \
-  swift test --package-path apps/mobile/ios --filter PrototypeRenderTests
-```
+A matching LAN selection sets `preferDirect` instead of waiting for a relay-token request. Rust tries the known IP routes for 1.5 seconds; if they fail, it asynchronously obtains a fresh, complete relay lease and retries with all relay candidates. The total dial remains bounded by 15 seconds. An acquired fallback lease publishes its expiry before welcome so the normal credential rollover is armed. Direct-only dialing is explicit; it does not reinterpret an empty or malformed relay lease as valid. EndpointId verification and account authorization apply to both routes.
 
-These host renders show edge-to-edge page content without a simulated status bar or home indicator. They support comparison with the HTML prototype. iPhone safe areas, keyboard behavior, scrolling and final material appearance are reviewed on the device. Without the export variable, the render test is skipped.
+`Connection` retains one native runtime across client facades. Disconnect retires the old facade and clears its protocol events and projection while preserving the endpoint's sockets and path knowledge. Generation checks isolate late replies and commands; a cancelled relay-map update is reconciled before the next dial, including removal of partially applied nodes. Account or identity changes close the old endpoint. A terminal runtime failure is disposed before its owner creates a replacement. Network changes notify the retained endpoint and restart discovery.
 
-The backdrop has a separate full-image sRGB regression check against lossless browser PNG exports of the approved HTML; it runs without the export variable. The shared glass renderer applies the prototype's explicit blur, saturation, tint, sheen and shadow values without adding system Material. It currently samples only the known page backdrop: text and other views behind sheets are not part of the blur, and the offline sheet's separate presentation host still needs device review. Passing the backdrop check therefore does not establish whole-screen visual equivalence.
+Successful device and endpoint registrations are cached for five minutes only while their account token, install ID, name, platform and identity still match. Account changes and 401/403/404 responses invalidate the cache. Each new connection still reads the current account device list; relay leases are fetched when needed. Connection diagnostics record fixed phase names, elapsed time and outcomes without credentials.
+
+## Toolchains
+
+Use the Flutter SDK version specified by `pubspec.yaml`, Rust stable, Java 17, Android SDK 36 and NDK `28.2.13676358`. Android ships ARM64 (`arm64-v8a`). iOS requires Xcode, CocoaPods, and the Rust device/simulator targets.
 
 ```sh
-cargo test --manifest-path apps/mobile/core/Cargo.toml
-swift test --package-path apps/mobile/ios
-cd apps/mobile/android && ./gradlew assembleDebug
-cd apps/mobile/android && ./gradlew :native:buildAar
+cd apps/mobile
+flutter pub get
+flutter analyze
+flutter test
 ```
 
-The transcript model keeps message parts in source order, including thinking, tool calls, tool results, model changes, and compaction. UI lists must render lazily and consume the bounded visible window; older turns are fetched by cursor instead of loading the whole transcript into a single view.
+From the repository root:
 
+```sh
+pnpm mobile:analyze
+pnpm mobile:test
+pnpm mobile:core:test
+pnpm mobile:android
+pnpm mobile:ios
+```
 
-### Android native prerequisites
+## Account sign-in
 
-The Android build uses the checked-in Gradle wrapper (Gradle 8.10.2), Java 17, Android SDK 35, CMake 3.22.1, and Android NDK 28.2.13676358. Put `sdk.dir=/absolute/path/to/Android/sdk` in `android/local.properties`, or set `ANDROID_SDK_ROOT`/`ANDROID_HOME`; `local.properties` is ignored and must not be committed.
+Account authorization opens the phone’s full default browser through `url_launcher` in external-application mode. `app_links` receives `fastvibe://oauth/callback` on Android and iOS; Flutter routing does not consume that URL. The pending attempt checks its state and PKCE verifier, expires after five minutes, and can be cancelled from the account row. Closing or cancelling an old attempt cannot publish a late login.
 
-The shipping Android build targets **arm64-v8a / ARMv8 only**, matching the Flutter release APK. `./gradlew :native:buildRustAndroid` and `apps/mobile/android/tool/build.sh` copy the ARM64 Rust library into the APK/AAR JNI directory; pass `-PfastvibeAbis=...` only for an intentional development ABI override. `./gradlew :native:buildAar` produces `native/build/outputs/aar/native-release.aar`. Install `aarch64-linux-android` with `rustup target add aarch64-linux-android`.
+## Android
 
-### Android product and verification
+Set `ANDROID_SDK_ROOT` / `ANDROID_HOME`, or `sdk.dir` in `android/local.properties`. On macOS, the Rust build script also recognizes Homebrew's Android command-line tools. `ANDROID_NDK_HOME` can explicitly select the NDK.
 
-The approved visual baseline is in [`design/prototype-standalone.html`](design/prototype-standalone.html). The Android app uses the real account service and Rust/JNI runtime; production code contains no sample conversation catalog. Login uses browser PKCE, and saved credentials are bound to the configured issuer. The account migration reads the old Flutter secure-storage format without removing its data.
+```sh
+bash scripts/build-mobile-android-core.sh
+cd apps/mobile/android
+bash tool/build.sh
+```
 
-Conversation operations complete on the server's `rpcResult`, not when JNI queues the call. The core owns transcript projection, snapshot hydration, live event ordering and history paging. Android retains drafts on failed or uncertain sends and validates output downloads in chunks of at most 512 KiB, including stable size and modification time.
+The Rust script builds the production transport/account features and stages the library under `packages/rust_core/android/src/main/jniLibs/arm64-v8a`. The app ID remains `dev.fastvibe.mobile`.
 
-Run the Android code checks and create a development APK with:
+Signed releases require `FASTVIBE_ANDROID_STORE_FILE`, `FASTVIBE_ANDROID_STORE_PASSWORD`, `FASTVIBE_ANDROID_KEY_ALIAS` and `FASTVIBE_ANDROID_KEY_PASSWORD`. The release script refuses incomplete signing configuration; `tool/verify-release.sh` checks the APK certificate against the trusted keystore. Do not substitute a debug signature for an update to an installed production APK.
 
 ```sh
 cd apps/mobile/android
-./gradlew :app:testDebugUnitTest :native:testDebugUnitTest :app:assembleDebug
+bash tool/build.sh --release
 ```
 
-The APK is `app/build/outputs/apk/debug/app-debug.apk`. It uses the development signing certificate, so it cannot replace an installed production APK signed with the release key. Production builds use the existing `FASTVIBE_ANDROID_*` signing inputs through `tool/build.sh release`; release verification checks the APK certificate against that keystore. The application ID remains `dev.fastvibe.mobile`, and `version.properties` advances beyond Flutter build 510. Published update assets retain `FastVibe-app-vX.Y.Z-arm64-v8a.apk`.
+Flutter outputs APKs in `apps/mobile/build/app/outputs/flutter-apk/`. The release asset remains `FastVibe-app-vX.Y.Z-arm64-v8a.apk` plus its SHA256 file. `pubspec.yaml` and `android/version.properties` must agree on version/build number; the Rust crate version tracks the mobile release. This migration retains version `0.5.13+513`.
 
-The local desktop protocol harness and C ABI integration test are separate from UI acceptance:
+## iOS
 
 ```sh
-node --experimental-strip-types --test test/native-android-release.test.ts
-node --experimental-strip-types --test test/mobile-protocol.integration.test.ts
+bash scripts/build-mobile-ios.sh
+bash scripts/check-mobile-ios.sh
+cd apps/mobile
+flutter pub get
+flutter build ios --simulator --debug --no-codesign
+flutter build ios --release --no-codesign
 ```
 
-The protocol test starts a temporary relay, account test server and real desktop AppServer. It uses test credentials and does not read the installed app's account or conversation data. Interactive product acceptance is performed manually by the user.
+The Rust build produces device arm64 and universal simulator arm64/x86_64 slices. The XCFramework lives in `packages/rust_core/ios/Frameworks/`; it is generated, not committed. `FASTVIBE_IOS_FRAMEWORK` and `FASTVIBE_IOS_BUILD_DIR` can override output locations. The checker verifies architectures and the exported create/destroy/command/poll/free-string symbols.
+
+CocoaPods links the FFI plugin into the Flutter Runner. Dart loads iOS symbols from the current process; the plugin must retain them through release dead stripping. Open `ios/Runner.xcworkspace` when using Xcode.
+
+The existing distribution certificate, team, App Store Connect credentials and build-number series remain in the iOS workflow. TestFlight upload is still an explicit workflow input.
+
+## Tests and connection diagnosis
+
+```sh
+cargo test --locked --manifest-path apps/mobile/core/Cargo.toml
+node --test test/mobile-release.test.ts
+cargo build --locked --manifest-path rust/Cargo.toml --bin fastvibe-iroh
+FASTVIBE_IROH_BIN="$PWD/rust/target/debug/fastvibe-iroh" node --test test/mobile-protocol.integration.test.ts
+```
+
+The protocol test uses a temporary local account API, relay and real desktop AppServer. It exercises direct-preferred LAN dialing without a relay-token request, stale-address relay fallback with expiry propagation, registration reuse, welcome, the four catalog initialization calls, a settings health probe, RPC results, independent conversation navigation, snapshots, subscriptions, prompts, pending questions, history, queue and stop over the C ABI. It does not touch installed accounts or conversations. The harness checks that its desktop sidecar supports the current multi-relay commands before testing the network; an older staged binary must be rebuilt rather than treated as a transport failure.
+
+A page rendering successfully is not proof of remote connectivity. Verify account registration, lease issuance, relay TLS/authorization, iroh connection, protocol welcome and catalog initialization separately. UI migration does not bypass a failed relay path.
+
+Bonjour discovery requires mDNS traffic to reach the phone. A Wi-Fi network that filters multicast may still permit QUIC unicast connections but show no LAN label. Treat a widget fixture or an injected DNS-SD record as a separate validation from automatic discovery across the actual network; neither establishes that multicast delivery works.

@@ -8,7 +8,120 @@ use iroh::{
     Endpoint, EndpointAddr, RelayConfig, RelayMap, RelayMode, SecretKey, endpoint::presets,
 };
 use iroh_relay::RelayQuicConfig;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+
+/// Route hints never grant identity: QUIC still pins the remote EndpointId.
+/// A bounded list also prevents a discovery record from growing a dial unboundedly.
+pub fn parse_direct_addresses(
+    value: Option<&serde_json::Value>,
+) -> Result<Vec<SocketAddr>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let values = value.as_array().ok_or("directAddresses must be an array")?;
+    if values.len() > 8 {
+        return Err("at most 8 direct addresses are allowed".into());
+    }
+    let mut result = Vec::new();
+    for value in values {
+        let address = value
+            .as_str()
+            .ok_or("direct address must be a socket address")?
+            .parse::<SocketAddr>()
+            .map_err(|_| "invalid direct socket address")?;
+        let ip = address.ip();
+        if address.port() == 0
+            || ip.is_unspecified()
+            || ip.is_multicast()
+            || matches!(ip, std::net::IpAddr::V4(ip) if ip.is_broadcast())
+        {
+            return Err("direct address must be unicast with a nonzero port".into());
+        }
+        if !result.contains(&address) {
+            result.push(address);
+        }
+    }
+    Ok(result)
+}
+
+/// The phone's long-lived CoreHandle owns this pool, not an individual RPC session.
+/// All relays remain candidates when local hints are supplied.
+#[derive(Default)]
+pub struct IrohEndpointPool {
+    current: Option<(Endpoint, Vec<MobileRelayNode>)>,
+    updating: bool,
+}
+
+impl IrohEndpointPool {
+    pub async fn endpoint(
+        &mut self,
+        key: SecretKey,
+        relays: &[MobileRelayNode],
+    ) -> Result<Endpoint, Box<dyn std::error::Error + Send + Sync>> {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|(endpoint, _)| endpoint.id() != key.public() || endpoint.is_closed())
+        {
+            self.clear().await;
+        }
+        if let Some((endpoint, previous)) = self.current.as_mut() {
+            // Map mutation happens before iroh's notification await. Track each
+            // prospective key first; a cancelled update must be fully reconciled
+            // by the next caller, including removal of partially applied nodes.
+            let resync = self.updating;
+            self.updating = true;
+            for node in relays {
+                if resync || !previous.contains(node) {
+                    let url = node.url.parse::<iroh::RelayUrl>()?;
+                    let config =
+                        RelayConfig::new(url.clone(), node.quic_port.map(RelayQuicConfig::new))
+                            .with_auth_token(node.token.clone());
+                    previous.retain(|old| old.url != node.url);
+                    previous.push(node.clone());
+                    endpoint.insert_relay(url, Arc::new(config)).await;
+                }
+            }
+            for node in previous.iter() {
+                if !relays.iter().any(|current| current.url == node.url) {
+                    endpoint
+                        .remove_relay(&node.url.parse::<iroh::RelayUrl>()?)
+                        .await;
+                }
+            }
+            *previous = relays.to_vec();
+            self.updating = false;
+            return Ok(endpoint.clone());
+        }
+        let map = if relays.is_empty() {
+            RelayMap::empty()
+        } else {
+            relay_routes(key.public(), relays)?.0
+        };
+        let endpoint = Endpoint::builder(presets::Minimal)
+            .secret_key(key)
+            .alpns(vec![ALPN.to_vec()])
+            .relay_mode(RelayMode::Custom(map))
+            .bind()
+            .await?;
+        self.current = Some((endpoint.clone(), relays.to_vec()));
+        self.updating = false;
+        Ok(endpoint)
+    }
+
+    pub fn current(&self) -> Option<Endpoint> {
+        self.current.as_ref().map(|(endpoint, _)| endpoint.clone())
+    }
+
+    pub async fn clear(&mut self) {
+        self.updating = false;
+        if let Some((endpoint, _)) = self.current.take() {
+            endpoint.close().await;
+        }
+    }
+}
 
 pub const IROH_MAX_FRAGMENT_BYTES: usize = 65_537;
 
@@ -158,13 +271,33 @@ impl IrohClient {
         remote: iroh::EndpointId,
         relays: &[MobileRelayNode],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let (map, addr) = relay_routes(remote, relays)?;
+        let (map, _) = relay_routes(remote, relays)?;
         let endpoint = Endpoint::builder(presets::Minimal)
             .secret_key(key)
             .alpns(vec![ALPN.to_vec()])
             .relay_mode(RelayMode::Custom(map))
             .bind()
             .await?;
+        Self::connect_on(endpoint, remote, relays, &[]).await
+    }
+
+    pub async fn connect_on(
+        endpoint: Endpoint,
+        remote: iroh::EndpointId,
+        relays: &[MobileRelayNode],
+        direct_addresses: &[SocketAddr],
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let mut addr = if relays.is_empty() {
+            if direct_addresses.is_empty() {
+                return Err("a direct-only dial requires an address".into());
+            }
+            EndpointAddr::new(remote)
+        } else {
+            relay_routes(remote, relays)?.1
+        };
+        for address in direct_addresses {
+            addr = addr.with_ip_addr(*address);
+        }
         let connection = endpoint.connect(addr, ALPN).await?;
         let (mut send, recv) = connection.open_bi().await?;
         let hello = serde_json::to_vec(&hello("0.1.0"))?;

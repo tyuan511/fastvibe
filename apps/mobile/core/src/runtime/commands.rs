@@ -15,6 +15,12 @@ impl CoreHandle {
             login: Mutex::new(None),
             #[cfg(feature = "iroh-transport")]
             identity: Mutex::new(None),
+            #[cfg(feature = "iroh-transport")]
+            endpoint_pool: Arc::new(tokio::sync::Mutex::new(
+                crate::iroh_transport::IrohEndpointPool::default(),
+            )),
+            #[cfg(feature = "mobile-client")]
+            registrations: Arc::new(Mutex::new(RegistrationCache::default())),
         }
     }
 
@@ -79,6 +85,8 @@ impl CoreHandle {
             "relay" | "relayToken" | "relay_token" => self.command_relay(&value),
             "connect" => self.command_connect(&value),
             "disconnect" => self.command_disconnect(),
+            "clearAccount" => self.command_clear_account(),
+            "networkChanged" => self.command_network_changed(),
             "subscribe" => self.command_subscribe(&value),
             "unsubscribe" => self.command_send_message(&serde_json::json!({
                 "message": {

@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } fro
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ScrollArea as ScrollAreaPrimitive } from "@base-ui/react/scroll-area";
-import { Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, Clock01Icon, MessageSquarePlusIcon, PanelLeftCloseIcon, PencilEdit02Icon, PuzzleIcon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, ArrowLeft01Icon, ArrowRight01Icon, Clock01Icon, MessageSquarePlusIcon, PanelLeftCloseIcon, PencilEdit02Icon, Search01Icon, Settings01Icon } from "@hugeicons/core-free-icons";
 import {
   DndContext,
   DragOverlay,
@@ -98,8 +98,6 @@ export const Sidebar = memo(function Sidebar({
   onManageFolders,
   onReorderProjects,
   onOpenSettings,
-  onOpenMarket,
-  pluginsActive,
   onOpenTasks,
   tasksActive,
   onOpenVivi,
@@ -129,10 +127,7 @@ export const Sidebar = memo(function Sidebar({
   /** Persists a drag-reordered project list; the catalog owns the order. */
   onReorderProjects: (cwds: string[]) => void;
   onOpenSettings: () => void;
-  onOpenMarket: () => void;
-  /** The 插件 page is on screen. */
-  pluginsActive: boolean;
-  /** The 定时任务 page, directly under 插件. */
+  /** Opens the 定时任务 page. */
   onOpenTasks: () => void;
   /** That page is the one on screen. */
   tasksActive: boolean;
@@ -614,21 +609,6 @@ export const Sidebar = memo(function Sidebar({
                 {botActivity?.waiting ? <span className="text-xs text-warning">{t("sidebar.waitingAction")}</span> : null}
               </span>
             </Button>
-            <button
-              type="button"
-              aria-current={pluginsActive ? "page" : undefined}
-              className={cn(
-                "flex h-8 pointer-coarse:h-10 w-full items-center gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent/50",
-                pluginsActive && "bg-sidebar-accent font-medium",
-              )}
-              onClick={() => {
-                onOpenMarket();
-                dismissDrawer();
-              }}
-            >
-              <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} className="size-3.5 text-muted-foreground" />
-              {t("sidebar.plugins")}
-            </button>
             <button
               type="button"
               aria-current={tasksActive ? "page" : undefined}

@@ -107,6 +107,7 @@ import { agentIdentityForId } from "@shared/agent-identity";
 import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
 import { agentThreadFinished } from "@shared/agent-thread";
 import { installNativeCompactionGuard } from "../engine/native-compaction";
+import { BackgroundCompactions } from "../engine/background-compaction";
 import { runtimeContextExtension } from "../engine/runtime-context";
 import { agentTeamContextExtension } from "../engine/agent-team-context";
 import { lastRequestUsage, turnTokens } from "../engine/turn-usage";
@@ -458,8 +459,7 @@ export class PiProcessManager {
   /** Last time each resident session was opened or asked for, for the idle sweep. */
   #sessionTouched = new Map<string, number>();
   #sessionSweep: NodeJS.Timeout | null = null;
-  #backgroundCompactions = new Map<string, Promise<boolean>>();
-  #backgroundCompactionEpoch = 0;
+  #backgroundCompactions?: BackgroundCompactions;
   #activeId: string | null = null;
   /** Monotonic generation for foreground conversation activation. A slow open must not win over a newer one. */
   #activationTicket = new ActivationTicket();
@@ -874,7 +874,7 @@ export class PiProcessManager {
         timeoutMs: botRole(conversation) === "router" ? 120_000 : 3_600_000,
         abort: () => this.abort(id),
         prepare: async () => {
-          await this.#waitForBackgroundCompaction(id);
+          this.#backgroundCompactions?.apply(id);
           await this.#awaitMcp();
           this.#beginTurn(id);
           await this.#flushModelRebind(id);
@@ -1171,6 +1171,22 @@ export class PiProcessManager {
       // and asks the models it can not to think, because the same requests are sized for an answer,
       // not for a thought (`thinking-off.ts`).
       installThinkingOffGuard(this.#runtime, this.#noThinkingOffModels, this.#thinkingOffRefused);
+      this.#backgroundCompactions = new BackgroundCompactions({
+        runtime: this.#runtime,
+        agentDir: this.#paths.agentDir,
+        isCurrent: (id, session) => !this.#queueShutdown && !this.#queueRebuilds.has(id)
+          && !!this.#catalog.get(id) && this.#sessions.get(id)?.session === session
+          && readAppSettings(this.#paths).backgroundCompaction === true,
+        onApplied: (conversationId, result) => {
+          // The checkpoint is already durable. Reuse the transcript's ordinary completion
+          // divider without publishing a running state or a background notification.
+          const event = { type: "compaction_end", conversationId, result, aborted: false, willRetry: false };
+          const conversation = this.#catalog.get(conversationId);
+          if (!conversation) return;
+          this.#deliverStreamPayload(conversation, event);
+        },
+        onError: (id, error) => console.warn(`[compaction] background summary failed (${id})`, error),
+      });
       await this.#models.refresh({ allowNetwork: false });
       if (this.#paths.engineMode === "global") this.#modelsCache = globalPiModels(this.#models);
       await this.#mcp.load();
@@ -1206,8 +1222,8 @@ export class PiProcessManager {
     this.#queueShutdown = true;
     this.#scheduledTasks.stop();
     this.#stopSessionSweep();
-    this.#backgroundCompactionEpoch++;
-    this.#backgroundCompactions.clear();
+    this.#backgroundCompactions?.clear();
+    this.#backgroundCompactions = undefined;
     await this.#queue(async () => {
       const sessions = [...this.#sessions.values()];
       this.#sessions.clear();
@@ -1300,7 +1316,7 @@ export class PiProcessManager {
     },
   ): Promise<void> {
     const { id, session } = await this.#sessionFor(options?.conversationId);
-    if (id) await this.#waitForBackgroundCompaction(id);
+    if (id) this.#backgroundCompactions?.apply(id);
     const held = this.#holdCommand(id, message);
     try {
       if (await this.#compactIfCommand(session, message)) return;
@@ -1360,7 +1376,7 @@ export class PiProcessManager {
     await this.#ensureReady();
     const managed = await this.#ensureSession(conversation);
     if (signal?.aborted) throw new Error("任务已停止");
-    if (id) await this.#waitForBackgroundCompaction(id);
+    this.#backgroundCompactions?.apply(id);
     if (await this.#compactIfCommand(managed.session, message)) return;
     // Same rule as prompt(): only a pause over an empty queue is cleared here.
     if (this.#messageQueue.releaseEmptyPause(id)) this.#emitQueue(id);
@@ -1644,6 +1660,7 @@ export class PiProcessManager {
    */
   async abort(conversationId?: string): Promise<void> {
     const queueOwner = conversationId ?? this.#activeId ?? undefined;
+    if (queueOwner) this.#backgroundCompactions?.cancel(queueOwner);
     if (queueOwner) this.#promptPreparations.cancel(queueOwner);
     if (queueOwner) {
       // Invalidate drains before waiting for session creation or the queue lock. A
@@ -1767,7 +1784,7 @@ export class PiProcessManager {
     const owner = conversationId ?? this.#activeId ?? undefined;
     this.#resolvePendingUi(owner);
     const { session } = await this.#sessionFor(conversationId);
-    if (owner) await this.#waitForBackgroundCompaction(owner);
+    if (owner) this.#backgroundCompactions?.apply(owner);
     // 0.87.0 made the session projection the provider context. Splicing
     // `agent.state.messages` is overwritten by the next request, so a failed attempt
     // has to be omitted with a context edit or the resume stacks on top of it. The
@@ -2481,6 +2498,7 @@ export class PiProcessManager {
     return this.#catalog.snapshot();
   }
   async deleteConversation(id: string): Promise<ConversationDeleteResult> {
+    this.#backgroundCompactions?.cancel(id);
     this.#goalDescendantUsage.delete(id);
     this.#queueRebuilds.add(id);
     this.#bumpQueueEpoch(id);
@@ -3399,44 +3417,17 @@ export class PiProcessManager {
   getPendingUi(): Array<Record<string, unknown>> {
     return [...this.#pendingUi.values()].map((pending) => pending.request);
   }
-  /** Wait for a scheduled background checkpoint before accepting the next user turn. */
-  #waitForBackgroundCompaction(conversationId: string): Promise<boolean> {
-    return this.#backgroundCompactions.get(conversationId) ?? Promise.resolve(false);
-  }
-  /**
-   * Prepare a compacted projection after an idle turn. The raw transcript stays intact;
-   * `session.compact()` only adds the SDK checkpoint that the next request projects.
-   */
+  /** Generate on an isolated snapshot; only a finished checkpoint is applied at idle. */
   #scheduleBackgroundCompaction(conversationId: string, session: AgentSession): void {
-    if (readAppSettings(this.#paths).backgroundCompaction !== true) return;
-    if (!session.isIdle || this.#backgroundCompactions.has(conversationId)) return;
+    if (this.#queueShutdown || this.#queueRebuilds.has(conversationId) || readAppSettings(this.#paths).backgroundCompaction !== true) return;
+    if (!session.isIdle) return;
+    // A result finished during the run can now be published without replacing a live
+    // request's context. Appending at today's leaf preserves all messages since the snapshot.
+    if (this.#backgroundCompactions?.apply(conversationId)) return;
+    if (this.#backgroundCompactions?.has(conversationId)) return;
     const usage = session.getContextUsage();
     if (!usage || usage.tokens === null || usage.contextWindow <= 0 || (usage.percent ?? 0) < BACKGROUND_COMPACTION_PERCENT) return;
-    const epoch = this.#backgroundCompactionEpoch;
-    const task = (async () => {
-      this.#emit({ type: "background_compaction", conversationId, status: "start" });
-      try {
-        await session.compact();
-        if (epoch !== this.#backgroundCompactionEpoch) return false;
-        const after = session.getContextUsage();
-        this.#emit({ type: "background_compaction", conversationId, status: "done", tokensBefore: usage.tokens, tokensAfter: after?.tokens ?? undefined });
-        return true;
-      } catch (error) {
-        if (epoch === this.#backgroundCompactionEpoch) {
-          this.#emit({
-            type: "background_compaction",
-            conversationId,
-            status: "failed",
-            errorMessage: error instanceof Error ? error.message : String(error),
-          });
-        }
-        return false;
-      }
-    })();
-    this.#backgroundCompactions.set(conversationId, task);
-    void task.finally(() => {
-      if (this.#backgroundCompactions.get(conversationId) === task) this.#backgroundCompactions.delete(conversationId);
-    });
+    this.#backgroundCompactions?.schedule(conversationId, session);
   }
   /** Whether a conversation is still working: a run in flight, or a compaction. */
   #busy(id: string): boolean { return this.#running.get(id) === true || this.#compacting.has(id); }
@@ -3499,6 +3490,7 @@ export class PiProcessManager {
    * project removed.
    */
   #clearBusy(id: string): void {
+    this.#backgroundCompactions?.cancel(id);
     const wasBusy = this.#busyBroadcast.get(id) === true;
     this.#openingPrompts.delete(id);
     this.#running.delete(id);
@@ -4339,9 +4331,7 @@ export class PiProcessManager {
       resourceLoader,
       ...(sessionStartEvent ? { sessionStartEvent } : {}),
     });
-    installNativeCompactionGuard(result.session, {
-      waitForBackgroundCompaction: () => this.#waitForBackgroundCompaction(conversation.id),
-    });
+    installNativeCompactionGuard(result.session);
     this.#armModelNotice(conversation.id, result.session);
     lap("session");
     this.#promptPreparations.install(conversation.id, result.session);
@@ -4509,6 +4499,7 @@ export class PiProcessManager {
       let compactionTouched = false;
       let compactionEnded = false;
       if (eventType === "compaction_start" || eventType === "auto_compaction_start") {
+        this.#backgroundCompactions?.cancel(conversation.id);
         this.#compacting.set(conversation.id, compactReasonOf(event as { reason?: unknown }));
         compactionTouched = true;
       } else if (eventType === "compaction_end" || eventType === "auto_compaction_end") {
@@ -4574,7 +4565,15 @@ export class PiProcessManager {
           this.#pendingCwdRebind.delete(conversation.id);
           void this.#rebindSessionCwd(conversation.id).catch(() => undefined);
         }
-        this.#scheduleBackgroundCompaction(conversation.id, result.session);
+        if (verdictAnnouncesActivity(settledVerdict) && settledVerdict !== "error") {
+          // Publish after this settle event, so the successful divider cannot land
+          // inside the still-streaming reply or race the queue's next run.
+          queueMicrotask(() => {
+            if (this.#sessions.get(conversation.id)?.session === result.session) this.#scheduleBackgroundCompaction(conversation.id, result.session);
+          });
+        } else {
+          this.#backgroundCompactions?.cancel(conversation.id);
+        }
       }
       // A user turn has no id of its own; the session entry that stores it does.
       // The renderer's optimistic copy needs that id to branch (retry / edit) back
@@ -4917,7 +4916,7 @@ export class PiProcessManager {
     const held = this.#holdCommand(conversationId, message);
     try {
       if (signal?.aborted) throw new Error("任务已停止");
-      if (conversationId) await this.#waitForBackgroundCompaction(conversationId);
+      if (conversationId) this.#backgroundCompactions?.apply(conversationId);
       if (await this.#compactIfCommand(session, message)) return;
       // Queued rows, scheduled tasks and delegated work have no one waiting at a keyboard, and
       // a run that silently lacks its MCP tools is worse than one that starts a moment later.
@@ -5944,6 +5943,7 @@ export class PiProcessManager {
   async #releaseSession(id: string): Promise<void> {
     const managed = this.#sessions.get(id);
     if (!managed) return;
+    this.#backgroundCompactions?.cancel(id);
     this.#sessions.delete(id);
     this.#sdkQueueAdapters.delete(id);
     this.#sessionTouched.delete(id);

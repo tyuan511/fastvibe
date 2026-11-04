@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { configureFastVibeUserData } from "../src/main/engine/paths.ts";
 import { IrohRemoteConnection } from "../src/main/rtc/iroh-remote.ts";
+import { IrohSidecar, irohSidecarBinary } from "../src/main/rtc/iroh-sidecar.ts";
 import { RemoteServer } from "../src/main/server/server.ts";
 import { AppServer } from "../src/main/app-server/app-server.ts";
 import { DESKTOP_CAPABILITIES } from "../src/main/app-server/capabilities.ts";
@@ -203,9 +204,11 @@ function makeDispatch(getAppServer, state) {
 
 function makeAccountApi({ relayUrl }) {
   const devices = new Map([[TEST_DEVICE_ID, { id: TEST_DEVICE_ID, name: "FastVibe test desktop", platform: "darwin", online: true, iroh_endpoint_id: null }]]);
+  const calls = [];
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      calls.push(`${request.method} ${url.pathname}`);
       const auth = request.headers.authorization;
       if (auth !== `Bearer ${TEST_TOKEN}`) return json(response, 401, { error: "unauthorized" });
       if (url.pathname === "/api/devices" && request.method === "GET") return json(response, 200, { devices: [...devices.values()] });
@@ -234,7 +237,7 @@ function makeAccountApi({ relayUrl }) {
       json(response, 500, { error: error instanceof Error ? error.message : String(error) });
     }
   });
-  return { server, devices };
+  return { server, devices, calls };
 }
 
 async function readJson(request) {
@@ -274,7 +277,42 @@ async function startRelay({ emulatorReachable = false } = {}) {
   return { child, dir, relayUrl };
 }
 
+const checkedSidecars = new Map();
+
+async function checkHarnessSidecar() {
+  const binary = irohSidecarBinary();
+  if (!checkedSidecars.has(binary)) {
+    checkedSidecars.set(binary, (async () => {
+      const temp = await mkdtemp(join(tmpdir(), "fastvibe-mobile-sidecar-check-"));
+      try {
+        // Old staged binaries silently ignore relays and bind only the legacy
+        // primary. Probe the command parser before starting any network fixtures.
+        const commands = [
+          { type: "identity", statePath: join(temp, "identity.key") },
+          { type: "start", relayId: TEST_RELAY_ID, relayUrl: "http://127.0.0.1:9", relayToken: TEST_TOKEN, expiresAt: TEST_EXPIRES_AT, relays: [] },
+          { type: "stop" },
+        ];
+        const result = spawnSync(binary, ["--stdio"], {
+          input: commands.map((command) => JSON.stringify(command)).join("\n") + "\n",
+          encoding: "utf8",
+          timeout: 5_000,
+        });
+        if (result.error) throw new Error(`Cannot check harness iroh sidecar ${binary}: ${result.error.message}`);
+        const events = result.stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+        if (result.status !== 0 || !events.some((event) => event.type === "error" && event.message === "relays must be a non-empty array")) {
+          throw new Error(`Harness iroh sidecar does not support the current multi-relay commands: ${binary}. Build current sources with cargo build --manifest-path rust/Cargo.toml --bin fastvibe-iroh --target-dir /tmp/fastvibe-mobile-protocol-iroh, then set FASTVIBE_IROH_BIN to that target's debug/fastvibe-iroh. Probe events: ${JSON.stringify(events)}`);
+        }
+      } finally {
+        await rm(temp, { recursive: true, force: true });
+      }
+    })());
+  }
+  await checkedSidecars.get(binary);
+  return binary;
+}
+
 export async function startHarness({ emulatorReachable = false, deadFirstRelay = false } = {}) {
+  const sidecarBinary = await checkHarnessSidecar();
   const temp = await mkdtemp(join(tmpdir(), "fastvibe-mobile-harness-"));
   configureFastVibeUserData(temp);
   const relay = await startRelay({ emulatorReachable });
@@ -332,7 +370,13 @@ export async function startHarness({ emulatorReachable = false, deadFirstRelay =
     async issueIrohRelay() { return relayConfig; },
     async reportIrohUsage() { return TEST_RELAY_USAGE; },
   };
+  const sidecar = new IrohSidecar();
+  let directAddresses = [];
+  sidecar.on("event", (event) => {
+    if ((event.type === "started" || event.type === "addresses") && Array.isArray(event.directAddresses)) directAddresses = event.directAddresses;
+  });
   const desktop = new IrohRemoteConnection({
+    sidecar,
     account,
     deviceId: TEST_DEVICE_ID,
     attach: (socket, peer) => {
@@ -357,7 +401,7 @@ export async function startHarness({ emulatorReachable = false, deadFirstRelay =
     await rm(relay.dir, { recursive: true, force: true });
     await rm(temp, { recursive: true, force: true });
   };
-  return { temp, relayUrl: advertisedRelayUrl, relayConfig, accountOrigin, remoteId, token: TEST_TOKEN, state, desktop, remoteServer, appServer: serverWithDispatch, cleanup };
+  return { temp, sidecarBinary, relayUrl: advertisedRelayUrl, relayConfig, accountOrigin, remoteId, token: TEST_TOKEN, state, desktop, remoteServer, appServer: serverWithDispatch, cleanup, accountCalls: accountApi.calls, get directAddresses() { return [...directAddresses]; } };
 }
 
 export function printConnectionInfo(harness) {

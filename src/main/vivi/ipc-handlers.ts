@@ -30,8 +30,9 @@ export function registerViviIpc(options: ViviIpcOptions): void {
     pet.rendererState(ctx.window, payload?.ready === true, typeof payload?.error === "string" ? payload.error : undefined);
   });
   handle(Ipc.viviMotionSettled, (payload: { at?: number }, ctx) => pet.motionSettled(ctx.window, payload?.at ?? NaN));
-  handle(Ipc.viviSetBubble, (payload: { height?: number; composerHeight?: number; width?: number }, ctx) => pet.setBubble(ctx.window, payload?.height ?? 0, payload?.composerHeight ?? 0, payload?.width));
+  handle(Ipc.viviSetBubble, (payload: { height?: number; composerHeight?: number; width?: number; kind?: string }, ctx) => pet.setBubble(ctx.window, payload?.height ?? 0, payload?.composerHeight ?? 0, payload?.width, payload?.kind === "feedback" ? "feedback" : "notification"));
   handle(Ipc.viviHitTest, (payload: { interactive?: boolean }, ctx) => pet.hitTest(ctx.window, payload?.interactive === true));
+  handle(Ipc.viviClick, (_payload, ctx) => pet.click(ctx.window));
   const setEnabled = (enabled: boolean): Promise<void> => options.queueSettingsWrite(async () => { pet.setSettings({ enabled }); });
   handle(Ipc.viviShow, () => setEnabled(true));
   handle(Ipc.viviHide, () => setEnabled(false));

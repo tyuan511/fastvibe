@@ -2,12 +2,14 @@ use super::*;
 use crate::transcript::trim_values;
 
 #[cfg(feature = "iroh-transport")]
-pub(super) async fn handle_server_message(
+pub(super) fn handle_server_message(
     shared: &Arc<SharedCore>,
     generation: u64,
     message: AppServerMessage,
-    writer: &mut crate::iroh_transport::IrohWriter,
 ) {
+    // Commit a frame and its generation check together with disconnect/connect.
+    // This function has no suspension points while holding the protocol gate.
+    let _protocol = lock(&shared.protocol);
     if lock(&shared.connection).generation != generation {
         return;
     }
@@ -111,7 +113,6 @@ pub(super) async fn handle_server_message(
         }
         AppServerMessage::Pong => shared.push_event(serde_json::json!({"kind":"pong"})),
     }
-    let _ = writer;
 }
 
 #[cfg(feature = "iroh-transport")]
@@ -130,7 +131,11 @@ pub(super) fn apply_rpc_result(
         match (&kind, result.as_ref()) {
             (RpcKind::Snapshot { conversation_id }, Some(value)) => {
                 match serde_json::from_value::<ConversationSnapshot>(value.clone()) {
-                    Ok(snapshot) if snapshot.conversation_id.as_deref() == Some(conversation_id) => None,
+                    Ok(snapshot)
+                        if snapshot.conversation_id.as_deref() == Some(conversation_id) =>
+                    {
+                        None
+                    }
                     Ok(_) => Some("snapshot conversation does not match the request".to_owned()),
                     Err(error) => Some(format!("invalid conversation snapshot: {error}")),
                 }
@@ -286,8 +291,9 @@ pub(super) fn hydrate_open_or_create(shared: &Arc<SharedCore>, value: &serde_jso
     }
     if let Some(messages) = value.get("messages") {
         if let Ok(messages) = serde_json::from_value::<Vec<ChatMessage>>(messages.clone()) {
-            let snapshot =
-                lock(&shared.store).snapshot(lock(&shared.connection).conversation_id.clone());
+            // Match state()/snapshot(): never hold the store while taking connection.
+            let conversation_id = lock(&shared.connection).conversation_id.clone();
+            let snapshot = lock(&shared.store).snapshot(conversation_id);
             lock(&shared.store).replace_snapshot(ConversationSnapshot {
                 conversation_id: snapshot.conversation_id,
                 messages,

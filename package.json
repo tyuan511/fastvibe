@@ -41,8 +41,11 @@
     "typecheck": "node scripts/check-pnpm-variants.mjs && node scripts/check-injected-scripts.mjs && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "shadcn": "shadcn",
     "mobile:core:test": "cargo test --manifest-path apps/mobile/core/Cargo.toml",
-    "mobile:android": "cd apps/mobile/android && ./gradlew assembleDebug",
-    "mobile:ios": "swift test --package-path apps/mobile/ios",
+    "mobile:android": "cd apps/mobile/android && bash tool/build.sh",
+    "mobile:analyze": "cd apps/mobile && flutter analyze",
+    "mobile:test": "cd apps/mobile && flutter test",
+    "mobile:android:core": "bash scripts/build-mobile-android-core.sh",
+    "mobile:ios": "pnpm mobile:ios:build && cd apps/mobile && flutter build ios --simulator --no-codesign",
     "mobile:ios:build": "bash scripts/build-mobile-ios.sh",
     "mobile:ios:check": "bash scripts/check-mobile-ios.sh",
     "fetch:cua-driver": "node scripts/fetch-cua-driver.mjs"

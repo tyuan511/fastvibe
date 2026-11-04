@@ -1,0 +1,162 @@
+import 'package:flutter/material.dart';
+import 'package:hugeicons/hugeicons.dart';
+
+import '../i18n/core.dart';
+import '../theme/theme.dart';
+import '../ui/icons.dart';
+import 'markdown_chunks.dart';
+import 'tool_details.dart';
+
+/// A thinking block, drawn as one row of a process card.
+///
+/// Same measurements as a tool call's row on purpose: thinking and tool calls are the
+/// same kind of thing to a reader — work that happened between two pieces of prose — and
+/// giving them two shapes would make one card look like two.
+///
+/// The phone does not show a duration. The desktop measures each block and prints
+/// 「持续了 N 秒」; the phone's transcript carries no bounds for them, so a number here
+/// would be invented rather than measured.
+class ThinkingRow extends StatefulWidget {
+  const ThinkingRow({
+    super.key,
+    required this.text,
+    required this.palette,
+    this.live = false,
+  });
+
+  final String text;
+  final Palette palette;
+
+  /// This row is the reply's tail and the run is still in flight.
+  final bool live;
+
+  @override
+  State<ThinkingRow> createState() => _ThinkingRowState();
+}
+
+class _ThinkingRowState extends State<ThinkingRow> {
+  bool _open = false;
+
+  /// Enough of a one-line preview to fill a row, and no more.
+  static const int _previewChars = 240;
+
+  /// A block longer than this is laid out a screenful at a time when it is expanded.
+  static const int _inlineChars = 4000;
+
+  /// How much of one is on screen at once — it scrolls inside the card.
+  static const double _longBodyHeight = 320;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = widget.palette;
+    final live = widget.live;
+    // Collapsing the whitespace of the whole block was itself an O(n) pass on every
+    // frame a reply streamed; the row shows one line of it, so only the head is read.
+    final opening = widget.text.length > _previewChars
+        ? widget.text.substring(0, _previewChars)
+        : widget.text;
+    final preview = opening.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        InkWell(
+          onTap: () => setState(() => _open = !_open),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: <Widget>[
+                  HugeIcon(
+                    icon: AppIcons.aiBrain,
+                    size: 16,
+                    color: live ? palette.accent : palette.muted,
+                    strokeWidth: 1.8,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: ToolActivityLabel(
+                      active: live,
+                      child: Text(
+                        live
+                            ? t('chat.thinking', context: context)
+                            : t('chat.thoughts', context: context),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: live ? palette.accent : palette.muted,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (!_open) ...<Widget>[
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        preview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: palette.text, fontSize: 13),
+                      ),
+                    ),
+                  ] else
+                    const Spacer(),
+                  const SizedBox(width: 4),
+                  RotatedBox(
+                    quarterTurns: _open ? 1 : 0,
+                    child: HugeIcon(
+                      icon: AppIcons.arrowRight,
+                      size: 14,
+                      color: palette.subtle,
+                      strokeWidth: 2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (_open)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: palette.field,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: _body(palette),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// The whole block, laid out one screenful at a time when it is long.
+  ///
+  /// A `SelectableText` holding 376 KB is one paragraph the engine has to break into
+  /// lines in a single pass — the same unbounded layout a looping model puts in the reply
+  /// itself. Cutting it into rows lets the list build only what is on screen; the reader
+  /// still has all of it, scrolled inside the card.
+  Widget _body(Palette palette) {
+    final style = TextStyle(
+      color: palette.muted,
+      fontSize: 14,
+      height: 21 / 14,
+    );
+    final text = widget.text.trim();
+    if (text.length <= _inlineChars) return SelectableText(text, style: style);
+    final chunks = chunkPlainText(text);
+    return SizedBox(
+      height: _longBodyHeight,
+      child: ListView.builder(
+        primary: false,
+        padding: EdgeInsets.zero,
+        itemCount: chunks.length,
+        itemBuilder: (context, index) =>
+            SelectableText(chunks[index], style: style),
+      ),
+    );
+  }
+}

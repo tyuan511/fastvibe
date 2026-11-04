@@ -84,8 +84,8 @@
     "hidden": "已隐藏",
     "appearance": "外观",
     "behavior": "行为",
-    "messages": "显示消息",
-    "messagesDesc": "在宠物旁显示任务通知和互动消息。",
+    "messages": "显示任务通知",
+    "messagesDesc": "在宠物旁显示任务通知，不影响点击互动。",
     "palette": "配色",
     "paletteDesc": "选择 Vivi 的颜色。",
     "paletteNames": {

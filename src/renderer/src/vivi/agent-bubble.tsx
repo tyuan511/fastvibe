@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { applyUiLanguage } from "@/lib/i18n";
 import { applyThemePreferences } from "@/lib/themes";
 import { ViviCompletionState } from "@/lib/vivi-completion";
+import { viviClickFeedback } from "@/lib/vivi-agent-activity";
 import { ViviNotificationLifetime } from "@/lib/vivi-notification";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
@@ -38,6 +39,8 @@ function ViviBubble(): JSX.Element | null {
   const [hovered, setHovered] = useState(false);
   const [visible, setVisible] = useState(false);
   const completions = useRef(new ViviCompletionState());
+  const clickCount = useRef(0);
+  const [feedback, setFeedback] = useState<{ text: string; revision: number }>();
   const measurement = useRef<HTMLSpanElement>(null);
   const [textSize, setTextSize] = useState<{ width: number; height: number }>();
   const change = useCallback(() => redraw((value) => value + 1), []);
@@ -50,19 +53,26 @@ function ViviBubble(): JSX.Element | null {
       if (!event.completion) return;
       const snapshot = surface.snapshot;
       const eligible = Boolean(snapshot?.visible && snapshot.settings.enabled && snapshot.settings.messages !== false && snapshot.appFocused !== true);
-      if (completions.current.deliver(event.completion, eligible)) change();
+      if (completions.current.deliver(event.completion, eligible)) { setFeedback(undefined); change(); }
+    });
+    const offClick = api.vivi.onClicked(() => {
+      const snapshot = surface.snapshot;
+      if (!snapshot?.visible || !snapshot.settings.enabled) return;
+      const revision = ++clickCount.current;
+      setFeedback({ text: viviClickFeedback(snapshot.uiLanguage ?? "zh", revision - 1), revision });
     });
     const theme = api.settings.onChanged((settings) => applyThemePreferences(settings as Parameters<typeof applyThemePreferences>[0]));
-    return () => { listeners.delete(change); offBot(); theme(); };
+    return () => { listeners.delete(change); offBot(); offClick(); theme(); };
   }, [change]);
 
   const { snapshot, moving } = surface;
-  const completion = completions.current.completion;
-  const content = completion?.text ?? "";
-  const source = completion ? completion.runId ? `bot:${completion.runId}` : `chat:${completion.conversationId}` : "none";
-  const identity = completion ? String(completion.revision) : "none";
-  const suppressed = !snapshot?.visible || !snapshot.settings.enabled || snapshot.settings.messages === false
-    || snapshot.appFocused === true || !completion;
+  const completion = feedback ? undefined : completions.current.completion;
+  const content = feedback?.text ?? completion?.text ?? "";
+  const source = feedback ? "feedback" : completion ? completion.runId ? `bot:${completion.runId}` : `chat:${completion.conversationId}` : "none";
+  const identity = String(feedback?.revision ?? completion?.revision ?? "none");
+  const kind = feedback ? "feedback" : "notification";
+  const suppressed = !snapshot?.visible || !snapshot.settings.enabled || !content
+    || (!feedback && (snapshot.settings.messages === false || snapshot.appFocused === true));
   const show = visible && !suppressed && !moving;
 
   useLayoutEffect(() => {
@@ -99,19 +109,21 @@ function ViviBubble(): JSX.Element | null {
 
   const height = show ? textSize?.height ?? 0 : 0;
   const width = textSize?.width;
-  useEffect(() => { void api.vivi.setBubble(height, 0, width).catch(() => undefined); }, [height, width]);
+  useEffect(() => { void api.vivi.setBubble(height, 0, width, kind).catch(() => undefined); }, [height, width, kind]);
   const bubble = snapshot?.surface?.bubble;
   return <>
     <span ref={measurement} className="vivi-bubble-measure vivi-bubble-text" aria-hidden="true">{content}</span>
-    {show && completion && bubble && bubble.height > 0 ? <div
+    {show && bubble && bubble.height > 0 ? <div
       className="vivi-agent-bubble vivi-text-bubble pointer-events-auto"
       style={{ position: "absolute", left: bubble.x, top: bubble.y, width: bubble.width, height: bubble.height }}
       onPointerEnter={() => { setHovered(true); void api.vivi.hitTest(true); }}
       onPointerLeave={() => { setHovered(false); void api.vivi.hitTest(false); }}>
-      <Button variant="ghost" className="vivi-bubble-text h-full w-full min-w-0 justify-start rounded-[inherit] text-left hover:bg-transparent"
+      {completion ? <Button variant="ghost" className="vivi-bubble-text h-full w-full min-w-0 justify-start rounded-[inherit] text-left hover:bg-transparent"
         title={t("vivi.openConversation")} onClick={() => void api.vivi.openConversation(completion.conversationId, completion.runId)}>
         <span className="vivi-notification-content block w-full text-sm font-normal leading-5">{content}</span>
-      </Button>
+      </Button> : <div className="vivi-bubble-text flex h-full w-full items-center">
+        <span className="vivi-notification-content block w-full text-sm font-normal leading-5">{content}</span>
+      </div>}
       <Button variant="secondary" size="icon-xs" className="vivi-bubble-close absolute -left-2.5 -top-2.5 size-6 rounded-full border border-border" aria-label={t("vivi.dismiss")}
         onClick={() => { lifetime.dismiss(); setVisible(false); setHovered(false); }}><HugeiconsIcon icon={Cancel01Icon} className="size-3.5" /></Button>
     </div> : null}

@@ -5,6 +5,9 @@ import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 
 import { startHarness } from "../scripts/test-mobile-protocol.mjs";
+import { AppServer } from "../src/main/app-server/app-server.ts";
+import { DESKTOP_CAPABILITIES } from "../src/main/app-server/capabilities.ts";
+import { RemoteServer } from "../src/main/server/server.ts";
 
 const root = new URL("..", import.meta.url).pathname;
 const defaultLibrary = join(root, "apps/mobile/core/target/debug", process.platform === "darwin" ? "libfastvibe_mobile_core.dylib" : "libfastvibe_mobile_core.so");
@@ -105,11 +108,13 @@ async function startCore(libraryPath) {
 
 async function waitForConnection(core, timeout = 30_000) {
   const deadline = Date.now() + timeout;
+  const received = [];
   while (Date.now() < deadline) {
     const events = (await core.poll()).events ?? [];
+    received.push(...events);
     if (process.env.FASTVIBE_MOBILE_HARNESS_DEBUG) process.stderr.write(`[mobile-event] ${JSON.stringify(events)}\n`);
     if (events.some((event) => event.type === "connection_error")) throw new Error(JSON.stringify(events));
-    if (events.some((event) => event.type === "welcome")) return;
+    if (events.some((event) => event.type === "welcome")) return received;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("timed out waiting for mobile AppServer welcome");
@@ -120,9 +125,106 @@ function assertOk(response, label) {
   return response.result;
 }
 
+for (const staleLocalHint of [false, true]) test(`mobile direct-preferred dial ${staleLocalHint ? "recovers through the relay after a stale LAN hint" : "connects without requesting any relay token"}`, { timeout: 60_000 }, async (t) => {
+  const harness = await startHarness();
+  const core = await startCore(buildLibraryIfNeeded());
+  t.after(async () => { await core.stop(); await harness.cleanup(); });
+  assertOk(await core.call({ action: "setToken", origin: harness.accountOrigin, token: harness.token }), "account");
+  const identity = assertOk(await core.call({ action: "identity" }), "identity");
+  const registered = assertOk(await core.call({ action: "registerDevice", installId: "lan-test", name: "Phone", platform: "android" }), "register device");
+  assertOk(await core.call({ action: "registerEndpoint", deviceId: registered.deviceId, endpointId: identity.endpointId }), "register endpoint");
+  const deadline = Date.now() + 5000;
+  while (!harness.directAddresses.some((address) => !address.startsWith("[")) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+  const local = harness.directAddresses.find((address) => !address.startsWith("["));
+  assert.ok(local, "desktop sidecar must report its bound IPv4 route");
+  const port = Number(local.split(":").at(-1));
+  assertOk(await core.call({ action: "connect", remoteId: harness.remoteId, preferDirect: true,
+    directAddresses: [staleLocalHint ? "127.0.0.1:9" : `127.0.0.1:${port}`] }), "LAN connect");
+  const received = await waitForConnection(core);
+  const lease = received.find((event) => event.type === "relay_lease");
+  assert.equal(Boolean(lease), staleLocalHint, "relay fallback must publish the acquired lease for renewal");
+  if (lease) assert.equal(lease.expiresAt, harness.relayConfig.expiresAt);
+  assert.equal(harness.accountCalls.filter((call) => call === "POST /api/relay/iroh/token").length, staleLocalHint ? 1 : 0);
+  assertOk(await core.call({ action: "call", method: "conversations:list", payload: null }), "catalog queued");
+  assert.equal(assertOk(await core.waitRpc("call"), "catalog").conversations.length, 2);
+  assertOk(await core.call({ action: "disconnect" }), "disconnect");
+  // Reusing the same account and runtime must not repeat either registration PUT.
+  assertOk(await core.call({ action: "setToken", origin: harness.accountOrigin, token: harness.token }), "same account");
+  assertOk(await core.call({ action: "registerDevice", installId: "lan-test", name: "Phone", platform: "android" }), "reused registration");
+  assertOk(await core.call({ action: "registerEndpoint", deviceId: registered.deviceId, endpointId: identity.endpointId }), "reused endpoint registration");
+  assert.equal(harness.accountCalls.filter((call) => call.startsWith("PUT ")).length, 2);
+});
+
+for (const deadFirstRelay of [false, true]) test(`mobile Dart catalog initialization and settings health check over real iroh${deadFirstRelay ? " with an unavailable first relay" : " (legacy single relay)"}`, { timeout: 60_000 }, async (t) => {
+  const library = buildLibraryIfNeeded();
+  const harness = await startHarness({ deadFirstRelay });
+  t.diagnostic(`desktop iroh sidecar: ${harness.sidecarBinary}`);
+  const core = await startCore(library);
+  // Mirror Connection._readCatalog and RemoteClient.checkHealth. Keep these
+  // handlers local: the shared harness serves other platform lifecycle tests.
+  const replies = new Map([
+    ["conversations:list", { projects: [], conversations: harness.state.conversations, activeId: harness.state.activeId }],
+    ["engine:get-running", []],
+    ["engine:get-pending-ui", []],
+    ["settings:get", { archivedConversations: ["conversation-2"] }],
+  ]);
+  const dispatched = [];
+  const appServer = new AppServer({
+    identity: { serverInstanceId: "srv_mobile_initialization", version: "test", platform: process.platform },
+    capabilities: DESKTOP_CAPABILITIES,
+    channels: () => [...replies.keys()],
+    dispatch: async (method) => {
+      assert.ok(replies.has(method), `unexpected initialization method: ${method}`);
+      dispatched.push(method);
+      return structuredClone(replies.get(method));
+    },
+    log: { info() {}, warn() {} },
+  });
+  const server = new RemoteServer({
+    accessFile: join(harness.temp, "initialization-access.json"),
+    policyScope: "subset",
+    channels: () => [...replies.keys()],
+    dispatch: async () => { throw new Error("AppServer must dispatch initialization calls"); },
+    subscribe: () => () => undefined,
+    appServer,
+    log: { info() {}, warn() {}, error() {} },
+  });
+  // The harness desktop invokes this method when the real iroh transport opens.
+  harness.remoteServer.attachTransport = server.attachTransport.bind(server);
+  t.after(async () => {
+    await core.stop();
+    await server.stop();
+    appServer.closeAll();
+    await harness.cleanup();
+  });
+  assertOk(await core.call({
+    action: "connect",
+    remoteId: harness.remoteId,
+    relay: deadFirstRelay ? harness.relayConfig : { url: harness.relayUrl, token: harness.token },
+  }), "Dart connect");
+  await waitForConnection(core);
+
+  // Run all four reads even if one fails, so a rejected settings capability
+  // cannot conceal missing coverage for another initialization method.
+  const results = [];
+  for (const method of replies.keys()) {
+    assertOk(await core.call({ action: "call", method, payload: null }), `${method} queued`);
+    results.push([method, await core.waitRpc("call")]);
+  }
+  assertOk(await core.call({ action: "call", method: "settings:get", payload: null }), "health queued");
+  const health = await core.waitRpc("call");
+  for (const [method, response] of results) {
+    assert.deepEqual(assertOk(response, `Dart initialization ${method}`), replies.get(method));
+  }
+  assert.deepEqual(assertOk(health, "Dart settings:get health"), replies.get("settings:get"));
+  assert.deepEqual(dispatched, [...replies.keys(), "settings:get"]);
+  assertOk(await core.call({ action: "disconnect" }), "disconnect after health");
+});
+
 for (const deadFirstRelay of [false, true]) test(`mobile core C ABI speaks real iroh to desktop AppServer and exercises protocol lifecycle${deadFirstRelay ? " with an unavailable first relay" : " (legacy single relay)"}`, { timeout: 180_000 }, async (t) => {
   const library = buildLibraryIfNeeded();
   const harness = await startHarness({ deadFirstRelay });
+  t.diagnostic(`desktop iroh sidecar: ${harness.sidecarBinary}`);
   const core = await startCore(library);
   t.after(async () => {
     await core.stop();

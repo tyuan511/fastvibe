@@ -8,13 +8,11 @@ import {
   CheckmarkCircle02Icon,
   Download01Icon,
   Loading03Icon,
-  PanelLeftOpenIcon,
   Search01Icon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/icon-button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { packageName, PluginCard, typeLabel } from "@/components/plugins/plugin-card";
 import { PluginDialog, type PluginDialogTarget } from "@/components/plugins/plugin-dialog";
 import { cn } from "@/lib/utils";
@@ -23,19 +21,9 @@ import type { ExtensionInfo, ExtensionPackage, MarketPackage, MarketPackagePage,
 const TYPE_FILTERS = ["", "extension", "skill", "theme", "prompt"] as const;
 const SORT_FILTERS = ["downloads", "recent", "name"] as const;
 
-/**
- * 插件 — the page behind the sidebar entry. Same shell as 智能体: one width, a card
- * grid, and a dialog for the thing you clicked.
- */
-export function PluginsPage({
-  sidebarCollapsed,
-  onExpandSidebar,
-}: {
-  sidebarCollapsed: boolean;
-  onExpandSidebar: () => void;
-}): JSX.Element {
+/** Plugin marketplace and installed packages, shown in Settings → 插件. */
+export function PluginsPage(): JSX.Element {
   const { t } = useTranslation("settings");
-  const { t: tApp } = useTranslation("app");
   const [tab, setTab] = useState<"installed" | "market">("market");
   const [packages, setPackages] = useState<ExtensionPackage[]>([]);
   const [loaded, setLoaded] = useState<ExtensionInfo[]>([]);
@@ -145,22 +133,8 @@ export function PluginsPage({
   const total = page?.total;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="drag-region shrink-0 pt-4">
-        <div className="mx-auto flex w-full max-w-5xl items-start gap-1 px-6 pb-3">
-          {sidebarCollapsed ? (
-            <IconButton size="icon-sm" variant="ghost" label={tApp("workspace.expandSidebar")} onClick={onExpandSidebar} className="no-drag mt-0.5">
-              <HugeiconsIcon strokeWidth={2} icon={PanelLeftOpenIcon} />
-            </IconButton>
-          ) : null}
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <h1 className="text-xl font-medium tracking-tight">{tApp("sidebar.plugins")}</h1>
-            <p className="text-sm leading-5 text-muted-foreground">{t("extensions.subtitle")}</p>
-          </div>
-        </div>
-      </header>
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-6 pb-10 pt-1">
+    <div className="flex min-w-0 flex-col gap-5">
+      <p className="text-sm leading-5 text-muted-foreground">{t("extensions.subtitle")}</p>
           <div className="relative min-w-48">
             <HugeiconsIcon strokeWidth={2} icon={Search01Icon} className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -278,8 +252,6 @@ export function PluginsPage({
               </div>
             </>
           )}
-        </div>
-      </ScrollArea>
       <PluginDialog
         target={target}
         installed={installedMatch}

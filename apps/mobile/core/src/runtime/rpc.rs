@@ -130,6 +130,8 @@ impl CoreHandle {
     }
 
     pub(crate) fn poll_result(&self, limit: Option<&serde_json::Value>) -> serde_json::Value {
+        let _protocol = lock(&self.shared.protocol);
+        let generation = lock(&self.shared.connection).generation;
         for (request_id, pending) in self.shared.expire_rpcs() {
             if matches!(pending.kind, RpcKind::HistoryPage { .. }) {
                 *lock(&self.shared.loading_history) = false;
@@ -169,6 +171,6 @@ impl CoreHandle {
             *overflowed = false;
             value
         };
-        serde_json::json!({"events": result, "overflowed": overflowed})
+        serde_json::json!({"events": result, "overflowed": overflowed, "generation": generation})
     }
 }

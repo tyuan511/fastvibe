@@ -799,7 +799,6 @@ function ChatMessageRowImpl({
             {parts
               .slice(foldHead, fold.cut)
               .map((part, index) => renderPart(part, foldHead + index))}
-            {changedFiles.length > 0 ? <TurnFileChips files={changedFiles} /> : null}
           </RunCollapse>
         ) : null}
 
@@ -824,9 +823,9 @@ function ChatMessageRowImpl({
         {/*
          * Withhold the turn's changes card until the run ends. Mid-run it would
          * grow as each write/edit lands, reflowing the thread over a half-finished
-         * change set.
+         * change set. Keep it after the final answer, outside the process fold.
          */}
-        {!streaming && !fold && changedFiles.length > 0 ? (
+        {!streaming && changedFiles.length > 0 ? (
           <div className="w-full max-w-2xl pt-1">
             <TurnFileChips files={changedFiles} />
           </div>

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { configureFastVibeUserData } from "../src/main/engine/paths.ts";
 import { IrohRemoteConnection, type IrohRemoteDeps } from "../src/main/rtc/iroh-remote.ts";
 import { IrohSidecar, type IrohSidecarEvent } from "../src/main/rtc/iroh-sidecar.ts";
+import type { IrohDiscoveryEndpoint, IrohDiscoveryPublisher } from "../src/main/rtc/iroh-discovery.ts";
 import { AccountService, type AccountIrohDevice } from "../src/main/engine/account.ts";
 import { splitFrame } from "../src/main/rtc/frames.ts";
 import { uiText } from "../src/main/engine/ui-text.ts";
@@ -59,7 +60,8 @@ test("iroh initialization failures become visible error state", async () => {
 
 class FakeSidecar extends IrohSidecar {
   closed: string[] = [];
-  override async identity() { return "desktop-endpoint"; }
+  endpointId = "desktop-endpoint";
+  override async identity() { return this.endpointId; }
   override async startLease() {}
   override async refresh() {}
   override async stop() {}
@@ -67,7 +69,7 @@ class FakeSidecar extends IrohSidecar {
   event(event: IrohSidecarEvent) { this.emit("event", event); }
 }
 
-function connection(authorizePeer: IrohRemoteDeps["authorizePeer"], attach?: IrohRemoteDeps["attach"]) {
+function connection(authorizePeer: IrohRemoteDeps["authorizePeer"], attach?: IrohRemoteDeps["attach"], options: Pick<IrohRemoteDeps, "discovery" | "deviceName"> = {}) {
   const sidecar = new FakeSidecar();
   const attached: Array<{ id: string; label: string }> = [];
   const snapshots: unknown[] = [];
@@ -83,6 +85,7 @@ function connection(authorizePeer: IrohRemoteDeps["authorizePeer"], attach?: Iro
     attach(socket, peer) { attached.push(peer); attach?.(socket, peer); },
     log: { info() {}, warn() {} },
     onChange() { snapshots.push(remote.state(true).peers); },
+    ...options,
   });
   return { remote, sidecar, attached, snapshots };
 }
@@ -186,4 +189,91 @@ test("authorization resolving after stop, disconnect or peer close never revives
       assert.deepEqual(r.sidecar.closed, ["pending"]);
     } finally { await r.remote.dispose(); }
   });
+});
+
+
+class FakeDiscovery implements IrohDiscoveryPublisher {
+  current: IrohDiscoveryEndpoint | null = null;
+  published: IrohDiscoveryEndpoint[] = [];
+  publish(endpoint: IrohDiscoveryEndpoint) { this.current = endpoint; this.published.push(endpoint); }
+  stop() { this.current = null; }
+}
+
+test("iroh LAN discovery follows actual addresses, account identity, rename and stop independently of a password listener", async () => {
+  const discovery = new FakeDiscovery();
+  let name = "Office";
+  const r = connection(async () => null, undefined, { discovery, deviceName: () => name });
+  try {
+    await r.remote.start();
+    assert.equal(discovery.current, null);
+    r.sidecar.event({ type: "started", endpointId: "desktop-endpoint", directAddresses: ["192.168.1.2:41414"] });
+    assert.deepEqual(discovery.current, {
+      deviceId: "desktop-device", endpointId: "desktop-endpoint", name: "Office", directAddresses: ["192.168.1.2:41414"],
+    });
+    r.sidecar.event({ type: "addresses", endpointId: "other-endpoint", directAddresses: ["192.168.1.3:51515"] });
+    assert.deepEqual(discovery.current!.directAddresses, ["192.168.1.2:41414"]);
+    name = "Renamed";
+    r.remote.renamed();
+    assert.equal(discovery.current!.name, "Renamed");
+    r.sidecar.event({ type: "addresses", endpointId: "desktop-endpoint", directAddresses: [] });
+    assert.equal(discovery.current, null);
+    r.sidecar.event({ type: "addresses", endpointId: "desktop-endpoint", directAddresses: ["192.168.1.2:41415"] });
+    assert.deepEqual(discovery.current!.directAddresses, ["192.168.1.2:41415"]);
+    r.sidecar.event({ type: "peer_error", message: "incoming connection timed out" });
+    assert.equal(r.remote.state(true).status, "online");
+    assert.ok(discovery.current);
+    await r.remote.stop();
+    assert.equal(discovery.current, null);
+    r.sidecar.event({ type: "addresses", endpointId: "desktop-endpoint", directAddresses: ["192.168.1.9:9"] });
+    assert.equal(discovery.current, null);
+    r.sidecar.endpointId = "new-endpoint";
+    await r.remote.start();
+    assert.equal(discovery.current, null);
+    r.sidecar.event({ type: "addresses", endpointId: "desktop-endpoint", directAddresses: ["192.168.1.9:9"] });
+    assert.equal(discovery.current, null);
+    r.sidecar.event({ type: "addresses", endpointId: "new-endpoint", directAddresses: ["192.168.1.2:41416"] });
+    assert.equal(discovery.current!.endpointId, "new-endpoint");
+  } finally { await r.remote.dispose(); }
+});
+
+test("sign-out, sidecar error and exit withdraw discovery immediately and ignore late addresses", async (t) => {
+  for (const action of ["signout", "error", "exit"] as const) await t.test(action, async () => {
+    const discovery = new FakeDiscovery();
+    const r = connection(async () => null, undefined, { discovery });
+    try {
+      await r.remote.start();
+      r.sidecar.event({ type: "addresses", endpointId: "desktop-endpoint", directAddresses: ["192.168.1.2:44444"] });
+      assert.ok(discovery.current);
+      if (action === "signout") r.remote.setSignedOut(true);
+      else if (action === "error") r.sidecar.emit("error", new Error("transport failed"));
+      else r.sidecar.emit("exit");
+      assert.equal(discovery.current, null);
+      r.sidecar.event({ type: "addresses", endpointId: "desktop-endpoint", directAddresses: ["192.168.1.2:44445"] });
+      assert.equal(discovery.current, null);
+    } finally { await r.remote.dispose(); }
+  });
+});
+
+test("stop during lease issuance prevents a late startup from advertising or becoming online", async () => {
+  let resolveLease!: (value: typeof relayConfig) => void;
+  const sidecar = new FakeSidecar();
+  const discovery = new FakeDiscovery();
+  const remote = new IrohRemoteConnection({
+    account: {
+      issueIrohRelay: () => new Promise((resolve) => { resolveLease = resolve; }),
+      async reportIrohUsage() { return relayConfig.usage; },
+    },
+    deviceId: "desktop-device", identityFile: "/unused/endpoint.key", sidecar, discovery,
+    authorizePeer: async () => null, attach() {}, log: { info() {}, warn() {} },
+  });
+  try {
+    const start = remote.start();
+    await tick();
+    const stopped = remote.stop();
+    resolveLease(relayConfig);
+    await Promise.all([start, stopped]);
+    assert.equal(remote.running, false);
+    sidecar.event({ type: "started", endpointId: "desktop-endpoint", directAddresses: ["192.168.1.2:44444"] });
+    assert.equal(discovery.current, null);
+  } finally { await remote.dispose(); }
 });

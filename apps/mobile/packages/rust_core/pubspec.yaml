@@ -1,0 +1,16 @@
+name: fastvibe_rust_core
+description: Platform packaging for FastVibe's shared Rust mobile runtime.
+version: 0.5.13
+publish_to: none
+
+environment:
+  sdk: ^3.13.5
+  flutter: '>=3.47.6'
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true

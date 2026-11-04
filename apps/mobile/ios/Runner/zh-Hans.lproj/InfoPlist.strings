@@ -1,0 +1,3 @@
+"NSCameraUsageDescription" = "拍摄要发给 FastVibe 的照片。";
+"NSPhotoLibraryUsageDescription" = "选择要发给 FastVibe 的照片。";
+"NSLocalNetworkUsageDescription" = "连接同一网络上的 FastVibe。";

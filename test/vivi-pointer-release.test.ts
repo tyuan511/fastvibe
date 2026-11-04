@@ -56,6 +56,7 @@ async function fixture(deferStart = false) {
     },
     dragEnd: async () => { calls.push("end"); },
     openConversation: async () => { calls.push("open"); },
+    click: async () => { calls.push("feedback"); },
     contextMenu: async () => undefined,
   };
   const win = Object.assign(new Element(), { location: { search: "" }, fastvibe: { vivi: api } });
@@ -138,5 +139,5 @@ test("cancelling a click does not poke, while ordinary click and doubleclick sti
   f.canvas.emit("pointerdown");
   f.win.emit("pointerup", { buttons: 0 });
   await f.flush();
-  assert.deepEqual(f.calls, ["poke", "open"]);
+  assert.deepEqual(f.calls, ["poke", "feedback", "open"]);
 });

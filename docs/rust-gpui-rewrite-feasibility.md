@@ -92,7 +92,7 @@ test/                       35,906  (249 文件)  ← 25+ 用真 SDK，6 个用�
 
 **仓库外的强耦合面**（任何重写都要一起考虑）：
 
-- 手机端 `apps/mobile`：Rust core + SwiftUI/Compose 原生客户端；旧 Flutter 路径已在远程控制重写中移除。
+- 手机端 `apps/mobile`：Flutter 界面通过 FFI 调用 Rust core；曾经的 SwiftUI/Compose 页面已移除。
 - 服务端 `fastvibe-services`（Go，**19,807 行**）：OAuth、设备注册、信令、TURN 计量、Bifrost 网关、计费
 
 ### 2.2 协议面

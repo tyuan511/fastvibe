@@ -351,6 +351,8 @@ export const Ipc = {
   viviMotionSettled: "vivi:motion-settled",
   viviSetBubble: "vivi:set-bubble",
   viviHitTest: "vivi:hit-test",
+  viviClick: "vivi:click",
+  viviClicked: "vivi:clicked",
   viviChanged: "vivi:changed",
   viviDragMotion: "vivi:drag-motion",
   viviShow: "vivi:show",

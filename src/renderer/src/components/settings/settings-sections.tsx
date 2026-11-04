@@ -12,6 +12,7 @@ import {
   KeyboardIcon,
   LookBottomIcon,
   Plug01Icon,
+  PuzzleIcon,
   Router01Icon,
   Settings02Icon,
   ServerStack01Icon,
@@ -41,6 +42,7 @@ export type SectionId =
   | "memory"
   | "mcp"
   | "skills"
+  | "extensions"
   | "import"
   | "remote"
   | "ssh"
@@ -88,6 +90,7 @@ export const SETTINGS_SECTIONS: Array<{
       { id: "memory", icon: <HugeiconsIcon strokeWidth={2} icon={StickyNote01Icon} /> },
       { id: "mcp", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
       { id: "skills", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
+      { id: "extensions", icon: <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} /> },
     ],
   },
   {

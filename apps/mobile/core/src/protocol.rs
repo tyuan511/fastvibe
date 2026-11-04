@@ -362,6 +362,8 @@ pub struct MobileState {
     pub wire_cursors: HashMap<String, WireCursor>,
     pub loading_history: bool,
     pub connection: String,
+    #[serde(default)]
+    pub connection_generation: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -393,6 +395,8 @@ pub fn hello(version: &str) -> AppMessage {
                 "workspace".into(),
                 "git".into(),
                 "providers".into(),
+                // Dart reads settings during catalog initialization and health probes.
+                "settings".into(),
             ],
             features: AppFeatures {
                 event_batch: Some(true),

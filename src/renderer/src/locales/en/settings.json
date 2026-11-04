@@ -84,8 +84,8 @@
     "hidden": "Hidden",
     "appearance": "Appearance",
     "behavior": "Behavior",
-    "messages": "Show messages",
-    "messagesDesc": "Show task notifications and interaction messages beside Vivi.",
+    "messages": "Show task notifications",
+    "messagesDesc": "Show task notifications beside Vivi. Click interactions are always available.",
     "palette": "Palette",
     "paletteDesc": "Choose Vivi’s colors.",
     "paletteNames": {

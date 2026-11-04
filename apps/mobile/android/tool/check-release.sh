@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Validate native Android release metadata and an optional app-vX.Y.Z tag.
+# Validate Flutter Android release metadata and an optional app-vX.Y.Z tag.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 android_dir="$(cd -- "$script_dir/.." && pwd)"
-# shellcheck source=version.sh
 # shellcheck source=version.sh
 # shellcheck disable=SC1091
 source "$script_dir/version.sh"

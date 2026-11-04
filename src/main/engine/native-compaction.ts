@@ -276,9 +276,7 @@ function historyStamp(session: AgentSession, ids?: ReadonlySet<string>): { ids: 
  * instance method rather than supplying an extension summary (`fromHook` must stay false).
  * The SDK integration tests pin this private-method contract when upgrading Pi.
  */
-export function installNativeCompactionGuard(session: AgentSession, options: {
-  waitForBackgroundCompaction?: () => Promise<boolean>;
-} = {}): void {
+export function installNativeCompactionGuard(session: AgentSession): void {
   if (installed.has(session)) return;
   const host = session as unknown as CompactionHost;
   for (const method of ["_runDefaultCompaction", "_getSummarizationRequestAuth", "_runAutoCompaction", "_checkCompaction", "_modelForMessage", "_exceedsCompactionThreshold", "_handlePostAgentRun", "_runBeforeSettleBoundary", "_emit", "_clearManualCompactionState", "_refreshFinalizedContext", "_emitSessionCompactFailed"] as const) {
@@ -462,18 +460,8 @@ export function installNativeCompactionGuard(session: AgentSession, options: {
   };
   host._runAutoCompaction = async (reason, willRetry) => {
     if (blocked()) return false;
-    // A background checkpoint may already have reduced the projection below the hard
-    // threshold. Wait for it before the SDK's 90% protection decides to compact again;
-    // otherwise one idle maintenance pass would be immediately followed by a duplicate
-    // summary on the next request.
-    if (reason === "threshold" && options.waitForBackgroundCompaction) {
-      const completed = await options.waitForBackgroundCompaction();
-      const model = session.model;
-      if (completed && model) {
-        const projection = session.sessionManager.buildSessionProjection();
-        if (!host._exceedsCompactionThreshold(model, projection)) return false;
-      }
-    }
+    // Background summaries run on a snapshot and never hold this foreground guard.
+    // A checkpoint already published is included in the SDK's current projection.
     const before = compactionEnds;
     const retry = await nativeAuto(reason, willRetry);
     if (reason === "overflow" && willRetry && !retry && before === compactionEnds) {

@@ -1,3 +1,5 @@
+export type ViviBubbleKind = "notification" | "feedback";
+
 export type ViviMood = "idle" | "thinking" | "working" | "waiting" | "success" | "error";
 export type ViviPalette = "sky" | "grape" | "mint" | "peach" | "cloud";
 export type ViviPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right" | "custom";

@@ -19,7 +19,8 @@ import { irohRelayNodes, type IrohRelayConfig } from "../../shared/iroh-relay.ts
 
 export type IrohSidecarEvent =
   | { type: "identity"; endpointId: string }
-  | { type: "started"; endpointId: string; relayId?: string; expiresAt?: string }
+  | { type: "started"; endpointId: string; directAddresses?: string[]; relayId?: string; expiresAt?: string }
+  | { type: "addresses"; endpointId: string; directAddresses: string[] }
   | { type: "refreshed" }
   | { type: "connected"; connectionId: string; remoteId: string }
   | { type: "data"; connectionId: string; data: string; bytes?: number }
@@ -27,6 +28,7 @@ export type IrohSidecarEvent =
   | { type: "traffic"; connectionId: string; direction: "in" | "out"; bytes: number }
   | { type: "closed"; connectionId: string }
   | { type: "sent"; seq: number; connectionId: string; bytes: number }
+  | { type: "peer_error"; message: string }
   | { type: "error"; connectionId?: string; seq?: number; message: string };
 
 
@@ -153,20 +155,24 @@ export class IrohSidecar extends EventEmitter {
     const child = spawn(binary, ["--stdio"], { stdio: ["pipe", "pipe", "pipe"] });
     child.stderr.on("data", (chunk: Buffer) => this.emit("log", chunk.toString("utf8")));
     child.on("error", (error) => {
+      if (this.#child !== child) return;
       const message = `iroh transport 启动失败: ${error.message}`;
       this.#rejectWaiters(new Error(message));
       this.emit("error", error);
     });
     child.on("exit", () => {
+      if (this.#child !== child) return;
       this.#child = null;
       this.#rejectWaiters(new Error("iroh sidecar exited"));
       this.emit("exit");
     });
     const lines = createInterface({ input: child.stdout });
     lines.on("line", (line) => {
+      if (this.#child !== child) return;
       try {
         const event = JSON.parse(line) as IrohSidecarEvent;
         this.emit("event", event);
+        if (event.type === "peer_error") this.emit("log", event.message);
         if (event.type !== "error" || (event.connectionId === undefined && event.seq === undefined)) {
           this.emit(event.type, event);
         }

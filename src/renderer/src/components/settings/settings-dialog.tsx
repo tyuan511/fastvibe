@@ -35,6 +35,7 @@ import { ComputerSettings } from "./computer-settings";
 import { ProxySettings } from "./proxy-settings";
 import { BrowserSettings } from "./browser-settings";
 import { SkillsSettings } from "./skills-settings";
+import { PluginsPage } from "@/components/plugins/plugins-page";
 import { ThemeSelect } from "./theme-select";
 import { UsageSettings } from "./usage-settings";
 import { ShortcutsSettings } from "./shortcuts-settings";
@@ -451,6 +452,7 @@ export function SettingsDialog({
           {section === "memory" ? <MemorySettings models={models} /> : null}
           {section === "mcp" ? <McpSettings /> : null}
           {section === "skills" ? <SkillsSettings /> : null}
+          {section === "extensions" ? <PluginsPage /> : null}
           {section === "import" ? <ImportSettings onImported={onImported} /> : null}
 
           {section === "about" ? <AboutSettings /> : null}

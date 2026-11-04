@@ -30,15 +30,26 @@ resources/models-dev/**
 # catches the one time somebody exports a .p12 into the repo to "just try it".
 *.p12
 *.p8
-# Native mobile generated files
+# Mobile build products (Flutter UI and shared Rust core)
 # Legacy workspaces retain only generated build products after the source migration.
 /native/target/
 /apps/mobile_flutter/
 /rust/target/
+apps/mobile/.dart_tool/
+apps/mobile/.flutter-plugins*
+apps/mobile/build/
+apps/mobile/packages/rust_core/android/src/main/jniLibs/
+apps/mobile/packages/rust_core/ios/Frameworks/
+apps/mobile/ios/.symlinks/
+apps/mobile/ios/Flutter/Generated.xcconfig
+apps/mobile/ios/Flutter/flutter_export_environment.sh
+apps/mobile/ios/Flutter/ephemeral/
+apps/mobile/ios/Runner/GeneratedPluginRegistrant.*
 apps/mobile/android/.gradle/
 apps/mobile/android/local.properties
 apps/mobile/.visual-review/
 apps/mobile/android/**/build/
+apps/mobile/ios/.native-build/
 apps/mobile/ios/DerivedData/
 apps/mobile/ios/Pods/
 apps/mobile/ios/**/xcuserdata/

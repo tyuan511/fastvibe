@@ -270,7 +270,13 @@ export class AccountService {
     const response = await this.#call("/api/relay/iroh/usage", {
       method: "POST",
       token: accountToken,
-      body: input,
+      body: {
+        device_id: input.deviceId,
+        token: input.token,
+        report_id: input.reportId,
+        bytes_in: input.bytesIn,
+        bytes_out: input.bytesOut,
+      },
     });
     const body = (await response.json().catch(() => undefined)) as { usage?: unknown } | undefined;
     if (!response.ok) throw new Error(`iroh relay usage report failed: ${response.status}`);

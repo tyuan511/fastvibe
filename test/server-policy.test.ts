@@ -177,6 +177,8 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "update:check",
     "update:download",
     "update:install",
+    // The pet renderer owns clicks; remote clients never mount the desktop pet.
+    "vivi:click",
     "vivi:context-menu",
     "vivi:drag-end",
     "vivi:drag-start",

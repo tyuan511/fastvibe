@@ -25,6 +25,7 @@ function fixture(platform = "darwin", create = true) {
   const timeouts = new Map<() => void, number>();
   const motions: ViviDragMotion[] = [];
   const snapshots: ViviSnapshot[] = [];
+  const clicks: unknown[] = [];
   const saves: unknown[] = [];
   const frameChanges: unknown[] = [];
   class Window extends EventEmitter {
@@ -79,6 +80,7 @@ function fixture(platform = "darwin", create = true) {
     "../ipc/broadcast": { broadcast: (channel: string, payload: unknown) => {
       if (channel === Ipc.viviDragMotion) motions.push(payload as ViviDragMotion);
       if (channel === Ipc.viviChanged) snapshots.push(payload as ViviSnapshot);
+      if (channel === Ipc.viviClicked) clicks.push(payload);
     } },
     "./state": { ViviStateStore },
     "./bounds": { clampViviBounds, viviBoundsFor, VIVI_BASE_SIZE },
@@ -103,7 +105,7 @@ function fixture(platform = "darwin", create = true) {
   pet.setPersistence((settings) => { saves.push(settings); });
   if (create) pet.create();
   return {
-    pet, get window() { return window!; }, get notification() { return notification!; }, Window, screen, motions, snapshots, saves, frameChanges, timers, timeouts,
+    pet, get window() { return window!; }, get notification() { return notification!; }, Window, screen, motions, snapshots, clicks, saves, frameChanges, timers, timeouts,
     mouse(type: "mouseDown" | "mouseUp" | "mouseMove", pressed = false) {
       window.webContents.emit("before-mouse-event", {}, { type, button: "left", modifiers: pressed ? ["leftbuttondown"] : [] });
     },
@@ -117,6 +119,65 @@ function fixture(platform = "darwin", create = true) {
     },
   };
 }
+
+test("pet clicks reach the text window only while feedback can be displayed", () => {
+  const f = fixture();
+  const click = () => f.pet.click(f.window as never);
+  click();
+  assert.equal(f.clicks.length, 0, "do not queue feedback before renderers are ready");
+  f.pet.rendererState(f.window as never, true);
+  f.pet.rendererState(f.notification as never, true);
+  f.pet.click(f.notification as never);
+  f.pet.click(null);
+  assert.equal(f.clicks.length, 0, "only the model window owns pet clicks");
+  click();
+  click();
+  assert.equal(f.clicks.length, 2);
+  f.pet.setAppFocused(true);
+  click();
+  f.pet.setSettings({ messages: false });
+  click();
+  assert.equal(f.clicks.length, 4, "clicks still respond in the foreground with notifications disabled");
+  f.pet.setSettings({ clickable: false });
+  click();
+  f.pet.setSettings({ clickable: true });
+  f.mouse("mouseDown", true);
+  f.pet.startDrag();
+  click();
+  assert.equal(f.clicks.length, 4, "disabled interaction and motion stay silent");
+  f.pet.hide();
+  click();
+  f.pet.destroy();
+  click();
+  assert.equal(f.clicks.length, 4);
+});
+
+test("feedback windows ignore notification preferences and foreground focus", () => {
+  for (const focused of [true, false]) {
+    for (const messages of [true, false]) {
+      const f = fixture();
+      f.pet.rendererState(f.window as never, true);
+      f.pet.rendererState(f.notification as never, true);
+      f.pet.setAppFocused(focused);
+      f.pet.setSettings({ messages });
+      const frame = f.window.getBounds();
+      f.pet.setBubble(f.notification as never, 36, 0, 180, "notification");
+      assert.equal(f.notification.isVisible(), messages && !focused);
+      f.pet.setBubble(f.notification as never, 36, 0, 180, "feedback");
+      assert.equal(f.notification.isVisible(), true, "changing only the kind must update native visibility");
+      f.pet.setAppFocused(!focused);
+      f.pet.setSettings({ messages: !messages });
+      assert.equal(f.notification.isVisible(), true, "focus and preference changes cannot hide active feedback");
+      f.pet.setBubble(f.notification as never, 36, 0, 180, "notification");
+      assert.equal(f.notification.isVisible(), !messages && focused, "notification rules resume for the next task notice");
+      f.pet.setBubble(f.notification as never, 36, 0, 180, "feedback");
+      f.pet.setBubble(f.notification as never, 0, 0, 180, "feedback");
+      assert.equal(f.notification.isVisible(), false, "expired feedback hides in every state");
+      assert.deepEqual(f.window.getBounds(), frame);
+      f.pet.destroy();
+    }
+  }
+});
 
 test("macOS full screen attaches Vivi to the main Space and restores its desktop position", () => {
   const f = fixture();

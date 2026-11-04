@@ -69,6 +69,7 @@ const DENIED = new Map<string, string>([
   [Ipc.viviContextMenu, "Vivi \u684c\u9762\u5ba0\u7269\u53ea\u80fd\u5728\u672c\u673a\u63a7\u5236"],
   [Ipc.viviSetBubble, "Vivi 桌面宠物只能在本机控制"],
   [Ipc.viviHitTest, "Vivi 桌面宠物只能在本机控制"],
+  [Ipc.viviClick, "Vivi 桌面宠物只能在本机控制"],
   [Ipc.viviRendererState, "Vivi 桌面宠物只能在本机控制"],
   [Ipc.viviMotionSettled, "Vivi 桌面宠物只能在本机控制"],
   // The menu bar is this machine's desktop chrome. A phone's chord edits belong to its own

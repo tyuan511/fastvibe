@@ -27,7 +27,7 @@
 
 macOS 打开 DMG 后，将 FastVibe 拖入「应用程序」；Windows 运行安装程序；Linux 安装 DEB，或为 AppImage 添加可执行权限后启动。桌面端会检查更新，由你决定何时下载并重启安装。
 
-[Android 客户端](apps/mobile/android) 和 [iOS 客户端](apps/mobile/ios) 使用原生 Compose/SwiftUI，逻辑由共享 Rust 核心提供。
+[手机端](apps/mobile) 的 Android 与 iOS 共用一套 Flutter 界面，通过 FFI 直接调用 Rust 核心。
 
 ## 开始使用
 

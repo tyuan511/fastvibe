@@ -254,6 +254,7 @@ async function bringUp(): Promise<RemoteServerState> {
 export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>) => Promise<void>, account: AccountService): void {
   irohRemote = new IrohRemoteConnection({
     account,
+    deviceName,
     deviceId: () => official?.state().deviceId ?? "",
     attach: (socket, peer) => instance().attachTransport(socket, peer),
     log: { info: (message) => log.info(message), warn: (message, error) => log.warn(message, error) },
@@ -343,6 +344,7 @@ export function registerRemoteIpc(queueSettingsWrite: (task: () => Promise<void>
       broadcast(Ipc.settingsChanged, settings);
     });
     // The account's device list and the phones' lists carry the name, so tell the cloud.
+    irohRemote?.renamed();
     await official?.renamed();
     return announce();
   });

@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# Build the native Android client. Production release builds require production signing.
+# Build the Flutter Android client with the shared Rust runtime.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 android_dir="$(cd -- "$script_dir/.." && pwd)"
-# shellcheck source=version.sh
-# shellcheck source=version.sh
+mobile_dir="$(cd -- "$android_dir/.." && pwd)"
+repo_dir="$(cd -- "$mobile_dir/../.." && pwd)"
 # shellcheck disable=SC1091
 source "$script_dir/version.sh"
 
 release=0
-with_aar=0
 for arg in "$@"; do
   case "$arg" in
     --release) release=1 ;;
-    --with-aar) with_aar=1 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -22,6 +20,8 @@ done
 load_android_version "$android_dir/version.properties"
 bash "$script_dir/check-release.sh" "$android_dir/version.properties" "${RELEASE_TAG:-}"
 
+# Check signing before any Rust compilation or Flutter dependency resolution. A
+# production build must never silently fall back to the development certificate.
 if ((release)); then
   required=(
     FASTVIBE_ANDROID_STORE_FILE
@@ -39,19 +39,22 @@ if ((release)); then
     echo "Signing keystore does not exist: $FASTVIBE_ANDROID_STORE_FILE" >&2
     exit 1
   }
-  gradle_args=(assembleRelease -PfastvibeAbis=arm64-v8a)
-  ((with_aar)) && gradle_args+=( :native:buildAar )
-else
-  gradle_args=(assembleDebug -PfastvibeAbis=arm64-v8a)
 fi
 
-cd "$android_dir"
-./gradlew "${gradle_args[@]}"
-
+command -v flutter >/dev/null || { echo "flutter is required" >&2; exit 1; }
+bash "$repo_dir/scripts/build-mobile-android-core.sh"
+cd "$mobile_dir"
+flutter pub get
+flutter_args=(build apk --target-platform android-arm64
+  --build-name "$FASTVIBE_ANDROID_VERSION_NAME"
+  --build-number "$FASTVIBE_ANDROID_VERSION_CODE")
 if ((release)); then
-  apk="$android_dir/app/build/outputs/apk/release/app-release.apk"
+  flutter_args+=(--release --split-per-abi)
+  apk="$mobile_dir/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
 else
-  apk="$android_dir/app/build/outputs/apk/debug/app-debug.apk"
+  flutter_args+=(--debug)
+  apk="$mobile_dir/build/app/outputs/flutter-apk/app-debug.apk"
 fi
+flutter "${flutter_args[@]}"
 [[ -f "$apk" ]] || { echo "Expected APK was not produced: $apk" >&2; exit 1; }
 printf '%s\n' "$apk"

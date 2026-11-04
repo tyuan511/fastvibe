@@ -11,6 +11,7 @@ type ViviApi = {
   motionSettled: (at: number) => Promise<void>;
   dragStart: () => Promise<void>;
   dragEnd: () => Promise<void>;
+  click: () => Promise<void>;
   openConversation: (conversationId?: string) => Promise<void>;
   contextMenu: () => Promise<void>;
   hitTest?: (interactive: boolean) => Promise<void>;
@@ -221,6 +222,7 @@ function handlePointerUp(event: PointerEvent): void {
     return;
   }
   scene?.poke(current.actorId);
+  safeCall(() => api.click());
 }
 
 function handlePointerCancel(event: PointerEvent): void {

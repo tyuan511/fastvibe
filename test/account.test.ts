@@ -27,6 +27,7 @@ type Cloud = {
   tokenStatus: number;
   devicesBody: unknown;
   devicesStatus: number;
+  usageBody?: unknown;
   server: Server;
 };
 
@@ -75,7 +76,14 @@ async function cloud(): Promise<Cloud> {
     }
     if (req.url === "/api/relay/iroh/usage") {
       if (req.headers.authorization !== "Bearer fvs_issued") return send(401, { error: { code: "unauthorized" } });
-      await readJson(req);
+      const body = await readJson(req) as Record<string, unknown>;
+      state.usageBody = body;
+      const fields = ["device_id", "token", "report_id", "bytes_in", "bytes_out"];
+      if (Object.keys(body).length !== fields.length || fields.some((field) => !Object.hasOwn(body, field))
+        || typeof body.device_id !== "string" || typeof body.token !== "string" || typeof body.report_id !== "string"
+        || typeof body.bytes_in !== "number" || typeof body.bytes_out !== "number") {
+        return send(400, { error: { code: "invalid_usage_fields" } });
+      }
       return send(200, { allowed: true, usage: { period_start: "2026-11-01T00:00:00Z", resets_at: "2026-12-01T00:00:00Z", used_bytes: 20, quota_bytes: 1000, remaining_bytes: 980 } });
     }
     if (req.url === "/api/auth/logout") {
@@ -221,6 +229,13 @@ test("an account receives the iroh relay URL and can report cumulative bytes", a
       reportId: "00000000-0000-0000-0000-000000000002",
       bytesIn: 12,
       bytesOut: 34,
+    });
+    assert.deepEqual(r.cloud.usageBody, {
+      device_id: "00000000-0000-0000-0000-000000000001",
+      token: issued.token,
+      report_id: "00000000-0000-0000-0000-000000000002",
+      bytes_in: 12,
+      bytes_out: 34,
     });
     assert.equal(usage.remainingBytes, 980);
     assert.ok(r.cloud.calls.includes("POST /api/relay/iroh/token"));

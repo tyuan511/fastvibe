@@ -126,7 +126,6 @@ async function harness(auto: boolean, options: {
   continueAfterError?: boolean;
   cancelCompaction?: () => boolean;
   compactEvents?: string[];
-  backgroundWait?: () => Promise<boolean>;
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "native-compaction-"));
   const models = [
@@ -180,7 +179,7 @@ async function harness(auto: boolean, options: {
   });
   await loader.reload();
   const { session } = await createAgentSession({ cwd: dir, agentDir: join(dir, "agent"), modelRuntime: runtime, model: runtime.getModel("faux", "large"), sessionManager: sm, settingsManager, resourceLoader: loader, tools: [] });
-  installNativeCompactionGuard(session, options.backgroundWait ? { waitForBackgroundCompaction: options.backgroundWait } : undefined);
+  installNativeCompactionGuard(session);
   await session.bindExtensions({ mode: "rpc" });
   const errors: unknown[] = [];
   let starts = 0;
@@ -242,25 +241,13 @@ test("the real SDK threshold is 90% at every supported window and follows metada
   } finally { h.close(); }
 });
 
-test("a threshold compaction waits for background maintenance before forcing its own checkpoint", { timeout: 10_000 }, async () => {
-  let release!: (completed: boolean) => void;
-  let signalCalled!: () => void;
-  const called = new Promise<void>((resolve) => { signalCalled = resolve; });
-  const gate = new Promise<boolean>((resolve) => { release = resolve; });
-  const h = await harness(true, {
-    backgroundWait: async () => {
-      signalCalled();
-      return gate;
-    },
-  });
+test("the foreground threshold guard compacts independently of background maintenance", { timeout: 10_000 }, async () => {
+  const h = await harness(true);
   try {
     await h.session.setModel(h.runtime.getModel("faux", "small")!);
-    const prompt = h.session.prompt("Continue after background maintenance");
-    await called;
-    assert.equal(h.starts(), 0, "the hard compaction has not started while background maintenance is pending");
-    release(false);
-    await prompt;
-    assert.equal(h.starts(), 1, "the hard compaction runs after background maintenance declines the checkpoint");
+    await h.session.prompt("Continue with the foreground capacity guard");
+    assert.equal(h.starts(), 1);
+    assert.ok(h.session.messages.some((message) => message.role === "assistant" && JSON.stringify(message.content).includes("continued successfully")));
   } finally { h.close(); }
 });
 

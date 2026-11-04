@@ -97,7 +97,7 @@ function transcriptFixture() {
 }
 // The settings scenes are routes, so they have to be entered before the shell mounts.
 if (website && websiteScene === "models") window.location.hash = "#/settings/providers";
-if (website && websiteScene === "market") window.location.hash = "#/plugins";
+if (website && websiteScene === "market") window.location.hash = "#/settings/extensions";
 if (params.get("tasks") === "sample") window.location.hash = "#/tasks";
 if (params.has("vivi")) window.location.hash = "#/vivi";
 const theme = params.get("theme");
@@ -1848,8 +1848,8 @@ if (dialog === "skills-market") {
 }
 
 if (dialog === "market") {
-  // Sidebar 「插件」 opens the plugins page; open the catalog tab.
-  window.location.hash = "#/plugins";
+  // Open Settings → 插件 with the catalog tab selected.
+  window.location.hash = "#/settings/extensions";
   const clickByText = (text: string, root: ParentNode = document): boolean => {
     const target = [...root.querySelectorAll<HTMLElement>("button")].find((node) =>
       (node.textContent ?? "").includes(text),

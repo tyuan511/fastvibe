@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-XCFRAMEWORK="${1:-apps/mobile/ios/.native-build/FastVibeMobileCore.xcframework}"
+XCFRAMEWORK="${1:-apps/mobile/packages/rust_core/ios/Frameworks/FastVibeMobileCore.xcframework}"
 [[ -d "$XCFRAMEWORK" ]] || { printf 'missing XCFramework: %s\n' "$XCFRAMEWORK" >&2; exit 1; }
 [[ -f "$XCFRAMEWORK/Info.plist" ]] || { printf 'missing XCFramework Info.plist\n' >&2; exit 1; }
 
@@ -11,6 +11,7 @@ required_symbols=(
     fv_mobile_core_destroy
     fv_mobile_core_version
     fv_mobile_core_command_json
+    fv_mobile_core_poll_json
     fv_mobile_core_free_string
 )
 
@@ -18,6 +19,11 @@ has_arm64_device=0
 has_arm64_sim=0
 has_x86_sim=0
 while IFS= read -r library; do
+    # CocoaPods derives one -l name from the XCFramework. All slices must use
+    # the same conventional lib<name>.a filename or only the device can link.
+    [[ "$(basename "$library")" == libfastvibe_mobile_core.a ]] || {
+        printf 'inconsistent XCFramework library name: %s\n' "$library" >&2; exit 1;
+    }
     arches="$(lipo -archs "$library")"
     case "$library" in
         *ios-arm64/*) [[ "$arches" == *arm64* ]] && has_arm64_device=1 ;;

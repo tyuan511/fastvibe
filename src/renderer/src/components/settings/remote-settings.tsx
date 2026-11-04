@@ -13,10 +13,8 @@ import { RemoteIroh } from "./remote-iroh";
 /**
  * 远程访问: let phones signed in to the same FastVibe account find and use this computer.
  *
- * One switch turns on two ways in. Phones signed in to the same account find this
- * computer on their own, with no address and no password (`RemoteOfficial`); and once a
- * LAN password is set, phones on the local network scan a code or find it by name
- * The account-authenticated iroh transport is the single product connection path.
+ * The account-authenticated iroh transport is the product connection path.
+ * Local discovery supplies addresses for the same authenticated connection.
  *
  * State comes from `remote:state` pushes (`window.fastvibe.remote.onState`), the same
  * broadcast a second window would receive — so two settings panes cannot show the

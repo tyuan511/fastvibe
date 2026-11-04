@@ -30,7 +30,6 @@ import { CommandPalette } from "@/components/layout/command-palette";
 import { TitleBar } from "@/components/layout/title-bar";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS } from "@/lib/platform";
 import { isRemoteRef } from "@/lib/remote-project";
-import { PluginsPage } from "@/components/plugins/plugins-page";
 import { TasksPage } from "@/components/schedules/tasks-page";
 import { createConversationRefresh } from "@/lib/conversation-refresh";
 import { sameServerScope } from "../../shared/server-scope.ts";
@@ -265,8 +264,7 @@ export function App(): JSX.Element {
   const navigate = useNavigate();
   const initialLocationKey = useRef(location.key);
   const settingsOpen = Boolean(settingsMatch);
-  // 插件 and 定时任务 are pages of the main column, not overlays: the sidebar stays and every chat keeps running.
-  // Only one of them is mounted; the conversation column is the other page.
+  // 定时任务 is a page of the main column; plugins now live in settings.
   const pluginsOpen = Boolean(useMatch("/plugins"));
   const tasksOpen = Boolean(useMatch(TASKS_PATH));
   const viviOpen = Boolean(useMatch("/vivi"));
@@ -285,15 +283,14 @@ export function App(): JSX.Element {
     ? (routeSection as SectionId)
     : undefined;
 
-  // 插件 used to live at /settings/extensions. Keep that link, and normalise anything
-  // else that is not a real pane onto 通用.
+  // Keep the old plugin page URL working, and normalise unknown settings panes.
   useEffect(() => {
-    if (routeSection === "extensions") {
-      navigate("/plugins", { replace: true });
+    if (pluginsOpen) {
+      navigate("/settings/extensions", { replace: true });
       return;
     }
     if (settingsOpen && !settingsSection) navigate("/settings/general", { replace: true });
-  }, [settingsOpen, settingsSection, routeSection, navigate]);
+  }, [settingsOpen, settingsSection, pluginsOpen, navigate]);
   const [commandOpen, setCommandOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
@@ -1715,7 +1712,6 @@ export function App(): JSX.Element {
   });
   const onSidebarReorderProjects = useStable((cwds: string[]) => void handleReorderProjects(cwds));
   const onSidebarOpenSettings = useStable(() => navigate("/settings/general"));
-  const onSidebarOpenMarket = useStable(() => navigate("/plugins"));
   const onSidebarOpenTasks = useStable(() => navigate(TASKS_PATH));
   const onSidebarOpenVivi = useStable(() => navigate("/vivi"));
   const onSidebarSearch = useStable(() => setCommandOpen(true));
@@ -1856,8 +1852,6 @@ export function App(): JSX.Element {
             onManageFolders={setManageProjectCwd}
             onReorderProjects={onSidebarReorderProjects}
             onOpenSettings={onSidebarOpenSettings}
-            onOpenMarket={onSidebarOpenMarket}
-            pluginsActive={pluginsOpen}
             onOpenTasks={onSidebarOpenTasks}
             tasksActive={tasksOpen}
             onOpenVivi={onSidebarOpenVivi}
@@ -1878,13 +1872,6 @@ export function App(): JSX.Element {
               <Suspense fallback={<main className="flex min-h-0 flex-1" />}>
                 <ViviPage mainModel={session?.model} sidebarCollapsed={sidebarCollapsed} onExpandSidebar={() => setSidebarCollapsed(false)} onManageModels={() => navigate("/settings/providers")} />
               </Suspense>
-            ) : pluginsOpen ? (
-              <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <PluginsPage
-                  sidebarCollapsed={sidebarCollapsed}
-                  onExpandSidebar={() => setSidebarCollapsed(false)}
-                />
-              </main>
             ) : tasksOpen ? (
               <main className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <TasksPage
@@ -2089,7 +2076,7 @@ export function App(): JSX.Element {
         onNewChat={() => void handleNewChat()}
         onAddProject={() => void handleAddProject()}
         onOpenSettings={(section) => navigate(`/settings/${section}`)}
-        onOpenPlugins={() => navigate("/plugins")}
+        onOpenPlugins={() => navigate("/settings/extensions")}
       />
       <PermissionDialog
         key={pendingDialog?.id ?? "permission"}

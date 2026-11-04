@@ -12,7 +12,7 @@ import { ViviStateStore } from "./state";
 import { clampViviBounds, viviBoundsFor, VIVI_BASE_SIZE } from "./bounds";
 import { ViviFlight, ViviThrowVelocity } from "./throw-motion";
 import { viviNotificationSurfaceLayout } from "./panel-bounds";
-import type { ViviSurfaceLayout } from "../../shared/vivi";
+import type { ViviBubbleKind, ViviSurfaceLayout } from "../../shared/vivi";
 
 type PersistSettings = (settings: ViviSettings) => void;
 const SUCCESS_DURATION_MS = 5_000;
@@ -45,6 +45,7 @@ export class ViviPetWindow {
   private showRequested = false;
   private successTimer: ReturnType<typeof setTimeout> | undefined;
   private bubbleHeight = 0;
+  private bubbleKind: ViviBubbleKind = "notification";
   private composerHeight = 0;
   private bubbleWidth: number | undefined;
   private surface: ViviSurfaceLayout | undefined;
@@ -200,7 +201,8 @@ export class ViviPetWindow {
     if (!window || window.isDestroyed()) return;
     const settings = this.getSettings();
     const show = this.notificationReady && this.modelReady && this.store.state().visible
-      && settings.enabled && settings.messages && !this.appFocused && !this.moving && this.bubbleHeight > 0;
+      && settings.enabled && !this.moving && this.bubbleHeight > 0
+      && (this.bubbleKind === "feedback" || (settings.messages && !this.appFocused));
     if (show && !window.isVisible()) window.showInactive();
     else if (!show && window.isVisible()) window.hide();
   }
@@ -533,19 +535,29 @@ export class ViviPetWindow {
     this.setWindowBounds(clampViviBounds(bounds, this.movementArea(bounds)));
   }
 
-  setBubble(window: BrowserWindow | null, height: number, composerHeight = 0, width?: number): void {
+  setBubble(window: BrowserWindow | null, height: number, composerHeight = 0, width?: number, kind: ViviBubbleKind = "notification"): void {
     if (!window || window !== this.notificationWindow || window.isDestroyed() || !Number.isFinite(height) || !Number.isFinite(composerHeight) || (width !== undefined && !Number.isFinite(width))) return;
     const next = Math.max(0, Math.min(460, Math.round(height)));
     const controls = Math.max(0, Math.min(120, Math.round(composerHeight)));
     const measuredWidth = width === undefined ? undefined : Math.max(1, Math.min(360, Math.ceil(width)));
-    if (next === this.bubbleHeight && controls === this.composerHeight && measuredWidth === this.bubbleWidth) return;
+    if (next === this.bubbleHeight && controls === this.composerHeight && measuredWidth === this.bubbleWidth && kind === this.bubbleKind) return;
     const bounds = this.petBounds();
     if (next === 0 && this.bubbleHeight > 0) window.setIgnoreMouseEvents(true, { forward: true });
     this.bubbleHeight = next;
+    this.bubbleKind = kind;
     this.composerHeight = controls;
     this.bubbleWidth = measuredWidth;
     this.setWindowBounds(bounds);
     this.publish();
+  }
+
+  /** Forward deliberate pet clicks to the separate text window; never replay them. */
+  click(window: BrowserWindow | null): void {
+    const settings = this.getSettings();
+    if (this.disposed || !window || window !== this.window || window.isDestroyed()
+      || !this.notificationReady || !this.store.state().visible || !settings.enabled
+      || !settings.clickable || this.moving) return;
+    broadcast(Ipc.viviClicked, undefined);
   }
 
   hitTest(window: BrowserWindow | null, interactive: boolean): void {
