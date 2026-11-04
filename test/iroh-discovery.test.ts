@@ -36,11 +36,12 @@ class FakeBonjour implements DiscoveryBonjour {
   unpublishAll(callback?: () => void) { this.withdrawn = true; callback?.(); }
   destroy() { this.destroyed = true; }
 }
-function harness() {
+function harness(deps: Partial<IrohDiscoveryDeps> = {}) {
   const instances: FakeBonjour[] = [];
   const info: string[] = [];
   const warnings: string[] = [];
   const advertiser = new IrohDiscoveryAdvertiser({
+    retryDelays: deps.retryDelays,
     log: { info: (message) => info.push(message), warn: (message) => warnings.push(message) },
     create(error) { const instance = new FakeBonjour(error); instances.push(instance); return instance; },
   });
@@ -171,4 +172,34 @@ test("synchronous publisher failures are contained", () => {
   assert.doesNotThrow(() => advertiser.publish(endpoint));
   assert.equal(warnings.length, 1);
   advertiser.stop();
+});
+
+test("a failed multicast send is retried until it announces again, and stop ends the retries", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = harness({ retryDelays: [50, 100] });
+  try {
+    h.advertiser.publish(endpoint);
+    h.instances[0].service.emit("up");
+    assert.equal(h.info.length, 1);
+    // A tunnel flap takes the default route away: the announcement dies with EHOSTUNREACH.
+    h.instances[0].error(new Error("send EHOSTUNREACH 224.0.0.251:5353"));
+    assert.ok(h.instances[0].destroyed);
+    t.mock.timers.tick(50);
+    assert.equal(h.instances.length, 2);
+    assert.equal(h.instances[1].configs[0].name, "Office-Mac");
+    h.instances[1].service.emit("up");
+    // The route came back: the next failure starts from the shortest delay again.
+    h.instances[1].error(new Error("send EHOSTUNREACH 224.0.0.251:5353"));
+    t.mock.timers.tick(49);
+    assert.equal(h.instances.length, 2);
+    t.mock.timers.tick(1);
+    assert.equal(h.instances.length, 3);
+    // An explicit stop (signed out, no addresses left) must not be resurrected.
+    h.advertiser.stop();
+    h.instances[2].error(new Error("send EHOSTUNREACH 224.0.0.251:5353"));
+    t.mock.timers.tick(10_000);
+    assert.equal(h.instances.length, 3);
+    assert.ok(h.instances.every((instance) => instance.destroyed));
+    assert.equal(h.warnings.length, 2);
+  } finally { h.advertiser.stop(); }
 });

@@ -42,7 +42,15 @@ export interface IrohDiscoveryPublisher {
 export type IrohDiscoveryDeps = {
   log: { info(message: string): void; warn(message: string): void };
   create?: (onError: (error: unknown) => void) => DiscoveryBonjour;
+  /** Spacing between attempts to bring a failed announcement back; the last entry repeats. */
+  retryDelays?: readonly number[];
 };
+
+/** A tunnel owning the default route, or an interface flap, can make multicast sends fail
+ * for a while (`EHOSTUNREACH 224.0.0.251:5353`). The LAN hint the phone shows disappears
+ * the moment the announcement stops, so a failed one is retried — not dropped until the
+ * next restart, which is what a single flap used to do. */
+const DISCOVERY_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
 
 function canonicalIp(ip: string): string {
   return isIP(ip) === 6 ? new URL(`http://[${ip}]/`).hostname.slice(1, -1) : ip;
@@ -114,6 +122,9 @@ export class IrohDiscoveryAdvertiser implements IrohDiscoveryPublisher {
   #key: string | null = null;
   #generation = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
+  #lastEndpoint: IrohDiscoveryEndpoint | null = null;
+  #retryTimer: ReturnType<typeof setTimeout> | null = null;
+  #retryAttempt = 0;
   #host = `fastvibe-iroh-${randomUUID()}.local`;
 
   constructor(deps: IrohDiscoveryDeps) { this.#deps = deps; }
@@ -123,8 +134,9 @@ export class IrohDiscoveryAdvertiser implements IrohDiscoveryPublisher {
     if (!advertisement) { this.stop(); return; }
     const name = mdnsInstanceName(endpoint.name || hostname());
     const key = JSON.stringify([name, advertisement.port, advertisement.txt]);
-    if (this.#key === key && this.#bonjour) return;
+    if (this.#key === key && this.#bonjour) { this.#lastEndpoint = endpoint; return; }
     this.stop();
+    this.#lastEndpoint = endpoint;
     this.#key = key;
     this.#publish(name, advertisement, this.#generation, 1);
   }
@@ -136,8 +148,7 @@ export class IrohDiscoveryAdvertiser implements IrohDiscoveryPublisher {
     const onError = (error: unknown) => {
       if (!bonjour) { creationError = error; return; }
       if (!current()) return;
-      this.#deps.log.warn(`iroh discovery: ${String(error)}`);
-      this.stop();
+      this.#fail(`iroh discovery: ${String(error)}`);
     };
     try {
       bonjour = (this.#deps.create ?? createBonjour)(onError);
@@ -161,6 +172,7 @@ export class IrohDiscoveryAdvertiser implements IrohDiscoveryPublisher {
       const confirmed = () => {
         if (!current()) return;
         this.#clearTimer();
+        this.#retryAttempt = 0;
         this.#deps.log.info(`iroh discovery: announcing "${name}" on UDP port ${advertisement.port}`);
       };
       service.on("up", confirmed);
@@ -173,22 +185,45 @@ export class IrohDiscoveryAdvertiser implements IrohDiscoveryPublisher {
         if (conflict && attempt < MAX_NAME_ATTEMPTS) {
           this.#publish(baseName, advertisement, generation, attempt + 1);
         } else {
-          this.#key = null;
-          this.#deps.log.warn("iroh discovery: announcement probe failed");
+          this.#fail("iroh discovery: announcement probe failed");
         }
       }, PROBE_TIMEOUT_MS);
       this.#timer.unref();
     } catch (error) {
       if (generation !== this.#generation) return;
-      this.#deps.log.warn(`iroh discovery: could not announce (${String(error)})`);
-      this.stop();
+      this.#fail(`iroh discovery: could not announce (${String(error)})`);
     }
   }
 
+  /** Tears the announcement down and brings it back after a backoff, until it sticks.
+   * An explicit `stop()` (signed out, no addresses) cancels the retry with it. */
+  #fail(reason: string): void {
+    this.#deps.log.warn(reason);
+    this.#key = null;
+    this.#close();
+    if (this.#retryTimer || !this.#lastEndpoint) return;
+    const delays = this.#deps.retryDelays ?? DISCOVERY_RETRY_DELAYS_MS;
+    const delay = delays[Math.min(this.#retryAttempt, delays.length - 1)];
+    this.#retryAttempt++;
+    const endpoint = this.#lastEndpoint;
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = null;
+      if (this.#lastEndpoint) this.publish(endpoint);
+    }, delay);
+    this.#retryTimer.unref();
+  }
+
   stop(): void {
+    this.#clearRetry();
+    this.#lastEndpoint = null;
     this.#generation++;
     this.#key = null;
     this.#close();
+  }
+
+  #clearRetry(): void {
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    this.#retryTimer = null;
   }
 
   #close(): void {
