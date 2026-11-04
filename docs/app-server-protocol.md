@@ -99,9 +99,9 @@ wss://example.com/ws
 
 服务端每 30 秒发送一次 WebSocket Ping。客户端应使用标准 WebSocket 实现自动回复 Pong；不要因为连接空闲而主动断开。
 
-### 浏览器客户端注意事项
+### 原生客户端与浏览器边界
 
-服务端不提供跨域 CORS。浏览器页面应由 FastVibe 同源提供，或由自己的后端代理 `/api/login` 和 `/ws`。一个任意第三方网页不能仅靠浏览器 `fetch` 直接跨域登录 FastVibe；WebSocket 的 `Origin` 也会被服务端校验。
+当前没有浏览器远程客户端。`RemoteServer` 拒绝任何携带 `Origin` 头的 WebSocket upgrade，**同源网页也不例外**，不提供网页登录与连接路径。原生手机和 SSH 转发不发送该头；第三方原生客户端应使用相同的外层鉴权和 App Protocol。不要将旧版“同源网页或 CORS 代理”说明作为当前连接方式。
 
 ## 4. App Protocol v1
 

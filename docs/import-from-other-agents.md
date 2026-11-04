@@ -1,8 +1,8 @@
 # 从其他 Agent 导入会话：格式调研与实现设计
 
-> 对应 roadmap-2026-09-16.md 第二阶段 **P2「CLI 导入与迁移」**：只读发现 / 显式导入会话及非秘密配置，复制到 FastVibe 根，说明冲突与不支持项。
+> 状态：会话导入已实现。本文保留源格式调研与写出契约；当前启用来源以 [`adapters.ts`](../src/main/engine/import/adapters.ts) 为准，不按下文历史 v1/v2 建议判断功能是否可用。
 >
-> 结论基于本机真实数据逆向（`~/.claude` 9.1 MB / `~/.codex` 4.8 GB / `~/.local/share/opencode` 3.4 GB / `~/.pi` 3.7 MB / `~/.gemini` 191 MB），以及 SDK 与主进程源码。凡未验证的推断均标注 `UNVERIFIED`。
+> 结论基于调研时本机真实数据逆向（`~/.claude` 9.1 MB / `~/.codex` 4.8 GB / `~/.local/share/opencode` 3.4 GB / `~/.pi` 3.7 MB / `~/.gemini` 191 MB），以及当时的 SDK 与主进程源码。这些体积与行号不是当前测量；凡未验证的推断均标注 `UNVERIFIED`。
 
 ---
 

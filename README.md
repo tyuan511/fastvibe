@@ -11,7 +11,7 @@
 
 An AI agent workspace for code, documents, and everyday tasks. Work with your own models, follow what the agent does, and keep conversations, files, terminals, and Git changes together on your desktop.
 
-[Download](#download) · [Get started](#get-started) · [Features](#features) · [Use your phone](#use-your-phone) · [Development](#development) · [Release notes / 更新说明](docs/release/README.md)
+[Download](#download) · [Get started](#get-started) · [Features](#features) · [Use your phone](#use-your-phone) · [Development](#development) · [Documentation](docs/README.md) · [Release notes / 更新说明](docs/release/README.md)
 
 ![The FastVibe workspace, split diagonally between its light theme (left) and dark theme (right)](docs/images/workspace-en.webp)
 

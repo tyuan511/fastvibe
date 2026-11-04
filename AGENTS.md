@@ -2604,6 +2604,18 @@ ipc-ready …, window-created …, engine-runtime …, engine-session …, engin
     典型转写的 `prepareTranscriptForOpen` 是 4 MB ~20 ms、9 MB ~35 ms、58 MB ~150–210 ms。所以切换本身
     不是瓶颈，启动路径上真正大的是上面等 MCP 的那一段。
 
+## 项目文档
+
+文档入口是 [docs/README.md](docs/README.md)。Vivi 当前架构、运行合同与限制统一维护在
+[docs/vivi-bot-implementation.md](docs/vivi-bot-implementation.md)，类型以 `src/shared/bot.ts` 为准；
+DeepSeek 上游研究单独放在 [docs/dsh-superagent-architecture.md](docs/dsh-superagent-architecture.md)。
+Vivi 的目标架构已确定为整体采用 DSH，完整设计与迁移要求见
+[docs/vivi-dsh-architecture.md](docs/vivi-dsh-architecture.md)：GitHub Issue/PR 作为外部事件驱动 Vivi；
+Issue → PR → Review → 修复 → CI → Merge 是首个验收场景，不以最小闭环为由省略核心领域、Effects/Outbox 或恢复机制。
+该目标尚未实现，当前实现说明与目标设计须明确区分；不沿用已删除的旧审核技能流程。
+已被替代的计划不作为当前需求或实现承诺；更新功能时同步现有说明，删除过时步骤与重复合同，保留研究基线和验证边界。
+删除文档前提取仍有用的独有资料，并更新所有入口与脚本引用；发布记录和数据库迁移不随文档清理删除。
+
 ## Commands
 
 ```bash
