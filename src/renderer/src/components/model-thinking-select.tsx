@@ -1,7 +1,7 @@
 import { useMemo, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowDown01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
+import { ArrowDown01Icon, Settings01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -168,6 +168,21 @@ export function ModelThinkingSelect({
         }
       />
       <DropdownMenuContent align="end" className="min-w-64">
+        <div className="flex items-center justify-between gap-2 pl-1.5">
+          <span className="text-xs font-medium text-muted-foreground">{t("composer.modelSelection")}</span>
+          {onManageModels ? (
+            <DropdownMenuItem
+              disabled={disabled}
+              onClick={onManageModels}
+              aria-label={manageModelsLabel ?? t("composer.manageModels")}
+              title={manageModelsLabel ?? t("composer.manageModels")}
+              className="justify-center p-1.5"
+            >
+              <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} className="size-4" />
+            </DropdownMenuItem>
+          ) : null}
+        </div>
+        <DropdownMenuSeparator />
         {inheritModelLabel ? (
           <>
             <DropdownMenuCheckboxItem
@@ -227,12 +242,6 @@ export function ModelThinkingSelect({
           disabled={disabled}
           onCommit={onThinkingChange}
         />
-        {onManageModels ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={disabled} onClick={onManageModels}>{manageModelsLabel ?? t("composer.manageModels")}</DropdownMenuItem>
-          </>
-        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

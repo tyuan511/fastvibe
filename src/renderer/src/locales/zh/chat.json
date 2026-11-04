@@ -31,6 +31,7 @@
     "compactBusy": "会话进行中，无法压缩",
     "addModel": "添加模型",
     "pickModel": "选择模型",
+    "modelSelection": "模型选择",
     "noModels": "暂无模型",
     "manageModels": "管理模型",
     "thinking": "推理强度",

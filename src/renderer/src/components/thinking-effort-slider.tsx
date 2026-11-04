@@ -61,7 +61,7 @@ export function ThinkingEffortSlider({
 
   return (
     <div
-      className="thinking-effort px-2.5 pt-2 pb-1"
+      className="thinking-effort px-1.5 pt-2 pb-1"
       data-energized={energized && !disabled || undefined}
       style={{
         "--thinking-progress": progress,

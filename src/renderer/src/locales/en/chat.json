@@ -31,6 +31,7 @@
     "compactBusy": "Unavailable while this conversation is working",
     "addModel": "Add a model",
     "pickModel": "Choose a model",
+    "modelSelection": "Model selection",
     "noModels": "No models",
     "manageModels": "Manage models",
     "thinking": "Reasoning",
