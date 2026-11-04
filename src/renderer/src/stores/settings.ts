@@ -10,6 +10,7 @@ import {
   type ThemeId,
   type ThemeMode,
 } from "@/lib/themes";
+import { isChatMessageWidth, type ChatMessageWidth } from "@/lib/chat-layout";
 import { normalizeNotificationSettings } from "@shared/notifications";
 import { DEFAULT_AUTO_ARCHIVE_DAYS, isAutoArchiveDays } from "@shared/auto-archive";
 import { detectSystemLanguage, isUiLanguage, type UiLanguage } from "@/lib/language";
@@ -111,6 +112,12 @@ export type AppSettings = ProxySettings & {
    */
   uiFontSize: number;
   /**
+   * 消息宽度 (设置 → 通用 → 外观): the transcript rail's max-width, applied through
+   * `--chat-column-max` (`applyChatMessageWidth`). Renderer-only: nothing outside the
+   * window reads it, so it does not need Main's sanitising.
+   */
+  messageWidth: ChatMessageWidth;
+  /**
    * Workspace sidebar width in px. Absent until the user resizes, so an older
    * install can still migrate its localStorage-only value.
    */
@@ -201,6 +208,7 @@ const DEFAULTS: AppSettings = {
   darkTheme: DEFAULT_DARK_THEME,
   glass: true,
   uiFontSize: DEFAULT_UI_FONT_SIZE,
+  messageWidth: "default",
   autoCheckUpdates: true,
   // 系统通知 (设置 → 通用): every scenario on, so a fresh install is not a silent one.
   notifyDone: true,
@@ -241,6 +249,7 @@ function sanitize(parsed: Partial<AppSettings>): Partial<AppSettings> {
   if (!isThemeId(next.lightTheme)) delete next.lightTheme;
   if (!isThemeId(next.darkTheme)) delete next.darkTheme;
   if (!isFontSize(next.uiFontSize)) delete next.uiFontSize;
+  if (!isChatMessageWidth(next.messageWidth)) delete next.messageWidth;
   if (!isThinkingLevel(next.thinkingLevel)) delete next.thinkingLevel;
   if (!isEngineModel(next.defaultModel)) delete next.defaultModel;
   if (!isEngineModel(next.defaultImageModel)) delete next.defaultImageModel;

@@ -20,6 +20,7 @@ import { useIsNarrowViewport } from "@/lib/sidebar-visibility";
 import { UI_LANGUAGES, UI_LANGUAGE_LABELS, type UiLanguage } from "@/lib/language";
 import type { ThemeMode } from "@/lib/themes";
 import { UI_FONT_SIZE_MAX, UI_FONT_SIZE_MIN, UI_FONT_SIZE_STEP } from "@/lib/themes";
+import type { ChatMessageWidth } from "@/lib/chat-layout";
 import { readSidebarWidth } from "@/lib/sidebar-width";
 import { HAS_CUSTOM_TITLE_BAR, HAS_TRAFFIC_LIGHTS, HAS_VIBRANCY } from "@/lib/platform";
 import { TITLE_BAR_OFFSET } from "@/lib/window-chrome";
@@ -347,6 +348,30 @@ export function SettingsDialog({
                             {size}px
                           </SelectItem>
                         ))}
+                      </SelectContent>
+                    </Select>
+                  }
+                />
+                <Row
+                  title={t("appearance.messageWidth")}
+                  description={t("appearance.messageWidthDesc")}
+                  control={
+                    <Select
+                      items={{
+                        default: t("appearance.widthDefault"),
+                        wide: t("appearance.widthWide"),
+                        widest: t("appearance.widthWidest"),
+                      }}
+                      value={settings.messageWidth}
+                      onValueChange={(value) => update({ messageWidth: value as ChatMessageWidth })}
+                    >
+                      <SelectTrigger size="sm" className="w-44">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">{t("appearance.widthDefault")}</SelectItem>
+                        <SelectItem value="wide">{t("appearance.widthWide")}</SelectItem>
+                        <SelectItem value="widest">{t("appearance.widthWidest")}</SelectItem>
                       </SelectContent>
                     </Select>
                   }

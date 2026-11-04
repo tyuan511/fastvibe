@@ -121,7 +121,12 @@
   "darkThemeDesc": "Theme used in dark mode",
   "glass": "Glass",
   "glassDesc": "See-through, frosted window over the desktop, in any theme",
-  "uiFontSize": "Interface size"
+  "uiFontSize": "Interface size",
+  "messageWidth": "Message width",
+  "messageWidthDesc": "Adjust the width of the conversation column",
+  "widthDefault": "Default",
+  "widthWide": "Wider",
+  "widthWidest": "Widest"
  },
  "agent": {
   "title": "Agent settings"

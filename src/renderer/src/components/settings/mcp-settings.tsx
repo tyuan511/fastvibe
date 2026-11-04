@@ -34,6 +34,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -513,14 +514,17 @@ function AddServerDialog({
                 </div>
                 <div className="space-y-1.5">
                   <Label>{t("mcp.transport")}</Label>
-                  <select
+                  <Select
+                    items={{ stdio: t("mcp.stdio"), http: "HTTP（Streamable HTTP）" }}
                     value={draft.transport}
-                    onChange={(event) => onPatch({ transport: event.target.value as McpServerConfig["transport"] })}
-                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    onValueChange={(transport) => { if (transport !== null) onPatch({ transport: transport as McpServerConfig["transport"] }); }}
                   >
-                    <option value="stdio">{t("mcp.stdio")}</option>
-                    <option value="http">HTTP（Streamable HTTP）</option>
-                  </select>
+                    <SelectTrigger aria-label={t("mcp.transport")} className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectItem value="stdio">{t("mcp.stdio")}</SelectItem>
+                      <SelectItem value="http">HTTP（Streamable HTTP）</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -574,15 +578,18 @@ function AddServerDialog({
 
               <div className="space-y-1.5">
                 <Label>{t("mcp.exposure")}</Label>
-                <select
+                <Select
+                  items={{ direct: t("mcp.exposureDirect"), deferred: t("mcp.exposureDeferred"), codemode: t("mcp.exposureCodemode") }}
                   value={draft.exposure}
-                  onChange={(event) => onPatch({ exposure: event.target.value as McpExposure })}
-                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  onValueChange={(exposure) => { if (exposure !== null) onPatch({ exposure: exposure as McpExposure }); }}
                 >
-                  <option value="direct">{t("mcp.exposureDirect")}</option>
-                  <option value="deferred">{t("mcp.exposureDeferred")}</option>
-                  <option value="codemode">{t("mcp.exposureCodemode")}</option>
-                </select>
+                  <SelectTrigger aria-label={t("mcp.exposure")} className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectItem value="direct">{t("mcp.exposureDirect")}</SelectItem>
+                    <SelectItem value="deferred">{t("mcp.exposureDeferred")}</SelectItem>
+                    <SelectItem value="codemode">{t("mcp.exposureCodemode")}</SelectItem>
+                  </SelectContent>
+                </Select>
                 <p className="text-xs text-muted-foreground">{t(`mcp.exposureHint.${draft.exposure}`)}</p>
               </div>
 

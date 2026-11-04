@@ -2,6 +2,7 @@ import { useMemo, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import { Alert02Icon, ArrowRight01Icon, Clock01Icon } from "@hugeicons/core-free-icons";
 import { AppLogo } from "@/components/app-logo";
 import { RunningMark } from "@/components/running-mark";
@@ -82,7 +83,7 @@ export function NewSessionFooter({
   const searchKey = useShortcutLabel("commandPalette");
 
   return (
-    <div className="flex w-full max-w-3xl flex-col gap-5 px-6">
+    <div className={`${CHAT_COLUMN_CLASS} flex flex-col gap-5`}>
       {recent.length > 0 ? (
         <section className="flex flex-col gap-1">
           <div className="flex items-center gap-1.5 px-3 text-xs text-muted-foreground">

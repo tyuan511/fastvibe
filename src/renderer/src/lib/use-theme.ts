@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { useSettingsStore } from "@/stores/settings";
 import { applyThemePreferences, applyUiFontSize } from "@/lib/themes";
+import { applyChatMessageWidth } from "@/lib/chat-layout";
 
 /**
  * Keeps <html> in sync with the persisted appearance settings, including live
@@ -13,6 +14,7 @@ export function useThemeSync(): void {
   const darkTheme = useSettingsStore((state) => state.settings.darkTheme);
   const glass = useSettingsStore((state) => state.settings.glass);
   const uiFontSize = useSettingsStore((state) => state.settings.uiFontSize);
+  const messageWidth = useSettingsStore((state) => state.settings.messageWidth);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -27,6 +29,10 @@ export function useThemeSync(): void {
   useEffect(() => {
     applyUiFontSize(uiFontSize);
   }, [uiFontSize]);
+
+  useEffect(() => {
+    applyChatMessageWidth(messageWidth);
+  }, [messageWidth]);
 }
 
 /**

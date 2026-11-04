@@ -1,6 +1,7 @@
 import { useState, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import { ArrowRight01Icon, Cancel01Icon, CircleIcon, ListChecksIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -116,7 +117,7 @@ export function TodoPanel({ className }: { className?: string }): JSX.Element | 
   const active = activeTodo(items);
 
   return (
-    <div className={cn("mx-auto w-full max-w-3xl px-6", className)}>
+    <div className={cn(CHAT_COLUMN_CLASS, className)}>
       <Collapsible
         open={open}
         onOpenChange={setOpen}

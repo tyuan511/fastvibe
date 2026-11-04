@@ -9,11 +9,11 @@ const spawn: ToolCallBlock = { id: "spawn", name: "spawn_agent", status: "done",
 const wait: ToolCallBlock = { id: "wait", name: "wait_agent", status: "running", args: { targets: ["agent-one"] } };
 const messages: ChatMessage[] = [{ id: "reply", role: "assistant", text: "", tools: [spawn, wait], createdAt: 1 }];
 
-test("all team actions keep a dedicated row instead of disappearing in a generic batch", () => {
+test("only team checks can join a batch; running waits and team changes stay standalone", () => {
   for (const name of ["spawn_agent", "wait_agent", "send_message", "followup_task", "interrupt_agent", "list_agents"]) {
     assert.ok(agentToolAction(name));
     assert.equal(familyOf(name), "agent");
-    assert.equal(foldsIntoRun(name), false);
+    assert.equal(foldsIntoRun(name), name === "list_agents");
   }
   assert.equal(agentToolAction("unknown"), undefined);
 });

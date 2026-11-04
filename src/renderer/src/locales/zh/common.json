@@ -139,7 +139,7 @@
       },
       "wait": {
         "running": "正在等待 <agents/> 完成",
-        "done": "已结束等待 <agents/>",
+        "done": "已等待 <agents/>",
         "error": "等待 <agents/>"
       },
       "send": {
@@ -189,7 +189,9 @@
     "searchMany_other": "已搜索 {{count}} 次",
     "toolOne": "已调用",
     "toolMany_one": "已调用 {{count}} 个工具",
-    "toolMany_other": "已调用 {{count}} 个工具"
+    "toolMany_other": "已调用 {{count}} 个工具",
+    "agentChecks_one": "已查看团队 {{count}} 次",
+    "agentChecks_other": "已查看团队 {{count}} 次"
   },
   "shortcuts": {
     "group": {

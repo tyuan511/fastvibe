@@ -26,8 +26,8 @@ export function createImageFixture(sample: boolean, readConfig?: () => ImageConf
     models: historyModels,
   };
   let sessions: ImageSession[] = sample ? [
-    { id: "image-session-still", title: "日常之物 · 陶器视觉探索", createdAt: now - 86400000, updatedAt: now, modelId: config.models[0]?.id, options: { count: 4, aspectRatio: "1:1" } },
-    { id: "image-session-brand", title: "品牌图形与色彩", createdAt: now - 172800000, updatedAt: now - 3600000, modelId: config.models[1]?.id },
+    { id: "image-session-still", title: "日常之物 · 陶器视觉探索", createdAt: now - 86400000, updatedAt: now, modelId: config.models[0]?.id, options: { count: 4, aspectRatio: "1:1" }, previewPath: artwork(0) },
+    { id: "image-session-brand", title: "品牌图形与色彩", createdAt: now - 172800000, updatedAt: now - 3600000, modelId: config.models[1]?.id, previewPath: artwork(3) },
   ] : [];
   let tasks: ImageTask[] = sample ? [
     { id: "image-job-finished", requestId: "fixture-finished", sessionId: sessions[0]!.id, createdAt: now - 100000, completedAt: now - 60000, status: "succeeded", prompt: "一组宁静的陶器静物海报。自然光，温润的手作质感，鼠尾草绿与暖白色调，留白克制。", model: config.models[0]!, options: { count: 4, aspectRatio: "1:1" }, references: [], images: [0, 1, 2, 3].map((i) => ({ id: `sample-${i}`, path: artwork(i), mimeType: "image/svg+xml", width: 1024, height: 1024 })) },

@@ -20,15 +20,18 @@ export type ThinkingPart = Extract<MessagePart, { kind: "thinking" }>;
  *
  * A few calls stay on their own line and break the run, because the row is the
  * thing to see: a question waits on the reader, and a todo / sub-agent / presented
- * file is its own card. Reads and writes stay in the batch — the summary names them, it
- * does not hide them behind 「已运行」.
+ * file is its own card. Completed team checks join the batch, while team-changing
+ * actions keep their own rows. Waits are visible only while running.
+ * Reads and writes stay in the batch — the summary names them, it does not hide them
+ * behind 「已运行」.
  */
 const STANDALONE_FAMILIES = new Set<ToolFamily>(["question", "todo", "agent", "present"]);
+const QUIET_AGENT_TOOLS = new Set(["list_agents"]);
 
 export function foldsIntoRun(name: string): boolean {
   const key = name.trim().toLowerCase();
   if (!key) return false;
-  return !STANDALONE_FAMILIES.has(familyOf(key));
+  return QUIET_AGENT_TOOLS.has(key) || !STANDALONE_FAMILIES.has(familyOf(key));
 }
 
 export type RunItem =
@@ -57,8 +60,10 @@ export type CollapsedPart =
 
 /**
  * Fold adjacent quiet tools (and, with `collapseThinking`, the thoughts between them)
- * into one run. A single call stays a row — it already is its own description. Without
- * the preference, thinking is emitted on its own and splits the batch, the same as prose.
+ * into one run. A single ordinary call stays a row — it already is its own description.
+ * Team checks use a compact count even for one call; settled waits are omitted.
+ * Without the preference, thinking is emitted on its own and splits the batch,
+ * the same as prose.
  *
  * A call still in flight is not folded either, and it splits the batch behind it. The row
  * is the thing the reader watches while the run goes on: had the live call been drawn *as*
@@ -88,7 +93,7 @@ export function collapseToolRuns(
     if (tools.length === 0) {
       // Thoughts only: no call to fold them into, so each keeps its own block.
       for (const item of pending) if (item.kind === "thinking") output.push(item.part);
-    } else if (tools.length >= 2 || thoughts > 0) {
+    } else if (tools.length >= 2 || thoughts > 0 || tools.some((tool) => QUIET_AGENT_TOOLS.has(tool.name))) {
       output.push({
         kind: "run",
         id: `run:${tools[0].id}`,
@@ -115,7 +120,12 @@ export function collapseToolRuns(
     if (part.kind === "tool") {
       const tool = toolById.get(part.toolId);
       if (!tool) continue;
-      if (foldsIntoRun(tool.name) && tool.status !== "running") {
+      // Only the active wait is useful in the transcript. A settled wait neither
+      // occupies a row nor splits or contributes to the surrounding tool batch.
+      if (tool.name === "wait_agent" && tool.status !== "running") continue;
+      // Failed team checks must remain visible beside the live work.
+      const failedAgent = familyOf(tool.name) === "agent" && tool.status === "error";
+      if (foldsIntoRun(tool.name) && tool.status !== "running" && !failedAgent) {
         pending.push({ kind: "tool", tool });
         continue;
       }
@@ -187,11 +197,12 @@ export function callName(tool: ToolCallBlock): string {
 
 /**
  * The categories a settled line reports. Everything that folds falls into one of them, so
- * the line is at most six clauses however many calls a batch made. Reads and writes stay
+ * the line is bounded however many calls a batch made. Team checks get
+ * their own counts rather than exposing raw tool names. Reads and writes stay
  * apart; searches and the rest of the tool surface each gather into one, and so do the
  * thoughts the option folded in.
  */
-type RunCategory = "think" | "command" | "read" | "write" | "search" | "tool";
+type RunCategory = "think" | "command" | "read" | "write" | "search" | "tool" | "agentCheck";
 
 const CATEGORY_OF: Record<ToolFamily, RunCategory> = {
   terminal: "command",
@@ -221,10 +232,11 @@ const CATEGORY_CLAUSE: Record<RunCategory, { one: string; many: string }> = {
   write: { one: "common:group.writeOne", many: "common:group.writeMany" },
   search: { one: "common:group.searchOne", many: "common:group.searchMany" },
   tool: { one: "common:group.toolOne", many: "common:group.toolMany" },
+  agentCheck: { one: "common:group.agentChecks", many: "common:group.agentChecks" },
 };
 
-/** Commands and thoughts are only ever counted; neither has a name to print. */
-const COUNT_ONLY = new Set<RunCategory>(["command", "think"]);
+/** Commands, thoughts and team checks are counted rather than named. */
+const COUNT_ONLY = new Set<RunCategory>(["command", "think", "agentCheck"]);
 
 /** A later clause of the same sentence: drop a leading 「已」, or uncapitalise an English verb. */
 function continueClause(clause: string): string {
@@ -241,7 +253,9 @@ export function runSummary(items: RunItem[], text: Translate): { line: string; p
   const buckets = new Map<RunCategory, RunItem[]>();
   const order: RunCategory[] = [];
   for (const item of items) {
-    const category = item.kind === "thinking" ? "think" : CATEGORY_OF[familyOf(item.tool.name)];
+    const category = item.kind === "thinking" ? "think"
+      : item.tool.name === "list_agents" ? "agentCheck"
+      : CATEGORY_OF[familyOf(item.tool.name)];
     const bucket = buckets.get(category);
     if (bucket) bucket.push(item);
     else {

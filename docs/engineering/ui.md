@@ -109,6 +109,7 @@ it.
 - Product screens (chat thread, workspace chrome, tool cards) live outside `components/ui/` and **compose** shadcn primitives. Custom markup is allowed only when shadcn has no matching primitive.
 - **A group part needs its group.** `DropdownMenuLabel` / `ContextMenuLabel` / `SelectLabel` are Base UI's `Menu.GroupLabel`, which throws `MenuGroupContext is missing` when rendered outside its group; the same applies to the other group-only parts. It is a **render-time** throw, so no typecheck catches it and it does not degrade gracefully — it unmounts the whole tree. That is how the composer's model menu, whose empty state drew a bare label, took FastVibe down the instant it was opened on an install with no models. Wrap every label in `DropdownMenuGroup` / `ContextMenuGroup` / whichever group the surface has.
 - Wrap the tree with `TooltipProvider`.
+- Select 触发器统一使用单下箭头，设置页与 MCP 表单都复用公共 Select，不保留平台原生双箭头。选项文字允许收缩并省略，右侧勾选区单独预留空间，不能用 `shrink-0` 让长名称覆盖勾选标记。生图模型菜单优先向上展开，按内容增长宽度并受视口限制。
 - `vite.config.ts` exists so the shadcn CLI can detect Vite. The Electron app builds through `electron.vite.config.ts`.
 
 ## 会话资源
@@ -116,7 +117,7 @@ it.
 `AiExpandIcon` 资源入口只挂载在中间聊天区自己的标题栏右侧，不跨列、不移到右侧详情区域。右侧面板收起时，这里按「资源 → 展开面板」排列；右侧面板展开后，中间区只保留资源按钮，收起按钮属于右侧面板自己的标题行。
 两个区域各有标题行，右侧面板不为跨列标题栏下移。资源面板展开或收起都保留同一个入口；右侧面板最大化时，中间区及其标题栏一起隐藏，资源入口也不迁移过去。
 `ConversationResources` 内容随会话栏实际宽度切换：有足够正文留白时绝对定位常驻，同一个按钮可以收起；空间不足时点击按钮打开可在外部点击关闭的浮层。
-资源面板固定为 `300px` 宽，浮层在极窄窗口内再收窄。`ResizeObserver` 同时观察会话栏和 `calc(50rem + 600px)` 的尺寸探针（`48rem` 居中正文、两侧各 `300px + 1rem` 留白），所以侧栏拖动和界面字号也参与判断，不以整窗宽度代替。
+资源面板固定为 `300px` 宽，浮层在极窄窗口内再收窄。`ResizeObserver` 同时观察会话栏和一个尺寸探针（`chatColumnDockProbe`，居中正文加两侧 `1rem` 内边距再加 `300px + 1rem` 面板留白；`50rem + 600px` 起，随消息宽度变化），所以侧栏拖动、界面字号和消息宽度都参与判断，不以整窗宽度代替。消息宽度为「最宽」时正文占满会话栏，没有可停靠的留白，面板只以浮层打开。
 用户打开偏好保存在 `settings.resourcePanelOpen`（默认开启），跨会话和重启保留。宽度变化只清空临时浮窗，不改写偏好：变窄自动隐藏，重新变宽时按偏好恢复。按钮、点击外部或 Escape 的主动关闭才记为关闭；打开文件等导航动作只临时收起浮窗。窄布局不会因为恢复偏好自动弹出浮窗，仍需手动点击查看。
 视觉采用单层浮层和平铺列表：分组间用细分隔线与留白，不套边框卡片，展开标题也不铺底色。
 常驻与浮窗共用 `resource-surface`，保留左侧栏的内侧细边、高光和边缘反光，不加外投影。普通主题使用 `--sidebar` 底色；玻璃主题的常驻面板使用 `--glass-pane`，浮窗则使用与全局弹窗一致的 `--glass-overlay` 透明度，避免下面的正文干扰，同时模糊背后文字、不额外增强饱和度。
@@ -252,13 +253,15 @@ is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glas
   dialog and an `absolute` popover already do the same. `test/toast-stacking.test.ts` pins both
   halves, because either side alone fixes nothing and neither side fails loudly.
 - **A pinned prompt cuts the reply, it does not cover it.** Elsewhere the sticky prompt's
-  solid `bg-background` hides what scrolls under it while matching the page; a see-through
-  page has no colour that does both (a tinted band was tried and is an ugly block). Under
-  glass the row paints nothing, and `pinRegistryFor` masks the reply rows of the pinned turn
-  off at the prompt's lower edge (`GLASS_CUT_FEATHER`), in the same read-then-write pass that
-  decides which prompt is pinned. The mask follows how far sticky has moved the prompt off its
-  own place, not `pinned`: pushed away by the next turn, a prompt leaves the top edge but rides
-  out lying on its reply's last rows, and those must stay cut until the turn is gone.
+  solid band hides what scrolls under it while matching the surface it sits on: `--thread-band`
+  (message-list.tsx, defined in index.css) is the page (`--background`) in the conversation
+  column and the pane fill (`--sidebar`) inside a floating pane — painted `--background` in a
+  pane it read as a lighter slab behind the bubble. Under glass the row paints nothing, and
+  `pinRegistryFor` masks the reply rows of the pinned turn off at the prompt's lower edge
+  (`GLASS_CUT_FEATHER`), in the same read-then-write pass that decides which prompt is pinned.
+  The mask follows how far sticky has moved the prompt off its own place, not `pinned`: pushed
+  away by the next turn, a prompt leaves the top edge but rides out lying on its reply's last
+  rows, and those must stay cut until the turn is gone.
 - **The same goes for anything tucked under a card.** The follow-up queue slides 1.75rem under
   the input card and relies on the card's fill to hide that part; under glass `.composer-tray`
   is masked to the card's outline instead (`index.css`). A new panel that tucks under a
@@ -306,6 +309,16 @@ is only offered where there is a blur to show (`HAS_VIBRANCY`). `src/shared/glas
 - Two exceptions need px by nature: xterm's `fontSize` (derived from the resolved
   root size in `side-pane-terminal.tsx`) and container-query breakpoints, which are
   written in `rem` (`min-[27.5rem]`) so they track the setting too.
+- 消息宽度 (设置 → 通用 → 外观, `settings.messageWidth`) is the transcript rail's
+  max-width: `default` is the `max-w-3xl` (48rem) reading column, `wide` is 56rem,
+  `widest` caps at 100% of the column — never beyond — so the rail's own `px-6` is
+  the only margin. It applies as
+  `--chat-column-max` on `<html>` (`applyChatMessageWidth` in `lib/chat-layout.ts`,
+  applied live by `useThemeSync` and pre-mount in `main.tsx`), and the shared rail
+  class `CHAT_COLUMN_CLASS` (`chat-column mx-auto w-full px-6`) reads it — composer,
+  todo/goal/widget rows, a raised permission panel and the new-session hero all ride
+  the same rail, so they move together. Assistant process rows keep their own
+  `max-w-2xl` cap on purpose; the setting widens the message text, not every card.
 
 ## 滚动条（原生和 ScrollArea 画成同一根条）
 

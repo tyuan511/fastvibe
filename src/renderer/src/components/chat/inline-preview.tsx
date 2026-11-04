@@ -191,16 +191,21 @@ const SCRIM_BUTTON = "text-white hover:bg-white/15 hover:text-white aria-expande
  * from; the caption is bottom-left, the position bottom-centre and what a row's buttons do is
  * top-right, because nothing else on screen is clickable while this is open.
  */
-function Viewer({
+export function Viewer({
   items,
   index,
   onIndex,
   onClose,
+  extraActions,
+  sidePreview = true,
 }: {
   items: InlinePreview[];
   index: number;
   onIndex: (index: number) => void;
   onClose: () => void;
+  extraActions?: JSX.Element;
+  /** Generated-image galleries leave this out: the image already fills the screen there. */
+  sidePreview?: boolean;
 }): JSX.Element | null {
   const { t } = useTranslation("chat");
   const narrow = useIsNarrowViewport();
@@ -247,7 +252,7 @@ function Viewer({
       >
         <DialogTitle className="sr-only">{caption}</DialogTitle>
         <div className="flex shrink-0 items-center justify-end gap-1 p-3" onClick={dismissOnScrim}>
-          {canPane ? (
+          {sidePreview && canPane ? (
             <Button
               type="button"
               size="icon-sm"
@@ -263,6 +268,7 @@ function Viewer({
               <HugeiconsIcon strokeWidth={2} icon={SidebarRight01Icon} />
             </Button>
           ) : null}
+          {extraActions}
           <ItemMenu preview={current} className={SCRIM_BUTTON} />
           <Button type="button" size="icon-sm" variant="ghost" aria-label={t("preview.close")} className={SCRIM_BUTTON} onClick={onClose}>
             <HugeiconsIcon strokeWidth={2} icon={Cancel01Icon} />

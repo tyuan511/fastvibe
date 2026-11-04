@@ -9,10 +9,11 @@ export function ImageSelect({ value, onChange, options, label, disabled, classNa
   disabled?: boolean;
   className?: string;
 }): JSX.Element {
-  return <Select value={value} onValueChange={(next) => { if (next !== null) onChange(next); }} disabled={disabled}>
-    <SelectTrigger aria-label={label} className={className}><SelectValue>{options.find((option) => option.value === value)?.label ?? value}</SelectValue></SelectTrigger>
-    <SelectContent align="start" alignItemWithTrigger={false}>
-      {options.map((option) => <SelectItem key={option.value} value={option.value} disabled={option.disabled}>{option.label}</SelectItem>)}
+  const selectedLabel = options.find((option) => option.value === value)?.label ?? value;
+  return <Select items={Object.fromEntries(options.map((option) => [option.value, option.label]))} value={value} onValueChange={(next) => { if (next !== null) onChange(next); }} disabled={disabled}>
+    <SelectTrigger aria-label={label} title={selectedLabel} className={className}><SelectValue>{selectedLabel}</SelectValue></SelectTrigger>
+    <SelectContent side="top" align="start" alignItemWithTrigger={false} className="w-max min-w-(--anchor-width) max-w-[min(32rem,calc(100vw-2rem))]">
+      {options.map((option) => <SelectItem key={option.value} value={option.value} title={option.label} disabled={option.disabled}>{option.label}</SelectItem>)}
     </SelectContent>
   </Select>;
 }

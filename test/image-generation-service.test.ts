@@ -98,6 +98,23 @@ test("OpenAI generation sends image parameters and a Bearer credential", async (
   assert.deepEqual(captured, { url: "/v1/images/generations", auth: "Bearer secret-image-key", body: { model: "test-image", prompt: "A lighthouse", n: 1, size: "1536x1024", quality: "high" } });
 });
 
+test("current GPT models send widescreen high-resolution sizes in both generation and editing requests", async (t) => {
+  const captured: { size: string; multipart: boolean }[] = [];
+  const { service, config } = await fixture(t, (req, res, bytes) => {
+    const multipart = String(req.headers["content-type"]).includes("multipart/form-data");
+    const size = multipart ? /name="size"\r\n\r\n([^\r]+)/.exec(bytes.toString())?.[1] : JSON.parse(bytes.toString()).size;
+    captured.push({ size, multipart });
+    send(res, imageResponse);
+  });
+  config.models[0]!.model = "gpt-image-2.5-flare-1k";
+  for (const editing of [false, true]) {
+    const task = await service.generate({ requestId: `custom-size-${editing}`, prompt: "A landscape", options: { aspectRatio: "16:9", size: "3840x2160" }, ...(editing ? { references: [reference] } : {}) });
+    assert.equal((await service.waitForTask(task.id)).status, "succeeded");
+    assert.equal((await service.snapshot(task.sessionId)).tasks[0]!.options.size, "3840x2160");
+  }
+  assert.deepEqual(captured, [{ size: "3840x2160", multipart: false }, { size: "3840x2160", multipart: true }]);
+});
+
 test("OpenAI editing uploads reference bytes as multipart rather than a JSON image URL", async (t) => {
   let contentType = "";
   let bytes = Buffer.alloc(0);
@@ -489,9 +506,10 @@ test("count results retain request slot order during reverse completion, partial
   assert.deepEqual((await reopened.snapshot(task.sessionId)).tasks[0]!.images, result.images);
 });
 
-test("OpenAI refuses unsupported ratios and size conflicts before creating a task or sending a request", async (t) => {
+test("legacy GPT Image refuses unsupported ratios and size conflicts before creating a task or sending a request", async (t) => {
   let attempts = 0;
-  const { service } = await fixture(t, (_req, res) => { attempts++; send(res, imageResponse); });
+  const { service, config } = await fixture(t, (_req, res) => { attempts++; send(res, imageResponse); });
+  config.models[0]!.model = "gpt-image-1";
   for (const [index, options] of [
     { aspectRatio: "16:9" }, { aspectRatio: "9:16", size: "1024x1536" },
     { aspectRatio: "4:3" }, { aspectRatio: "3:2", size: "1024x1024" },

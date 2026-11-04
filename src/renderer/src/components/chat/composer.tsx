@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEve
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import { Add01Icon, ArrowDown01Icon, ArrowUp02Icon, AttachmentIcon, Cancel01Icon, Folder01Icon, MagicWand02Icon, PlayIcon, ScissorIcon, Search01Icon, SparklesIcon, SquareIcon } from "@hugeicons/core-free-icons";
 import { FileIcon } from "@/components/file-icon";
 import { IconButton } from "@/components/icon-button";
@@ -851,7 +852,7 @@ export function Composer({
 
   return (
     <div
-      className={cn("@container/composer mx-auto w-full max-w-3xl px-6 pb-5", className)}
+      className={cn("@container/composer", CHAT_COLUMN_CLASS, "pb-5", className)}
       onDragOver={(event) => {
         event.preventDefault();
         setDragging(!readOnly && !locked);

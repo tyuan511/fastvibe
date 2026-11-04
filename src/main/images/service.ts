@@ -58,11 +58,28 @@ export class ImageGenerationService {
 
   async snapshot(sessionId?: string): Promise<ImageSnapshot> {
     this.#ensureOpen();
+    // Covers are derived, not stored: the newest task image per session, read while listing.
+    const previews = this.#sessionPreviews();
     return {
       revision: this.#revision(),
-      sessions: this.#db.all<{ data: string }>("SELECT data FROM image_sessions ORDER BY updated_at DESC, id").map((row) => JSON.parse(row.data) as ImageSession),
+      sessions: this.#db.all<{ data: string }>("SELECT data FROM image_sessions ORDER BY updated_at DESC, id").map((row) => {
+        const session = JSON.parse(row.data) as ImageSession;
+        const previewPath = previews.get(session.id);
+        return previewPath ? { ...session, previewPath } : session;
+      }),
       tasks: sessionId ? this.#db.all<{ data: string }>("SELECT data FROM image_tasks WHERE session_id = ? ORDER BY created_at, rowid", sessionId).map((row) => JSON.parse(row.data) as ImageTask) : [],
     };
+  }
+
+  /** The newest task with an image owns the session's cover; one pass, newest first. */
+  #sessionPreviews(): Map<string, string> {
+    const previews = new Map<string, string>();
+    for (const row of this.#db.all<{ session_id: string; preview: string | null }>(
+      "SELECT session_id, json_extract(data, '$.images[0].path') AS preview FROM image_tasks ORDER BY created_at DESC, rowid DESC",
+    )) {
+      if (row.preview && !previews.has(row.session_id)) previews.set(row.session_id, row.preview);
+    }
+    return previews;
   }
 
   async createSession(title?: string): Promise<ImageSession> {
@@ -139,7 +156,7 @@ export class ImageGenerationService {
     const model = config.models.find((item) => item.id === selected && isUsableImageModel(item));
     if (!model) throw new Error(uiText("请先在模型设置中配置并选择可用的默认图片模型。", "Configure and select an available default image model in model settings first."));
     const validated = validateOptions({ ...session?.options, ...request.options });
-    const options = model.protocol === "openai" ? normalizeOpenAiOptions(validated) : validated;
+    const options = model.protocol === "openai" ? normalizeOpenAiOptions(validated, model) : validated;
     session ??= this.#newSession(request.prompt.trim().slice(0, 40), request.sourceConversationId);
     session = { ...session, modelId: model.id, options, updatedAt: Date.now() };
     const task: ImageTask = {

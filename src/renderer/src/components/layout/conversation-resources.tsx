@@ -16,6 +16,7 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { RunningMark } from "@/components/running-mark";
 import { TodoRow } from "@/components/chat/todo-list";
 import { activeTodo } from "@/lib/todos";
+import { chatColumnDockProbe } from "@/lib/chat-layout";
 import { getAgentThreads, onEvent } from "@/lib/engine-client";
 import { useConversationTodo } from "@/lib/use-conversation-todo";
 import { conversationAgents, resourceAgentFinished, type ResourceAgent } from "@/lib/conversation-resources";
@@ -233,16 +234,19 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
   </div>;
 }
 
-/** A centered 48rem chat needs a 300px panel plus a 1rem outside inset in
- * each gutter: the docking threshold is 50rem + 600px. The panel stays 300px
- * wide, including when the UI font size changes.
- * Observe the actual column and a rem-sized probe: splitters and font changes
- * matter just as much as window resizing. The trigger belongs only to this
- * conversation header; it never migrates into a detail pane. */
+/** A centered chat rail needs a 300px panel plus a 1rem outside inset in
+ * each gutter. The docking threshold follows 消息宽度: the rail (48rem or 56rem)
+ * plus its 2×1rem padding, before the 600px of panel + insets. `widest` leaves
+ * no gutter, so the panel never docks — it only ever opens as a popover.
+ * The panel stays 300px wide, including when the UI font size changes.
+ * Observe the actual column and a rem-sized probe: splitters, font changes and
+ * the width preference matter just as much as window resizing. The trigger
+ * belongs only to this conversation header; it never migrates into a detail pane. */
 export function ConversationResources({ disabled = false }: { disabled?: boolean }) {
   const { t } = useTranslation("sidepane");
   const conversation = useSessionStore((state) => state.conversations.find((item) => item.id === state.activeId));
   const project = useSessionStore((state) => state.projects.find((item) => item.cwd === conversation?.project));
+  const messageWidth = useSettingsStore((state) => state.settings.messageWidth);
   const [openFor, setOpenFor] = useState<string | null>(null);
   const [docked, setDocked] = useState(false);
   const requestedOpen = useSettingsStore((state) => state.settings.resourcePanelOpen !== false);
@@ -251,9 +255,10 @@ export function ConversationResources({ disabled = false }: { disabled?: boolean
     const probe = sizeProbe.current;
     const host = probe?.closest<HTMLElement>("[data-conversation-resources-host]");
     if (!probe || !host) return;
+    const dockable = messageWidth !== "widest";
     let previous: boolean | undefined;
     const measure = (): void => {
-      const next = host.clientWidth >= probe.getBoundingClientRect().width;
+      const next = dockable && host.clientWidth >= probe.getBoundingClientRect().width;
       if (previous === next) return;
       previous = next;
       // Resize dismisses only the transient popover. The saved user preference
@@ -266,7 +271,7 @@ export function ConversationResources({ disabled = false }: { disabled?: boolean
     observer.observe(host);
     observer.observe(probe);
     return () => observer.disconnect();
-  }, [conversation?.id]);
+  }, [conversation?.id, messageWidth]);
   useLayoutEffect(() => { setOpenFor(null); }, [conversation?.id, disabled]);
   useLayoutEffect(() => { if (!requestedOpen) setOpenFor(null); }, [requestedOpen]);
   if (!conversation) return null;
@@ -279,7 +284,7 @@ export function ConversationResources({ disabled = false }: { disabled?: boolean
   const body = <ResourceBody key={conversation.id + ":" + conversation.cwd} conversation={conversation} project={project} onClose={() => setOpenFor(null)} />;
   return <>
     {/* Clip the measurement probe so it cannot create horizontal overflow. */}
-    <span aria-hidden className="pointer-events-none absolute h-0 w-0 overflow-hidden"><span ref={sizeProbe} className="block h-0 w-[calc(50rem+600px)]" /></span>
+    <span aria-hidden className="pointer-events-none absolute h-0 w-0 overflow-hidden"><span ref={sizeProbe} className="block h-0" style={{ width: chatColumnDockProbe(messageWidth) }} /></span>
     {docked ? <>
       <IconButton size="icon-sm" variant="ghost" label={t("resources.title")} disabled={disabled}
         aria-expanded={showDocked} className="no-drag text-muted-foreground"

@@ -137,6 +137,53 @@ test("questions, todos and sub-agents stay out", () => {
   assert.equal(foldsIntoRun("computer_window_state"), true);
 });
 
+test("settled waits disappear while the current wait stays visible", () => {
+  const waits = Array.from({ length: 8 }, (_, index) => ({
+    ...tool(`wait-${index}`, "wait_agent", index === 7 ? "error" : "done"),
+    args: { targets: ["agent-one", "agent-two"] },
+    details: { threads: [{ id: "agent-one", status: "working" }] },
+  }));
+  const current = tool("current", "wait_agent", "running");
+  const folded = collapse([...waits, current], { streaming: true });
+  assert.deepEqual(folded, [{ kind: "tool", tool: current }]);
+  assert.deepEqual(collapse([...waits, { ...current, status: "done" }]), []);
+  // This is a view rule; persisted history and the model's results stay intact.
+  assert.equal(waits.length, 8);
+  assert.equal(waits[0].details.threads[0].status, "working");
+});
+
+test("one completed team check still uses a compact count", () => {
+  const folded = collapse([tool("one", "list_agents")]);
+  if (folded[0]?.kind !== "run") throw new Error("expected a run");
+  assert.equal(runSummary(folded[0].items, zh).line, "已查看团队 1 次");
+  assert.equal(folded[0].tools.length, 1);
+});
+
+test("hidden waits neither split tool batches nor contribute to their summaries", () => {
+  const sequence = [tool("w1", "wait_agent"), thought("check the changes"), tool("b1", "bash"), tool("w2", "wait_agent", "error"), tool("l1", "list_agents"), tool("w3", "wait_agent")];
+  const folded = collapse(sequence, { collapseThinking: true });
+  if (folded[0]?.kind !== "run") throw new Error("expected a run");
+  assert.equal(folded.length, 1);
+  assert.deepEqual(folded[0].tools.map((call) => call.id), ["b1", "l1"]);
+  assert.equal(runSummary(folded[0].items, zh).line, "已思考 1 次，运行 1 个命令，查看团队 1 次");
+  assert.deepEqual(collapse(sequence).map((part) => part.kind), ["thinking", "run"]);
+  assert.deepEqual(collapse([tool("w1", "wait_agent"), thought("still thinking")], { collapseThinking: true, streaming: true }).map((part) => part.kind), ["thinking"]);
+  assert.deepEqual(collapse([tool("w1", "wait_agent"), { kind: "text", text: "结果" }, tool("w2", "wait_agent")]), [{ kind: "text", text: "结果" }]);
+  const aroundWait = collapse([tool("b1", "bash"), tool("w1", "wait_agent"), tool("b2", "bash")]);
+  if (aroundWait[0]?.kind !== "run") throw new Error("expected a run");
+  assert.equal(aroundWait.length, 1);
+  assert.equal(runSummary(aroundWait[0].items, zh).line, "已运行 2 个命令");
+});
+
+test("running waits, failed team checks and team changes remain visible boundaries", () => {
+  for (const name of ["wait_agent", "list_agents", "spawn_agent", "send_message", "followup_task", "interrupt_agent"]) {
+    const middle = tool("middle", name, name === "wait_agent" ? "running" : name === "list_agents" ? "error" : "done");
+    const folded = collapse([tool("b1", "bash"), tool("b2", "bash"), middle, tool("b3", "bash"), tool("b4", "bash")]);
+    assert.deepEqual(folded.map((part) => part.kind), ["run", "tool", "run"]);
+    assert.equal(folded[1]?.kind === "tool" ? folded[1].tool : undefined, middle);
+  }
+});
+
 test("commands are counted, and a single read or write is named", () => {
   const mixed = runSummary(
     items(
@@ -297,6 +344,7 @@ function zh(key: string, options?: { count?: number }): string {
     "common:group.thoughts": `已思考 ${count} 次`,
     "common:group.ranCommands": `已运行 ${count} 个命令`,
     "common:group.readOne": "已读取",
+    "common:group.agentChecks": `已查看团队 ${count} 次`,
   };
   return table[key] ?? key;
 }

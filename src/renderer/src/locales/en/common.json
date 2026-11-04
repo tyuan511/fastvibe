@@ -139,7 +139,7 @@
       },
       "wait": {
         "running": "Waiting for <agents/> to finish",
-        "done": "Finished waiting for <agents/>",
+        "done": "Waited for <agents/>",
         "error": "Wait for <agents/>"
       },
       "send": {
@@ -189,7 +189,9 @@
     "searchMany_other": "Searched {{count}} times",
     "toolOne": "Called",
     "toolMany_one": "Called {{count}} tool",
-    "toolMany_other": "Called {{count}} tools"
+    "toolMany_other": "Called {{count}} tools",
+    "agentChecks_one": "Checked the team {{count}} time",
+    "agentChecks_other": "Checked the team {{count}} times"
   },
   "shortcuts": {
     "group": {

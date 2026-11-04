@@ -121,7 +121,12 @@
   "darkThemeDesc": "暗色模式下使用的主题",
   "glass": "玻璃效果",
   "glassDesc": "窗口透出桌面背景，呈现毛玻璃质感，适用于所有主题",
-  "uiFontSize": "界面字号"
+  "uiFontSize": "界面字号",
+  "messageWidth": "消息宽度",
+  "messageWidthDesc": "调整会话消息栏的宽度",
+  "widthDefault": "默认",
+  "widthWide": "较宽",
+  "widthWidest": "最宽"
  },
  "agent": {
   "title": "Agent 设置"

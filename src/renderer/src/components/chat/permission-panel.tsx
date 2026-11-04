@@ -1,6 +1,7 @@
 import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
@@ -139,7 +140,7 @@ function PanelShell({
       ref={rootRef}
       tabIndex={embedded && active ? -1 : undefined}
       inert={!active}
-      className={cn("@container/composer w-full outline-none", !embedded && "mx-auto max-w-3xl px-6 pb-5")}
+      className={cn("@container/composer w-full outline-none", !embedded && cn(CHAT_COLUMN_CLASS, "pb-5"))}
     >
       <div className={cn(
         "relative flex w-full flex-col gap-2 overflow-hidden",

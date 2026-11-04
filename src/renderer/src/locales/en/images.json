@@ -4,11 +4,15 @@
   "title": "Image generation",
   "newSession": "New image session",
   "sessions": "Image sessions",
+  "sessionList": {
+    "default": "Default session",
+    "emptyTitle": "Start with an idea",
+    "emptyDescription": "Generated images are saved here."
+  },
   "untitled": "New creation",
   "loading": "Loading your creations…",
   "emptyTitle": "Give your imagination a picture",
   "emptyDescription": "Describe what you want to create, or add an image as a reference.",
-  "emptySessions": "Start with an idea. Your creations will be saved here.",
   "noModels": "Add an image model to start creating.",
   "configuration": {
     "loading": "Loading image model configuration…",
@@ -46,23 +50,26 @@
     "unsupportedRatio": "This model doesn't support the selected aspect ratio. Choose another ratio.",
     "aspectRatio": "Aspect ratio",
     "size": "Resolution",
+    "imageOptions": "Image options",
+    "dimensions": "Dimensions",
+    "width": "Image width",
+    "height": "Image height",
+    "dimensionHint": "Dimensions follow the selected ratio and align to 16 pixels.",
     "count": "Image count",
     "countLabel": "{{count}} images",
     "automaticSize": "Automatic size",
     "generate": "Generate",
     "submitting": "Submitting…",
-    "parallelHint": "Each batch runs independently. Keep creating while it generates.",
-    "referenceHint": "Reference images",
-    "keyboardHint": "⌘ / Ctrl + Enter to generate"
+    "referenceHint": "Reference images"
   },
   "timeline": {
     "openImage": "View original image",
     "imageUnavailable": "This image couldn't be loaded",
     "generatingImage": "Generating an image",
-    "creating": "Imagining the scene…",
     "edit": "Edit prompt",
     "regenerate": "Generate again",
     "cancel": "Cancel generation",
+    "useReference": "Use as reference",
     "copyPrompt": "Copy prompt",
     "copied": "Copied",
     "copyFailed": "Couldn't copy. Try again."

@@ -50,7 +50,7 @@ export function previewResources(mode: string, attempt = 0): void {
       { id: "action-followup", name: "followup_task", status: "done", args: { target: threads[1].id, message: "继续检查边界情况。" }, details: { result: threads[1] } },
       { id: "action-interrupt", name: "interrupt_agent", status: "done", args: { target: threads[1].id } },
       { id: "action-list", name: "list_agents", status: "done", args: {}, details: { threads } },
-      { id: "action-wait-many", name: "wait_agent", status: "done", args: { targets: threads.map((thread) => thread.id) }, details: { threads } },
+      ...Array.from({ length: 8 }, (_, index): ToolCallBlock => ({ id: `action-wait-many-${index}`, name: "wait_agent", status: "done", args: { targets: threads.map((thread) => thread.id) }, details: { threads } })),
       { id: "action-error", name: "send_message", status: "error", args: { target: threads[1].id }, result: "Thread is closed" },
       { id: "action-wait", name: "wait_agent", status: "running", args: { targets: [threads[0].id] } },
     ] : [];

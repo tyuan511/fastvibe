@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { HashRouter } from "react-router";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { applyThemePreferences, applyUiFontSize } from "@/lib/themes";
+import { applyChatMessageWidth } from "@/lib/chat-layout";
 import { applyUiLanguage } from "@/lib/i18n";
 import { installRendererLogger } from "@/lib/logger";
 import { useSettingsStore } from "@/stores/settings";
@@ -21,6 +22,8 @@ applyThemePreferences(useSettingsStore.getState().settings);
 // Same for 界面字号: the root font size is the scale factor for every rem in the
 // app, so stamping it pre-mount avoids a one-frame flash at the default size.
 applyUiFontSize(useSettingsStore.getState().settings.uiFontSize);
+// And 消息宽度, so the transcript rail opens at its persisted width for the first paint.
+applyChatMessageWidth(useSettingsStore.getState().settings.messageWidth);
 // And 界面语言, so the first paint is already in the persisted language instead of
 // the OS-detected one the i18n instance starts on.
 applyUiLanguage(useSettingsStore.getState().settings.uiLanguage);

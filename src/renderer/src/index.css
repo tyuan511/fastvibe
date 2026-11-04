@@ -345,14 +345,24 @@ html[data-glass="true"] .glass-rim.overflow-hidden::after {
 html[data-glass="true"] .glass-rim:focus-within::after {
   opacity: 0;
 }
-/* The sticky prompt (message-list.tsx). Its solid `bg-background` is what hides the
-   reply under a pinned prompt in every other theme, but here that token is a 24% tint:
-   at rest it stacked on the root's own into a darker band around the bubble, and
-   pinned it let the reply through. So the row paints nothing; what scrolls under a
-   pinned prompt is masked off in message-list.tsx (`GLASS_CUT_FEATHER`), and the
-   gradient scrim that feathers that edge elsewhere has nothing to do. */
+/* The sticky prompt (message-list.tsx). The band that hides what scrolls under a
+   pinned prompt takes the colour of the surface the thread sits on: the page
+   (`--background`) in the conversation column, the pane fill (`--sidebar`) inside a
+   floating pane — painted `--background` there it read as a lighter slab behind the
+   bubble. The gradient scrim that feathers the band's lower edge follows along. */
+.thread-prompt {
+  --thread-band: var(--background);
+}
+[data-slot="panel-frame"] .thread-prompt {
+  --thread-band: var(--sidebar);
+}
+/* Glass has no solid band colour at all: the token is a 24% tint, at rest it stacked
+   on the root's own into a darker band around the bubble, and pinned it let the reply
+   through. So the row paints nothing; what scrolls under a pinned prompt is masked
+   off in message-list.tsx (`GLASS_CUT_FEATHER`), and the gradient scrim that feathers
+   that edge elsewhere has nothing to do. */
 html[data-glass="true"] .thread-prompt {
-  background-color: transparent;
+  --thread-band: transparent;
 }
 html[data-glass="true"] .thread-prompt [data-prompt-scrim] {
   display: none;
@@ -495,6 +505,15 @@ html[data-glass="true"] .resource-surface[data-resource-presentation="popover"] 
  */
 @utility transcript-gutter {
   scrollbar-gutter: stable;
+}
+
+/* 消息宽度 (设置 → 通用 → 外观): the transcript rail and everything sharing its
+   column (composer, todo panel, extension widgets, a raised permission panel, the
+   new-session hero) take their max-width from `--chat-column-max`, written by
+   `applyChatMessageWidth` (`lib/chat-layout.ts`). The var defaults to the 48rem
+   reading column, so an install whose settings predate the row lays out as before. */
+@utility chat-column {
+  max-width: var(--chat-column-max, 48rem);
 }
 
 /* Side panel splitters --------------------------------------------------------

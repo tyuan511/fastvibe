@@ -4,11 +4,15 @@
   "title": "图片生成",
   "newSession": "新建图片会话",
   "sessions": "图片会话",
+  "sessionList": {
+    "default": "默认会话",
+    "emptyTitle": "从一个想法开始",
+    "emptyDescription": "生成的图片都会保存在这里。"
+  },
   "untitled": "新的创作",
   "loading": "正在加载创作记录…",
   "emptyTitle": "让想象有画面",
   "emptyDescription": "描述你想创造的画面，也可以添加参考图片。",
-  "emptySessions": "从一个想法开始，创作记录会保存在这里。",
   "noModels": "先添加一个图片模型，开始创作。",
   "configuration": {
     "loading": "正在读取图片模型配置…",
@@ -55,24 +59,27 @@
     "unavailableModel": "原图片模型已不可用，请重新选择。",
     "unsupportedRatio": "这个模型不支持所选比例，请重新选择。",
     "aspectRatio": "画面比例",
-    "size": "清晰度",
+    "size": "分辨率",
+    "imageOptions": "图片参数",
+    "dimensions": "尺寸",
+    "width": "图片宽度",
+    "height": "图片高度",
+    "dimensionHint": "宽高按所选比例联动，自动对齐至 16 像素。",
     "count": "生成数量",
     "countLabel": "{{count}} 张",
     "automaticSize": "自动尺寸",
     "generate": "生成图片",
     "submitting": "正在提交…",
-    "parallelHint": "每批独立生成，可继续发起新的创作",
-    "referenceHint": "参考图",
-    "keyboardHint": "⌘ / Ctrl + Enter 生成"
+    "referenceHint": "参考图"
   },
   "timeline": {
     "openImage": "查看原图",
     "imageUnavailable": "图片暂时无法加载",
     "generatingImage": "正在生成图片",
-    "creating": "正在构思画面…",
     "edit": "重新编辑",
     "regenerate": "再次生成",
     "cancel": "取消生成",
+    "useReference": "作为参考图",
     "copyPrompt": "复制提示词",
     "copied": "已复制",
     "copyFailed": "复制失败，请重试"
@@ -92,7 +99,7 @@
     "next": "下一张",
     "position": "{{index}} / {{count}}",
     "copyPath": "复制路径",
-    "useReference": "以此图为参考继续生成",
+    "useReference": "作为参考图",
     "reveal": "在文件夹中显示"
   },
   "models": {

@@ -167,8 +167,8 @@ Consecutive **settled** tools between two stretches of prose fold into one row, 
 default (`collapseToolRuns` in `src/renderer/src/lib/tool-run.ts`). Nothing that is still being
 written is ever folded — neither a call in flight nor a thought in flight; each stands on its own
 line below the fold (see the bullet below), and joins it once it returns. Once the batch
-has settled and the reply has moved on to the next sentence, the line is a summary of at most six
-categories, in the order they first appeared: 思考 (only with 折叠思考内容, always counted),
+has settled and the reply has moved on to the next sentence, the line is a summary of categories,
+in the order they first appeared: 思考 (only with 折叠思考内容, always counted),
 命令 (shell calls only, always counted),
 读取, 写入 (write / edit / delete), 搜索 (search / web / list), 工具 (MCP, browser,
 scripts, skills, anything else). One call inside a category names the file or query
@@ -231,9 +231,15 @@ into the row. Expanding the row shows the calls — 一批工具在 `ToolRow` �
   with the finished calls above it counted — the live thought is still on its own line),
   `?batch=live` (a call left in flight inside a batch).
 
-Questions, todos, sub-agents, presented files and the task graph stay on
-their own line and break the run — the row is the status. A single tool is never folded;
-it already is its own description. The two folds are separate: this one is while the run is
+`wait_agent` 只在运行中显示「正在等待」和可点击的成员身份；调用结束后隐藏，包括成功、超时返回和错误结果。
+结束的等待不占行、不切断工具批次、不计入摘要，展开过程也不再显示；原始转写和模型收到的结果保持完整。
+已完成的 `list_agents` 仍进入工具批次，计为「已查看团队 N 次」，单次查看也使用可展开的计数行；展开可查看
+每次调用、成员身份与结果。运行中的查看、查看失败，以及创建、发消息、继续任务和中断保持独立行；正文和
+未折叠思考仍切断批次。
+
+Questions, todos, team-changing actions, presented files and the task graph stay on
+their own line and break the run — the row is the status. Other single tools are never folded;
+each already is its own description. The two folds are separate: this one is while the run is
 going; once it settles, the outer 「用时」 fold takes the whole run — thoughts, calls, and these
 summary rows alike — and leaves only the final answer on screen.
 

@@ -29,6 +29,8 @@ export type ImageSession = {
   modelId?: string;
   options?: ImageOptions;
   sourceConversationId?: string;
+  /** Latest saved image of the session, computed at read time; never persisted on the row. */
+  previewPath?: string;
 };
 export type GeneratedImage = {
   id: string;

@@ -169,6 +169,9 @@ const initialSettings: Record<string, unknown> = {
   // `?foldthink=1` turns on 设置 → 对话 → 折叠思考内容, so the transcript can be read with the
   // thoughts counted inside the tool line instead of on rows of their own.
   ...(params.get("foldthink") === "1" ? { collapseThinking: true } : {}),
+  // `?width=wide|widest` presets 设置 → 通用 → 外观 → 消息宽度, so the rail's width
+  // steps can be laid out in the preview without opening Settings and picking a row.
+  ...(params.get("width") === "wide" || params.get("width") === "widest" ? { messageWidth: params.get("width") } : {}),
   // The files scene has to be wide enough for the pane's `@min-[32rem]/files` container
   // query, which is what swaps the preview for tree + preview side by side.
   sidePaneWidth: website ? (websiteScene === "files" ? 760 : 460) : 384,

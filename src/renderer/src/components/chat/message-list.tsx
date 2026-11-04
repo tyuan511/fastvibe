@@ -185,8 +185,10 @@ const PIN_SLACK = 1;
  * How far below a pinned prompt the reply fades back in, under 玻璃效果 (px).
  *
  * Every other theme hides what scrolls under a pinned prompt with the row's solid
- * `bg-background`: a band the colour of the page, so it hides the reply and is itself
- * invisible. A Glass page is see-through, so no band can do both — a translucent one
+ * band: `--thread-band`, the colour of the surface the thread sits on — the page
+ * (`--background`) in the conversation column, the pane fill (`--sidebar`) in the
+ * floating panes — so it hides the reply and is itself invisible. A Glass page is
+ * see-through, so no band can do both — a translucent one
  * lets the reply through, and a tinted one is a visible block. There, the reply rows
  * are masked off at the prompt's lower edge instead: what is above the line is not
  * drawn at all, and the window's own blur shows there exactly as it does around it.
@@ -392,7 +394,7 @@ function ThreadRow({
       data-pinned={isUser && pinned ? "" : undefined}
       className={cn(
         "[content-visibility:visible]",
-        isUser && "thread-prompt relative sticky top-0 z-10 bg-background pt-2",
+        isUser && "thread-prompt relative sticky top-0 z-10 bg-(--thread-band) pt-2",
       )}
     >
       <ChatMessageRow
@@ -410,7 +412,7 @@ function ThreadRow({
         <div
           aria-hidden
           data-prompt-scrim
-          className="pointer-events-none absolute inset-x-0 top-full h-6 bg-gradient-to-b from-background to-background/0"
+          className="pointer-events-none absolute inset-x-0 top-full h-6 bg-gradient-to-b from-(--thread-band) to-background/0"
         />
       ) : null}
     </MessageScrollerItem>

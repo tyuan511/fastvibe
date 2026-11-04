@@ -2,6 +2,7 @@ import { useEffect, useRef, type JSX } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "@/lib/i18n";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { CHAT_COLUMN_CLASS } from "@/lib/chat-layout";
 import { toast } from "sonner";
 import {
   Cancel01Icon,
@@ -149,7 +150,7 @@ export function GoalPanel({ className, disabled }: { className?: string; disable
   if (!goal) return null;
   const meta = goalStatusMeta(goal.status);
   return (
-    <div className={cn("mx-auto w-full max-w-3xl px-6", className)}>
+    <div className={cn(CHAT_COLUMN_CLASS, className)}>
       <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5">
         {/* The target glyph names the panel — 「目标」 only restated the icon that
             already leads the row (and read larger than the chrome beside it). */}
@@ -224,7 +225,7 @@ export function ExtensionWidgets({ className }: { className?: string }): JSX.Ele
   const widgetEntries = Object.values(widgets);
   if (statusEntries.length === 0 && widgetEntries.length === 0) return null;
   return (
-    <div className={cn("mx-auto w-full max-w-3xl space-y-1.5 px-6", className)}>
+    <div className={cn(CHAT_COLUMN_CLASS, "space-y-1.5", className)}>
       {statusEntries.map(([key, text]) => (
         <div key={key} className="flex items-center gap-2 text-xs text-muted-foreground">
           <HugeiconsIcon strokeWidth={2} icon={InformationSquareIcon} className="size-3.5 shrink-0" />
