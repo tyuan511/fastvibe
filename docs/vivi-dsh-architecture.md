@@ -1,6 +1,6 @@
 # Vivi 整体重构：采用 DSH 完整架构
 
-状态：**目标架构已确定；M0–M2 的隔离领域与 Shadow Store 已落地，生产 Runtime 尚未切换。** 实际开发进度、验收命令与未完成范围见 [开发进度记录](vivi-dsh-development.md)。
+状态：**目标架构已确定；M0–M3 的隔离领域、Shadow Store 与同步端口组装已落地，生产 Runtime 尚未切换。** 实际开发进度、验收命令与未完成范围见 [开发进度记录](vivi-dsh-development.md)。
 
 目标是把 Vivi 整体改造成 DSH Superagent 的领域与运行架构。GitHub Issue → PR → Review → 修复 → CI → Merge 是第一条验收链路；“先完成 GitHub”限定外部平台，不允许据此省略授权评估、长期工作、消息归属、持久副作用和恢复机制。
 

@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0/M1 领域基线和 M2 隔离 Shadow Store，生产 Vivi 继续使用现有 Router/Worker Runtime。下列结果只证明本文列出的隔离能力，不代表 Pi 投递、Effect 调度或 GitHub 集成已实现。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M3 的隔离领域、Shadow Store 和同步端口组装，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表 Pi 投递、自动 Effect 调度或 GitHub 集成已实现。
 
 ## M0：已建立的实施基线
 
@@ -23,9 +23,9 @@
 位置：[src/main/bot/core](../src/main/bot/core/index.ts)。
 
 - 完整保留上游 `src/core` 的 15 个模块，含模型、同步端口、Intake、Evals、Tickets、Assignments、Replies、stage、Engine 和内存 repository。
-- 保留领域 Engine 是为了让所有状态转移可直接测试；这不是 M3 的持久 Store 集成，也不是新的生产调度器。
+- M1 保留领域 Engine，让所有状态转移可直接测试；持久端口组装在 M3 单独验收，生产调度器仍未切换。
 - 从上游提取纯 Policy/Admission/Assessment，覆盖 actor 接收表、explicit/inferred、主动模式、机器人/CI、Mandate revalidation、policyEffects、规则覆盖和实现意图检查。配置 parser 与表单留在 M7。
-- Node 原生执行只适配构造器参数属性与 ES2022 数组查找，不改领域算法；具体差异见源码 [NOTICE](../src/main/bot/core/NOTICE.md)。
+- M1 的 Node 原生执行适配限于构造器参数属性与 ES2022 数组查找；M3 对同毫秒 Eval 身份冲突补充了持久化去重，具体差异见源码 [NOTICE](../src/main/bot/core/NOTICE.md)。
 - Ticket 执行目录、prepare 和可选 worktree 的实际运行属于 M6；M1 没有创建任何目录或 worktree。
 
 ## M2：隔离 Shadow Store 已落地
@@ -57,15 +57,31 @@
 - `migrations.begin(plan)` 持久保存完整报告；`advance(snapshotId, batchSize)` 将一批去重映射、该身份下全部原始冲突行和 checkpoint 同事务提交。相同快照重复执行幂等，内容或分类漂移拒绝覆盖；中途失败可以从已提交的位置继续。
 - 报告完成表示历史证据已归档，不表示领域转换完成。正式数据转换及新旧 Runtime 所有权切换仍属于 M8/M12。
 
+## M3：同步 Engine 与持久 fake 端口已组装
+
+位置：[engine.ts](../src/main/bot/shadow/engine.ts)、[ports.ts](../src/main/bot/shadow/ports.ts)。
+
+- `ShadowEngine` 私有持有 pure Core，只向 Source、主协调者、人工控制和 Worker 暴露各自命令。receive/evaluate/decide（含 accept）/attach、delivery/read/report/reply、threadClosed、stop/retry/requeue/unsubscribe 均通过既有领域事务执行；没有第二套领域状态机。
+- Assessor、Executor、Outbox 同步写入 assessment/launch/delivery/reply；事件产生 notice/follow-up relay，报告产生 report/attention relay。Decision、Ticket、Mandate、首 Assignment、订阅、ack receipt 和 launch 在 accept 的同一事务中提交。
+- receipt 保留首次消息。撤回待发送 Attention 时同事务撤回 pending receipt 和 pending reply Effect；running/uncertain 不被误称为已停止。launch/delivery 的同 payload 在途请求幂等，终态后的新合法请求创建新 generation，覆盖 launch 失败后人类跟进唤醒同一 pending Assignment 的场景。
+- Stop/Release 保存带稳定身份的持久 control，afterCommit 只通知观察者或唤醒。control 目前是待消费意图，不证明真实 Session 已中止、缓存已释放或外部操作已取消。
+- 手动 completion 在事务内重读 Effect，核对 kind/key、有效 lease、owner、claim token 和 generation。事实变更与 Effect 结算共用事务，结算前再次读取时钟，事务执行期间租约到期也会整体回滚；旧代 completion 只可释放自己仍持有的租约，不改变新代领域事实。
+- fake Worker binding 持久记录 Ticket、Assignment、launch generation 和 claim token。Worker report/read/turn-end/handback/reply 等回调在事务内核对完整 binding、当前 running Assignment 和 Ticket 开放状态；Stop/Retry 后旧 token 不能写入新 Assignment。Delivery failure 同时要求匹配的 delivery claim。
+- delivered、read 和 report 分别记录。未投递、其他 Assignment 的输入不能被补成 read。普通 progress 不生成主协调 relay；问题、结果、等待、阻塞、失败和 answer 保留上游 relay 语义。Main 自身命令不产生自通知，提交后观察者仍可收到已提交领域事件。
+- 修复同一毫秒、同一批 Trigger 重评复用已结束 Eval ID 的问题。普通 ID 规则不变，碰撞时依据该 Thread 的持久 Decision 派生新的 replay ID；关闭重开仍能拒绝旧 outcome，并领取新的 assessment。无需新 schema。
+- [M3 集成测试](../test/vivi-dsh-engine.test.ts) 覆盖角色命令、所有六类意图、SQL ABORT 回滚、第二连接可见性和迟到回调。另用真实子进程分别在工作创建与报告的提交前/后退出，验证事实和意图一起回滚或持久，重复 completion 不重放。
+
+本阶段只提供显式调用的 fake completion，没有自动 claim loop、退避、WorkerSlots、Pi prompt、Source poller 或 GitHub 请求。真实 SDK 的 turn/entry 身份、输入落盘及读取证据属于 M4，driver/Passes 与 Stop control 的实际消费属于 M5。
+
 ## 可重跑的验收入口
 
-领域、隔离与存储测试：
+领域、隔离、存储与同步组装测试：
 
 ```bash
-node --test test/vivi-dsh-core.test.ts test/vivi-dsh-stage.test.ts test/vivi-dsh-policy.test.ts test/vivi-dsh-isolation.test.ts test/vivi-dsh-replay.test.ts test/vivi-dsh-migration.test.ts test/vivi-dsh-store.test.ts
+node --test test/vivi-dsh-core.test.ts test/vivi-dsh-stage.test.ts test/vivi-dsh-policy.test.ts test/vivi-dsh-isolation.test.ts test/vivi-dsh-replay.test.ts test/vivi-dsh-migration.test.ts test/vivi-dsh-store.test.ts test/vivi-dsh-engine.test.ts
 ```
 
-本轮结果：**285/285 通过**，39 个 suite，无跳过或取消。其中 113 个领域行为、31 个 stage/canRetry 用例移植自固定上游，另有 43 个策略、4 个隔离、2 个回放、52 个旧数据分类及 40 个 Store 验收用例。
+本轮结果：**320/320 通过**，39 个 suite，无跳过或取消。其中 113 个领域行为、31 个 stage/canRetry 用例移植自固定上游，另有 43 个策略、4 个隔离、2 个回放、52 个旧数据分类、40 个 Store 验收及 **35 个 M3 组装用例**。
 
 让相同上游领域用例改用真实 SQLite repository（fake 外部端口不变）：
 
@@ -81,7 +97,7 @@ FASTVIBE_DSH_TEST_REPOSITORY=sqlite node --test test/vivi-dsh-core.test.ts
 node --test test/db.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-restart.test.ts
 ```
 
-本轮结果：**67/67 通过**；与上述新测试合并运行 **352/352 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
+本轮结果：**67/67 通过**；与上述新测试合并运行 **387/387 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
 
 类型与格式：
 
@@ -94,6 +110,6 @@ git diff --check
 
 ## 下一阶段与限制
 
-下一阶段是 M3：将同步 Engine 与持久 Effect 端口收口，在临时数据库中验证所有命令的事实和副作用意图同事务提交。M2 的 Store 原语和 SQLite 领域回归不替代 M3 的完整端口组装验收。
+下一阶段是 M4：在独立 scratch data-dir 中接入真实 Pi SDK，验证稳定 Session key、输入 requestId 与 JSONL entry 的关联，以及 accepted → persisted → read → turn boundary → report。M3 的 fake binding 和手动回执不替代真实 SDK 验收。
 
 M4 的 Pi persisted/read 回执、M5 的 Effect handlers/Passes、M6 的后台执行、M7 的 Source 控制面、M8 的正式旧数据转换、M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。

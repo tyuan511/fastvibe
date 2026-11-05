@@ -33,7 +33,7 @@
 
 ## 已确定的重构方向
 
-[Vivi 采用 DSH 完整架构](vivi-dsh-architecture.md)：整体替换当前会话运行器，完整保留 Source、Policy/Evaluation/Mandate、Ticket/Assignment、同步 Engine、Effects/Outbox、Session 投递、资源与恢复机制。GitHub Issue/PR 外部事件闭环是首个验收场景，不以最小闭环为由省略核心架构。M0–M2 的隔离领域和 Shadow Store 已落地，当前生产实现仍以上表为准；实际进度、独立验收命令与后续缺口见 [Vivi DSH 开发记录](vivi-dsh-development.md)。
+[Vivi 采用 DSH 完整架构](vivi-dsh-architecture.md)：整体替换当前会话运行器，完整保留 Source、Policy/Evaluation/Mandate、Ticket/Assignment、同步 Engine、Effects/Outbox、Session 投递、资源与恢复机制。GitHub Issue/PR 外部事件闭环是首个验收场景，不以最小闭环为由省略核心架构。M0–M3 的隔离领域、Shadow Store 与同步端口组装已落地，当前生产实现仍以上表为准；实际进度、独立验收命令与后续缺口见 [Vivi DSH 开发记录](vivi-dsh-development.md)。
 
 ## 协议、部署与维护
 

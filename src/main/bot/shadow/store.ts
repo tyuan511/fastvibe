@@ -165,6 +165,8 @@ export class ShadowStore implements Repositories {
     get: (id: string): Receipt | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_outbox WHERE id=?", id)),
     add: (message: OutboundMessage): boolean => this.db.run("INSERT INTO dsh_outbox(id,status,ticket_id,thread_key,data) VALUES(?,'pending',?,?,?) ON CONFLICT(id) DO NOTHING", message.id, message.ticketId, message.channel.thread, json({ ...message, status: "pending" })).changes > 0,
     waiting: (): Receipt[] => many(this.db.all<JsonRow>("SELECT data FROM dsh_outbox WHERE status='pending' ORDER BY rowid")),
+    /** Withdraw only an unsent message; sent/dropped IDs remain permanent receipts. */
+    withdrawPending: (id: string): boolean => this.db.run("DELETE FROM dsh_outbox WHERE id=? AND status='pending'", id).changes > 0,
     settle: (id: string, status: "sent" | "dropped", dropped?: Receipt["dropped"]): boolean => this.atomic(() => {
       const receipt = this.receipts.get(id);
       if (!receipt || receipt.status !== "pending") return false;
@@ -184,6 +186,9 @@ export class ShadowStore implements Repositories {
         status=CASE WHEN status IN ('running','uncertain') THEN status ELSE 'pending' END`, kind, key, json(payload), now, now);
       return this.effects.get(kind, key)!;
     }),
+    /** Domain cancellation may withdraw queued work, but never pretend an in-flight attempt stopped. */
+    cancelPending: (kind: EffectKind, key: string): boolean =>
+      this.db.run("UPDATE dsh_effects SET status='cancelled' WHERE kind=? AND key=? AND status='pending' AND lease_owner IS NULL", kind, key).changes > 0,
     due: (kind: EffectKind, now: number, limit = 100): EffectRecord[] => this.db.all("SELECT * FROM dsh_effects WHERE kind=? AND status='pending' AND due<=? ORDER BY seq LIMIT ?", kind, now, limit).map(row => this.effectRow(row)!),
     claim: (kind: EffectKind, key: string, owner: string, now: number, ttl: number): EffectRecord | undefined => this.atomic(() => {
       const until = duration(now, ttl);

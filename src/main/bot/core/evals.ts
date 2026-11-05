@@ -107,7 +107,7 @@ export class Evals extends EnginePart {
       this.repo.threads.save(thread)
       return
     }
-    const evalId = key('eval', thread.key, policy.version, at, ...thread.pending)
+    const evalId = this.freshId(key('eval', thread.key, policy.version, at, ...thread.pending), thread.key)
     const deadline = new Date(Date.parse(at) + policy.evalTimeoutMs).toISOString()
     const { strength, trigger: { actor }, basis } = strongest
     thread.evaluating = { id: evalId, threadKey: thread.key, triggerIds: thread.pending, primary: strongest.trigger.id, strength, actor, basis,
@@ -248,7 +248,7 @@ export class Evals extends EnginePart {
    * differs from an Eval's, so it never replaces the Decision of an earlier Eval of the same Triggers.
    */
   private ignore(thread: Thread, ids: string[], reason: Reason[], policy: Policy, at: string): void {
-    const evaluation = { id: key('eval', thread.key, 'ignored', policy.version, at, ...ids), threadKey: thread.key, triggerIds: ids, strength: 'inferred' as const,
+    const evaluation = { id: this.freshId(key('eval', thread.key, 'ignored', policy.version, at, ...ids), thread.key), threadKey: thread.key, triggerIds: ids, strength: 'inferred' as const,
       actor: { source: thread.ref.source, id: '' }, basis: { via: 'followup' as const }, policyVersion: policy.version, startedAt: at, deadline: at }
     this.record(thread, evaluation, { kind: 'ignore', reason })
     thread.pending = thread.pending.filter(id => !ids.includes(id))
@@ -277,9 +277,16 @@ export class Evals extends EnginePart {
     if (!gate.admissible) throw new UserError('notAdmissible', { reason: gate.reason })
     const at = this.now()
     if (thread.pending.includes(trigger.id)) { thread.pending = thread.pending.filter(id => id !== trigger.id); this.repo.threads.save(thread) }
-    const id = key('eval', thread.key, 'direct', trigger.id, kind, ...ticketId ? [ticketId] : [], at)
+    const id = this.freshId(key('eval', thread.key, 'direct', trigger.id, kind, ...ticketId ? [ticketId] : [], at), thread.key)
     return { id, threadKey: thread.key, triggerIds: [trigger.id], primary: trigger.id,
       strength: gate.strength, actor: trigger.actor, basis: gate.basis, policyVersion: policy.version, startedAt: at, deadline: at }
+  }
+  /** A replay in the same millisecond is a fresh Eval, never authority under a finished Eval's identity. */
+  private freshId(base: string, thread: string): string {
+    const used = new Set(this.repo.decisions.byThread(thread).map(decision => decision.evalId))
+    let id = base, replay = 0
+    while (used.has(id)) id = key('eval', base, 'replay', String(++replay))
+    return id
   }
   /** Apply an outcome to an Eval of a Thread: the one in progress, or a gate-only one. */
   private decideEval(thread: Thread, evaluation: Evaluation, outcome: AssessmentOutcome): Decision {
