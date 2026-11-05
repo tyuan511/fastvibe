@@ -1,13 +1,13 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M3 的隔离领域、Shadow Store 和同步端口组装，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表 Pi 投递、自动 Effect 调度或 GitHub 集成已实现。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M4 的隔离领域、Shadow Store、同步端口组装与真实 Pi SDK Session 实验，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表自动 Effect 调度或 GitHub 集成已实现。
 
 ## M0：已建立的实施基线
 
 | 决定 | 本次落实 |
 | --- | --- |
 | 上游与许可 | 固定 `deepseek-ai/dsh-superagent-prototype@8c32a9dc5d72c033816c6a8110b37f40cf94fba4`；源码移植，保留 [MIT License](../src/main/bot/core/LICENSE) 和 [变更说明](../src/main/bot/core/NOTICE.md) |
-| 依赖边界 | 移植完整纯领域闭包；不安装 DSH SDK、Cordis 或另一套模型 Runtime。模型执行继续由未来 Pi adapter 实现 |
+| 依赖边界 | 移植完整纯领域闭包；不安装 DSH SDK、Cordis 或另一套模型 Runtime。M4 使用现有 Pi SDK 和显式传入的 ModelRuntime 实现隔离 adapter |
 | 首个部署宿主 | 首先适配桌面 Main 生命周期；进程退出期间停止轮询，重新启动按持久游标补收并报告覆盖缺口。无头宿主复用同一组端口，云端服务不是首批前置依赖 |
 | GitHub 身份接口 | 按 DSH 的专用 GitHub CLI/账号接口设计 Source；执行和 Review/Merge 使用可区分的账号引用，不复用 FastVibe 登录凭据、不写死旧审核账号。本轮不创建账号、读取凭据或配置真实仓库 |
 | 凭据落实阶段 | M7 实现凭据引用、CLI 调用边界和权限验证；M10/M11 验证外部写入路径。专用目录和工具列表不声明为 OS 沙箱 |
@@ -73,15 +73,40 @@
 
 本阶段只提供显式调用的 fake completion，没有自动 claim loop、退避、WorkerSlots、Pi prompt、Source poller 或 GitHub 请求。真实 SDK 的 turn/entry 身份、输入落盘及读取证据属于 M4，driver/Passes 与 Stop control 的实际消费属于 M5。
 
+## M4：真实 Pi SDK Session 与回执实验已落地
+
+位置：[pi-session.ts](../src/main/bot/shadow/pi-session.ts)、[pi-ledger.ts](../src/main/bot/shadow/pi-ledger.ts)。
+
+### 身份、投递与读取
+
+- 使用真实 Pi `AgentSession`、`SessionManager` 和 agent loop。测试显式创建离线 `ModelRuntime`，使用 `createFauxCore` 提供可控的模型响应；没有模拟 SDK、访问网络或读取真实凭据。
+- 稳定身份为 `worker-<ticketId>`，SessionFile 和 workspace 按该身份的哈希固定。Assignment 更换复用 Session 与目录；同一实例只接受同 Ticket 的新 binding。同 token 重绑幂等；进程 owner 使用持久 PID/nonce，epoch 和完整 WorkerToken 隔离迟到结果。
+- `PiLedger` 复用已有 Session receipt 和 KV，不加 schema。首次接受保存原始 text、inputIds、mode、binding、epoch 和 fingerprint；同 requestId 同内容复用，异内容拒绝。进度单调，entryId 不可替换；persisted 必须有 entry，read/reported 必须有真实 read 记录。
+- SDK 1.3.0 没有公开 UserMessage requestId。实验 adapter 在精确的低层 user 对象附 `__fastvibeDsh`，随真实 JSONL 保存投递时的 requestId、epoch 和 binding，并在最终 LLM 转换后去掉；`entryEpoch`/`entryBinding` 与首次接受身份分别保留。不按文本、时间或队列顺序猜 entry，重开也不把旧 entry 的 persisted 回调归给新 Assignment。输入 hook 的 handled/transform/reject、steer/followUp 各自保留身份。嵌套 SDK prompt 不继承原请求 tag，显式 adapter.submit 则建立自己的作用域。
+- accepted、persisted、read、turn boundary、report 分开记录。persisted 通过读取实际 JSONL 验证；read 在最终 context hook/LLM 转换之后、provider 成功返回 stream 的边界记录。被 context hook 排除、只入队、同步 dispatch 失败的输入不补成 read。此证据表示输入获得 provider 处理机会，不表示模型理解或外部操作成功。
+- 每次 provider 请求重新读取 context callback，附当前 Ticket/Mandate/Assignment 等调用方快照及 binding；Continue、reload 后的请求和压缩摘要请求也更新。摘要请求不产生原输入的新 read。压缩后的报告可关联同 binding 下已有的真实 read，`readTurnId` 指回该机会，不能沿用其他 Assignment 的 read。
+
+### 报告、停止与恢复
+
+- `dsh_report` 是真实 SDK 结构化工具。普通 assistant 文本不产生报告；同 turn 同报告幂等，异报告拒绝；progress/waiting 后新 turn 可继续报告 ready。同步领域 callback 与接受回执在同一 ShadowStore 的 SQLite 事务中提交；callback 拒绝或返回 Promise 时回滚其 SQL，外部副作用不属于此事务。JSONL REPORT 仅在 afterCommit 追加审计镜像，不能恢复或篡改不存在的接受事实；DB 已提交但镜像尚未写入的崩溃不重播 callback。
+- Stop 先持久 paused/epoch，再清 SDK 队列、使未落盘请求 stopped 并等待 abort。resume 只解除暂停；不会重投。dispose 和 rebind 将丢失的未落盘工作保留为 uncertain，不改写已有 stopped，不解除人工暂停。旧 preflight、旧 turn 或旧 Assignment 不能报告到新 binding。
+- Continue 复用真实 SDK run 生命周期，不追加 user 消息；末尾 error/aborted/length 通过 SDK context edit 排除后继续。reload 等待 idle 并保留实例适配；compact 运行真实 SDK 摘要并保存 compaction entry。这里使用的 `_startRun`/`_prepareRun` 和 UserMessage 附加字段属于锁定 **pi-coding-agent/pi-agent-core 1.3.0** 的实例适配，升级须重跑真实 SDK 回归，版本不符失败关闭。
+- 重开验证 header、entry chain、唯一请求映射和数据库归属，恢复已有事实但不自动请求模型或重播 report callback。只有显式 recover 才重投未落盘且未被 handled/rejected/stopped 的请求；已落盘请求不因 SDK 内存队列消失重复追加。缺失、损坏、重复 entry 或冲突 report mirror 保留原历史并失败关闭，不自动修复或创建替代会话。
+- scratch 路径只允许系统临时目录；内部目录与 JSONL 拒绝符号链接，即使目标仍在临时目录。settings/resources/history 独立，禁用自动 skills/context/extensions/templates 发现、自动重试与自动压缩；仅开放报告工具及测试显式注入的扩展。这是隔离实验入口，不是 OS 沙箱或生产凭据隔离实现。
+
+真实子进程分别在 accepted、SDK JSONL 已写但 receipt 未提交、receipt 已提交，以及 SQL report 已提交但 JSONL 镜像未追加时直接退出。测试还验证 SQL 外层回滚、同实例 rebind 后未落盘输入 recover、Stop/preflight 竞态和第二连接可见性。SDK 同步 append 没有 fsync 保证；本阶段证明进程崩溃恢复，不声明断电持久性或跨存储 exactly-once。
+
+本阶段没有消费 M3 的 launch/delivery/Stop control，也没有自动 claim loop、WorkerSlots、Passes、生产 Bot host、Source poller 或 GitHub 调用。实际 driver 组装属于 M5，执行资源与目录准备属于 M6。
+
 ## 可重跑的验收入口
 
-领域、隔离、存储与同步组装测试：
+领域、隔离、存储、同步组装与真实 SDK 实验测试：
 
 ```bash
-node --test test/vivi-dsh-core.test.ts test/vivi-dsh-stage.test.ts test/vivi-dsh-policy.test.ts test/vivi-dsh-isolation.test.ts test/vivi-dsh-replay.test.ts test/vivi-dsh-migration.test.ts test/vivi-dsh-store.test.ts test/vivi-dsh-engine.test.ts
+node --test test/vivi-dsh-core.test.ts test/vivi-dsh-stage.test.ts test/vivi-dsh-policy.test.ts test/vivi-dsh-isolation.test.ts test/vivi-dsh-replay.test.ts test/vivi-dsh-migration.test.ts test/vivi-dsh-store.test.ts test/vivi-dsh-engine.test.ts test/vivi-dsh-pi-ledger.test.ts test/vivi-dsh-pi-session.test.ts
 ```
 
-本轮结果：**320/320 通过**，39 个 suite，无跳过或取消。其中 113 个领域行为、31 个 stage/canRetry 用例移植自固定上游，另有 43 个策略、4 个隔离、2 个回放、52 个旧数据分类、40 个 Store 验收及 **35 个 M3 组装用例**。
+本轮结果：**415/415 通过**，39 个 suite，无跳过或取消。其中 113 个领域行为、31 个 stage/canRetry 用例移植自固定上游，另有 43 个策略、4 个隔离、2 个回放、52 个旧数据分类、40 个 Store 验收、35 个 M3 组装用例，以及 **37 个 M4 Ledger 和 58 个真实 SDK Session 用例**。
 
 让相同上游领域用例改用真实 SQLite repository（fake 外部端口不变）：
 
@@ -94,10 +119,10 @@ FASTVIBE_DSH_TEST_REPOSITORY=sqlite node --test test/vivi-dsh-core.test.ts
 当前功能与公共数据库 adapter 回归：
 
 ```bash
-node --test test/db.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-restart.test.ts
+node --test test/db.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-restart.test.ts test/bot-engine.test.ts
 ```
 
-本轮结果：**67/67 通过**；与上述新测试合并运行 **387/387 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
+本轮结果：**83/83 通过**；与上述新测试合并运行 **498/498 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
 
 类型与格式：
 
@@ -110,6 +135,6 @@ git diff --check
 
 ## 下一阶段与限制
 
-下一阶段是 M4：在独立 scratch data-dir 中接入真实 Pi SDK，验证稳定 Session key、输入 requestId 与 JSONL entry 的关联，以及 accepted → persisted → read → turn boundary → report。M3 的 fake binding 和手动回执不替代真实 SDK 验收。
+下一阶段是 M5：消费持久 Effect/Stop/Release 意图，组装 Shadow handlers、Outbox、Passes、退避与 uncertain 对账。M4 的单 Session 实验不替代调度器的 claim、资源和恢复合同。
 
-M4 的 Pi persisted/read 回执、M5 的 Effect handlers/Passes、M6 的后台执行、M7 的 Source 控制面、M8 的正式旧数据转换、M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
+M5 的 Effect handlers/Passes、M6 的后台执行、M7 的 Source 控制面、M8 的正式旧数据转换、M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。

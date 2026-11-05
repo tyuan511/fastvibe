@@ -62,7 +62,7 @@ test("staged DSH domain and shadow storage are unreachable from existing product
       }
     }
   }
-  assert.deepEqual(violations, [], "M0–M3 must not change runtime, IPC, UI, database registration, or extensions");
+  assert.deepEqual(violations, [], "M0–M4 must not change runtime, IPC, UI, database registration, or extensions");
 });
 
 test("domain dependency closure contains only local modules and node:crypto", () => {
@@ -77,12 +77,14 @@ test("domain dependency closure contains only local modules and node:crypto", ()
   }
 });
 
-test("shadow dependencies stay within the staged modules and the existing database adapter", () => {
+test("shadow dependencies stay isolated, with the SDK confined to the scratch adapter", () => {
   const lowLevel = new Set([join(root, "src/main/engine/db.ts"), join(root, "src/main/engine/db-schema.ts")]);
   const builtins = new Set(["node:crypto", "node:fs", "node:os", "node:path"]);
+  const sdkBridge = join(shadow, "pi-session.ts");
+  const sdkImports = new Set(["node:async_hooks", "node:url", "@earendil-works/pi-coding-agent", "@earendil-works/pi-agent-core", "typebox"]);
   for (const path of files(shadow)) {
     for (const specifier of specifiers(path)) {
-      if (builtins.has(specifier)) continue;
+      if (builtins.has(specifier) || (path === sdkBridge && sdkImports.has(specifier))) continue;
       const target = resolveModule(specifier, path);
       assert.ok(target && (isStaged(target) || lowLevel.has(target)), `${relative(root, path)} has an unexpected dependency: ${specifier}`);
     }

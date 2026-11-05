@@ -24,6 +24,8 @@ M2 的 `../shadow/store.ts` 另外参考上游 `src/app/store.ts` 的 repository
 
 M3 的 `../shadow/ports.ts` 和 `../shadow/engine.ts` 参考上游 `src/app/runtime.ts`、`assessment.ts`、`outbox.ts`、`notices.ts` 及 `src/executor/dsh.ts` 的同步入队、quiet notice、follow-up/report relay 与回执语义。实现只面向手动 fake completion，增加持久 Worker binding、generation/claim fencing 和 Stop/Release control；没有注册 SDK handler、Passes 或生产 Source。
 
+M4 的 `../shadow/pi-ledger.ts` 和 `../shadow/pi-session.ts` 参考上游 `src/app/sessions.ts` 与 `src/executor/dsh.ts` 的稳定 Ticket Session、输入读取与报告语义，使用已有 Pi SDK 重写；不带入 DSH Session/inbox/flush。精确 UserMessage 身份、provider stream 边界、嵌套输入 hook 隔离、epoch/owner、JSONL 对账与 SQL 报告接受记录属于 FastVibe 适配。实例内部方法与附加字段明确锁定 Pi 1.3.0，以真实 SDK、离线 provider、临时数据库及真实进程崩溃测试验收；没有接入生产 host 或 Effect driver。
+
 这是源码移植，不是安装另一个 Agent Runtime。Pi、Store、Source 和 Effects 适配均在这些同步端口之外实现。当前只有隔离测试调用实验组装；生产 Bot API、BotRuntime、会话、数据库、通知及轮询入口无法到达它。
 
 ## 上游更新
