@@ -194,7 +194,9 @@ Ticket 结束时释放未读且未承接输入，ack/answer/read 不能混为一
 
 Worker Session idle 后仍需检查 jobs/子代理。有受管后台工作则 settling；ready、提问、blocked/failed 等交接时分别停止子代理或保留供人检查的服务。上游 30 分钟后台观察不是 Ticket 总时限，也不是所有进程硬超时。宿主必须拥有后台 job 的取消、结果和收尾句柄；这也是 pi executor 要补的能力。
 
-Ticket 工作目录使用稳定名字和可配置 prepare，上游默认不保证是 git worktree。GitHub 交付 profile 在独立 checkout 中准备分支，已有目录需要检查初始化状态；不把目录存在当完整 prepare 成功。工作区冲突检测属于 Vivi 额外的资源约束，不能声称 DSH 已提供仓库写锁。
+Ticket 工作目录使用稳定名字和可配置的 `prepare`。每个 Ticket 都有自己的 Executor Session 和执行目录，目录默认位于配置的 execution root 下；Assignment 重试和重启恢复复用同一个 Session、目录、分支和 PR。上游 DSH 不强制目录必须是 git worktree，典型 GitHub prepare 命令可以用 `git worktree` 创建 checkout；没有 prepare 命令时，Worker 在空目录中开始。
+
+首次 Assignment 启动前，prepare 在执行根目录运行一次，接收 Ticket 和 Source 的执行环境变量，完成后由宿主验证目录。prepare 有明确超时；失败使 Ticket failed 并记录输出，不把失败目录当成成功准备。瞬时 launch/provider 错误可以按 Effect 退避，prepare 失败不自动重试；显式 retry 或后续人类输入可重新推动 Ticket，但已有非空目录不能被无条件当作干净的新 workspace。工作区冲突检测、目录归属和是否使用 worktree 属于 Executor/部署配置，不声称 DSH 提供 OS 沙箱或仓库写锁。
 
 ### 重试、重启与停止
 
@@ -302,15 +304,142 @@ DSH Mandate 是业务授权，工具名单和 cwd 不是 OS 沙箱。完整迁�
 
 ## 14. 实施顺序与数据切换
 
-1. **完整域模型与测试**：按上游定义对象、端口与状态转移，覆盖 ownership、context、handback、Mandate、ready/followsDone/unfinished、stop 与人类恢复（reopen Decision 仅保留历史兼容）。
-2. **Store 与 Engine**：加入下一可用 schema 迁移、索引、事务/内存回滚；保留旧迁移编号及所有历史转写。新模型的公开类型以实际源码维护，不长期保存第二份接口伪代码。
-3. **Effects / Passes / Outbox**：六类 Effect、generation、退避、暂停/健康、来源顺序与外部回执，故障注入验证提交前后崩溃。
-4. **Pi executor 与 Session delivery**：主会话/稳定 Worker、历史与 inbox 判重、persisted/read 边界、slots、prepare、jobs/子代理、取消和恢复。不能仅靠 mock 假定 pi 与 DSH API 等价。
-5. **Local Source 与已有产品迁移**：本地输入/问题、feed、记忆、Stop、通知和资源面板全部走新域；兼容投影不产生第二份可写状态。
-6. **GitHub Source 全路径**：通知/仓库观察/订阅/PR/CI，准入与三种主动模式，cursor、分页、版本身份、reply Channel、PR 绑定与生命周期；Source 自动驱动 Vivi。
-7. **GitHub 交付 profile**：受管 reviewer、版本化正式 Review、修复反馈、CI 检查、Merge 端口、Issue 关闭及对账；仍是同一个 Ticket 和 Effects 系统。
-8. **控制面与迁移切换**：Source/Policy/Prompts/模型/slot 设置，状态详情和诊断；旧 Runtime 不能与新 Runtime 同时执行同一工作。先停旧所有者、完成幂等转换、核验再切换所有权。
-9. **真实闭环验收**：完整保留各层机制，通过下列用例后才认为架构重构完成。
+这一节采用“并行建设、最后切换”的方式。**M0–M11 完成前，当前 Vivi 的旧 `BotRuntime` 是唯一生产执行路径；新 DSH 实现不能接管本地输入、GitHub 输入、现有 Bot API、现有通知或现有 Session。** 只有 M12 通过全部验收后，才允许切换所有权。
+
+### 14.1 所有阶段共同遵守的隔离合同
+
+1. **旧路径唯一写入。** M0–M11 不修改旧 `bot_v2_*` 事实，不让新 Engine 调用旧 `BotRuntime`，不让旧 Runtime 读取新 DSH 表。
+2. **新数据独立。** 领域和 Effect 使用 `vivi_dsh_*` 命名空间或临时/复制数据库；真实用户库只在 M12 迁移演练和最终切换时操作。迁移演练始终复制 userData 到临时目录。
+3. **运行时默认关闭。** 新 Source、Pass、Effect handler、IPC 控制面和 UI 入口默认不注册或保持 disabled；不能因为安装了新模块就启动轮询、模型调用或外部写入。
+4. **外部副作用后置。** M0–M9 只允许纯函数、fixture、fake port、Pi scratch session 和 GitHub 只读 shadow；M10 只生成 dry-run operation plan；M11 才能对专用测试仓库执行真实写入。
+5. **可回滚。** 每个阶段失败时删除测试数据或关闭 feature flag 即可回到旧路径。阶段验收不能要求用户迁移数据、修改现有配置或改变现有 UI 行为。
+6. **共同回归门槛。** 每阶段都要运行新增的窄测试、`pnpm typecheck` 和 `git diff --check`；涉及旧 Bot 的阶段还要运行现有 `bot-runtime`、`bot-store`、`bot-restart`、通知和 Vivi UI 回归。历史测试数量不能代替当前结果。
+
+每个阶段必须同时交付三类证据：实现/测试产物、独立验收命令或脚本、当前功能隔离证明。没有这三项就不能进入下一阶段。
+
+### 14.2 可独立验收的开发阶段
+
+#### M0：边界、来源和安全基线
+
+**交付：** 固定 DSH commit、许可证和移植方式；确定 Source 运行位置；确定 GitHub 认证、执行、Review、Merge 身份；定义新旧 Runtime ownership、feature flag、shadow 数据库和回滚协议；准备 fake Source、fake Executor、GitHub 分页/超时/乱序/重启 fixture。
+
+**独立验收：** 能在不启动 Electron 业务 Runtime 的情况下运行所有领域 fixture；能证明新模块不会注册旧 IPC、旧 Source、旧 Pass 或外部写入；现有回归基线通过。
+
+**当前影响：** 只增加测试和设计边界，不改变生产代码路径、数据库和配置。
+
+#### M1：纯 DSH 领域内核
+
+**交付：** 实现不依赖 Electron、SQLite、Pi 和网络的 Source、Trigger、Thread、Channel、Evaluation、Decision、Mandate、Ticket、Assignment、TicketInput、Report、Attention、Subscription、Follow、Correlation、Disposition 和 Policy gate。
+
+**独立验收：** 纯函数测试覆盖 explicit/inferred、`off/observe/auto`、整批 `triggerIds` 去重、旧 Eval/Policy 拒绝、ownership、context-only、handback、requeue、reply purpose、Follow、`threadClosed` 和 `ready`/`idle`/`ended` 区分。
+
+**当前影响：** 新代码只由新领域测试引用；旧 Bot Runtime、旧 SQLite 表和旧 IPC 不变。
+
+#### M2：Shadow Store 和数据库迁移器
+
+**交付：** 新 Store、聚合 JSON 与查询索引、Effect/lease/generation/operation 唯一键；新 schema 迁移；旧数据 dry-run 转换器和旧 ID → 新 ID 映射表。
+
+**独立验收：** 在 `:memory:` 和临时复制数据库中验证事务、第二连接、提交前后崩溃、高版本拒绝、重复迁移、转换报告和不可确定记录分类。不能连接正在运行的真实 userData。
+
+**当前影响：** 不向现有 `fastvibe.db` 写新表，不读取或改写旧 Bot 数据；旧 Store 完全照常工作。
+
+#### M3：同步 Engine 和 fake Source/Executor
+
+**交付：** Engine 命令收口：`receive`、`evaluate`、`decide`、`accept`、`attach`、`deliver`、`read`、`report`、`reply`、`threadClosed`、`stop`、`retry`、`requeue`、`unsubscribe`。Engine 只更新 shadow Store 并入队 fake Effect。
+
+**独立验收：** 使用 fake Source/fake Executor 跑通 `Source → Trigger → Intake → Eval → Decision → Mandate → Ticket → Assignment`，验证所有命令的事务事实、Effect 意图和迟到 generation。
+
+**当前影响：** 不接生产 Source、旧 Bot API、旧 UI 或真实 Session；测试结束后 shadow 数据可直接删除。
+
+#### M4：Pi Session Adapter 实验室
+
+**交付：** 新 Pi adapter 在独立 scratch data-dir 中实现稳定 Session key、输入回执、history entry 映射和恢复；明确 `accepted → persisted → read → turn boundary → report`。
+
+**独立验收：** 使用真实 SDK 和临时 Session 验证 idle follow-up、steer、Stop、Continue、reload、compaction、重启、未读输入重投、旧 Assignment 迟到回调和同一 requestId 重放。
+
+**当前影响：** 不调用现有 `process-manager` 的生产 Bot host，不接现有 Router/Worker transcript，不改变用户会话。
+
+#### M5：Shadow Effects、Outbox、Passes 和恢复
+
+**交付：** 六类 DSH Effect、generation、claim owner、attempt、due、退避、`Later`、健康、Outbox、Pass 启停和重启恢复；通用 `source-operation` / `source-reconcile` 状态机。
+
+**独立验收：** 在 fake Executor 和临时数据库中注入提交前后崩溃、旧 generation、长期失败、暂停、shutdown、uncertain、reconcile 和重复 claim，证明 Pass idle 不会结束 Ticket。
+
+**当前影响：** Effect handler 只运行 fake/sandbox 实现；不启动生产 Pass，不发消息、不启动模型、不调用 GitHub 写 API。
+
+#### M6：Executor、WorkerSlots 和 DSH execution directory
+
+**交付：** WorkerSlots、保留名额、resource lease、settling、后台 job/子代理、prepare、执行目录、取消和恢复。按 DSH 语义复用 Ticket 的 Session、目录、分支和 PR；git worktree 只作为 GitHub prepare 的可选实现。
+
+**独立验收：** 在临时目录验证 launch/prepare 超时、prepare 失败、非空失败目录、slot 占用、Assignment 重试、进程重启、后台任务收尾、目录复用和迟到回调。验证没有 prepare 时空目录可启动，prepare 失败不会被当作成功环境。
+
+**当前影响：** 只操作临时目录和 fake Session；不接现有项目 cwd，不改变现有 Worker workspace，不启动真实 Ticket。
+
+#### M7：Source、Policy、凭据和控制面基础设施
+
+**交付：** Source registry、实例 ID、游标/健康、监听范围、actor 接收表、`off/observe/auto`、Policy 版本、撤权、凭据宿主保存、执行身份分离和最小控制 API。所有新能力默认 disabled。
+
+**独立验收：** 使用临时配置验证 Source 开关、Policy revalidate、撤权、凭据不进入 Renderer/模型、未知 Source 不启动、重启后状态可恢复；控制 API 只能读 shadow 状态或修改测试配置。
+
+**当前影响：** 不改现有 settings、provider、账号或远程访问配置；没有 Source 配置时旧功能完全不变。
+
+#### M8：Local Source 回放、兼容投影和迁移 dry-run
+
+**交付：** Local Source 适配器、旧 Bot API 到新 Engine 的只读/回放映射、WorkSnapshot 兼容投影、旧数据转换报告。此阶段不接真实本地输入。
+
+**独立验收：** 使用复制的 userData 和固定历史 fixture 验证 Router/Worker/Input/Attention/Result/Outbox 到新领域的分类、稳定 ID 映射、stopped/uncertain 处理和重复 dry-run；报告所有无法确认授权的记录。
+
+**当前影响：** 现有本地聊天仍只走旧 Bot API 和旧 Runtime；新投影只在 replay 测试中生成，不广播、不替换 UI。
+
+#### M9：GitHub 只读 Shadow Source
+
+**交付：** GitHub Source 的通知、Issue、PR、评论、Review、CI、游标、分页、ETag、baseline、Trigger 去重、Thread/Channel 和 404/410/撤权处理。PR merged/closed 仍走 `threadClosed`。
+
+**独立验收：** 一方面用固定 HTTP fixture 验证分页、乱序、重复、自回复、CI baseline、PR 生命周期和多 Source identity；另一方面用独立命令或临时配置做只读 GitHub 回放，把结果写入 shadow Store，验证不产生 Model turn、Ticket launch 或 Reply Effect。
+
+**当前影响：** 默认不轮询，不接现有 Source registry，不发送消息，不唤醒 Vivi，不写 GitHub。
+
+#### M10：GitHub Source Operation dry-run
+
+**交付：** GitHub branch、PR、Review、Merge、Issue close 的 operation plan、参数哈希、幂等 key、授权和 head/base 校验、uncertain/reconcile 模拟。
+
+**独立验收：** 使用 fake GitHub server 验证超时、重复请求、head 漂移、不同参数复用 key、撤权、Stop、generation 失效和 reconcile；输出预期操作和 receipt，但不发真实写请求。
+
+**当前影响：** 不需要生产 GitHub token，不触碰任何真实仓库，不改变当前 Worker shell 或凭据。
+
+#### M11：专用测试部署的真实 GitHub 闭环
+
+**交付：** 使用独立 data-dir、独立 Source 配置、专用测试仓库和可撤销凭据完成 Issue → Ticket → Worker → PR → Review → 修复 → CI → Merge → `threadClosed` → Issue close continuation。
+
+**独立验收：** 对专用测试仓库插入重复事件、网络超时、进程重启、PR head 漂移、Review 失效、Merge 超时和 Issue close 超时；证明没有重复 PR、批准旧 SHA、重复 Merge 或把 Issue close 失败报告成完成。
+
+**当前影响：** 运行在独立进程/data-dir/仓库/profile 中；不接用户当前项目、不启动当前 Vivi 的新 Runtime，不改变旧功能。
+
+#### M12：最终切换、回滚和旧 Runtime 下线
+
+**交付：** 在 M0–M11 全部签字通过后，才执行真实 userData 的迁移、Source 所有权切换、兼容投影切换和旧 Runtime 下线。
+
+**独立验收：**
+
+1. 备份 userData、数据库、Source 配置和 Session 映射。
+2. 运行最终 dry-run，报告无未解释记录。
+3. 停止旧 Runtime 接收新工作并确认不再 pump。
+4. 幂等迁移旧数据和待处理 Input。
+5. 启动新 Runtime，但先只开放 Local Source。
+6. 验证本地聊天、Stop、Continue、Attention、记忆、通知和历史恢复。
+7. 再开放 GitHub Source 和 Passes。
+8. 验证真实闭环和回滚路径。
+9. 回滚窗口结束后，才删除旧 BotRuntime 执行路径；旧表和历史转写按兼容策略保留。
+
+**当前影响：** M12 之前为零。M12 是唯一允许改变当前生产执行路径的阶段，并且必须具备一键关闭新模式、保留旧数据和恢复旧所有权的回滚方案。
+
+### 14.3 阶段准入和退出规则
+
+- 下一阶段只能依赖上一阶段的持久化产物和验收报告，不能依赖“在开发机上刚好能运行”的临时状态。
+- 每阶段必须有一个明确的入口命令和一个明确的退出报告；测试目录不存在时先创建测试，不得把不存在的命令写成验收证据。
+- M0–M11 的失败只能影响新代码、shadow 数据、临时 Session 或专用测试仓库；不得要求用户清理数据库、重建现有会话或修改生产配置。
+- 任一阶段发现旧功能回归，立即关闭新 feature flag 并回到旧 Runtime；不继续用双写掩盖问题。
+- 完整实现的完成条件不是 M11 的测试仓库成功，而是 M12 的真实数据切换、回滚演练、旧 Runtime 下线和现有 Vivi 回归全部通过。
 
 旧数据转换按来源和语义明确处理：保留现有 main/worker Session 和记忆；能确认 scope 的旧本地工作映射为 Local Source 的 origin 与 Mandate；无法确认授权的记录保持只读/待核对，不推断成允许外部 merge。未完成输入、问题、结果与宿主投递有稳定旧→新 ID 映射，转换与切换可重入。不能自动启动旧 stopped 工作，也不拼接多个历史转写伪造单 Session。
 
