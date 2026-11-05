@@ -728,6 +728,49 @@ void main() {
     },
   );
 
+  test(
+    'a failed first dial rejects connect without retiring its caller',
+    () async {
+      final core = FakeCore()..autoWelcome = false;
+      final client = RemoteClient(
+        runtime: core,
+        readIdentity: () async => null,
+        saveIdentity: (_) async {},
+      );
+      var disconnects = 0;
+      client.onDisconnect((_) => disconnects++);
+      final connecting = client.connectDevice(
+        origin: 'https://account.example',
+        token: 'account-token',
+        deviceId: 'desktop',
+        installId: 'install',
+        clientName: 'Phone',
+        platform: 'android',
+      );
+      final rejected = expectLater(
+        connecting,
+        throwsA(
+          isA<ConnectionError>().having(
+            (e) => e.message,
+            'message',
+            'iroh connection timed out after 15s',
+          ),
+        ),
+      );
+      while (!core.commands.any((c) => c['action'] == 'connect')) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      core.emit({
+        'type': 'connection_error',
+        'message': 'iroh connection timed out after 15s',
+      });
+      await rejected;
+      await client.shutdown;
+      expect(disconnects, 0);
+      expect(client.ready, isFalse);
+    },
+  );
+
   test('disconnect rejects outstanding calls without replaying them', () async {
     final core = FakeCore();
     final client = await connect(core);

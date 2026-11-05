@@ -637,7 +637,10 @@ class RemoteClient {
       }
     });
     unawaited(_shutdown!.catchError((Object _) {}));
-    if (notify) _disconnect?.call(detail);
+    // A dial that has not received welcome is still owned by connectDevice().
+    // Let its caller surface the failure before deciding whether to reconnect;
+    // the disconnect callback would retire that caller's client first.
+    if (notify && connecting == null) _disconnect?.call(detail);
   }
 }
 
