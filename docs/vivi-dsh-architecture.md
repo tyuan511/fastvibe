@@ -1,6 +1,6 @@
 # Vivi 整体重构：采用 DSH 完整架构
 
-状态：**已确定的目标架构与实施设计，尚未实现。**
+状态：**目标架构已确定；M0–M2 的隔离领域与 Shadow Store 已落地，生产 Runtime 尚未切换。** 实际开发进度、验收命令与未完成范围见 [开发进度记录](vivi-dsh-development.md)。
 
 目标是把 Vivi 整体改造成 DSH Superagent 的领域与运行架构。GitHub Issue → PR → Review → 修复 → CI → Merge 是第一条验收链路；“先完成 GitHub”限定外部平台，不允许据此省略授权评估、长期工作、消息归属、持久副作用和恢复机制。
 
@@ -341,7 +341,7 @@ DSH Mandate 是业务授权，工具名单和 cwd 不是 OS 沙箱。完整迁�
 
 **独立验收：** 在 `:memory:` 和临时复制数据库中验证事务、第二连接、提交前后崩溃、高版本拒绝、重复迁移、转换报告和不可确定记录分类。不能连接正在运行的真实 userData。
 
-**当前影响：** 不向现有 `fastvibe.db` 写新表，不读取或改写旧 Bot 数据；旧 Store 完全照常工作。
+**当前影响：** 不向现有 `fastvibe.db` 写新表，不读取或改写正在运行的旧 Bot 数据；dry-run 只读取内存 fixture 或显式复制的临时数据库。旧 Store 完全照常工作。
 
 #### M3：同步 Engine 和 fake Source/Executor
 

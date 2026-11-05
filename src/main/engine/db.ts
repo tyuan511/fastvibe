@@ -207,17 +207,18 @@ export function openDatabase(file: string): Db {
  *
  * Production code uses `openDatabase`. This exists for the tests that need a *second
  * process* — two of them sharing one database is the whole point of the migration — and the
- * caller owns closing it.
+ * caller owns closing it. An explicit migration sequence is only for independent,
+ * isolated databases; omitting it keeps the normal production schema unchanged.
  */
-export function openDatabaseConnection(file: string): Db {
-  return openPrepared(file === MEMORY ? MEMORY : resolve(file));
+export function openDatabaseConnection(file: string, options?: { migrations?: readonly ((db: Db) => void)[] }): Db {
+  return openPrepared(file === MEMORY ? MEMORY : resolve(file), options?.migrations);
 }
 
-function openPrepared(file: string): Db {
+function openPrepared(file: string, migrations: readonly ((db: Db) => void)[] = MIGRATIONS): Db {
   if (file !== MEMORY) mkdirSync(dirname(file), { recursive: true });
   const db = new Connection(file, new DatabaseSync(file));
   try {
-    return prepare(db);
+    return prepare(db, migrations);
   } catch (error) {
     // A half-prepared connection must not keep the file open, and must not be cached.
     db.close();
@@ -229,7 +230,7 @@ function openPrepared(file: string): Db {
 }
 
 /** PRAGMAs, permissions, schema migrations, one incremental vacuum. */
-function prepare(db: Connection): Db {
+function prepare(db: Connection, migrations: readonly ((db: Db) => void)[]): Db {
   // `auto_vacuum` must be set *before* anything else initialises the file: measured on a
   // fresh database, setting it after `journal_mode = WAL` is accepted and then silently
   // ignored (`PRAGMA auto_vacuum` keeps reading 0). It is a header field, and the WAL
@@ -246,7 +247,7 @@ function prepare(db: Connection): Db {
   // anything is written — but do not rely on it: `test/db.test.ts` asserts all three, and
   // this runs again after the migration for a file created by an older build.
   harden(db.file);
-  migrate(db);
+  migrate(db, migrations);
   harden(db.file);
   try {
     // Deleted checkpoints leave free pages behind, and the file would otherwise only
@@ -277,8 +278,8 @@ function harden(file: string): void {
  * `busy_timeout` behind the first, and without the re-read it would run the same
  * `CREATE TABLE` again and fail startup with `table … already exists`.
  */
-function migrate(db: Connection): void {
-  const target = MIGRATIONS.length;
+function migrate(db: Connection, migrations: readonly ((db: Db) => void)[]): void {
+  const target = migrations.length;
   const at = db.userVersion();
   if (at > target) {
     // A newer FastVibe already wrote this database. Downgrading a schema is not something
@@ -292,7 +293,7 @@ function migrate(db: Connection): void {
     db.transaction(() => {
       const now = db.userVersion();
       if (now >= step + 1) return;
-      MIGRATIONS[step](db);
+      migrations[step](db);
       db.userVersion(step + 1);
     });
   }

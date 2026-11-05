@@ -22,6 +22,9 @@
 - **一个进程一个连接，按路径缓存**（`openDatabase`）。测试要「第二个进程」时用 `openDatabaseConnection`
   拿一条独立连接；`closeDatabases()` 在退出路径上（桌面 `requestShutdown`、无头 Agent `stop()`）
   先 `wal_checkpoint(TRUNCATE)` 再关。`:memory:` 永不缓存——两个调用各要一个内存库时它们确实是两个库。
+  独立连接可显式传 `migrations` 以验收临时 Shadow 库；省略时仍运行生产迁移。Vivi M2 的
+  [隔离 Store](../vivi-dsh-development.md#m2隔离-shadow-store-已落地) 只接受内存库或系统临时目录，
+  不把分支 schema 注册到生产迁移，也不通过缓存连接改变当前用户库。
 - **PRAGMA 的顺序有坑**：`auto_vacuum = INCREMENTAL` 必须在 `journal_mode = WAL` *之前*设——实测新建的库
   反过来设会被接受然后无声忽略（`PRAGMA auto_vacuum` 一直读回 0）。其余是 `synchronous=NORMAL`、
   `busy_timeout=5000`（另一个进程在写时等一会儿，而不是立刻抛 `SQLITE_BUSY`）、`foreign_keys=ON`。
