@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M5 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session 实验与 Shadow 调度组装，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已实现。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M6 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session 实验、Shadow 调度与执行资源层，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已实现。
 
 ## M0：已建立的实施基线
 
@@ -126,6 +126,19 @@
 
 M5 没有增加 schema 步骤，也没有生产注册、真实 Pi 执行、Source 轮询或外部消息/API 写入。M4 的真实 SDK 实验与 M5 的 fake 端口调度分别验收；M6 才组合真实 Executor、回执回调、WorkerSlots、prepare、稳定执行目录及后台资源恢复。生产仍只有旧 `BotRuntime`。
 
+## M6：Executor 资源层与稳定执行目录已组装
+
+位置：[execution-directory.ts](../src/main/bot/shadow/execution-directory.ts)、[worker-slots.ts](../src/main/bot/shadow/worker-slots.ts)、[worker-resources.ts](../src/main/bot/shadow/worker-resources.ts)。
+
+- `executionPaths()` 与 M4 的 scratch Session 使用同一稳定 `worker-<ticketId>` 哈希布局，固定 `base/workspace/sessions/agent/sessionFile`；Ticket 重试不改变目录和 SessionFile。目录根及内部路径拒绝符号链接，只允许系统临时目录边界。
+- `ExecutionDirectories` 把 prepare 先记录为持久 `preparing`，再执行显式 recipe。成功后保存 metadata 并变为 ready；首次没有 recipe 的空目录可以直接 ready。recipe ID、root、cwd 和 Ticket 身份不可漂移。
+- prepare 超时、abort、异常和 lease 过期不会伪造 ready。失败的非空目录不能自动重试；`retry` 只接受精确 revision 且目录为空，uncertain 必须先用显式 `reconcile` 处理。prepare Promise 即使被 abort，资源状态也不会在底层回调结束前宣称成功。
+- `WorkerSlots` 使用既有 Shadow lease 和 KV，无新 schema。starting、running、settling、stopping 与 uncertain 都占用容量；running/settling/stopping/uncertain 的跨连接 claim 使用 owner、generation、revision 和 lease fencing。launch 计算不重复扣除 launch reservation；人的 follow-up 最多额外占一个 slot。过期 lease 进入 uncertain，只有 quiet 对账才能释放。
+- `WorkerResources` 将 shell job 与 subagent 的生命周期和 Session idle 分开。资源可进入 handed-off 而不唤醒 Worker；stop 等待所有 stop adapter 返回后再释放 slot；停止失败和重启恢复保留 uncertain。不同 Assignment 的 binding 不能停止或接管旧资源。
+- 这些模块只接受显式 fake/sandbox adapter，不启动真实 shell、Git、GitHub、Pi host 或子代理。M4 的真实 Pi SDK 证据仍由 Scratch Session 提供；M6 证明的是稳定目录、资源状态、slot fencing、handoff 和恢复屏障。真实 Executor Host 接入仍需在后续生产组装中完成。
+
+本阶段新增 18 个目录、slot 和资源回归，覆盖目录复用、recipe/失败残留、超时/取消、symlink、slot 容量与人类额外 slot、跨连接 owner、settling、handoff、stop barrier、uncertain 恢复和旧 binding 拒绝。
+
 ## 可重跑的验收入口
 
 领域、隔离、存储、同步组装与真实 SDK 实验测试：
@@ -134,9 +147,7 @@ M5 没有增加 schema 步骤，也没有生产注册、真实 Pi 执行、Sourc
 node --test test/vivi-dsh-*.test.ts
 ```
 
-本轮结果：**566/566 通过**，39 个 suite，无跳过或取消。M0–M4 的 415 项保持通过：113 个领域行为、31 个 stage/canRetry 用例移植自固定上游，另有 43 个策略、4 个隔离、2 个回放、52 个旧数据分类、40 个 Store 验收、35 个 M3 组装用例，以及 37 个 M4 Ledger 和 58 个真实 SDK Session 用例。
-
-M5 新增 **151 项**：58 个 Effects、40 个 Operations、21 个 Driver、23 个 Outbox 和 9 个 Passes 用例，含真实子进程退出、跨连接执行和 SQL 回滚验收。
+本轮结果：**584/584 通过**，39 个 suite，无跳过或取消。M0–M4 的 415 项和 M5 的 151 项保持通过；M6 新增 **18 项**，覆盖 6 个目录/prepare、6 个 WorkerSlots 和 6 个后台资源生命周期用例。
 
 让相同上游领域用例改用真实 SQLite repository（fake 外部端口不变）：
 
@@ -152,7 +163,7 @@ FASTVIBE_DSH_TEST_REPOSITORY=sqlite node --test test/vivi-dsh-core.test.ts
 node --test test/db.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-restart.test.ts test/bot-engine.test.ts
 ```
 
-本轮结果：**83/83 通过**；与上述新测试合并运行 **649/649 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
+本轮结果：**83/83 通过**；与上述新测试合并运行 **667/667 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
 
 类型与格式：
 
@@ -165,6 +176,6 @@ git diff --check
 
 ## 下一阶段与限制
 
-下一阶段是 M6：实现 Executor、WorkerSlots、prepare、稳定 Ticket 执行目录、后台 job/子代理与资源恢复。M5 的 fake 端口调度与控制确认不替代真实执行资源的生命周期验收。
+下一阶段是 M7：实现 Source registry、Policy/凭据控制面和最小测试控制 API。M6 的资源层仍只接受 fake/sandbox adapter，不接生产 shell、GitHub 凭据或现有 Bot host。
 
-M6 的后台执行、M7 的 Source 控制面、M8 的正式旧数据转换、M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
+M7 的 Source 控制面、M8 的正式旧数据转换、M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。

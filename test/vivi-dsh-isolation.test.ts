@@ -62,7 +62,7 @@ test("staged DSH domain and shadow storage are unreachable from existing product
       }
     }
   }
-  assert.deepEqual(violations, [], "M0–M5 must not change runtime, IPC, UI, database registration, or extensions");
+  assert.deepEqual(violations, [], "M0–M6 must not change runtime, IPC, UI, database registration, or extensions");
 });
 
 test("domain dependency closure contains only local modules and node:crypto", () => {
