@@ -26,14 +26,14 @@ function duration(now: number, ttl: number): number {
   if (!Number.isSafeInteger(now) || !Number.isSafeInteger(ttl) || ttl <= 0 || !Number.isSafeInteger(now + ttl)) throw new Error("租约时间必须为安全整数且有效期大于零");
   return now + ttl;
 }
-export type EffectKind = "assessment" | "launch" | "delivery" | "relay" | "notice" | "reply" | "source-operation" | "source-reconcile";
+export type EffectKind = "assessment" | "launch" | "delivery" | "relay" | "notice" | "reply" | "source-operation" | "source-reconcile" | "control";
 export interface EffectRecord {
   kind: EffectKind; key: string; payload: unknown; seq: number; generation: number; attempts: number;
   error: string; due: number; since: number; status: "pending" | "running" | "uncertain" | "done" | "cancelled";
   leaseOwner?: string; leaseUntil?: number; claimedGeneration?: number; claimToken: number;
 }
 export interface Lease { resource: string; owner: string; generation: number; expiresAt: number }
-export interface Receipt extends OutboundMessage { status: ReplyStatus; dropped?: { at: string; reason: "channelGone" | "channelIgnored" } }
+export interface Receipt extends OutboundMessage { status: ReplyStatus; dropped?: { at: string; reason: "channelGone" | "channelIgnored" | "withdrawn" } }
 export interface Operation {
   id: string; source: string; instance: string; key: string;
   status: "planned" | "uncertain" | "confirmed" | "failed" | "cancelled";
@@ -163,10 +163,23 @@ export class ShadowStore implements Repositories {
 
   readonly receipts = {
     get: (id: string): Receipt | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_outbox WHERE id=?", id)),
-    add: (message: OutboundMessage): boolean => this.db.run("INSERT INTO dsh_outbox(id,status,ticket_id,thread_key,data) VALUES(?,'pending',?,?,?) ON CONFLICT(id) DO NOTHING", message.id, message.ticketId, message.channel.thread, json({ ...message, status: "pending" })).changes > 0,
+    add: (message: OutboundMessage): boolean => this.atomic(() => {
+      const added = this.db.run("INSERT INTO dsh_outbox(id,status,ticket_id,thread_key,data) VALUES(?,'pending',?,?,?) ON CONFLICT(id) DO NOTHING", message.id, message.ticketId, message.channel.thread, json({ ...message, status: "pending" })).changes > 0;
+      if (added && this.get<boolean>(`shadow:withdraw:${message.id}`)) this.set(`shadow:withdraw:${message.id}`, false);
+      return added;
+    }),
     waiting: (): Receipt[] => many(this.db.all<JsonRow>("SELECT data FROM dsh_outbox WHERE status='pending' ORDER BY rowid")),
     /** Withdraw only an unsent message; sent/dropped IDs remain permanent receipts. */
-    withdrawPending: (id: string): boolean => this.db.run("DELETE FROM dsh_outbox WHERE id=? AND status='pending'", id).changes > 0,
+    withdrawPending: (id: string): boolean => this.atomic(() => {
+      const receipt = this.receipts.get(id);
+      if (receipt?.status !== "pending") return false;
+      const effect = this.effects.get("reply", id);
+      if (effect?.status === "running" || effect?.status === "uncertain") {
+        this.set(`shadow:withdraw:${id}`, true);
+        return false;
+      }
+      return this.db.run("DELETE FROM dsh_outbox WHERE id=? AND status='pending'", id).changes > 0;
+    }),
     settle: (id: string, status: "sent" | "dropped", dropped?: Receipt["dropped"]): boolean => this.atomic(() => {
       const receipt = this.receipts.get(id);
       if (!receipt || receipt.status !== "pending") return false;

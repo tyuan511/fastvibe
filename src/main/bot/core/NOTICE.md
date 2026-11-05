@@ -26,6 +26,8 @@ M3 的 `../shadow/ports.ts` 和 `../shadow/engine.ts` 参考上游 `src/app/runt
 
 M4 的 `../shadow/pi-ledger.ts` 和 `../shadow/pi-session.ts` 参考上游 `src/app/sessions.ts` 与 `src/executor/dsh.ts` 的稳定 Ticket Session、输入读取与报告语义，使用已有 Pi SDK 重写；不带入 DSH Session/inbox/flush。精确 UserMessage 身份、provider stream 边界、嵌套输入 hook 隔离、epoch/owner、JSONL 对账与 SQL 报告接受记录属于 FastVibe 适配。实例内部方法与附加字段明确锁定 Pi 1.3.0，以真实 SDK、离线 provider、临时数据库及真实进程崩溃测试验收；没有接入生产 host 或 Effect driver。
 
+M5 的 `../shadow/effects.ts`、`passes.ts`、`outbox.ts`、`driver.ts` 移植上游 `src/app/effects.ts`、`passes.ts`、`outbox.ts`、`runtime.ts` 的六类调度、Later、退避、quiet、消息顺序与生命周期语义。FastVibe 新增不可变 attempt、owner/token/lease 尾部 fencing、uncertain 对账、IO 后提交失败保护、持久 control 和通用 source-operation/source-reconcile；这些不是上游已经提供的保证。`claims.ts` 是执行校验助手，`operations.ts` 是新操作适配；均只在临时库与 fake/sandbox 端口上组装，不接生产 Runtime、SDK 执行或 Source。
+
 这是源码移植，不是安装另一个 Agent Runtime。Pi、Store、Source 和 Effects 适配均在这些同步端口之外实现。当前只有隔离测试调用实验组装；生产 Bot API、BotRuntime、会话、数据库、通知及轮询入口无法到达它。
 
 ## 上游更新

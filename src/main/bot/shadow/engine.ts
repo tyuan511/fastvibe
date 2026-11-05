@@ -7,7 +7,7 @@ import { followupOwners, liveTicket, runningAssignment, type PolicyEffect, type 
 import type { DomainEvent, Policy, SourceScope } from "../core/ports.ts";
 import type { ReplyRequest } from "../core/replies.ts";
 import { ticketStage } from "../core/stage.ts";
-import { createShadowPorts, type AssessmentPayload, type DeliveryPayload, type LaunchPayload } from "./ports.ts";
+import { createShadowPorts, workerBindingKey, type AssessmentPayload, type DeliveryPayload, type LaunchPayload } from "./ports.ts";
 import type { EffectRecord, ShadowStore } from "./store.ts";
 
 /** A captured fake executor binding, not a Pi Session receipt or a model authorization. */
@@ -20,7 +20,6 @@ export interface ShadowEngineOptions {
   wake?: () => void;
 }
 type MainCommands = Pick<EngineForMainSession, "candidate" | "decide" | "attach" | "reply" | "requestStatus" | "note">;
-const bindingKey = (ticketId: string): string => `shadow:worker:${ticketId}`;
 const sameToken = (a: WorkerToken, b: WorkerToken): boolean => a.ticketId === b.ticketId && a.assignmentId === b.assignmentId
   && a.generation === b.generation && a.claimToken === b.claimToken;
 const brief = (ticket: Ticket) => ({ id: ticket.id, title: ticket.title, ...ticketStage(ticket), ...(ticket.ended ? { ended: ticket.ended } : {}) });
@@ -95,7 +94,7 @@ export class ShadowEngine {
       const assignment = ticket?.assignments.at(-1);
       if (!ticket || !liveTicket(ticket) || !assignment || assignment.id !== payload.assignmentId || assignment.state !== "pending" || current.key !== assignment.id) return undefined;
       const token: WorkerToken = { ticketId: ticket.id, assignmentId: assignment.id, generation: current.generation, claimToken: current.claimToken };
-      this.store.set(bindingKey(ticket.id), token);
+      this.store.set(workerBindingKey(ticket.id), token);
       this.core.assignmentStarted(ticket.id, assignment.id);
       return token;
     });
@@ -162,8 +161,13 @@ export class ShadowEngine {
     followForContext: (token: WorkerToken, thread: Parameters<Engine["followForContext"]>[1]): boolean => this.withWorker(token, () => this.core.followForContext(token.ticketId, thread)) ?? false,
     markUnrelated: (token: WorkerToken, thread: string, reason: string): boolean => this.withWorker(token, () => { this.core.markUnrelated(token.ticketId, thread, reason); return true; }) ?? false,
   };
+  /** Current live execution binding; late callers must still use the captured token. */
+  currentBinding(ticketId: string): WorkerToken | undefined {
+    const token = this.store.get<WorkerToken>(workerBindingKey(ticketId));
+    return token && this.currentWorker(token) ? structuredClone(token) : undefined;
+  }
   private currentWorker(token: WorkerToken): Ticket | undefined {
-    const binding = this.store.get<WorkerToken>(bindingKey(token.ticketId));
+    const binding = this.store.get<WorkerToken>(workerBindingKey(token.ticketId));
     if (!binding || !sameToken(binding, token)) return undefined;
     const ticket = this.store.tickets.get(token.ticketId);
     return ticket && liveTicket(ticket) && runningAssignment(ticket)?.id === token.assignmentId ? ticket : undefined;

@@ -2,17 +2,21 @@
 // Port semantics adapted from deepseek-ai/dsh-superagent-prototype; see ../core/NOTICE.md.
 import type { Assessor, Executor, Outbox } from "../core/ports.ts";
 import type { ShadowStore } from "./store.ts";
+import type { WorkerToken } from "./engine.ts";
 
 export interface AssessmentPayload { triggerId: string; evalId: string }
 export interface LaunchPayload { ticketId: string; assignmentId: string }
 export interface DeliveryPayload extends LaunchPayload { inputIds: string[] }
 
+export const workerBindingKey = (ticketId: string): string => `shadow:worker:${ticketId}`;
 export const releaseControlKey = (evalId: string): string => "shadow:release:" + evalId;
 export const stopControlKey = (ticketId: string, assignmentId: string): string =>
   "shadow:stop:" + JSON.stringify([ticketId, assignmentId]);
 
-export interface ReleaseControl { evalId: string; at: number; status: "pending" }
-export interface StopControl extends LaunchPayload { reason: string; at: number; status: "pending" }
+export interface ReleaseControl { evalId: string; at: number; status: "pending" | "done" }
+export interface StopControl extends LaunchPayload { reason: string; at: number; status: "pending" | "done"; binding?: WorkerToken }
+export type ControlPayload = { type: "release"; controlKey: string; control: ReleaseControl }
+  | { type: "stop"; controlKey: string; control: StopControl };
 
 function isLaunchPayload(value: unknown, expected: LaunchPayload): boolean {
   if (!value || typeof value !== "object") return false;
@@ -55,6 +59,7 @@ export function createShadowPorts(
         if (store.get(key) === undefined) {
           const control: ReleaseControl = { evalId, at: now(), status: "pending" };
           store.set(key, control);
+          store.effects.enqueue("control", key, { type: "release", controlKey: key, control } satisfies ControlPayload, now());
           updated = true;
         }
         if (store.effects.cancelPending("assessment", evalId)) updated = true;
@@ -93,10 +98,13 @@ export function createShadowPorts(
         let updated = false;
         const key = stopControlKey(ticket.id, assignment.id);
         if (store.get(key) === undefined) {
+          const binding = store.get<WorkerToken>(workerBindingKey(ticket.id));
           const control: StopControl = {
             ticketId: ticket.id, assignmentId: assignment.id, reason, at: now(), status: "pending",
+            ...(binding?.assignmentId === assignment.id ? { binding } : {}),
           };
           store.set(key, control);
+          store.effects.enqueue("control", key, { type: "stop", controlKey: key, control } satisfies ControlPayload, now());
           updated = true;
         }
         if (store.effects.cancelPending("launch", assignment.id)) updated = true;

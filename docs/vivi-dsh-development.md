@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M4 的隔离领域、Shadow Store、同步端口组装与真实 Pi SDK Session 实验，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表自动 Effect 调度或 GitHub 集成已实现。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M5 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session 实验与 Shadow 调度组装，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已实现。
 
 ## M0：已建立的实施基线
 
@@ -98,15 +98,45 @@
 
 本阶段没有消费 M3 的 launch/delivery/Stop control，也没有自动 claim loop、WorkerSlots、Passes、生产 Bot host、Source poller 或 GitHub 调用。实际 driver 组装属于 M5，执行资源与目录准备属于 M6。
 
+## M5：Shadow Effects、Outbox、Passes 与恢复已组装
+
+位置：[effects.ts](../src/main/bot/shadow/effects.ts)、[operations.ts](../src/main/bot/shadow/operations.ts)、[outbox.ts](../src/main/bot/shadow/outbox.ts)、[passes.ts](../src/main/bot/shadow/passes.ts)、[driver.ts](../src/main/bot/shadow/driver.ts)。
+
+### 调度、事务与健康
+
+- `ShadowDriver` 只组装显式传入的 fake/sandbox adapters；缺少 adapter 时使用 `Later` 保留队列，不伪造成功。六类 DSH Effect 保持各自语义：assessment 并发 4、launch 默认实验并发 1、delivery 并发 4 且 quiet；relay/notice 按各自队列串行，reply 默认串行。M6 才将实验 launch 限额接到真实 WorkerSlots。
+- 默认退避为 2 秒至 60 秒，launch/reply 为 5 秒至 300 秒。`Later` 只延期，不增加或重置连续失败数；普通失败指数退避，第三次使健康进入 error，继续重试而非丢弃。M2 的 `attempts` 是 claim 次数，M5 的独立失败记录才用于退避和 Outbox 顺序阈值。quiet 只抑制重复普通失败；调度错误和 uncertain 始终明确报错并显示最早等待时间。
+- 所有 claim 在同步事务中保存 owner、token、generation、租约和不可变 attempt 快照。payload 更新不能抹掉原尝试，稳定 requestId 在同 generation 的重试间保持不变。跨连接在同事务内计算全局在途上限；ordered 队头未到 due、正在运行或 uncertain 时，后项不能越过。
+- handler 在事务外执行 IO，仅返回同步事实 commit。commit 前后均核对 seq、generation、owner、token 与最终时钟；失败回滚领域 SQL、Effect 及 afterCommit。返回 false 的 commit 撤回其部分事实，再取消原尝试；异步 commit 拒绝。已发生 IO 后的提交失败进入 uncertain，不按普通错误重新外发。
+- expired running 进入 uncertain，只有显式、精确 CAS 的 reconcile 才能解除。旧 generation 的完成不调用新 payload 的 commit，也不吞掉新代；旧 owner 的迟到结果不能落入新尝试。这里的 cancelled/uncertain 是队列事实，不表示外部动作已被撤销；不声明跨存储或外部 API 的 exactly-once。
+
+### Outbox、控制意图与操作对账
+
+- Outbox 复用原先的同步 receipt/enqueue 端口，发送确认与 Effect 结算同事务。相同消息 ID 保留首次消息；sent/dropped 不再发送。Source 暂缺、暂停或 `waiting` 使用 Later；ignored/gone 成为带原因的 dropped。相同 Ticket、Source、conversation 的后续消息等待前项，前项达到三次普通失败后可放行；running/uncertain 不能被当作普通失败绕过。
+- 尚未领取的消息可原子 withdraw；running/uncertain 保留 receipt 并记录撤回请求。未知发送只接受显式的 sent/gone/not-sent 对账事实，不能自动重发；not-sent 且已请求撤回时才收束为 withdrawn。迟到发送成功仍如实记录 sent，不用撤回来掩盖已发生的发送。
+- Stop/Release 原控制记录与内部 `control` Effect 同事务保存。消费时使用原 Assignment、Eval 与捕获的 binding，不查询最新 Worker 来替代旧目标；完成后写控制回执。控制在 processing pause 时仍可消费。此处只证明 fake control 已确认，真实 SDK、子代理、后台 job 与执行资源的停止属于 M6。
+- 通用 source-operation 先保存 immutable intent，再入队。执行前持久化 `planned → uncertain`，之后才调用 adapter；confirmed/failed receipt、operation revision 与 Effect 同事务结算。未知异常、提交失败及重启只安排 source-reconcile 读取，不重发 write。只有 not-applied 证据才可重新 planned；unknown 保留待对账。
+- claim 已提交但 handler 尚未启动的退出窗口也可恢复：对 `planned + Effect uncertain` 核对不可变 attempt 的身份、generation、token、意图及 revision，先补 uncertain 检查点再只读 inspect。取消未知操作只记录请求，不能抹去未知写入；confirmed 仍记录实际结果，not-applied 后才取消。Source/instance/key 分隔身份，revision CAS 拒绝 ABA 和迟到检查结果。
+
+### 生命周期与验收范围
+
+- Pass 以 2 秒周期及按需 request 驱动，单个 pass 串行，并发请求合并成一个 follow-up pass。未配置时保留队列，失败更新健康，后续成功恢复。idle 只说明当前没有可启动的 pass/Effect，不结束 Ticket 或 Assignment。
+- processing pause 单独持久化，重建 Driver 不解除暂停。shutdown 先 closing、拒绝新 Trigger 和新 dispatch，再等待 pass 与在途 handler；主动 abort 将未确认尝试标为 uncertain，但仍等待底层 Promise 真正结束，避免关库后留下活跃 handler。停止的 Driver 需要新实例接管，不能悄悄恢复。
+- 真实子进程覆盖 claim 提交前后、handler 启动前、外调成功但事实提交前等窗口；另有跨连接限额、SQL ABORT、旧 generation、租约在 commit 内到期、ordinary failure/Later、withdraw、pause、shutdown 和显式 reconcile 回归。
+
+M5 没有增加 schema 步骤，也没有生产注册、真实 Pi 执行、Source 轮询或外部消息/API 写入。M4 的真实 SDK 实验与 M5 的 fake 端口调度分别验收；M6 才组合真实 Executor、回执回调、WorkerSlots、prepare、稳定执行目录及后台资源恢复。生产仍只有旧 `BotRuntime`。
+
 ## 可重跑的验收入口
 
 领域、隔离、存储、同步组装与真实 SDK 实验测试：
 
 ```bash
-node --test test/vivi-dsh-core.test.ts test/vivi-dsh-stage.test.ts test/vivi-dsh-policy.test.ts test/vivi-dsh-isolation.test.ts test/vivi-dsh-replay.test.ts test/vivi-dsh-migration.test.ts test/vivi-dsh-store.test.ts test/vivi-dsh-engine.test.ts test/vivi-dsh-pi-ledger.test.ts test/vivi-dsh-pi-session.test.ts
+node --test test/vivi-dsh-*.test.ts
 ```
 
-本轮结果：**415/415 通过**，39 个 suite，无跳过或取消。其中 113 个领域行为、31 个 stage/canRetry 用例移植自固定上游，另有 43 个策略、4 个隔离、2 个回放、52 个旧数据分类、40 个 Store 验收、35 个 M3 组装用例，以及 **37 个 M4 Ledger 和 58 个真实 SDK Session 用例**。
+本轮结果：**566/566 通过**，39 个 suite，无跳过或取消。M0–M4 的 415 项保持通过：113 个领域行为、31 个 stage/canRetry 用例移植自固定上游，另有 43 个策略、4 个隔离、2 个回放、52 个旧数据分类、40 个 Store 验收、35 个 M3 组装用例，以及 37 个 M4 Ledger 和 58 个真实 SDK Session 用例。
+
+M5 新增 **151 项**：58 个 Effects、40 个 Operations、21 个 Driver、23 个 Outbox 和 9 个 Passes 用例，含真实子进程退出、跨连接执行和 SQL 回滚验收。
 
 让相同上游领域用例改用真实 SQLite repository（fake 外部端口不变）：
 
@@ -122,7 +152,7 @@ FASTVIBE_DSH_TEST_REPOSITORY=sqlite node --test test/vivi-dsh-core.test.ts
 node --test test/db.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-restart.test.ts test/bot-engine.test.ts
 ```
 
-本轮结果：**83/83 通过**；与上述新测试合并运行 **498/498 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
+本轮结果：**83/83 通过**；与上述新测试合并运行 **649/649 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
 
 类型与格式：
 
@@ -135,6 +165,6 @@ git diff --check
 
 ## 下一阶段与限制
 
-下一阶段是 M5：消费持久 Effect/Stop/Release 意图，组装 Shadow handlers、Outbox、Passes、退避与 uncertain 对账。M4 的单 Session 实验不替代调度器的 claim、资源和恢复合同。
+下一阶段是 M6：实现 Executor、WorkerSlots、prepare、稳定 Ticket 执行目录、后台 job/子代理与资源恢复。M5 的 fake 端口调度与控制确认不替代真实执行资源的生命周期验收。
 
-M5 的 Effect handlers/Passes、M6 的后台执行、M7 的 Source 控制面、M8 的正式旧数据转换、M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
+M6 的后台执行、M7 的 Source 控制面、M8 的正式旧数据转换、M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
