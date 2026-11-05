@@ -175,6 +175,74 @@ void main() {
     );
   }
 
+  testWidgets('thinking row runs its preview to the disclosure arrow', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final messages = <ChatMessage>[
+      ChatMessage.fromJson(<String, Object?>{
+        'id': 'assistant-1',
+        'role': 'assistant',
+        'text': 'Done.',
+        'parts': <Object?>[
+          <String, Object?>{
+            'kind': 'thinking',
+            'text':
+                '**Inspecting billing flows across the gateway handler and the internal key ledger to see where the deduction path actually lands.',
+          },
+          <String, Object?>{'kind': 'text', 'text': 'Done.'},
+        ],
+      }),
+    ];
+    await tester.pumpWidget(
+      _surface(
+        light,
+        Scaffold(
+          body: TranscriptView(
+            messages: messages,
+            footers: const {},
+            running: false,
+            waiting: false,
+            workingSince: null,
+            onLongPress: (_) {},
+            onOlder: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    RenderBox cardOf(RenderBox descendant) {
+      RenderBox box = descendant;
+      while (box.parent is RenderBox) {
+        box = box.parent! as RenderBox;
+        if (box is RenderDecoratedBox) return box;
+      }
+      fail('no decorated card ancestor');
+    }
+
+    double chevronGap() {
+      final chevron = tester.renderObject<RenderBox>(find.byType(RotatedBox));
+      final card = cardOf(chevron);
+      final cardRight = card.localToGlobal(Offset.zero).dx + card.size.width;
+      final chevronRight =
+          chevron.localToGlobal(Offset.zero).dx + chevron.size.width;
+      return cardRight - chevronRight;
+    }
+
+    // A loose Flexible on the row's label used to strand the arrow mid-row, an
+    // unused flex share wide of the card edge. Collapsed, the preview must run
+    // all the way to the arrow.
+    expect(chevronGap(), lessThanOrEqualTo(12.5), reason: 'collapsed row');
+    await tester.tap(find.byType(InkWell).first);
+    await tester.pumpAndSettle();
+    expect(chevronGap(), lessThanOrEqualTo(12.5), reason: 'expanded row');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('todo disclosure preserves completed and unfinished steps', (
     tester,
   ) async {

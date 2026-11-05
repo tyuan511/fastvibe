@@ -74,19 +74,21 @@ class _ThinkingRowState extends State<ThinkingRow> {
                     strokeWidth: 1.8,
                   ),
                   const SizedBox(width: 8),
-                  Flexible(
-                    child: ToolActivityLabel(
-                      active: live,
-                      child: Text(
-                        live
-                            ? t('chat.thinking', context: context)
-                            : t('chat.thoughts', context: context),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: live ? palette.accent : palette.muted,
-                          fontSize: 13,
-                        ),
+                  // The label is a fixed short string, so it takes no flex share:
+                  // a Flexible here reserves half the free width for it, and the
+                  // share it leaves unused strands the preview and the disclosure
+                  // arrow mid-row instead of letting the preview run to the edge.
+                  ToolActivityLabel(
+                    active: live,
+                    child: Text(
+                      live
+                          ? t('chat.thinking', context: context)
+                          : t('chat.thoughts', context: context),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: live ? palette.accent : palette.muted,
+                        fontSize: 13,
                       ),
                     ),
                   ),
