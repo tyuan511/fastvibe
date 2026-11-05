@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../account/account.dart';
 import '../app_info.dart';
 import '../chat/option_sheet.dart';
 import '../i18n/core.dart';
+import '../protocol/diagnostics.dart';
 import '../theme/theme.dart';
 import '../ui/feedback.dart';
 import '../ui/app_screen.dart';
@@ -368,6 +370,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onTap: _pickUpdateChannel,
                         ),
                       ],
+                      SettingsRow(
+                        icon: AppIcons.clipboardPaste,
+                        label: t(
+                          'settings.connectionDiagnostics',
+                          context: context,
+                        ),
+                        description: t(
+                          'settings.connectionDiagnosticsHint',
+                          context: context,
+                        ),
+                        onTap: () async {
+                          try {
+                            await Clipboard.setData(
+                              ClipboardData(
+                                text: connectionDiagnostics(appVersion),
+                              ),
+                            );
+                            toastSuccess(t('common.copied'));
+                          } catch (_) {
+                            toastError(t('settings.diagnosticsCopyFailed'));
+                          }
+                        },
+                      ),
                       SettingsRow(
                         icon: AppIcons.information,
                         label: t('settings.releaseNotes', context: context),
