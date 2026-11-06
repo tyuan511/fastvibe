@@ -111,6 +111,7 @@ rather than highlighted (below).
 ## Mermaid 图表
 
 桌面共用的 `MarkdownView` 将 `mermaid` / `mmd` 围栏渲染成图表，普通聊天、Vivi 和 Markdown 文件预览共用。
+内置技能 [`mermaid`](../../resources/skills/mermaid/SKILL.md) 经 `builtinSkillPaths()` 加载，指导 Agent 在架构、流程、调用时序、状态流转和实体关系等适合用图说明的场景优先输出 Mermaid 围栏；简单问答、统计图、UI 原型及用户指定其他工具的任务不按此触发。技能只提供提示词，不新增工具或渲染入口。
 `mermaid-block.tsx` 只在原始围栏闭合后按需加载 `lib/mermaid-renderer.ts`；未闭合、语法错误或超过 24,000 字符时保留源码，复制始终复制完整源码。成功后可切换图表 / 源码。
 
 - 渲染器串行执行 Mermaid 的配置与布局，取消或替换后的迟到结果不发布；临时 DOM 在 finally 中清理。
