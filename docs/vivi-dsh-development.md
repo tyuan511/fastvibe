@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M6 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session 实验、Shadow 调度与执行资源层，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已实现。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M7 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层和 Source/Policy 控制面实验，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已实现。
 
 ## M0：已建立的实施基线
 
@@ -10,13 +10,13 @@
 | 依赖边界 | 移植完整纯领域闭包；不安装 DSH SDK、Cordis 或另一套模型 Runtime。M4 使用现有 Pi SDK 和显式传入的 ModelRuntime 实现隔离 adapter |
 | 首个部署宿主 | 首先适配桌面 Main 生命周期；进程退出期间停止轮询，重新启动按持久游标补收并报告覆盖缺口。无头宿主复用同一组端口，云端服务不是首批前置依赖 |
 | GitHub 身份接口 | 按 DSH 的专用 GitHub CLI/账号接口设计 Source；执行和 Review/Merge 使用可区分的账号引用，不复用 FastVibe 登录凭据、不写死旧审核账号。本轮不创建账号、读取凭据或配置真实仓库 |
-| 凭据落实阶段 | M7 实现凭据引用、CLI 调用边界和权限验证；M10/M11 验证外部写入路径。专用目录和工具列表不声明为 OS 沙箱 |
+| 凭据落实阶段 | M7 实现隔离 credential reference、宿主 resolver 和权限边界；M10/M11 验证外部写入路径。专用目录和工具列表不声明为 OS 沙箱 |
 | 默认关闭方式 | 当前实现没有生产调用者，而不是在旧 BotRuntime 中插入条件分支。导入隔离测试检查整个 `src/` 和内置扩展的静态模块依赖 |
 | 状态所有权 | 新代码只使用内存 repository 或临时 Shadow 库；旧 BotRuntime、BotStore、Bot API、生产数据库 schema、Session、通知、记忆和工作目录均不切换 |
 | Fixture | 完整上游领域测试保留 fake Assessor/Executor/Outbox 和可控时钟；另有 [来源事件 fixture](../test/fixtures/vivi-dsh-source-events.ts) 提供重复、编辑、分页、短暂失败和状态响应样例 |
 | 外部验收边界 | 当前仅回放已标准化 Trigger，不声明已验证 GitHub HTTP 解析、分页或 API 调用；这些 fixture 将用于 M9/M10 |
 
-当前没有生产 feature flag、Source poller 或注册入口；M7/M12 才添加受隔离模式约束的组装入口。M0 的默认值是后续实现合同，不能解释成 GitHub 已配置或 Pi 投递已完成。
+当前没有生产 feature flag、Source poller 或注册入口；M7 只添加 Shadow 测试路径的 registry/control 组装，M12 才执行生产切换。M0 的默认值是后续实现合同，不能解释成 GitHub 已配置或 Pi 投递已完成。
 
 ## M1：纯领域内核已落地
 
@@ -139,7 +139,20 @@ M5 没有增加 schema 步骤，也没有生产注册、真实 Pi 执行、Sourc
 
 本阶段新增 18 个目录、slot 和资源回归，覆盖目录复用、recipe/失败残留、超时/取消、symlink、slot 容量与人类额外 slot、跨连接 owner、settling、handoff、stop barrier、uncertain 恢复和旧 binding 拒绝。
 
-## 可重跑的验收入口
+## M7：隔离 Source registry、Policy、凭据宿主和测试控制面已组装
+
+位置：[source-registry.ts](../src/main/bot/shadow/source-registry.ts)、[policy-host.ts](../src/main/bot/shadow/policy-host.ts)、[credential-host.ts](../src/main/bot/shadow/credential-host.ts)、[control.ts](../src/main/bot/shadow/control.ts)。
+
+- `ShadowSourceRegistry` 复用既有 `dsh_kv`、`dsh_source_cursors` 和 `dsh_leases`，管理已安装 Source kind、持久实例配置、`enabled/disabled/revoked/unavailable` 状态、健康、按 Source/instance 隔离的 poll cursor，以及跨连接 poll lease。未知 Source 不会监听或启动；重复注册、配置 revision 冲突、游标 CAS 冲突和旧 lease 释放都会拒绝。
+- Source kind 只能通过显式 `register()` 进入 Shadow registry；实例默认 disabled。Source 的 `scope()` 是 Core 唯一看到的窄接口，具体平台字段保留在 adapter config。Source 配置递归拒绝 token、secret、password、credential、API key 等凭据材料，只允许 `credentialRef` 这类引用。
+- `ShadowPolicyHost` 持久化隔离的 Policy/Eval 快照与 revision，使用已有 `policyVersion()`、`settingsPolicy()` 和 `policyEffects()`，不复制第二套 admission gate。保存使用 CAS；规则、Source policy、`off/observe/auto`、timeout 和撤权变化可被重新验证。Policy 扩展字段同样拒绝凭据材料。
+- `ShadowCredentialHost` 只保存 Source 到 credential reference 的绑定。resolver 返回的 secret 只能在 `withSourceCredential()` 回调内交给专用 adapter，Shadow 状态、控制快照、数据库、Renderer 和普通 Worker 都拿不到 secret。M7 使用 fake resolver，未接真实 keychain、GitHub PAT 或 FastVibe account token。
+- `ShadowControl` 只提供 Shadow 状态摘要：Source 安装/启用状态、health、config key、Policy version/rule/source 摘要和 credential reference 摘要。写入 API 只有显式 test mode 的 Source/Policy 配置修改；普通模式拒绝写入，也没有 launch、Source operation、credential read 或生产注册入口。
+- 这些模块没有接入 Electron IPC、普通 settings、远程 API、旧 BotRuntime 或 Source poller。M7 证明的是 registry、scope、健康/游标/租约、Policy CAS/revalidation、凭据引用隔离和控制面边界；真实 Source HTTP、轮询、消息发送和 GitHub 仍属于 M9/M10。
+
+本阶段新增 **9 项** registry/control 回归，覆盖未知/disabled/revoked/unavailable Source、配置和 Policy secret 拒绝、health/cursor 重启恢复、cursor CAS、poll lease fencing、credential callback 隔离、Policy revision 和 test-only control mutation。
+
+
 
 领域、隔离、存储、同步组装与真实 SDK 实验测试：
 
@@ -147,7 +160,7 @@ M5 没有增加 schema 步骤，也没有生产注册、真实 Pi 执行、Sourc
 node --test test/vivi-dsh-*.test.ts
 ```
 
-本轮结果：**584/584 通过**，39 个 suite，无跳过或取消。M0–M4 的 415 项和 M5 的 151 项保持通过；M6 新增 **18 项**，覆盖 6 个目录/prepare、6 个 WorkerSlots 和 6 个后台资源生命周期用例。
+本轮结果：**593/593 通过**，39 个 suite，无跳过或取消。M0–M6 的 584 项保持通过；M7 新增 **9 项** registry/control 用例，覆盖 Source 生命周期、health/cursor/lease、配置与 Policy secret 拒绝、credential callback 隔离、Policy revision 和 test-only control mutation。
 
 让相同上游领域用例改用真实 SQLite repository（fake 外部端口不变）：
 
@@ -163,7 +176,7 @@ FASTVIBE_DSH_TEST_REPOSITORY=sqlite node --test test/vivi-dsh-core.test.ts
 node --test test/db.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-restart.test.ts test/bot-engine.test.ts
 ```
 
-本轮结果：**83/83 通过**；与上述新测试合并运行 **667/667 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
+本轮结果：**83/83 通过**；与上述新测试合并运行 **676/676 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
 
 类型与格式：
 
@@ -176,6 +189,6 @@ git diff --check
 
 ## 下一阶段与限制
 
-下一阶段是 M7：实现 Source registry、Policy/凭据控制面和最小测试控制 API。M6 的资源层仍只接受 fake/sandbox adapter，不接生产 shell、GitHub 凭据或现有 Bot host。
+本文已完成 M0–M7 隔离能力的记录。下一阶段是 M8：Local Source 回放、旧 Bot API 兼容投影和正式旧数据转换 dry-run。M7 的 Source registry、Policy、凭据宿主和控制 API 仍只在 Shadow 测试路径使用。
 
-M7 的 Source 控制面、M8 的正式旧数据转换、M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
+M8–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
