@@ -34,6 +34,8 @@ M9 的 `../shadow/github-source.ts` 是新增的 Shadow-only GitHub 只读适配
 
 M10 的 `../shadow/github-operation.ts` 是新增的 Shadow-only dry-run planner：它校验 Source/instance/repository identity、Mandate allowed operations、ticket/generation、Stop、PR head/base、required checks、branch/PR/review/merge/Issue close 参数，保存稳定 operation intent、参数哈希和幂等 key。它只输出预期 method/path/body 与模拟 receipt；`uncertain`、`unknown`、`confirmed`、`not-applied` 和取消必须显式推进，不调用网络、真实凭据或 source-operation Effect。
 
+M11 原生适配的 `../shadow/github-transport.ts`、`github-native-plan.ts`、`github-native-operation.ts` 和 `github-native-deployment.ts` 是 FastVibe 新增实现，不是移植的上游保证。它们复用原有 Source/Engine/Effect/Operation，新增原生 REST 路径与字段、纯意图构造、Ticket/版本/artifact key、发送检查点、完整分页、同 secret 身份反查、独立审核账号和只读对账。settlement 支持注入原生纯 builder；GitHub 的 Review/Issue 没有继承 loopback 的 CAS，默认 Issue strict profile 不发 PATCH。以本地原生 HTTP 契约和真实子进程恢复验收，真实仓库与模型链路尚未验收；详见[原生适配说明](../../../../docs/vivi-dsh-github-rest.md)。
+
 ## 上游更新
 
 M11 前置的 `../shadow/github-deployment.ts`、`github-authority.ts` 和 `github-settlement.ts` 是 FastVibe 新增实验：复用 M5 的 operation/Effect 状态机，对 loopback HTTP、持久宿主权限、merge 后独立 Issue continuation、原子登记和重启对账做验证。fake HTTP server 只在测试 fixture，不是 GitHub 原生协议；host profile、Issue 版本比较和条件关闭也不冒称上游或 GitHub 已提供的能力。M7 credential callback 增加解析后的 binding/resolver fencing，M10 授权可携带精确 Assignment/binding 身份；这些模块仍不可从生产路径到达。真实 GitHub、独立 reviewer、真实 Worker 和 M11 端到端退出条件未验收，范围见 [开发记录](../../../../docs/vivi-dsh-development.md)。

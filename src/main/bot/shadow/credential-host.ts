@@ -25,7 +25,7 @@ export class ShadowCredentialHost {
     return this.registry.bindCredential(source, ref, expectedRevision);
   }
   bindings(): CredentialBindingView[] { return this.registry.credentialBindings(); }
-  async withSourceCredential<T>(source: string, purpose: string, use: (secret: unknown) => Promise<T>): Promise<T> {
+  async withSourceCredential<T>(source: string, purpose: string, use: (secret: unknown, validate: () => void) => Promise<T>): Promise<T> {
     const binding = this.registry.credentialBinding(source);
     if (!binding) throw new Error(`Source 没有凭据引用: ${source}`);
     const resolver = this.resolvers.get(binding.ref.id);
@@ -33,11 +33,14 @@ export class ShadowCredentialHost {
     const secret = await resolver.resolve(binding.ref, purpose);
     // A rotation/rebind or resolver removal while resolution was pending revokes
     // this in-memory result before any adapter can use it.
-    const current = this.registry.credentialBinding(source);
-    if (!current || current.revision !== binding.revision || current.ref.id !== binding.ref.id
-      || this.resolvers.get(binding.ref.id) !== resolver) throw new Error("凭据绑定在解析期间已变化");
+    const validate = () => {
+      const current = this.registry.credentialBinding(source);
+      if (!current || current.revision !== binding.revision || current.ref.id !== binding.ref.id
+        || this.resolvers.get(binding.ref.id) !== resolver) throw new Error("凭据绑定在解析期间已变化");
+    };
+    validate();
     if (secret === undefined || secret === null) throw new Error("凭据 resolver 返回空值");
-    return use(secret);
+    return use(secret, validate);
   }
   hasResolver(id: string): boolean { return this.resolvers.has(id); }
 }

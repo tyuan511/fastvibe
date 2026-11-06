@@ -38,7 +38,9 @@ export interface GithubIssueContinuationView extends GithubIssueContinuation {
 
 const recordKey = (ticketId: string): string => `shadow:m11:github-issue-continuation:${ticketId}`;
 const clone = <T>(value: T): T => structuredClone(value);
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+const stable = (value: unknown): string => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
+  ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+const same = (a: unknown, b: unknown): boolean => stable(a) === stable(b);
 const object = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 function positive(value: unknown, name: string): number {
   if (!Number.isSafeInteger(value) || Number(value) <= 0) throw new Error(`${name} 必须是正整数`);
@@ -66,8 +68,16 @@ export class GithubIssueSettlement {
   private readonly operations: ShadowOperations;
   private readonly policy: () => Policy;
   private readonly registry: ShadowSourceRegistry;
-  constructor(store: ShadowStore, operations: ShadowOperations, options: { policy: () => Policy; registry: ShadowSourceRegistry }) {
-    this.store = store; this.operations = operations; this.policy = options.policy; this.registry = options.registry;
+  private readonly buildIntent?: (request: GithubOperationRequest) => Omit<Operation, "status" | "revision">;
+  constructor(store: ShadowStore, operations: ShadowOperations, options: { policy: () => Policy; registry: ShadowSourceRegistry;
+    buildIntent?: (request: GithubOperationRequest) => Omit<Operation, "status" | "revision"> }) {
+    this.store = store; this.operations = operations; this.policy = options.policy; this.registry = options.registry; this.buildIntent = options.buildIntent;
+  }
+  private intent(request: GithubOperationRequest): Omit<Operation, "status" | "revision"> {
+    if (this.buildIntent) return this.buildIntent(request);
+    // Preserve the M10 experiment; native deployments inject a pure versioned builder.
+    const { id, source, instance, key, payload } = new GithubOperationDryRun(this.store, this.registry, request.source, request.instance).plan(request);
+    return { id, source, instance, key, payload };
   }
 
   register(input: GithubMergeSettlementEvidence): GithubIssueContinuationView {
@@ -85,8 +95,7 @@ export class GithubIssueSettlement {
       const source = this.registry.instance(input.closeRequest.source);
       if (!source?.enabled || source.status !== "enabled") throw new Error("Source 未启用");
 
-      const planner = new GithubOperationDryRun(this.store, this.registry, input.closeRequest.source, input.closeRequest.instance);
-      const planned = planner.plan(input.closeRequest);
+      const planned = this.intent(input.closeRequest);
       const existing = this.store.get<GithubIssueContinuation>(recordKey(ticket.id));
       const record: GithubIssueContinuation = { version: 1, decisionId: ticket.decisionId, sourceRevision: source.revision,
         policyVersion: existing?.policyVersion ?? policy.version, ended: clone(ticket.ended!), closedAt: input.closedAt, ticketId: ticket.id, originIssue: input.originIssue, pullThread: clone(input.pullThread),
@@ -122,7 +131,7 @@ export class GithubIssueSettlement {
       if (!source?.enabled || source.status !== "enabled" || source.revision !== record.sourceRevision) throw new Error("Source revision 已变化或未启用");
       const policy = this.policy();
       if (policy.paused || policy.version !== record.policyVersion || !policy.revalidate(ticket.mandate)) throw new Error("当前 Policy 拒绝 continuation");
-      const planned = new GithubOperationDryRun(this.store, this.registry, current.source, current.instance).plan(record.intent);
+      const planned = this.intent(record.intent);
       if (planned.id !== current.id || !same(planned.payload, current.payload)) throw new Error("continuation intent 不匹配");
     });
   }
@@ -169,6 +178,15 @@ export class GithubIssueSettlement {
     if (!ref.id.startsWith(prefix)) throw new Error("pull thread 仓库或 instance 不匹配");
     return positive(Number(ref.id.slice(prefix.length)), "pull number");
   }
+  private mergePath(payload: GithubOperationPayload, origin: { source: string; repositoryId: string }, number: number): string {
+    if (payload.mode !== "github-rest") return `/repos/${origin.repositoryId}/pulls/${number}/merge`;
+    const repo = object(this.registry.instance(origin.source)?.config.repository);
+    const native = object(payload);
+    const captured = object(native?.repository);
+    if (!repo || !captured || String(captured.id) !== origin.repositoryId || captured.owner !== repo.owner || captured.name !== repo.name
+      || object(native?.object)?.pullNumber !== number) throw new Error("continuation 原生仓库/PR 身份不匹配");
+    return `/repos/${encodeURIComponent(String(repo.owner))}/${encodeURIComponent(String(repo.name))}/pulls/${number}/merge`;
+  }
   private validate(ticket: Ticket, input: GithubMergeSettlementEvidence): void {
     if (!ticket.ended || ticket.ended.outcome !== "merged" || ticket.ended.by === "human") throw new Error("Ticket 必须以非 human 的 merged 结果结束");
     const decision = this.store.decisions.get(ticket.decisionId);
@@ -188,10 +206,14 @@ export class GithubIssueSettlement {
       || payload.expected.method !== "PUT" || !payload.expected.path
       || payload.authorization.stopped || merge.source !== origin.source || merge.instance !== origin.instance
       || !same(authShape(input.closeRequest), authShape({ ...input.closeRequest, authorization: payload.authorization }))
-      || payload.expected.path !== `/repos/${origin.repositoryId}/pulls/${this.pullNumber(input.pullThread, origin)}/merge`
+      || payload.expected.path !== this.mergePath(payload, origin, this.pullNumber(input.pullThread, origin))
       || payload.authorization.source !== origin.source || payload.authorization.instance !== origin.instance || String(payload.authorization.repositoryId) !== origin.repositoryId) throw new Error("merge operation 授权身份不匹配");
     const request = input.closeRequest;
-    positive(request.preconditions.issueVersion, "continuation issueVersion");
+    if (payload.mode === "github-rest") {
+      if (positive(request.params.pullNumber, "continuation pullNumber") !== this.pullNumber(input.pullThread, origin)
+        || typeof request.preconditions.issueUpdatedAt !== "string" || !Number.isFinite(Date.parse(request.preconditions.issueUpdatedAt))
+        || !Number.isSafeInteger(request.preconditions.issueEventFrontier) || Number(request.preconditions.issueEventFrontier) < 0) throw new Error("continuation 缺少原生 Issue 观测");
+    } else positive(request.preconditions.issueVersion, "continuation issueVersion");
     if (request.kind !== "issue-close" || request.source !== origin.source || request.instance !== origin.instance || String(request.repositoryId) !== origin.repositoryId
       || positive(request.object.issueNumber, "close issueNumber") !== origin.number || request.authorization.ticketId !== ticket.id || request.authorization.mandateId !== ticket.decisionId
       || request.authorization.source !== origin.source || request.authorization.instance !== origin.instance || String(request.authorization.repositoryId) !== origin.repositoryId) throw new Error("closeRequest 身份或 Issue 不匹配");

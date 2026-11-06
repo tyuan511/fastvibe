@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M10 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run、GitHub 只读 Source 和 Operation dry-run；另已实现下述 M11 前置的本地 HTTP 部署、宿主授权和 Issue continuation。**M11 的真实 GitHub 闭环尚未验收。**生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M10 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run、GitHub 只读 Source 和 Operation dry-run；另已实现下述 M11 前置的本地 HTTP 部署、宿主授权和 Issue continuation，以及 [原生 GitHub REST 读写与对账](vivi-dsh-github-rest.md)。**M11 的真实 GitHub 闭环尚未验收。**生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
 
 ## M0：已建立的实施基线
 
@@ -260,4 +260,24 @@ node --test test/vivi-dsh-github-authority.test.ts test/vivi-dsh-github-deployme
 
 其中 HTTP continuation 使用真实 ShadowEngine/ShadowStore 与 M9 的原生对象规范化来建立 Issue/PR Thread；Worker 与 Review 是显式 fixture，未调用真实模型。覆盖关闭成功、丢失响应、403、关闭前人工 reopen、关闭后丢失响应再 reopen。另有真实子进程在 HTTP branch 创建后、SQLite receipt 提交前 `process.exit`；重开后只读取远端事实，POST 保持一次。普通重建 deployment 的测试与真实进程崩溃证据分开记录。
 
-**尚未完成的 M11 退出项：** 原生 GitHub 读写 transport 与平台回执/对账、专用仓库与可撤销的执行/独立审核身份、真实 Pi Worker 编码和受管只读 reviewer、Source 轮询自动驱动 Ticket、同一 Ticket 的修复/新 SHA Review 循环、真实 CI 与 Merge、由真实 Source 读回 closure 的完整 continuation，以及原生 GitHub 上的全部故障注入。loopback 测试、Core 测试或离线 SDK 测试均不替代这些证据。本阶段没有读取真实凭据或连接真实仓库，M12 继续禁止切换。
+**本地协议阶段尚未完成的 M11 退出项：** 当时未实现原生 GitHub 读写 transport 与平台回执/对账；本轮原生适配进度见下一节。专用仓库与可撤销的执行/独立审核身份、真实 Pi Worker 编码和受管只读 reviewer、Source 自动驱动、真实 CI 与 Merge，以及真实 GitHub 上的故障注入均仍未验收。loopback 测试、Core 测试或离线 SDK 测试不替代这些证据。M12 继续禁止切换。
+
+## M11 原生适配：GitHub REST 读写与对账已实现
+
+详细端点、凭据、并发和证据合同见 [原生 REST 适配说明](vivi-dsh-github-rest.md)。新入口为 `GithubRestTransport`、`GithubNativePlanner`、`GithubNativeOperationAdapter` 与 `GithubNativeDeployment`；没有生产 Runtime、IPC、settings 或数据库迁移接入。
+
+- 原生 reader 使用完整 Link 分页与 ETag/304 接入真实 M9 Source；凭据、取消、timeout、路径边界、响应脱敏均由 transport 收口。默认 HTTPS GitHub origin，loopback 仅供显式契约测试。
+- 原生意图使用独立 `github-rest` 协议/版本，发送原生 owner/repo 路径和字段。纯 `buildIntent()` 不落库；业务 key 区分 Ticket 与 Review 的 head/base/artifact，支持同 Ticket 新 SHA 重新审核；同身份参数漂移仍拒绝。
+- 写入复用已有持久 Effect/Operation，发送前同事务保存 attempt 并复核授权；执行和审核账号按真实 `/user` ID/login 分离，最后一次身份查询和写入绑定同一 secret，之后再次 fence credential binding 与 operation owner。未知结果没有自动重发入口，404/不存在/不匹配/歧义只保留 unknown。
+- 原生 continuation 注入纯 builder，仍与 Follow closure/ended/意图/Effect 同事务登记，并在 ended 后使用独立授权。GitHub 没有已文档化的 Issue PATCH CAS，因此默认 strict 不发 PATCH；只有显式 best-effort profile 才执行观测后关闭，并保留并发窗口限制。没有把旧 loopback 的 Issue 版本字段或自定义 mergeCommit 发送给 GitHub。
+- `stop()` 同时 fence/取消并等待正在读取的 Source poll，保证迟到读结果不接收 Trigger，数据库关闭后没有悬挂 poll；新读写需由新部署实例显式接管。
+
+独立入口：
+
+```bash
+node --test test/vivi-dsh-github-native-*.test.ts test/vivi-dsh-github-transport.test.ts
+```
+
+本轮原生契约测试在临时 loopback HTTP、真实 ShadowStore/Engine/Effects/Operations 下执行；没有读取真实凭据、请求真实 GitHub 或配置真实仓库。真实领域组合包含独立身份、同 Ticket 的新 SHA Review、ready 等待 Follow、merged continuation 和重开数据库对账，Worker/审核产物仍为显式 fixture；另有真实子进程在原生 POST 成功但 receipt 未提交时退出。本轮原生专项 **80/80**、DSH 与旧 Bot/数据库组合 **868/868**（39 suites）、SQLite Core **113/113** 通过；`pnpm typecheck`、新测试/fixture 严格 ES2022 类型检查、生产隔离和 `git diff --check` 通过。
+
+**M11 仍未验收：** 实际 GitHub 服务端点与权限、专用仓库及独立可撤销身份、真实 Worker/受管 reviewer、真实代码提交/push、CI、Source 驱动的完整闭环和真实平台故障注入。Review 的 commit_id 不是 head CAS，Merge 的 sha 只保护 head、不保护 base，Issue 的观测读取不构成条件事务；这些并发限制保持显式，不能以契约测试通过代替真实仓库签字。

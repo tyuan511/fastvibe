@@ -18,7 +18,8 @@ interface Profile {
 const profileKey = (auth: OperationAuth) => JSON.stringify(["github:m11:authority", auth.source, auth.instance, auth.ticketId, auth.generation, auth.assignmentId, auth.bindingClaim]);
 const sameToken = (a: WorkerToken | undefined, b: WorkerToken): boolean => !!a && a.ticketId === b.ticketId
   && a.assignmentId === b.assignmentId && a.generation === b.generation && a.claimToken === b.claimToken;
-const stable = (value: unknown): string => JSON.stringify(value);
+const stable = (value: unknown): string => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
+  ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 
 /** Trusted deployment host calls grant; neither a Worker nor arbitrary request metadata creates this profile. */
 export class GithubOperationAuthority {

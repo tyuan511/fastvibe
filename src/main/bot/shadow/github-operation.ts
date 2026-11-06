@@ -37,13 +37,16 @@ export interface GithubOperationRequest {
     approvedBy?: readonly string[];
     /** Version used by the M11 loopback Issue close compare-and-set protocol. */
     issueVersion?: number;
+    /** Native REST observation; GitHub does not provide Issue PATCH CAS. */
+    issueUpdatedAt?: string;
+    issueEventFrontier?: number;
   };
 }
 export interface GithubOperationPlan extends Operation {
   payload: GithubOperationPayload;
 }
 export interface GithubOperationPayload {
-  mode: "dry-run";
+  mode: "dry-run" | "github-rest";
   kind: GithubOperationKind;
   params: Record<string, unknown>;
   paramsHash: string;
@@ -190,5 +193,6 @@ export class GithubOperationDryRun {
   }
 }
 
+export const validateGithubOperationRequest = validate;
 export const githubOperationParamsHash = (request: Pick<GithubOperationRequest, "kind" | "object" | "params" | "preconditions">): string => digest(request);
 export const githubOperationJson = (value: unknown): string => json(value);
