@@ -6,6 +6,8 @@ export function createScheduleFixture(sample = false) {
   let revision = 0;
   let tasks: ScheduledTask[] = sample ? [
     { id: "fixture-daily", name: "每日整理项目", prompt: "整理昨天的开发记录，生成今日待办摘要。", schedule: { kind: "daily", time: "09:00", timeZone: "Asia/Shanghai" }, enabled: true, createdAt: now - 86_400_000, updatedAt: now, nextRunAt: now + 3_600_000, lastRunAt: now - 86_400_000, lastStatus: "completed" },
+    { id: "fixture-deps", name: "依赖安全巡检", prompt: "检查 Orbit 的依赖更新与安全公告，有高危漏洞时开分支修复并跑测试。", project: "/Users/demo/Code/orbit", schedule: { kind: "weekly", time: "08:30", timeZone: "Asia/Shanghai", days: [1] }, enabled: true, createdAt: now - 86_400_000, updatedAt: now, nextRunAt: now + 2 * 86_400_000, lastRunAt: now - 5 * 86_400_000, lastStatus: "completed" },
+    { id: "fixture-digest", name: "每日内测反馈汇总", prompt: "汇总前一天 Orbit 内测用户的新反馈，按主题整理后交给 Vivi。", project: "/Users/demo/Code/orbit", schedule: { kind: "daily", time: "09:00", timeZone: "Asia/Shanghai" }, enabled: true, createdAt: now - 600_000, updatedAt: now - 600_000, nextRunAt: now + 14 * 3_600_000 },
     { id: "fixture-weekly", name: "每周总结", prompt: "总结本周的改动与待解决问题。", schedule: { kind: "weekly", time: "17:00", timeZone: "Asia/Shanghai", days: [5] }, enabled: true, createdAt: now - 86_400_000, updatedAt: now, nextRunAt: now + 86_400_000 },
   ] : [];
   const runs: ScheduledTaskRun[] = sample ? [{ id: "fixture-run", taskId: "fixture-daily", scheduledAt: now - 86_400_000, startedAt: now - 86_400_000, endedAt: now - 86_400_000 + 15_000, status: "completed", conversationId: "preview-conversation" }] : [];

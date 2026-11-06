@@ -36,6 +36,7 @@ import {
   previewFor,
 } from "./preview-data";
 import { websiteFixture, type WebsiteLanguage } from "./website-fixtures";
+import { viviPromoScenario, type ViviPromoStage } from "./vivi-promo-fixture";
 import { setTranscriptDisplay } from "@/lib/transcript-display";
 import { createBotFixture, createViviPendingUiFixture } from "./bot-fixture";
 import { createScheduleFixture } from "./schedule-fixture";
@@ -69,6 +70,9 @@ const website = params.get("website") === "1";
 const websiteLanguage: WebsiteLanguage = params.get("lang") === "en" ? "en" : "zh";
 const websiteScene = params.get("scene") ?? "workspace";
 const websiteData = website ? websiteFixture(websiteLanguage) : null;
+/** `?vivi=promo-<stage>`: Worker transcripts and the composer draft of the promo film's Vivi run. */
+const viviPromoStage = (params.get("vivi") ?? "").startsWith("promo-") ? (params.get("vivi")!.slice("promo-".length) as ViviPromoStage) : null;
+const viviPromo = viviPromoStage ? viviPromoScenario(Date.now(), viviPromoStage) : null;
 
 /**
  * `?inline=1` shows what a reply made as pictures; `?inline=office` shows the same 「用时」 strip
@@ -940,7 +944,7 @@ const api = {
     },
     getSnapshot: async (conversationId?: string) => ({
       conversationId: conversationId ?? fixtureActiveId,
-      messages: conversationId && conversationId !== fixtureActiveId ? fixtureMessages.slice(0, 2) : transcriptFixture(),
+      messages: (conversationId && viviPromo?.transcripts.get(conversationId)) || (conversationId && conversationId !== fixtureActiveId ? fixtureMessages.slice(0, 2) : transcriptFixture()),
       running: runningIds.has(conversationId ?? fixtureActiveId),
       queue: skillQueue(conversationId ?? fixtureActiveId, !conversationId || conversationId === fixtureActiveId),
       pendingUi: allParkedPrompts().filter((request) => request.conversationId === (conversationId ?? fixtureActiveId)),
@@ -1712,11 +1716,6 @@ if (websiteData) {
     window.setTimeout(() => observer.disconnect(), 15_000);
   };
   const byText = (pattern: RegExp) => (): boolean => pattern.test(document.body.innerText);
-  const tabMatching = (pattern: RegExp) => () =>
-    [...document.querySelectorAll<HTMLElement>('[data-slot="tabs-trigger"]')].find((node) =>
-      pattern.test(node.textContent ?? ""),
-    ) ?? null;
-
   // `?pane=none` is the marketing page's hero: the chat on its own, with no side pane
   // open beside it. The capture script never passes it, so its shots are unchanged.
   const keepPaneClosed = websiteScene === "workspace" && pane === "none";
@@ -1725,7 +1724,7 @@ if (websiteData) {
       void import("@/stores/side-pane").then(({ useSidePaneStore }) => {
         const store = useSidePaneStore.getState();
         if (websiteScene === "review") {
-          store.openGitDiff("src/components/CommandMenu.tsx", "unstaged", websiteData.cwd);
+          store.openGitDiff(websiteData.reviewPath, "unstaged", websiteData.cwd);
           return;
         }
         store.openFiles();
@@ -1757,7 +1756,8 @@ if (websiteData) {
     whenFound(
       () =>
         [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) =>
-          (node.textContent ?? "").startsWith("CommandMenu.tsxsrc/components"),
+          // A changed-file row reads as its name followed by its folder.
+          (node.textContent ?? "").startsWith(websiteData.reviewPath.split("/").pop()! + websiteData.reviewPath.split("/").slice(0, -1).join("/")),
         ) ?? null,
       (button) => button.click(),
     );
@@ -1780,15 +1780,34 @@ if (websiteData) {
     );
   } else if (websiteScene === "market") {
     // The catalog is fetched on the tab switch, so the rows — not the click — are ready.
-    whenFound(tabMatching(/官方市场|Marketplace/), (tab) => tab.click(), byText(/pi-mcp-adapter/));
+    // The page opens on 官方市场; its catalog rows arrive after a fetch.
+    whenFound(() => (/pi-mcp-adapter/.test(document.body.innerText) ? document.body : null), () => undefined);
   } else if (websiteScene === "models") {
-    whenFound(byText(/API 密钥|API key/), () => undefined);
+    // Providers list as a collapsed accordion; the first one opens so its key and models show.
+    whenFound(
+      () => document.querySelector<HTMLElement>('[data-slot="accordion-trigger"]'),
+      (trigger) => trigger.click(),
+      byText(/API 密钥|API key/),
+    );
   }
 }
 
 if (params.has("resources")) {
   window.setTimeout(() => {
     void import("./resources-preview").then(({ previewResources }) => previewResources(params.get("resources") ?? "sample"));
+  }, 800);
+}
+
+// `&viviOpen=tasks|<conversationId>`: Vivi's task list or one Worker beside the promo chat.
+if (viviPromo) {
+  window.setTimeout(() => {
+    void Promise.all([import("@/stores/side-pane"), import("@/components/bot/bot-composer-state")]).then(([{ useSidePaneStore }, { useBotComposerState }]) => {
+      if (viviPromo.draft) useBotComposerState.getState().setDraft(viviPromo.draft);
+      const open = params.get("viviOpen");
+      const worker = viviPromo.conversations.find((item) => item.conversationId === open);
+      if (worker) useSidePaneStore.getState().openBotConversation(worker.conversationId, worker.title);
+      else if (open === "tasks") useSidePaneStore.getState().openBotTasks();
+    });
   }, 800);
 }
 
@@ -1812,10 +1831,11 @@ if (pane === "files" || pane === "preview" || pane === "git") {
       const office = params.get("office");
       if (office) {
         const format = office === "xlsx" || office === "pptx" ? office : "docx";
+        const officePath = websiteData && format === "xlsx" ? `${websiteData.cwd}/docs/launch/内测反馈汇总.xlsx` : websiteData?.deckPath ?? `${PREVIEW_CWD}/demo.${format}`;
         store.openFilePreview({
           kind: "office",
-          path: `${PREVIEW_CWD}/demo.${format}`,
-          name: `demo.${format}`,
+          path: officePath,
+          name: officePath.split("/").pop() ?? `demo.${format}`,
           format,
           size: 4096,
         });

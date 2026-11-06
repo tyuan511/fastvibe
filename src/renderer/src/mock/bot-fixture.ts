@@ -1,5 +1,6 @@
 import type { BotApi, BotChanged, BotConversationMeta, BotAttention, BotChatMessage, BotExecutionError, BotProgress, BotResult, WorkSnapshot } from "@shared/bot";
 import type { ChatMessage, EngineEvent } from "@shared/types";
+import { viviPromoScenario, type ViviPromoStage } from "./vivi-promo-fixture";
 
 export function createBotFixture(cwd: string, english = false, empty = false, scenario = "sample"): BotApi {
   const word = (zh: string, en: string) => english ? en : zh;
@@ -86,6 +87,19 @@ export function createBotFixture(cwd: string, english = false, empty = false, sc
       results.push(result);
       chatMessages.push({ id: `chat:${inputId}`, conversationId, inputId, role: "assistant", kind: "result", result, text: error, createdAt: now });
     }
+  }
+  if (scenario.startsWith("promo-")) {
+    // `?vivi=promo-<stage>`: the promo film's run (see vivi-promo-fixture.ts).
+    const promo = viviPromoScenario(now, scenario.slice("promo-".length) as ViviPromoStage);
+    conversations.splice(0, conversations.length, ...promo.conversations);
+    attention.splice(0, attention.length, ...promo.attention);
+    chatMessages.splice(0, chatMessages.length, ...promo.chatMessages);
+    progress.splice(0, progress.length, ...promo.progress);
+    results.splice(0, results.length, ...promo.results);
+    for (const key of Object.keys(conversationPreviews)) delete conversationPreviews[key];
+    Object.assign(conversationPreviews, promo.previews);
+    messages.clear();
+    for (const [id, transcript] of promo.transcripts) messages.set(id, transcript);
   }
   const running = () => progress.some((item) => ["accepted", "understanding", "planning", "delegating", "working", "summarizing"].includes(item.phase));
   const snapshot = (): WorkSnapshot => ({ revision, chatGeneration, routerConversationId: routerId, conversations: structuredClone(conversations), attention: structuredClone(attention), results: structuredClone(results), progress: structuredClone(progress), conversationPreviews: structuredClone(conversationPreviews), executionErrors: structuredClone(executionErrors), deliveries: [], messages: structuredClone(chatMessages) });

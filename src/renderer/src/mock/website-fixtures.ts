@@ -26,405 +26,374 @@ export type WebsiteFixture = {
   previewFor: (path: string) => FilePreview;
   gitStatus: GitStatus;
   gitDiff: (path?: string) => string;
+  /** Repository-relative file the `review` scene opens in the Git pane. */
+  reviewPath: string;
+  /** The slide deck the run made; `?pane=files&office=pptx` previews it. */
+  deckPath: string;
 };
 
+/**
+ * The run shown on the website, in both READMEs and in the promo film: one task that
+ * spans backend, frontend, subagents, a question, a browser check and a slide deck, so a
+ * single conversation shows how much FastVibe carries.
+ */
 const NOW = Date.now();
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
-const CWD = "/Users/demo/Code/fieldnotes";
-const ACTIVE_ID = "website-fieldnotes-search";
-const SEARCH_PATH = `${CWD}/src/search/useQuickSearch.ts`;
-const COMMAND_PATH = `${CWD}/src/components/CommandMenu.tsx`;
-const TEST_PATH = `${CWD}/src/search/useQuickSearch.test.ts`;
+const CWD = "/Users/demo/Code/orbit";
+const ACTIVE_ID = "website-orbit-team-calendar";
+const SCRATCH = "/Users/demo/Library/Application Support/FastVibe/scratch";
+const P = {
+  availability: `${CWD}/server/calendar/availability.ts`,
+  permissions: `${CWD}/server/calendar/permissions.ts`,
+  events: `${CWD}/server/calendar/events.ts`,
+  routes: `${CWD}/server/routes/calendar.ts`,
+  week: `${CWD}/web/src/calendar/WeekView.tsx`,
+  drag: `${CWD}/web/src/calendar/useDragReschedule.ts`,
+};
 
 const copy = {
   zh: {
+    deckName: "团队日历发布.pptx",
     conversations: [
-      ["快速搜索与键盘导航", "已加入模糊搜索、结果分组与 ⌘K 键盘导航。"],
-      ["离线笔记同步", "梳理了断网编辑后的合并策略与冲突提示。"],
-      ["移动端编辑器细节", "优化工具栏、图片上传和安全区间距。"],
-      ["准备 1.4 发布说明", "整理本周完成项与升级注意事项。"],
+      ["团队共享日历与冲突检测", "忙闲视图、拖拽改期、发布会 PPT 已完成。"],
+      ["迁移通知服务到队列", "拆出重试与死信队列。"],
+      ["排查周报导出超时", "定位到 N+1 查询。"],
+      ["准备 2.3 发布说明", "整理本周变更。"],
     ],
-    scratch: ["设计每周回顾模板", "把散落的笔记整理成一份轻量回顾模板。"],
-    user: "为 Fieldnotes 加一个快速搜索：支持标题和正文的模糊匹配，用 ⌘K 打开，方向键选择，回车跳转。请保持现有视觉风格，并补测试。",
-    intro: "我先检查现有命令菜单、笔记索引和键盘事件的处理方式。",
-    finding: "结构很清晰：搜索索引已经在内存中，命令菜单也有可复用的焦点管理。我会把匹配逻辑做成独立 hook，再接入快捷键。",
-    thinking: "需求有三块：匹配、排序、键盘。命令菜单已有焦点管理，可以复用；排序规则会影响体验，值得先问一句。",
-    delegate: [
-      ["explorer", "梳理 CommandMenu 的焦点管理与快捷键注册"],
-      ["explorer", "找出笔记索引的数据结构和更新时机"],
+    paper: ["论文摘录的自动归档", "按引用格式归档 PDF 摘录。"],
+    mobile: ["推送通知的静默时段", "按时区计算免打扰。"],
+    scratch: [["整理用户访谈纪要", "按主题归纳 12 份访谈。"], ["季度 OKR 表格", "汇总各组目标与进度。"]],
+    user: "给 Orbit 做团队共享日历：成员能看到彼此的忙闲，拖拽改期时自动检测冲突，私人日程只显示「忙碌」。权限要走现有的角色体系，前后端都补测试，最后用浏览器把周视图走一遍，再给发布会准备一份 PPT。",
+    thinking: "需求有四块：忙闲合并、可见性、冲突检测、周视图。权限要复用现有角色，先摸清 requireRole 的调用链；前端的拖拽库和时区处理也要先看。两条线互不依赖，可以并行。",
+    plan: "这件事跨前后端，我先拆成七步，并让三个子 Agent 并行摸清权限、前端组件和测试。",
+    todos: ["梳理现有日历与角色权限", "设计忙闲合并与可见性规则", "实现后端接口与冲突检测", "实现周视图与拖拽改期", "补充前后端测试", "浏览器验证周视图", "生成发布会 PPT"],
+    agents: [
+      ["Quiet Heron", "梳理 auth/roles 与现有日历接口的权限检查链路"],
+      ["Amber Lynx", "找出前端日历组件、拖拽库和时区处理方式"],
+      ["Cobalt Wren", "为忙闲合并与冲突检测补充单元测试"],
     ],
-    webQuery: "fuzzy search ranking typo tolerance command palette",
+    research: "两个 explorer 都回来了：权限检查集中在 requireRole，前端用 dnd-kit 且时间统一存 UTC。私人日程的可见范围需要你确认一下。",
     sources: [
-      ["Ranking in command palettes", "https://example.dev/command-palette-ranking"],
-      ["Typo-tolerant matching explained", "https://example.dev/typo-tolerance"],
-      ["Keyboard navigation patterns", "https://example.dev/listbox-keyboard"],
+      ["Free/busy visibility in shared calendars", "https://example.dev/free-busy"],
+      ["Drag to reschedule: conflict UX patterns", "https://example.dev/reschedule-ux"],
+      ["Time zones in week views", "https://example.dev/week-view-tz"],
     ],
-    question: "多个结果分数接近时，优先展示哪类笔记？",
-    answer: "最近编辑的笔记",
-    research: "两条线索都回来了：索引是内存中的数组，编辑时增量更新。参考常见的命令面板做法后，我需要确认一个排序取舍。",
-    finish: "已完成快速搜索：\n\n| 能力 | 实现 |\n| --- | --- |\n| 打开 | `⌘K`，任意页面可用 |\n| 匹配 | 标题与正文，容错 1 个字符 |\n| 排序 | 分数优先，同分按最近编辑 |\n| 键盘 | `↑` `↓` 选择，`Enter` 跳转，`Esc` 关闭 |\n\n核心是一个独立的 hook，组件只管展示：\n\n```ts\nconst results = useQuickSearch(notes, query);\nconst active = useKeyboardSelection(results.length);\n```\n\n新增 8 个测试覆盖空查询、排序与键盘边界，`pnpm test` 与类型检查均已通过。",
-    todos: ["梳理搜索与命令菜单", "实现模糊匹配和结果排序", "接入键盘导航", "补充测试并验证"],
-    readme: [
-      "---",
-      "name: fieldnotes",
-      "description: 一个安静、离线优先的笔记应用",
-      "tools: [read, edit, write]",
-      "version: 1.4.0",
-      "---",
-      "",
-      "# Fieldnotes",
-      "",
-      "一个安静、离线优先的笔记应用。搜索在内存中完成，编辑立即落盘。",
-      "",
-      "## 快速开始",
-      "",
-      "安装后打开任意笔记目录，Fieldnotes 会索引其中的 Markdown 文件。",
-      "",
-      "```sh",
-      "pnpm install",
-      "pnpm dev",
-      "```",
-      "",
-      "### 快捷键",
-      "",
-      "| 按键 | 作用 |",
-      "| --- | --- |",
-      "| `⌘K` | 打开快速搜索 |",
-      "| `⌘J` | 切换亮色 / 暗色 |",
-      "| `⌘\\` | 展开右侧面板 |",
-      "",
-      "## 搜索",
-      "",
-      "匹配标题与正文，容错一个字符；分数优先，同分按最近编辑排序。",
-      "",
-      "## 同步",
-      "",
-      "离线编辑在恢复网络后合并，冲突会单独列出而不是静默覆盖。",
-      "",
-      "### 冲突处理",
-      "",
-      "- 保留两份内容，并在笔记顶部插入冲突标记",
-      "- 合并结果写回后立即重新索引",
-      "- 任何一步失败都保留原始文件",
-      "",
-      "## 贡献",
-      "",
-      "提交信息用英文，一个提交只做一件事。",
-    ].join("\n"),
-    testResult: "✓ 8 tests passed\n✓ TypeScript check passed",
+    question: "管理员能看到成员私人日程的标题吗？",
+    answer: "不能，私人日程对所有人只显示忙碌",
+    build: "规则定了：私人日程对所有人只显示忙碌。我先写忙闲合并和权限，再接周视图和拖拽。",
+    verify: "代码就绪。跑测试、类型检查，再在浏览器里拖一次日程看冲突提示。",
+    deck: "最后用 Office 技能做发布会 PPT，并提交改动。",
+    finish: "团队共享日历已完成，前后端测试都已通过：\n\n| 部分 | 实现 |\n| --- | --- |\n| 忙闲视图 | 合并成员日程为忙闲时段，私人日程只显示「忙碌」 |\n| 权限 | 复用 owner / admin / member / guest 角色，新增 `canSeeDetails` |\n| 冲突检测 | 拖拽松手时检查所有成员，冲突时给出提示并保留原时间 |\n| 周视图 | 新的 `WeekView`，按成员分列，支持拖拽改期 |\n| 测试 | 后端 14 个单测，前端 1 个端到端用例 |\n\n浏览器里走了一遍：拖动「设计评审」到周四 15:00，和 Mia 的日程冲突，提示正常出现；改到 16:30 后保存成功。\n\n发布会 PPT 放在 `docs/launch/团队日历发布.pptx`，共 8 页：问题、方案、权限模型、演示截图和上线计划。",
+    privateComment: "私人日程对所有者以外的人只显示「忙碌」。管理员能看到团队日程标题；成员只能看到自己受邀日程的标题。",
+    readme: "# Orbit\n\n团队排期与协作。\n\n## 团队日历\n\n成员之间共享忙闲，拖拽改期时检测冲突。私人日程只显示「忙碌」。\n\n## 开发\n\n```sh\npnpm install\npnpm dev\n```\n",
+    serverTest: "✓ availability.test.ts (9)\n✓ permissions.test.ts (5)\n\nTest Files  2 passed (2)\n     Tests  14 passed (14)",
+    e2eTest: "✓ team-calendar.spec.ts › 拖拽改期时提示冲突 (3.2s)\n\n1 passed (4.1s)",
+    eventTitle: "设计评审",
   },
   en: {
+    deckName: "team-calendar-launch.pptx",
     conversations: [
-      ["Quick search and keyboard navigation", "Added fuzzy search, grouped results, and ⌘K navigation."],
-      ["Offline note sync", "Outlined merge behavior and conflict prompts for offline edits."],
-      ["Mobile editor polish", "Refined the toolbar, image uploads, and safe-area spacing."],
-      ["Prepare the 1.4 release notes", "Collected this week’s changes and upgrade notes."],
+      ["Shared team calendar with conflict checks", "Free/busy view, drag to reschedule and the launch deck are done."],
+      ["Move notifications onto a queue", "Split out retries and a dead-letter queue."],
+      ["Weekly report export times out", "Traced to an N+1 query."],
+      ["Prepare the 2.3 release notes", "Collected this week's changes."],
     ],
-    scratch: ["Design a weekly review template", "Turn scattered notes into a lightweight weekly review."],
-    user: "Add Fieldnotes quick search: fuzzy-match titles and note text, open with ⌘K, use arrow keys, and jump with Enter. Keep the style and add tests.",
-    intro: "I’ll trace the existing command menu, note index, and keyboard handling first.",
-    finding: "The structure is clean: the note index is already in memory, and the command menu has reusable focus management. I’ll keep matching in a small hook, then wire in the shortcut.",
-    thinking: "Three parts: matching, ranking, keyboard. The command menu already manages focus, so I can reuse it; ranking shapes the feel, so it is worth one question.",
-    delegate: [
-      ["explorer", "Trace focus management and shortcut registration in CommandMenu"],
-      ["explorer", "Find the note index structure and when it updates"],
+    paper: ["Auto-archive paper excerpts", "Files PDF excerpts by citation style."],
+    mobile: ["Quiet hours for push notifications", "Do-not-disturb by time zone."],
+    scratch: [["Summarize user interviews", "Grouped 12 interviews by theme."], ["Quarterly OKR sheet", "Goals and progress for every team."]],
+    user: "Build a shared team calendar for Orbit: members see each other's free/busy time, dragging to reschedule checks for conflicts, and private events only show as \"Busy\". Permissions should use the existing roles. Add tests on both ends, walk the week view in a browser, then put together a launch deck.",
+    thinking: "Four parts: merging free/busy, visibility, conflict checks, the week view. Permissions must reuse the existing roles, so trace requireRole first; the frontend's drag library and time-zone handling need a look too. The two don't depend on each other, so they can run in parallel.",
+    plan: "This spans backend and frontend, so I'll split it into seven steps and send three subagents to map permissions, the frontend components and the tests in parallel.",
+    todos: ["Map the calendar and role permissions", "Design free/busy merging and visibility", "Build the API and conflict checks", "Build the week view with drag to reschedule", "Add backend and frontend tests", "Check the week view in a browser", "Make the launch deck"],
+    agents: [
+      ["Quiet Heron", "Trace permission checks through auth/roles and the calendar API"],
+      ["Amber Lynx", "Find the calendar components, drag library and time-zone handling"],
+      ["Cobalt Wren", "Add unit tests for free/busy merging and conflict checks"],
     ],
-    webQuery: "fuzzy search ranking typo tolerance command palette",
+    research: "Both explorers are back: permission checks all go through requireRole, and the frontend uses dnd-kit with times stored in UTC. One call on private events needs you.",
     sources: [
-      ["Ranking in command palettes", "https://example.dev/command-palette-ranking"],
-      ["Typo-tolerant matching explained", "https://example.dev/typo-tolerance"],
-      ["Keyboard navigation patterns", "https://example.dev/listbox-keyboard"],
+      ["Free/busy visibility in shared calendars", "https://example.dev/free-busy"],
+      ["Drag to reschedule: conflict UX patterns", "https://example.dev/reschedule-ux"],
+      ["Time zones in week views", "https://example.dev/week-view-tz"],
     ],
-    question: "When scores are close, which notes should rank first?",
-    answer: "Recently edited notes",
-    research: "Both leads are back: the index is an in-memory array, updated incrementally on edit. After checking how command palettes usually rank, one trade-off needs your call.",
-    finish: "Quick search is ready:\n\n| Area | Behaviour |\n| --- | --- |\n| Open | `⌘K`, from any page |\n| Match | Titles and note text, one typo tolerated |\n| Rank | Score first, ties go to the most recently edited |\n| Keys | `↑` `↓` to move, `Enter` to open, `Esc` to close |\n\nThe logic lives in one hook; the component only renders:\n\n```ts\nconst results = useQuickSearch(notes, query);\nconst active = useKeyboardSelection(results.length);\n```\n\n8 new tests cover empty queries, ranking, and keyboard boundaries; `pnpm test` and the TypeScript check both pass.",
-    todos: ["Trace search and command menu", "Build fuzzy matching and ranking", "Wire keyboard navigation", "Add tests and verify"],
-    readme: [
-      "---",
-      "name: fieldnotes",
-      "description: A calm, offline-first place for notes",
-      "tools: [read, edit, write]",
-      "version: 1.4.0",
-      "---",
-      "",
-      "# Fieldnotes",
-      "",
-      "A calm, offline-first place for notes. Search runs in memory and edits land on disk immediately.",
-      "",
-      "## Getting started",
-      "",
-      "Open any notes folder and Fieldnotes indexes the Markdown inside it.",
-      "",
-      "```sh",
-      "pnpm install",
-      "pnpm dev",
-      "```",
-      "",
-      "### Shortcuts",
-      "",
-      "| Key | Action |",
-      "| --- | --- |",
-      "| `⌘K` | Open quick search |",
-      "| `⌘J` | Toggle light / dark |",
-      "| `⌘\\` | Expand the side pane |",
-      "",
-      "## Search",
-      "",
-      "Matches titles and note text, tolerating one typo; score first, ties go to the most recently edited.",
-      "",
-      "## Sync",
-      "",
-      "Offline edits merge once the network returns, and conflicts are listed rather than silently overwritten.",
-      "",
-      "### Conflict handling",
-      "",
-      "- Keep both versions and insert a conflict marker at the top of the note",
-      "- Re-index as soon as the merge is written back",
-      "- Leave the original file in place if any step fails",
-      "",
-      "## Contributing",
-      "",
-      "Commit messages are English, and one commit does one thing.",
-    ].join("\n"),
-    testResult: "✓ 8 tests passed\n✓ TypeScript check passed",
+    question: "Can admins see the titles of members' private events?",
+    answer: "No, private events only show as busy to everyone",
+    build: "Settled: private events only show as busy. I'll write free/busy merging and permissions first, then wire in the week view and dragging.",
+    verify: "The code is in place. Running the tests and type check, then dragging an event in the browser to see the conflict prompt.",
+    deck: "Last, the launch deck with the Office skill, and a commit.",
+    finish: "The shared team calendar is done, and tests pass on both ends:\n\n| Area | Behaviour |\n| --- | --- |\n| Free/busy | Members' events merge into busy slots; private events show only as \"Busy\" |\n| Permissions | Reuses the owner / admin / member / guest roles, plus a new `canSeeDetails` |\n| Conflicts | Dropping an event checks every member, warns on a clash and keeps the old time |\n| Week view | A new `WeekView`, one column per member, with drag to reschedule |\n| Tests | 14 backend unit tests, 1 end-to-end test |\n\nI walked it in the browser: dragging \"Design review\" to Thursday 15:00 clashed with Mia's event and the warning appeared; moving it to 16:30 saved.\n\nThe launch deck is at `docs/launch/team-calendar-launch.pptx`, 8 slides: problem, approach, permission model, demo shots and rollout plan.",
+    privateComment: "Private events show as \"busy\" to everyone but their owner. Admins see titles of team events; members see titles only of events they were invited to.",
+    readme: "# Orbit\n\nTeam scheduling and collaboration.\n\n## Team calendar\n\nMembers share free/busy time, and rescheduling checks for conflicts. Private events only show as \"Busy\".\n\n## Development\n\n```sh\npnpm install\npnpm dev\n```\n",
+    serverTest: "✓ availability.test.ts (9)\n✓ permissions.test.ts (5)\n\nTest Files  2 passed (2)\n     Tests  14 passed (14)",
+    e2eTest: "✓ team-calendar.spec.ts › drag to reschedule shows conflicts (3.2s)\n\n1 passed (4.1s)",
+    eventTitle: "Design review",
   },
 } as const;
 
-function searchCode(language: WebsiteLanguage): string {
-  const placeholder = language === "zh" ? "搜索标题和正文…" : "Search titles and note content…";
-  const recent = language === "zh" ? "最近编辑" : "Recently edited";
-  return `import { useMemo } from "react";
-import { scoreMatch } from "./scoreMatch";
-import type { Note } from "../notes/types";
+const AVAILABILITY = `import type { CalendarEvent, Member, Role } from "./events";
+import { canSeeDetails } from "./permissions";
 
-export const SEARCH_PLACEHOLDER = "${placeholder}";
-export const RECENT_GROUP_LABEL = "${recent}";
+export type Slot = { start: number; end: number; busy: boolean; title?: string };
 
-export function useQuickSearch(notes: Note[], query: string) {
-  return useMemo(() => {
-    const needle = query.trim();
-    if (!needle) return [];
+/** Merge every member's events into free/busy slots the viewer is allowed to see. */
+export function teamAvailability(viewer: Member, members: Member[], events: CalendarEvent[]): Map<string, Slot[]> {
+  const byMember = new Map<string, Slot[]>();
+  for (const member of members) {
+    const own = events
+      .filter((event) => event.ownerId === member.id && !event.cancelled)
+      .sort((a, b) => a.start - b.start);
+    byMember.set(member.id, mergeSlots(own.map((event) => ({
+      start: event.start,
+      end: event.end,
+      busy: true,
+      title: canSeeDetails(viewer.role as Role, event, viewer.id) ? event.title : undefined,
+    }))));
+  }
+  return byMember;
+}
 
-    return notes
-      .map((note) => ({ note, score: scoreMatch(needle, note.title, note.body) }))
-      .filter((result) => result.score > 0)
-      .sort((a, b) => b.score - a.score || b.note.updatedAt - a.note.updatedAt)
-      .slice(0, 20);
-  }, [notes, query]);
+export function findConflicts(slots: Slot[], start: number, end: number): Slot[] {
+  return slots.filter((slot) => slot.busy && slot.start < end && start < slot.end);
+}
+
+function mergeSlots(slots: Slot[]): Slot[] {
+  const merged: Slot[] = [];
+  for (const slot of slots) {
+    const last = merged.at(-1);
+    if (last && slot.start <= last.end && last.title === slot.title) last.end = Math.max(last.end, slot.end);
+    else merged.push({ ...slot });
+  }
+  return merged;
 }
 `;
-}
 
-function diffFor(language: WebsiteLanguage): string {
-  const placeholder = language === "zh" ? "搜索标题和正文…" : "Search titles and note content…";
-  return `diff --git a/src/components/CommandMenu.tsx b/src/components/CommandMenu.tsx
-index 28cb541..b84f122 100644
---- a/src/components/CommandMenu.tsx
-+++ b/src/components/CommandMenu.tsx
-@@ -18,11 +18,17 @@ export function CommandMenu({ notes, onOpen }: Props) {
-   const [query, setQuery] = useState("");
-+  const results = useQuickSearch(notes, query);
-+  const active = useKeyboardSelection(results.length);
+function permissionsDiff(language: WebsiteLanguage): string {
+  return `diff --git a/server/calendar/permissions.ts b/server/calendar/permissions.ts
+index 4c1e7a2..9b03d5f 100644
+--- a/server/calendar/permissions.ts
++++ b/server/calendar/permissions.ts
+@@ -1,14 +1,32 @@
+ import type { Role } from "../auth/roles";
++import type { CalendarEvent } from "./events";
  
-   useShortcut("mod+k", () => setOpen(true));
+ export const CALENDAR_ROLES: Record<Role, { read: boolean; write: boolean }> = {
+   owner: { read: true, write: true },
+   admin: { read: true, write: true },
+   member: { read: true, write: false },
+   guest: { read: false, write: false },
+ };
  
-   return (
-     <CommandDialog open={open} onOpenChange={setOpen}>
--      <CommandInput placeholder="Search notes…" value={query} onValueChange={setQuery} />
--      <RecentNotes notes={notes} onOpen={onOpen} />
-+      <CommandInput
-+        autoFocus
-+        placeholder="${placeholder}"
-+        value={query}
-+        onValueChange={setQuery}
-+      />
-+      <SearchResults results={results} active={active} onOpen={onOpen} />
-     </CommandDialog>
-   );
+ export function canReadCalendar(role: Role): boolean {
+-  return CALENDAR_ROLES[role].read;
++  return CALENDAR_ROLES[role]?.read ?? false;
++}
++
++/**
++ * ${copy[language].privateComment}
++ */
++export function canSeeDetails(role: Role, event: CalendarEvent, viewerId?: string): boolean {
++  if (event.ownerId === viewerId) return true;
++  if (event.visibility === "private") return false;
++  if (role === "owner" || role === "admin") return true;
++  return viewerId !== undefined && event.attendees.includes(viewerId);
  }
 `;
 }
 
-function makeTool(id: string, name: string, args: Record<string, unknown>, extra: Partial<ToolCallBlock> = {}): ToolCallBlock {
+const WEEK_VIEW = `import { useMemo } from "react";
+import { findConflicts } from "../../../server/calendar/availability";
+import { useDragReschedule } from "./useDragReschedule";
+import { useTeamAvailability } from "./useTeamAvailability";
+
+export function WeekView({ teamId, week }: { teamId: string; week: Date }) {
+  const { members, slots } = useTeamAvailability(teamId, week);
+  const drag = useDragReschedule({
+    onDrop: (event, start, end) => {
+      const conflicts = members.flatMap((member) => findConflicts(slots.get(member.id) ?? [], start, end));
+      return conflicts.length ? { status: "conflict", conflicts } : { status: "ok" };
+    },
+  });
+
+  const columns = useMemo(() => buildWeekColumns(week), [week]);
+
+  return (
+    <div className="week-grid" onPointerMove={drag.move} onPointerUp={drag.drop}>
+      <TimeRail />
+      {columns.map((day) => (
+        <DayColumn key={day.key} day={day} members={members} slots={slots} drag={drag} />
+      ))}
+      {drag.preview ? <DragGhost {...drag.preview} /> : null}
+    </div>
+  );
+}
+`;
+
+const DRAG_HOOK = `import { useRef, useState } from "react";
+
+type Drop = (event: CalendarEvent, start: number, end: number) => { status: "ok" } | { status: "conflict"; conflicts: Slot[] };
+
+export function useDragReschedule({ onDrop }: { onDrop: Drop }) {
+  const origin = useRef<{ event: CalendarEvent; y: number } | null>(null);
+  const [preview, setPreview] = useState<DragPreview | null>(null);
+  return {
+    preview,
+    start: (event: CalendarEvent, y: number) => (origin.current = { event, y }),
+    move: (e: React.PointerEvent) => origin.current && setPreview(previewAt(origin.current, e.clientY)),
+    drop: () => {
+      if (origin.current && preview) onDrop(origin.current.event, preview.start, preview.end);
+      origin.current = null;
+      setPreview(null);
+    },
+  };
+}
+`;
+
+function tool(id: string, name: string, args: Record<string, unknown>, extra: Partial<ToolCallBlock> = {}): ToolCallBlock {
   return { id, name, args, status: "done", ...extra };
 }
 
 export function websiteFixture(language: WebsiteLanguage): WebsiteFixture {
   const text = copy[language];
+  const deckPath = `${CWD}/docs/launch/${text.deckName}`;
+  const diff = permissionsDiff(language);
   const todoItems = text.todos.map((content, index) => ({ id: `task-${index + 1}`, content, status: "completed" }));
-  const todo = makeTool("website-todo", "todo", { todos: todoItems }, { details: { todos: todoItems } });
-  const delegate = makeTool(
-    "website-subagent",
-    "subagent",
-    { tasks: text.delegate.map(([agent, task]) => ({ agent, task })) },
-    { details: { results: text.delegate.map(() => ({ exitCode: 0, stopReason: "stop" })) } },
-  );
-  const read = makeTool("website-read", "read", { path: COMMAND_PATH });
-  const search = makeTool("website-grep", "grep", { pattern: "CommandDialog|useShortcut", path: `${CWD}/src` });
-  const web = makeTool(
-    "website-web",
-    "web_search",
-    { query: text.webQuery },
-    { details: { sources: text.sources.map(([title, url]) => ({ title, url })) } },
-  );
-  const ask = makeTool(
-    "website-question",
-    "question",
-    { questions: [{ question: text.question }] },
-    { details: { questions: [{ question: text.question, answer: text.answer }] } },
-  );
-  const write = makeTool("website-write", "write", { path: SEARCH_PATH, content: searchCode(language) });
-  const edit = makeTool("website-edit", "edit", { path: COMMAND_PATH }, { details: { diff: diffFor(language), patch: diffFor(language) } });
-  const test = makeTool("website-test", "bash", { command: "pnpm test && pnpm typecheck" }, { result: text.testResult });
+  // `website-todo` is the row the workspace scene opens (see `mock/preview.ts`).
+  const todo = tool("website-todo", "todo", { todos: todoItems }, { details: { todos: todoItems } });
+  const createdAt = NOW - 26 * MINUTE;
+  const threads = text.agents.map(([name, task], index) => ({
+    id: `website-agent-${index + 1}`, name, avatarSeed: [17, 63, 88][index], task,
+    conversationId: ACTIVE_ID, rootId: `website-agent-${index + 1}`, agent: index === 2 ? "worker" : "explorer",
+    taskName: `website-agent-${index + 1}`, cwd: CWD, status: "completed" as const,
+    createdAt, updatedAt: createdAt + 4 * MINUTE, currentTurn: 1, revision: 1,
+  }));
+  const spawns = threads.map((thread, index) => tool(`website-spawn-${index}`, "spawn_agent", { task_name: thread.taskName, message: thread.task }, { details: { thread } }));
+  const wait = tool("website-wait", "wait_agent", { targets: threads.slice(0, 2).map((thread) => thread.id) }, { details: { threads: threads.slice(0, 2) } });
+  const read = tool("website-read", "read", { path: P.events });
+  const grep = tool("website-grep", "grep", { pattern: "requireRole|canReadCalendar", path: `${CWD}/server` });
+  const list = tool("website-list", "ls", { path: `${CWD}/web/src/calendar` });
+  const web = tool("website-web", "web_search", { query: "free busy calendar privacy busy-only visibility team scheduling" }, {
+    details: { sources: text.sources.map(([title, url]) => ({ title, url })) },
+  });
+  const ask = tool("website-question", "question", { questions: [{ question: text.question }] }, {
+    details: { questions: [{ question: text.question, answer: text.answer }] },
+  });
+  const writeAvail = tool("website-write-availability", "write", { path: P.availability, content: AVAILABILITY });
+  const editPerm = tool("website-edit-permissions", "edit", { path: P.permissions }, { details: { diff, patch: diff } });
+  const routesDiff = "@@ -40,3 +40,4 @@\n router.get(\"/teams/:id/events\", requireRole(\"member\"), listEvents);\n+router.get(\"/teams/:id/availability\", requireRole(\"member\"), availabilityHandler);\n";
+  const editRoutes = tool("website-edit-routes", "edit", { path: P.routes }, { details: { diff: routesDiff, patch: routesDiff } });
+  const writeWeek = tool("website-write-week", "write", { path: P.week, content: WEEK_VIEW });
+  const writeDrag = tool("website-write-drag", "write", { path: P.drag, content: DRAG_HOOK });
+  const testServer = tool("website-test-server", "bash", { command: "pnpm --filter server test calendar" }, { result: text.serverTest });
+  const typecheck = tool("website-typecheck", "bash", { command: "pnpm typecheck" }, { result: "" });
+  const testE2E = tool("website-test-e2e", "bash", { command: "pnpm --filter web exec playwright test team-calendar" }, { result: text.e2eTest });
+  const nav = tool("website-browser-open", "browser_navigate", { url: "http://localhost:5173/teams/design/calendar?week=2026-W46" });
+  const drag = tool("website-browser-drag", "browser_click", { text: text.eventTitle });
+  const snap = tool("website-browser-snapshot", "browser_snapshot", {});
+  const skill = tool("website-skill", "skill", { skill: "office" });
+  const deck = tool("website-write-deck", "write", { path: deckPath });
+  const commit = tool("website-commit", "bash", { command: "git add server/calendar web/src/calendar web/e2e docs/launch && git commit -m \"feat(calendar): add team free/busy calendar\"" }, {
+    result: "[feat/team-calendar 3f9a2c1] feat(calendar): add team free/busy calendar\n 9 files changed, 412 insertions(+), 38 deletions(-)",
+  });
+
+  const step = (id: string, body: string, tools: ToolCallBlock[], at: number, thinking?: string): ChatMessage => ({
+    id, role: "assistant", text: body, tools,
+    parts: [
+      ...(thinking ? [{ kind: "thinking" as const, text: thinking, startedAt: at, endedAt: at + 6_000 }] : []),
+      { kind: "text" as const, text: body },
+      ...tools.map((item) => ({ kind: "tool" as const, toolId: item.id })),
+    ],
+    createdAt: at,
+    completedAt: at + MINUTE,
+  });
 
   // One turn that shows the run end to end: it thinks, plans, delegates, researches,
-  // asks, writes and verifies, then answers with a table and a code block.
+  // asks, builds, verifies in a browser, makes a deck, then answers with a table.
   const messages: ChatMessage[] = [
-    {
-      id: "website-user",
-      role: "user",
-      text: text.user,
-      tools: [],
-      parts: [{ kind: "text", text: text.user }],
-      createdAt: NOW - 12 * MINUTE,
-    },
-    {
-      id: "website-assistant-explore",
-      role: "assistant",
-      text: text.intro,
-      tools: [todo, delegate, read, search],
-      parts: [
-        { kind: "thinking", text: text.thinking, startedAt: NOW - 11.9 * MINUTE, endedAt: NOW - 11.85 * MINUTE },
-        { kind: "text", text: text.intro },
-        { kind: "tool", toolId: todo.id },
-        { kind: "tool", toolId: delegate.id },
-        { kind: "tool", toolId: read.id },
-        { kind: "tool", toolId: search.id },
-      ],
-      createdAt: NOW - 11.9 * MINUTE,
-      completedAt: NOW - 11 * MINUTE,
-    },
-    {
-      id: "website-assistant-research",
-      role: "assistant",
-      text: text.research,
-      tools: [web, ask],
-      parts: [
-        { kind: "text", text: text.research },
-        { kind: "tool", toolId: web.id },
-        { kind: "tool", toolId: ask.id },
-      ],
-      createdAt: NOW - 10.9 * MINUTE,
-      completedAt: NOW - 10.4 * MINUTE,
-    },
-    {
-      id: "website-assistant-build",
-      role: "assistant",
-      text: text.finding,
-      tools: [write, edit, test],
-      parts: [
-        { kind: "text", text: text.finding },
-        { kind: "tool", toolId: write.id },
-        { kind: "tool", toolId: edit.id },
-        { kind: "tool", toolId: test.id },
-      ],
-      createdAt: NOW - 10.3 * MINUTE,
-      completedAt: NOW - 9.5 * MINUTE,
-    },
-    {
-      id: "website-assistant-final",
-      role: "assistant",
-      text: text.finish,
-      tools: [],
-      parts: [{ kind: "text", text: text.finish }],
-      createdAt: NOW - 9.4 * MINUTE,
-      completedAt: NOW - 9 * MINUTE,
-    },
+    { id: "website-user", role: "user", text: text.user, tools: [], parts: [{ kind: "text", text: text.user }], createdAt: NOW - 27 * MINUTE },
+    step("website-assistant-plan", text.plan, [todo, ...spawns, wait], NOW - 26.8 * MINUTE, text.thinking),
+    step("website-assistant-research", text.research, [read, grep, list, web, ask], NOW - 22 * MINUTE),
+    step("website-assistant-build", text.build, [writeAvail, editPerm, editRoutes, writeWeek, writeDrag], NOW - 18 * MINUTE),
+    step("website-assistant-verify", text.verify, [testServer, typecheck, testE2E, nav, drag, snap], NOW - 12 * MINUTE),
+    step("website-assistant-deck", text.deck, [skill, deck, commit], NOW - 7 * MINUTE),
+    { id: "website-assistant-final", role: "assistant", text: text.finish, tools: [], parts: [{ kind: "text", text: text.finish }], createdAt: NOW - 5 * MINUTE, completedAt: NOW - 4.5 * MINUTE },
   ];
 
   const projects: Project[] = [
-    { cwd: CWD, name: "Fieldnotes", createdAt: NOW - 45 * DAY, updatedAt: NOW - 9 * MINUTE },
-    { cwd: "/Users/demo/Code/luma-calendar", name: "Luma Calendar", createdAt: NOW - 80 * DAY, updatedAt: NOW - 3 * DAY },
+    { cwd: CWD, name: "Orbit", createdAt: NOW - 60 * DAY, updatedAt: NOW - 5 * MINUTE },
+    { cwd: "/Users/demo/Code/paper-trail", name: "Paper Trail", createdAt: NOW - 90 * DAY, updatedAt: NOW - DAY },
+    { cwd: "/Users/demo/Code/orbit-mobile", name: "Orbit Mobile", createdAt: NOW - 40 * DAY, updatedAt: NOW - 2 * DAY },
   ];
-
+  const conversation = (id: string, [title, preview]: readonly [string, string], cwd: string, updatedAt: number, project = true): Conversation => ({
+    id, title, cwd, ...(project ? { project: cwd } : {}), createdAt: updatedAt - DAY, updatedAt, preview, sessionId: `${id}-session`,
+  });
   const conversations: Conversation[] = [
-    ...text.conversations.map(([title, preview], index) => ({
-      id: index === 0 ? ACTIVE_ID : `website-fieldnotes-${index + 1}`,
-      title,
-      cwd: CWD,
-      project: CWD,
-      createdAt: NOW - (index + 1) * DAY,
-      updatedAt: index === 0 ? NOW - 9 * MINUTE : NOW - (index + 1) * DAY,
-      preview,
-      sessionId: `website-session-${index + 1}`,
-    })),
-    {
-      id: "website-scratch",
-      title: text.scratch[0],
-      cwd: "/Users/demo/Library/Application Support/FastVibe/scratch",
-      createdAt: NOW - 6 * DAY,
-      updatedAt: NOW - 6 * DAY,
-      preview: text.scratch[1],
-      sessionId: "website-session-scratch",
-    },
+    ...text.conversations.map((entry, index) =>
+      conversation(index === 0 ? ACTIVE_ID : `website-orbit-${index + 1}`, entry, CWD, index === 0 ? NOW - 5 * MINUTE : NOW - (index + 1) * DAY)),
+    conversation("website-paper-1", text.paper, "/Users/demo/Code/paper-trail", NOW - DAY),
+    conversation("website-mobile-1", text.mobile, "/Users/demo/Code/orbit-mobile", NOW - 2 * DAY),
+    ...text.scratch.map((entry, index) => conversation(`website-scratch-${index + 1}`, entry, SCRATCH, NOW - (3 + index) * DAY, false)),
   ];
 
+  const dir = (path: string, names: Array<[string, "file" | "directory"]>): DirEntry[] =>
+    names.map(([name, kind]) => ({ name, path: `${path}/${name}`, kind }));
   const tree: Record<string, DirEntry[]> = {
-    [CWD]: [
-      { name: "public", path: `${CWD}/public`, kind: "directory" },
-      { name: "src", path: `${CWD}/src`, kind: "directory" },
-      { name: "package.json", path: `${CWD}/package.json`, kind: "file" },
-      { name: "README.md", path: `${CWD}/README.md`, kind: "file" },
-      { name: "vite.config.ts", path: `${CWD}/vite.config.ts`, kind: "file" },
-    ],
-    [`${CWD}/src`]: [
-      { name: "components", path: `${CWD}/src/components`, kind: "directory" },
-      { name: "notes", path: `${CWD}/src/notes`, kind: "directory" },
-      { name: "search", path: `${CWD}/src/search`, kind: "directory" },
-      { name: "App.tsx", path: `${CWD}/src/App.tsx`, kind: "file" },
-    ],
-    [`${CWD}/src/components`]: [
-      { name: "CommandMenu.tsx", path: COMMAND_PATH, kind: "file" },
-      { name: "Editor.tsx", path: `${CWD}/src/components/Editor.tsx`, kind: "file" },
-      { name: "NoteList.tsx", path: `${CWD}/src/components/NoteList.tsx`, kind: "file" },
-    ],
-    [`${CWD}/src/search`]: [
-      { name: "scoreMatch.ts", path: `${CWD}/src/search/scoreMatch.ts`, kind: "file" },
-      { name: "useQuickSearch.test.ts", path: TEST_PATH, kind: "file" },
-      { name: "useQuickSearch.ts", path: SEARCH_PATH, kind: "file" },
-    ],
+    [CWD]: dir(CWD, [["docs", "directory"], ["server", "directory"], ["web", "directory"], ["package.json", "file"], ["pnpm-workspace.yaml", "file"], ["README.md", "file"]]),
+    [`${CWD}/docs`]: dir(`${CWD}/docs`, [["launch", "directory"], ["architecture.md", "file"]]),
+    [`${CWD}/docs/launch`]: dir(`${CWD}/docs/launch`, [[text.deckName, "file"]]),
+    [`${CWD}/server`]: dir(`${CWD}/server`, [["auth", "directory"], ["calendar", "directory"], ["routes", "directory"], ["index.ts", "file"]]),
+    [`${CWD}/server/calendar`]: dir(`${CWD}/server/calendar`, [["availability.test.ts", "file"], ["availability.ts", "file"], ["events.ts", "file"], ["permissions.test.ts", "file"], ["permissions.ts", "file"]]),
+    [`${CWD}/web`]: dir(`${CWD}/web`, [["e2e", "directory"], ["src", "directory"], ["vite.config.ts", "file"]]),
+    [`${CWD}/web/src`]: dir(`${CWD}/web/src`, [["calendar", "directory"], ["components", "directory"], ["App.tsx", "file"]]),
+    [`${CWD}/web/src/calendar`]: dir(`${CWD}/web/src/calendar`, [["DayColumn.tsx", "file"], ["useDragReschedule.ts", "file"], ["useTeamAvailability.ts", "file"], ["WeekView.tsx", "file"]]),
   };
 
+  const permissionsSource = diff
+    .split("\n")
+    .filter((line) => !/^(diff|index|---|\+\+\+|@@)/.test(line) && !line.startsWith("-"))
+    .map((line) => line.replace(/^[ +]/, ""))
+    .join("\n");
   const previewFor = (path: string): FilePreview => {
     const name = path.split("/").pop() ?? path;
+    if (name.endsWith(".pptx")) return { kind: "office", path, name, format: "pptx", size: 2_480_000 };
     if (name === "README.md") return { kind: "markdown", path, name, text: text.readme };
-    return {
-      kind: "code",
-      path,
-      name,
-      language: name.endsWith(".tsx") ? "tsx" : "typescript",
-      text: name === "useQuickSearch.ts" ? searchCode(language) : diffFor(language).split("\n").filter((line) => !/^(diff|index|---|\+\+\+|@@)/.test(line)).map((line) => line.replace(/^[ +-]/, "")).join("\n"),
-    };
+    const source = name === "WeekView.tsx" ? WEEK_VIEW
+      : name === "useDragReschedule.ts" ? DRAG_HOOK
+        : name === "permissions.ts" ? permissionsSource
+          : AVAILABILITY;
+    return { kind: "code", path, name, language: name.endsWith(".tsx") ? "tsx" : "typescript", text: source };
   };
 
   const gitStatus: GitStatus = {
     cwd: CWD,
     isRepository: true,
-    branch: "feat/quick-search",
-    changed: 3,
+    branch: "feat/team-calendar",
+    changed: 9,
     staged: 0,
-    additions: 86,
-    deletions: 12,
+    additions: 412,
+    deletions: 38,
     ahead: 1,
     behind: 0,
     files: [
-      { path: "src/components/CommandMenu.tsx", index: " ", worktree: "M" },
-      { path: "src/search/useQuickSearch.ts", index: "?", worktree: "?" },
-      { path: "src/search/useQuickSearch.test.ts", index: "?", worktree: "?" },
+      { path: "server/calendar/permissions.ts", index: " ", worktree: "M" },
+      { path: "server/routes/calendar.ts", index: " ", worktree: "M" },
+      { path: "server/calendar/availability.ts", index: "?", worktree: "?" },
+      { path: "server/calendar/availability.test.ts", index: "?", worktree: "?" },
+      { path: "server/calendar/permissions.test.ts", index: " ", worktree: "M" },
+      { path: "web/src/calendar/WeekView.tsx", index: "?", worktree: "?" },
+      { path: "web/src/calendar/useDragReschedule.ts", index: "?", worktree: "?" },
+      { path: "web/e2e/team-calendar.spec.ts", index: "?", worktree: "?" },
+      { path: `docs/launch/${text.deckName}`, index: "?", worktree: "?" },
     ],
   };
+
+  const weekDiff = `diff --git a/web/src/calendar/WeekView.tsx b/web/src/calendar/WeekView.tsx
+new file mode 100644
+--- /dev/null
++++ b/web/src/calendar/WeekView.tsx
+@@ -0,0 +1,26 @@
+${WEEK_VIEW.trimEnd().split("\n").map((line) => `+${line}`).join("\n")}
+`;
 
   return {
     language,
@@ -439,21 +408,23 @@ export function websiteFixture(language: WebsiteLanguage): WebsiteFixture {
       isStreaming: false,
       messageCount: messages.length,
       autoCompactionEnabled: true,
-      contextUsage: { tokens: 18_420, contextWindow: 200_000, percent: 9 },
+      contextUsage: { tokens: 64_210, contextWindow: 200_000, percent: 32 },
     },
     stats: {
-      tokens: { input: 14_820, output: 1_940, cacheRead: 6_200, cacheWrite: 0, total: 22_960 },
-      turn: { tokens: { input: 4_120, output: 540, cacheRead: 6_200, cacheWrite: 0, total: 10_860 }, modelMs: 12_600 },
-      lastRequest: { outputTokens: 240, durationMs: 3_000 },
-      cost: 0.12,
-      toolCalls: 9,
-      steps: 4,
-      timing: { totalMs: 42_000, modelMs: 25_000, toolMs: 12_000 },
+      tokens: { input: 52_400, output: 8_920, cacheRead: 31_000, cacheWrite: 0, total: 92_320 },
+      turn: { tokens: { input: 9_100, output: 1_240, cacheRead: 31_000, cacheWrite: 0, total: 41_340 }, modelMs: 48_000 },
+      lastRequest: { outputTokens: 620, durationMs: 6_000 },
+      cost: 0.86,
+      toolCalls: 27,
+      steps: 12,
+      timing: { totalMs: 22 * MINUTE, modelMs: 9 * MINUTE, toolMs: 11 * MINUTE },
     },
     tree,
-    previewPath: SEARCH_PATH,
+    previewPath: P.week,
     previewFor,
     gitStatus,
-    gitDiff: () => diffFor(language),
+    gitDiff: (path?: string) => (path?.includes("WeekView") ? weekDiff : diff),
+    reviewPath: "server/calendar/permissions.ts",
+    deckPath,
   };
 }
