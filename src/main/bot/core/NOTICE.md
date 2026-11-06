@@ -32,7 +32,7 @@ M8 的 `../shadow/local-source.ts`、`legacy-compat.ts`、`migration.ts` 是新�
 
 M9 的 `../shadow/github-source.ts` 是新增的 Shadow-only GitHub 只读适配：它只接受显式注入的 reader 和 response，不创建网络客户端或凭据解析；Link 分页、按路径 ETag/304、cursor CAS、poll lease、Issue/PR/comment/review/CI Trigger 规范化、多 Source/repository identity、CI baseline、actor 过滤、PR `threadClosed` 和 HTTP health/status 映射均保持在 adapter 内。它复用 Shadow cursor/lease，在同一事务提交接收事实、生命周期、CI baseline、ETag 和游标；不接生产 Source registry/poller、旧 BotRuntime、IPC、真实 GitHub 或写入 Effect。
 
-这是源码移植，不是安装另一个 Agent Runtime。Pi、Store、Source 和 Effects 适配均在这些同步端口之外实现。当前只有隔离测试调用实验组装；生产 Bot API、BotRuntime、会话、数据库、通知及轮询入口无法到达它。
+M10 的 `../shadow/github-operation.ts` 是新增的 Shadow-only dry-run planner：它校验 Source/instance/repository identity、Mandate allowed operations、ticket/generation、Stop、PR head/base、required checks、branch/PR/review/merge/Issue close 参数，保存稳定 operation intent、参数哈希和幂等 key。它只输出预期 method/path/body 与模拟 receipt；`uncertain`、`unknown`、`confirmed`、`not-applied` 和取消必须显式推进，不调用网络、真实凭据或 source-operation Effect。
 
 ## 上游更新
 

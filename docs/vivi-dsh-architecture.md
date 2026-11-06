@@ -1,6 +1,6 @@
 # Vivi 整体重构：采用 DSH 完整架构
 
-状态：**目标架构已确定；M0–M9 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session、执行资源层、Source/Policy 控制面、Local Source 回放、兼容投影、迁移 dry-run 与 GitHub 只读 Shadow Source 已落地，生产 Runtime 尚未切换。** 实际开发进度、验收命令与未完成范围见 [开发进度记录](vivi-dsh-development.md)。
+状态：**目标架构已确定；M0–M10 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session、执行资源层、Source/Policy 控制面、Local Source 回放、兼容投影、迁移 dry-run、GitHub 只读 Shadow Source 与 Source Operation dry-run 已落地，生产 Runtime 尚未切换。** 实际开发进度、验收命令与未完成范围见 [开发进度记录](vivi-dsh-development.md)。
 
 目标是把 Vivi 整体改造成 DSH Superagent 的领域与运行架构。GitHub Issue → PR → Review → 修复 → CI → Merge 是第一条验收链路；“先完成 GitHub”限定外部平台，不允许据此省略授权评估、长期工作、消息归属、持久副作用和恢复机制。
 
@@ -403,9 +403,10 @@ DSH Mandate 是业务授权，工具名单和 cwd 不是 OS 沙箱。完整迁�
 
 **交付：** GitHub branch、PR、Review、Merge、Issue close 的 operation plan、参数哈希、幂等 key、授权和 head/base 校验、uncertain/reconcile 模拟。
 
-**独立验收：** 使用 fake GitHub server 验证超时、重复请求、head 漂移、不同参数复用 key、撤权、Stop、generation 失效和 reconcile；输出预期操作和 receipt，但不发真实写请求。
+**独立验收：** 使用固定 ShadowStore 和显式 fake-server 结果验证重复请求、参数漂移、head/base/checks 变化、撤权、Stop、generation/revision 失效、uncertain、unknown、confirmed、not-applied 和取消；输出预期 HTTP 方法/path/body 与 dry-run receipt，但不启动 `source-operation` Effect、不调用网络、不发送真实 GitHub 写请求。
 
-**当前影响：** 不需要生产 GitHub token，不触碰任何真实仓库，不改变当前 Worker shell 或凭据。
+**当前影响：** M10 只新增隔离 planner 和模拟 receipt；不需要生产 GitHub token，不触碰任何真实仓库，不改变当前 Worker shell、凭据、Source poller 或旧 Runtime。
+
 
 #### M11：专用测试部署的真实 GitHub 闭环
 

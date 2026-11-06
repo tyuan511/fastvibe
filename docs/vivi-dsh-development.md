@@ -224,8 +224,17 @@ node --test test/vivi-dsh-github-source.test.ts
 
 该命令显式组装 reader、临时 ShadowStore 与真实 ShadowEngine，覆盖数据库重开、重复/编辑/乱序、多页 CI/ETag/304、真实 Follow 收束、绑定/Review ownership、撤权、Retry-After、串仓库/串编号、SQL ABORT、Source 配置变化、cursor CAS、并发和过期 lease。它不读取真实用户库、真实 GitHub、凭据或 Session；Webhook、生产 poller、消息回复、GitHub 写操作与 Issue close continuation 留给后续阶段。
 
-## 下一阶段与限制
+## M10：GitHub Source Operation dry-run 已落地
 
-本文已完成 M0–M9 隔离能力的记录。下一阶段是 M10：GitHub Source Operation dry-run，然后进入 M11 的专用测试仓库闭环和 M12 的最终切换。M8/M9 的 Local Source、GitHub reader、兼容投影和迁移 API 仍只在显式 Shadow/replay 路径使用。
+位置：[github-operation.ts](../src/main/bot/shadow/github-operation.ts)、[test/vivi-dsh-github-operation.test.ts](../test/vivi-dsh-github-operation.test.ts)。
 
-M10–M12 尚未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
+- `GithubOperationDryRun` 对 branch、PR、Review、Merge、Issue close 统一生成不可变 operation intent，保存 Source/instance/仓库身份、Mandate allowed operations、Ticket、generation、Stop 状态、参数哈希、稳定幂等 key，以及预期的 HTTP method/path/body。
+- branch/PR/review/merge/Issue close 各自校验参数；Merge 要求 open PR、当前 head/base SHA 和 required checks 通过；所有参数拒绝 token、secret、password、authorization、private key 等凭据字段。
+- 相同 operation identity 和参数重复计划保持幂等；同 identity 参数漂移拒绝覆盖。Source 撤权、Stop、generation、仓库身份或 head/base/checks 失效都会在持久化前拒绝。
+- `simulateExecute()`、`reconcile()` 和 `cancel()` 是显式 fake-server 事实控制，只改变 Shadow operation receipt。`uncertain`、`unknown`、`confirmed`、`not-applied`、failed 和 cancelled 不能被普通重试混淆；planner 不注册 Effect、不创建 Session、不调用 reader/网络、不使用真实凭据。
+
+M10 新增 5 项 Node 原生测试，覆盖五类 operation plan、幂等与参数漂移、授权与前置条件、超时/uncertain/reconcile、Stop 取消和无网络/无执行副作用。
+
+本文已完成 M0–M10 隔离能力的记录。下一阶段是 M11 的专用测试仓库闭环和 M12 的最终切换。M8/M9 的 Local Source、GitHub reader、兼容投影、迁移 API 与 M10 operation planner 仍只在显式 Shadow/replay 路径使用。
+
+M11–M12 尚未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
