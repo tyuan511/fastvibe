@@ -57,6 +57,10 @@ ipc-ready …, window-created …, engine-runtime …, engine-session …, engin
 - **前台不等于看见。** 其余场景只在没有窗口聚焦时发；`notifyApproval` 多两条路：窗口在前但
   请求的会话不是屏幕上的那一个（`focusedApprovalNeedsNotice`，纯函数，有单测），以及窗口失焦时
   补发还停着的请求。提问面板只画在活动会话的 composer 里，这是「在前却没看见」唯一会发生的场景。
+- **Vivi 注意力通知一条事实只播报一次。** `main/vivi/bot-notifications.ts` 把已播报的问题/失败
+  事实 id 存进 `bot-attention-state.json`，重启不再为同一条旧事实重复打扰；快照里消失的事实
+  会从状态里清掉。首次初始化（无状态文件）时把当时已存在的事实静默计为已播报，而不是升级后
+  翻旧账。回归在 `test/bot-notifications.test.ts`。
 
 ## 单窗口
 

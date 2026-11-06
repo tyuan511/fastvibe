@@ -48,6 +48,8 @@ export type FastVibePaths = {
   settingsFile: string;
   /** Main-owned normal window size and maximized state. */
   windowStateFile: string;
+  /** Vivi attention facts that already raised a system notification, so a restart does not repeat them. */
+  botAttentionStateFile: string;
   /** User overrides for built-in subagent models. */
   subagentsFile: string;
   /** Per-thinking-block durations, which the engine's transcripts do not record. */
@@ -196,6 +198,7 @@ function buildFastVibePaths(): FastVibePaths {
     mcpFile: engine.mode === "global" ? join(agentDir, "mcp.json") : join(userData, "mcp.json"),
     settingsFile: join(userData, "settings.json"),
     windowStateFile: join(userData, "window-state.json"),
+    botAttentionStateFile: join(userData, "bot-attention-state.json"),
     subagentsFile: join(agentDir, "subagents.json"),
     reasoningFile: join(runtimeRoot, "reasoning.json"),
     usageLedgerFile: join(runtimeRoot, "usage-ledger.jsonl"),

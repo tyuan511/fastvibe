@@ -72,7 +72,7 @@ import { syncScheduleTray, disposeScheduleTray } from "./schedule-tray";
 import { registerViviScheme, registerViviProtocol } from "./vivi/loader";
 import { getViviPetWindow, destroyViviPetWindow } from "./vivi/pet-window";
 import { registerViviIpc } from "./vivi/ipc-handlers";
-import { BotAttentionNotices } from "./vivi/bot-notifications";
+import { BotAttentionNotices, botAttentionStateStore } from "./vivi/bot-notifications";
 import { openPetConversation } from "./vivi/conversation-navigation";
 
 // Every static import above has been evaluated by now; the gap from process start is the cost of loading the bundle.
@@ -289,7 +289,7 @@ const gateway = new RemoteGateway({
 });
 const windows = new Set<BrowserWindow>();
 let stopBotObservation: (() => void) | undefined;
-const botAttention = new BotAttentionNotices();
+const botAttention = new BotAttentionNotices(botAttentionStateStore(getFastVibePaths().botAttentionStateFile));
 function createWindow(initialHash?: string): void {
   // Leaving the app is when a question raised while the user was watching first needs
   // saying out loud — see notifyParkedPrompts.
