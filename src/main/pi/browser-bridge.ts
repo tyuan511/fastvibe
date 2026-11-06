@@ -4,7 +4,8 @@ import { uiText } from "../engine/ui-text";
 import { readAppSettings } from "../engine/app-settings";
 import { runBrowserCdp } from "../engine/browser-cdp";
 import { getFastVibePaths } from "../engine/paths";
-import { app, type WebContents } from "electron";
+import { app, webContents, type WebContents } from "electron";
+import { runBrowserGuestAction } from "./browser-guest-input";
 import { Ipc } from "@shared/ipc";
 import type { BrowserRequest } from "@shared/types";
 
@@ -13,8 +14,17 @@ export type { BrowserRequest };
 
 type BrowserResponse = { id: string; ok: boolean; result?: unknown; error?: string };
 
+type PendingBrowserRequest = {
+  owner: WebContents;
+  request: BrowserRequest;
+  controller: AbortController;
+  inputStarted: boolean;
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+};
 let target: WebContents | null = null;
-const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+const pending = new Map<string, PendingBrowserRequest>();
 
 /** Attach the current renderer window. Browser requests are intentionally scoped to it. */
 export function attachBrowserRenderer(contents: WebContents): void {
@@ -22,20 +32,37 @@ export function attachBrowserRenderer(contents: WebContents): void {
   contents.once("destroyed", () => {
     if (target === contents) target = null;
     for (const [id, request] of pending) {
-      clearTimeout(request.timer);
-      request.reject(new Error(uiText("浏览器窗口已关闭", "Browser window closed")));
+      if (request.owner !== contents) continue;
       pending.delete(id);
+      clearTimeout(request.timer);
+      request.controller.abort();
+      request.reject(new Error(uiText("浏览器窗口已关闭", "Browser window closed")));
     }
   });
 }
 
-export function respondBrowserRequest(response: BrowserResponse): void {
+export function respondBrowserRequest(response: BrowserResponse, owner: WebContents | undefined): void {
   const request = pending.get(response.id);
-  if (!request) return;
+  if (!request || request.owner !== owner) return;
   pending.delete(response.id);
   clearTimeout(request.timer);
+  request.controller.abort();
   if (response.ok) request.resolve(response.result);
   else request.reject(new Error(response.error || uiText("浏览器操作失败", "Browser action failed")));
+}
+
+/** Renderer supplies only a guest id. Action arguments come exclusively from the pending tool call. */
+export function executeBrowserGuestAction(payload: { id: string; guestId: number }, owner: WebContents | undefined): Promise<unknown> {
+  const entry = pending.get(payload?.id);
+  if (!entry || !owner || entry.owner !== owner || entry.controller.signal.aborted) {
+    return Promise.reject(new Error("BROWSER_REQUEST_EXPIRED_OR_WRONG_OWNER"));
+  }
+  if (entry.inputStarted || !["snapshot", "check", "evaluate", "click", "type", "press"].includes(entry.request.action)) {
+    return Promise.reject(new Error("BROWSER_REQUEST_ALREADY_EXECUTED_OR_INVALID"));
+  }
+  if (!Number.isSafeInteger(payload.guestId) || payload.guestId <= 0) return Promise.reject(new Error("BROWSER_GUEST_INVALID"));
+  entry.inputStarted = true;
+  return runBrowserGuestAction(owner, webContents.fromId(payload.guestId), entry.request, entry.controller.signal);
 }
 
 /**
@@ -63,10 +90,12 @@ export function requestBrowser(request: BrowserRequest, signal?: AbortSignal): P
   if (signal?.aborted) return Promise.reject(abortError());
   if (useSystemBrowser()) {
     const profileDir = join(getFastVibePaths().runtimeRoot, "browser-profile");
-    return untilAborted(runBrowserCdp(request, profileDir), signal);
+    return untilAborted(runBrowserCdp(request, profileDir, signal), signal);
   }
   if (!target || target.isDestroyed()) return Promise.reject(new Error(uiText("内置浏览器尚未打开", "Built-in browser is not open")));
+  const owner = target;
   const id = randomUUID();
+  const controller = new AbortController();
   const timeout = Math.max(1_000, Math.min(request.timeoutMs ?? 30_000, 120_000));
   return new Promise((resolve, reject) => {
     const settle = () => {
@@ -77,20 +106,31 @@ export function requestBrowser(request: BrowserRequest, signal?: AbortSignal): P
       if (!entry) return;
       pending.delete(id);
       clearTimeout(entry.timer);
+      controller.abort();
+      settle();
       reject(abortError());
     };
     const timer = setTimeout(() => {
       pending.delete(id);
+      controller.abort();
       settle();
       reject(new Error(uiText(`浏览器操作超时（${timeout}ms）`, `Browser action timed out (${timeout}ms)`)));
     }, timeout);
     pending.set(id, {
+      owner, request, controller, inputStarted: false,
       resolve: (value) => { settle(); resolve(value); },
       reject: (error) => { settle(); reject(error); },
       timer,
     });
     signal?.addEventListener("abort", onAbort, { once: true });
-    target?.send(Ipc.browserRequest, { id, request });
+    try { owner.send(Ipc.browserRequest, { id, request }); }
+    catch (error) {
+      pending.delete(id);
+      clearTimeout(timer);
+      controller.abort();
+      settle();
+      reject(error);
+    }
   });
 }
 
@@ -103,8 +143,9 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Pro
   if (!signal) return work;
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(abortError());
+    work.then(resolve, reject).then(() => signal.removeEventListener("abort", onAbort));
+    if (signal.aborted) { reject(abortError()); return; }
     signal.addEventListener("abort", onAbort, { once: true });
-    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
 }
 

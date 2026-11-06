@@ -198,6 +198,8 @@ export const Ipc = {
   /** Main-process browser-use bridge (extension tool ↔ renderer webview). */
   browserRequest: "browser:request",
   browserResponse: "browser:response",
+  /** Host-only action claim for an already pending browser tool request. */
+  browserGuestAction: "browser:guest-action",
   browserListProfiles: "browser:list-profiles",
   browserImportProfile: "browser:import-profile",
   browserClearData: "browser:clear-data",

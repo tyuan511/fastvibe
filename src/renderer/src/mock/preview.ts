@@ -1417,6 +1417,7 @@ const api = {
     importProfile: async () => ({ browser: "", profile: "", cookies: 0, encryptedCookiesSkipped: 0, message: "" }),
     clearData: async () => undefined,
     listEngines: async () => [{ id: "auto", label: "" }],
+    guestAction: async () => ({ ok: false, code: "PREVIEW_ONLY" }),
     onRequest: () => () => undefined,
     respond: () => undefined,
   },

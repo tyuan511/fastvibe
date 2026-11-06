@@ -631,9 +631,10 @@ export type BrowserProfileInfo = {
  * new field has to be added here once — a copy that lags behind is what made
  * `ref` / `newTab` reach the renderer untyped.
  *
- * `ref` is stamped by a snapshot (`data-fv-ref`), `newTab` forces a second tab
- * instead of navigating the one on screen, and `timeoutMs` is the main-process
- * bridge's budget for the whole round trip.
+ * `ref` is an opaque snapshot-qualified handle to an exact DOM node; the page's
+ * `data-fv-ref` attribute is only an annotation. Supplied stale refs never fall
+ * through to selector/text. `newTab` forces a second tab instead of navigating
+ * the current one, and `timeoutMs` is the whole round-trip budget.
  * `conversationId` is stamped by the host so a background chat's `browser_open`
  * lands in that chat's side pane instead of hijacking the one on screen.
  */
@@ -647,6 +648,12 @@ export type BrowserRequest = {
   key?: string;
   script?: string;
   newTab?: boolean;
+  /** Snapshot source; DOM remains the compatibility default. */
+  snapshotMode?: "dom" | "accessibility";
+  /** Snapshot scope: exactly one of selector or rootRef, resolved before refs refresh. */
+  rootRef?: string;
+  maxDepth?: number;
+  maxElements?: number;
   timeoutMs?: number;
   conversationId?: string;
 };

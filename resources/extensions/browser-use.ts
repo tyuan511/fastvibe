@@ -32,12 +32,56 @@ const TAB_RESULT = Type.Object({ tabId: Type.String(), url: Type.String() }, { a
 const SNAPSHOT_RESULT = Type.Object({
   tabId: Type.String(), url: Type.String(), title: Type.String(), text: Type.String(),
   elementCount: Type.Number(), truncated: Type.Boolean(),
+  snapshotId: Type.Optional(Type.String()),
+  source: Type.Optional(Type.String()),
+  complete: Type.Optional(Type.Boolean()),
+  nodes: Type.Optional(Type.Array(Type.Any())),
   elements: Type.Array(Type.Object({
-    ref: Type.String(), selector: Type.String(), tag: Type.String(), text: Type.String(),
+    ref: Type.String({ description: "快照中的不透明 ref 字符串（如 sAbCdEf12345:e3），操作时须完整原样传回，不要解析或拼接" }), selector: Type.String(), tag: Type.String(), text: Type.String(),
     type: Type.Optional(Type.String()), role: Type.Optional(Type.String()),
+    value: Type.Optional(Type.String()), placeholder: Type.Optional(Type.String()),
     name: Type.Optional(Type.String()), href: Type.Optional(Type.String()), disabled: Type.Optional(Type.Boolean()),
+    accessibleName: Type.Optional(Type.String()), states: Type.Optional(OBJECT_RESULT),
   })),
 }, { additionalProperties: true });
+/** Model-facing text only; scripts and the UI retain the complete structured result. */
+export function formatBrowserSnapshot(page: Record<string, any>): string {
+  const quote = (value: unknown) => JSON.stringify(String(value ?? ''));
+  const lines = [`Tab: ${page.tabId ?? ''}`, `URL: ${page.url ?? ''}`, `Title: ${quote(page.title)}`];
+  if (page.source && page.source !== 'dom-semantics') lines.push(`Source: ${page.source}`);
+  if (page.scope && (typeof page.scope === 'string' || page.scope.kind !== 'document')) lines.push(`Scope: ${quote(typeof page.scope === 'string' ? page.scope : JSON.stringify(page.scope))}`);
+  if (page.note) lines.push(`Note: ${page.note}`);
+  if (Array.isArray(page.limitations)) for (const limitation of page.limitations) lines.push(`Limitation: ${limitation}`);
+  const represented = new Set<string>();
+  const normalize = (value: unknown) => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const render = (node: Record<string, any>, depth: number) => {
+    const name = node.name ?? node.accessibleName ?? node.text;
+    if (normalize(name)) represented.add(normalize(name));
+    const fields = ['type', 'value', 'placeholder']
+      .filter(key => node[key] !== undefined && !(key === 'value' && /^(password|file)$/i.test(node.type ?? '')))
+      .map(key => `${key}=${quote(node[key])}`).join(' ');
+    const states = Object.entries(node.states ?? {})
+      .filter(([, value]) => value !== undefined && value !== false && value !== 'false')
+      .map(([key, value]) => `${key}=${value}`).join(' ');
+    const childrenCount = node.childrenCount ?? node.children_count;
+    const missingChildren = childrenCount !== undefined && childrenCount > (node.children?.length ?? 0);
+    const boundary = missingChildren ? ` [children=${childrenCount}]` : '';
+    const truncated = missingChildren || node.subtreeTruncated || node.subtree_truncated ? ' [truncated]' : '';
+    const scopeTarget = node.ref && node.targetType === 'container' ? ' [scope]' : '';
+    lines.push(`${'  '.repeat(Math.min(depth, 12))}- ${node.role ?? node.tag ?? 'group'} ${quote(node.name ?? node.accessibleName ?? node.text)}${node.ref ? ` [ref=${node.ref}]` : ''}${scopeTarget}${states ? ` [${states}]` : ''}${fields ? ` ${fields}` : ''}${node.href ? ` ${quote(node.href)}` : ''}${boundary}${truncated}`);
+    for (const child of node.children ?? []) render(child, depth + 1);
+  };
+  if (Array.isArray(page.nodes)) for (const node of page.nodes) render(node, 0);
+  else for (const element of page.elements ?? []) render({ ...element, name: element.accessibleName ?? element.text }, 0);
+  // Only remove whole lines exactly represented by semantic names. Substrings,
+  // validation messages and extended status prose must survive.
+  const remainingText = String(page.text ?? '').split('\n')
+    .filter(line => !normalize(line) || !represented.has(normalize(line))).join('\n').trim();
+  if (remainingText) lines.push('', 'Page text:', remainingText);
+  if (page.truncated || page.complete === false) lines.push('[Partial snapshot: content was truncated.]');
+  return lines.join('\n');
+}
+
 const BATCH_GUIDELINES = [
   "codemode 可用时，连续浏览器步骤优先写成一次脚本：await tools.browser_*(args)，用条件、循环处理结构化返回值，只 text()/return 必要结果。单步操作或 codemode 不可用时直接调用 browser_*。",
   "同一标签页的操作与快照必须顺序 await；不同标签页的独立读取才可并行。根据最新快照定位，导航后重新快照；异步页面用 browser_wait 等条件，不反复请求模型或固定睡眠。",
@@ -60,7 +104,9 @@ export default function browserUse(pi: ExtensionAPI): void {
       }
     }
     return {
-      content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result, null, 2) }],
+      content: [{ type: "text", text: action === "snapshot" && result && typeof result === "object"
+        ? formatBrowserSnapshot(result as Record<string, any>)
+        : typeof result === "string" ? result : JSON.stringify(result, null, 2) }],
       details: result,
       structuredContent: result,
     };
@@ -123,11 +169,25 @@ export default function browserUse(pi: ExtensionAPI): void {
     outputSchema: SNAPSHOT_RESULT,
     label: "浏览器页面快照",
     description:
-      "读取当前页面：elements[] 列出可交互元素（每个带 ref 与 selector）、text 是可读正文。点击和输入优先使用元素上的 ref（其次 selector），比用文字匹配可靠得多。每次导航或点击后重新快照；可在 codemode 脚本内按 elements 查找 ref 并继续操作，只返回必要结果。",
+      "读取页面快照。默认 snapshotMode=dom，返回紧凑 DOM 语义树和正文；snapshotMode=accessibility 读取浏览器原生无障碍树，并把可定位节点绑定为精确 ref。脚本仍获得 elements[]、text 等兼容字段。复杂页面可用 selector 或 rootRef 读取一个区域（两者互斥），maxDepth/maxElements 控制输出；带 childrenCount 的容器可用其 ref 下钻。每次快照会使所有旧 ref 失效；rootRef 必须来自最近一次快照。ref 是不透明字符串，必须完整原样传回。能力限制见 source/limitations，不能假定 iframe 已展开；STALE_REF 时重新快照。",
     promptSnippet: "读取网页内容和可交互元素",
-    parameters: Type.Object({ tabId: TAB_ID(false) }),
+    parameters: Type.Object({
+      tabId: TAB_ID(false),
+      snapshotMode: Type.Optional(Type.Union([Type.Literal("dom"), Type.Literal("accessibility")], { description: "默认 dom 保持兼容；accessibility 使用 CDP 原生无障碍树" })),
+      selector: Type.Optional(Type.String({ minLength: 1, description: "只读取匹配的唯一区域，与 rootRef 互斥" })),
+      rootRef: Type.Optional(Type.String({ minLength: 1, description: "最近快照中的容器 ref，完整原样传回；读取后所有旧 ref 均失效" })),
+      maxDepth: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, description: "输出的最大语义层级；截断处可使用容器 ref 下钻" })),
+      maxElements: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "最多返回的语义节点数（含容器），默认 150" })),
+    }),
     async execute(_id, params, signal) {
-      return call("snapshot", { tabId: params.tabId, timeoutMs: LOAD_TIMEOUT }, signal);
+      if (params.selector !== undefined && !params.selector.trim() || params.rootRef !== undefined && !params.rootRef.trim()) throw new Error("browser_snapshot requires non-empty selector/rootRef");
+      if (params.selector !== undefined && params.rootRef !== undefined) throw new Error("browser_snapshot selector and rootRef are mutually exclusive");
+      if (params.snapshotMode !== undefined && params.snapshotMode !== "dom" && params.snapshotMode !== "accessibility") throw new Error("browser_snapshot unknown snapshotMode");
+      for (const [key, max] of [["maxDepth", 50], ["maxElements", 500]] as const) {
+        const value = params[key];
+        if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > max)) throw new Error(`browser_snapshot ${key} must be an integer between 1 and ${max}`);
+      }
+      return call("snapshot", { ...params, timeoutMs: LOAD_TIMEOUT }, signal);
     },
   });
 
@@ -140,7 +200,7 @@ export default function browserUse(pi: ExtensionAPI): void {
     promptSnippet: "点击网页元素",
     parameters: Type.Object({
       tabId: TAB_ID(false),
-      ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
+      ref: Type.Optional(Type.String({ description: "最新快照中的不透明 ref 字符串，例如 sAbCdEf12345:e3；须完整原样传回，不要解析、截短或拼接" })),
       selector: Type.Optional(Type.String({ description: "CSS selector，例如 #submit 或 body > div:nth-of-type(2) > a" })),
       text: Type.Optional(Type.String({ description: "元素可见文字，作为兜底匹配" })),
     }),
@@ -158,7 +218,7 @@ export default function browserUse(pi: ExtensionAPI): void {
     promptSnippet: "在网页输入框中填写文字",
     parameters: Type.Object({
       tabId: TAB_ID(false),
-      ref: Type.Optional(Type.String({ description: "快照中的元素 ref，例如 e3" })),
+      ref: Type.Optional(Type.String({ description: "最新快照中的不透明 ref 字符串，例如 sAbCdEf12345:e3；须完整原样传回，不要解析、截短或拼接" })),
       selector: Type.Optional(Type.String({ description: "CSS selector" })),
       text: Type.String({ description: "要填入的文字；select 传选项文字或 value" }),
     }),

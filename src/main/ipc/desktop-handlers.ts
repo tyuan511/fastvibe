@@ -45,7 +45,7 @@ import { scheduleUpdateCheck } from "../updater";
 import { PiProcessManager } from "../pi/process-manager";
 import { TerminalSessions } from "../engine/terminal-sessions";
 import { RemoteGateway } from "../remote/gateway";
-import { respondBrowserRequest } from "../pi/browser-bridge";
+import { executeBrowserGuestAction, respondBrowserRequest } from "../pi/browser-bridge";
 import {
   computerPermissions,
   listComputerApps,
@@ -109,9 +109,11 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): void {
   handle(Ipc.memorySetConfig, (payload: unknown) => engine.memory.setConfig(payload));
   handle(Ipc.memoryRun, () => engine.memory.run());
   handle(Ipc.memoryClear, () => engine.memory.clear());
-  handle(Ipc.browserResponse, (payload: { id: string; ok: boolean; result?: unknown; error?: string }) => {
-    respondBrowserRequest(payload);
+  handle(Ipc.browserResponse, (payload: { id: string; ok: boolean; result?: unknown; error?: string }, ctx) => {
+    respondBrowserRequest(payload, ctx.kind === "window" ? ctx.window?.webContents : undefined);
   });
+  handle(Ipc.browserGuestAction, (payload: { id: string; guestId: number }, ctx) =>
+    executeBrowserGuestAction(payload, ctx.kind === "window" ? ctx.window?.webContents : undefined));
   handle(Ipc.browserListProfiles, () => listBrowserProfiles());
   handle(Ipc.browserImportProfile, async (payload: { profile: import("@shared/types").BrowserProfileInfo; target?: "builtin" | "system" }) => {
     if (!payload?.profile?.cookiePath) throw new Error(uiText("浏览器配置文件无效", "Invalid browser profile"));

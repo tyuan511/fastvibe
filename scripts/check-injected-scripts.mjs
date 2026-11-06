@@ -24,13 +24,20 @@ const TARGETS = [
   // The same scripts the system-browser CDP backend evaluates. A brace missing here
   // fails every browser-use call once that backend is on, and tsc cannot see it.
   join(here, "..", "src", "shared", "browser-page.ts"),
+  // Shared CDP input scripts also execute inside both Chrome and Electron guests.
+  join(here, "..", "src", "main", "engine", "browser-input.ts"),
+  join(here, "..", "src", "main", "engine", "browser-accessibility.ts"),
 ];
 
 /** Script fragments held in constants and handed to `inject` by name. */
-const FRAGMENT_CONSTANTS = ["PAGE_HELPERS", "SNAPSHOT_BODY", "PICK_BODY", "PICK_READ_BODY"];
+const FRAGMENT_CONSTANTS = ["PAGE_HELPERS", "SNAPSHOT_BODY", "INPUT_TREE_HELPERS", "PICK_BODY", "PICK_READ_BODY"];
 
 /** Functions whose returned template literal is a page script. */
-const SCRIPT_FUNCTIONS = ["checkBody", "clickBody", "typeBody", "pressBody"];
+const SCRIPT_FUNCTIONS = ["checkBody", "clickBody", "typeBody", "pressBody", "snapshotBody",
+  "browserAccessibilityScopeBody", "browserAccessibilityFinalizeBody", "browserAccessibilityBindBody",
+  "browserAccessibilityScopeObjectBody", "browserAccessibilityCleanupBody",
+  "browserInputTargetBody", "browserInputPrepareBody", "browserInputVerifyBody",
+  "browserInputCheckBody", "browserInputFallbackBody"];
 
 /** Read the template literal that starts at `text[start]` (a backtick), tracking
  * `${}` nesting so an interpolation containing a backtick or brace cannot end it. */
@@ -137,7 +144,10 @@ for (const script of scripts) {
     problems.push(`${script.name}: no injected script found`);
     continue;
   }
-  const code = `(() => { const value = (() => { ${neutralise(script.body)} })(); return { ok: true, value: value }; })()`;
+  const body = neutralise(script.body);
+  const code = /^\s*(?:async\s+)?function\b/.test(body)
+    ? `return (${body});`
+    : `(() => { const value = (() => { ${body} })(); return { ok: true, value: value }; })()`;
   try {
     // Parse only: nothing here ever runs.
     new Function(code);

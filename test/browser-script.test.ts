@@ -8,8 +8,9 @@ import {
   SessionManager, SettingsManager, type ExtensionAPI, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall, InMemoryModelsStore } from "@earendil-works/pi-ai";
-import browserUse from "../resources/extensions/browser-use.ts";
-import { checkBody, pageProgram } from "../src/shared/browser-page.ts";
+import browserUse, { formatBrowserSnapshot } from "../resources/extensions/browser-use.ts";
+import { checkBody, clickBody, typeBody, SNAPSHOT_BODY, pageProgram } from "../src/shared/browser-page.ts";
+import { webcrypto } from "node:crypto";
 import { runInNewContext } from "node:vm";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -209,6 +210,175 @@ test("Stop aborts a polling wait and no further browser requests run", async () 
     await assert.rejects(tools.get("browser_wait")!.execute("wait", {}, undefined, undefined, {} as never), /requires/);
     assert.equal(calls, 1);
   } finally { globals.__fastvibeBrowserRequest = previous; }
+});
+
+test("snapshots retain hierarchy and states, redact secrets and invalidate earlier node refs", () => {
+  const document: any = { title: 'Profile', body: { tagName: 'BODY', innerText: 'Profile Email Save', getAttribute: () => null, getBoundingClientRect: () => ({ width: 100, height: 100 }), matches: () => false } };
+  const make = (tagName: string, id: string, attrs: Record<string, string> = {}, innerText = ''): any => ({
+    tagName, id, innerText, parentElement: null, isConnected: true, ownerDocument: document,
+    getAttribute: (name: string) => attrs[name] ?? null,
+    setAttribute: (name: string, value: string) => { attrs[name] = value; },
+    removeAttribute: (name: string) => { delete attrs[name]; },
+    getBoundingClientRect: () => ({ width: 100, height: 20 }),
+    matches: (selector: string) => selector.startsWith('main,') ? /^(MAIN|H1)$/.test(tagName) : /^(INPUT|BUTTON)$/.test(tagName),
+  });
+  const main = make('MAIN', 'main');
+  const heading = make('H1', 'heading', {}, 'Profile');
+  const input = make('INPUT', 'email', { name: 'email', type: 'email' });
+  input.labels = [{ textContent: 'Email' }]; input.required = true;
+  const password = make('INPUT', 'password', { type: 'password' }); password.type = 'password'; password.value = 'private-secret';
+  const button = make('BUTTON', 'save', {}, 'Save'); button.disabled = true;
+  for (const el of [heading, input, password, button]) el.parentElement = main;
+  const interactive = [input, password, button];
+  document.body.querySelectorAll = (selector: string) => selector === '*' ? [main, heading, ...interactive] : [main, heading, ...interactive];
+  document.querySelectorAll = (selector: string) => {
+    if (selector === '[data-fv-ref]') return interactive.filter(el => el.getAttribute('data-fv-ref'));
+    if (selector.startsWith('main,')) return [main, heading];
+    if (selector.includes(',main,')) return [main, heading, ...interactive];
+    return interactive;
+  };
+  const context = { document, location: { href: 'https://example.com' }, crypto: webcrypto,
+    CSS: { escape: (s: string) => s }, getComputedStyle: () => ({ visibility: 'visible', display: 'block', opacity: '1' }) };
+  const observe = () => {
+    const result = runInNewContext(pageProgram(SNAPSHOT_BODY), context);
+    assert.equal(result.ok, true, result.error);
+    return result.value;
+  };
+  const first = observe();
+  assert.match(first.snapshotId, /^[A-Za-z0-9_-]{12}$/);
+  assert.equal(first.elements[0].accessibleName, 'Email');
+  assert.equal(first.elements[0].states.required, true);
+  assert.equal(first.elements[2].states.disabled, true);
+  assert.equal(first.nodes[0].role, 'main');
+  assert.equal(first.nodes[0].children[0].role, 'heading');
+  assert.equal(first.nodes[0].children[0].ref, undefined, 'read-only leaves have no drill-down ref');
+  assert.equal(first.budgets.maxDepth, 50);
+  assert.equal(first.complete, true);
+  assert.equal(first.budgets.returnedNodeCount, 5);
+  assert.equal(first.nodes[0].targetType, 'container');
+  assert.equal(first.nodes[0].childrenCount, 4);
+  assert.equal(document.__fvSnapshotRefs.get(first.nodes[0].ref), main);
+  assert.equal(document.__fvSnapshotContainers.has(main), true);
+  assert.equal(document.__fvSnapshotContainers.has(heading), false);
+  assert.equal(document.__fvSnapshotContainers.has(input), false);
+  const previousContainers = document.__fvSnapshotContainers;
+  const rejected = runInNewContext(pageProgram(clickBody({ ref: first.nodes[0].ref })), context);
+  assert.equal(rejected.value.code, 'INVALID_TARGET');
+  assert.doesNotMatch(JSON.stringify(first), /private-secret/);
+  const second = observe();
+  assert.notEqual(document.__fvSnapshotContainers, previousContainers);
+  assert.equal(document.__fvSnapshotContainers.size, 1);
+  assert.notEqual(first.snapshotId, second.snapshotId);
+  assert.notEqual(first.elements[0].ref, second.elements[0].ref);
+  assert.equal(document.__fvSnapshotRefs.get(second.elements[0].ref), input);
+  assert.equal(document.__fvSnapshotRefs.has(first.elements[0].ref), false);
+  const stale = runInNewContext(pageProgram(typeBody({ ref: first.elements[0].ref, selector: '#email', text: 'wrong' })), context);
+  assert.equal(stale.value.code, 'STALE_REF');
+});
+
+test("snapshot text preserves semantics without printing selectors or the structured JSON", () => {
+  const page = { ...snapshot(), snapshotId: 's-test', complete: false, note: 'Recovered tab',
+    nodes: [{ role: 'form', name: 'Profile', children: [
+      { role: 'textbox', name: 'Email', ref: 's-test:e0', states: { required: true, disabled: false } },
+      { role: 'button', name: 'Save', ref: 's-test:e1', states: { disabled: true } },
+    ] }] };
+  const text = formatBrowserSnapshot(page);
+  assert.match(text, /form "Profile"\n  - textbox "Email" \[ref=s-test:e0\] \[required=true\]/);
+  assert.match(text, /disabled=true/);
+  assert.match(text, /Recovered tab/);
+  assert.match(text, /Email form/);
+  assert.match(text, /Partial snapshot/);
+  assert.doesNotMatch(text, /#email|"elements"|"selector"|disabled=false/);
+});
+
+test("snapshot formatter preserves current control values and only deduplicates whole name lines", () => {
+  const page = { ...snapshot('Email\nEmail is invalid\nSave\nSaved yesterday\nStatic article text'), nodes: [
+    { role: 'textbox', name: 'Email', ref: 's:e0', type: 'email', value: '', placeholder: 'you@example.com', states: { readonly: true, invalid: 'grammar' } },
+    { role: 'button', name: 'Save', ref: 's:e1', type: 'submit' },
+    { role: 'heading', name: 'Profile', states: { level: 2 } },
+  ] };
+  const output = formatBrowserSnapshot(page);
+  assert.match(output, /type="email" value="" placeholder="you@example.com"/);
+  assert.match(output, /readonly=true invalid=grammar/);
+  assert.match(output, /level=2/);
+  assert.equal(output.split('Page text:')[1].trim(), 'Email is invalid\nSaved yesterday\nStatic article text');
+  const fallback = formatBrowserSnapshot({ ...snapshot('Save'), elements: [
+    { tag: 'input', text: 'Password', type: 'password', value: 'private-marker' },
+    { tag: 'input', text: 'Upload', type: 'file', value: 'private-file' },
+    { tag: 'input', text: 'Query', type: 'search', value: 'current query', placeholder: 'Search' },
+  ] });
+  assert.doesNotMatch(fallback, /private-marker|private-file/);
+  assert.match(fallback, /value="current query" placeholder="Search"/);
+});
+
+test("direct snapshot tools expose compact content and preserve structured objects", async () => {
+  const tools = new Map<string, ToolDefinition>();
+  browserUse({ registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool) } as unknown as ExtensionAPI);
+  const previous = globals.__fastvibeBrowserRequest;
+  const page = { ...snapshot(), snapshotId: 'sAbCdEf12345', elements: snapshot().elements.map((element, index) => ({
+    ...element, ref: `sAbCdEf12345:e${index}`,
+  })) };
+  const requests: Request[] = [];
+  globals.__fastvibeBrowserRequest = async (request: Request) => {
+    requests.push(request);
+    return request.action === 'snapshot' ? page : { ok: true };
+  };
+  try {
+    const snapshotTool = tools.get('browser_snapshot')!;
+    for (const name of ['browser_click', 'browser_type']) {
+      const tool = tools.get(name)!;
+      const description = (tool.parameters as any).properties.ref.description;
+      assert.match(description, /不透明.*sAbCdEf12345:e3.*完整原样传回/);
+      assert.doesNotMatch(description, /例如 e\d/);
+    }
+    assert.match((snapshotTool.outputSchema as any).properties.elements.items.properties.ref.description, /不透明.*完整原样传回/);
+    assert.match(snapshotTool.description, /不透明.*完整原样传回/);
+    const result = await snapshotTool.execute('snapshot', {}, undefined, undefined, {} as never) as any;
+    assert.equal(result.structuredContent, page);
+    assert.equal(result.details, page);
+    assert.match(result.content[0].text, /button "Save" \[ref=sAbCdEf12345:e1\]/);
+    assert.doesNotMatch(result.content[0].text, /"selector"|#save/);
+    await tools.get('browser_type')!.execute('type', { ref: page.elements[0].ref, text: 'hello' }, undefined, undefined, {} as never);
+    await tools.get('browser_click')!.execute('click', { ref: page.elements[1].ref }, undefined, undefined, {} as never);
+    assert.equal(requests[1].ref, page.elements[0].ref);
+    assert.equal(requests[2].ref, page.elements[1].ref);
+  } finally { globals.__fastvibeBrowserRequest = previous; }
+});
+
+test("stale refs never fall through to selectors, text or cloned ref attributes", () => {
+  let selectorReads = 0;
+  const target = { isConnected: false, ownerDocument: undefined as unknown };
+  const document = {
+    __fvSnapshotRefs: new Map([['s-test:e0', target]]),
+    querySelector: () => { selectorReads++; throw new Error('selector fallback must not run'); },
+    querySelectorAll: () => [],
+  };
+  target.ownerDocument = document;
+  for (const body of [clickBody, typeBody]) {
+    const result = runInNewContext(pageProgram(body({ ref: 's-test:e0', selector: '#save', text: 'Save' })), { document });
+    assert.equal(result.ok, true);
+    assert.equal(result.value.code, 'STALE_REF');
+    assert.match(result.value.error, /new browser_snapshot/);
+    assert.ok(result.value.clicked === false || result.value.filled === false);
+  }
+  assert.equal(selectorReads, 0);
+});
+
+test("a live ref resolves its exact node without consulting selectors", () => {
+  let clicked = 0;
+  const document = { __fvSnapshotRefs: new Map(), querySelector: () => { throw new Error('unexpected selector'); } };
+  const target = {
+    isConnected: true, ownerDocument: document, tagName: 'DIV', innerText: 'Volume',
+    matches: () => false,
+    getAttribute: () => null, scrollIntoView() {}, focus() {}, dispatchEvent() {}, click() { clicked++; },
+  };
+  document.__fvSnapshotRefs.set('s-live:e0', target);
+  const EventStub = class {};
+  const result = runInNewContext(pageProgram(clickBody({ ref: 's-live:e0' })), {
+    document, window: { PointerEvent: EventStub }, MouseEvent: EventStub,
+  });
+  assert.equal(result.value.clicked, true);
+  assert.equal(clicked, 1);
 });
 
 test("condition probes require all conditions, check visibility, and preserve snapshot refs", () => {

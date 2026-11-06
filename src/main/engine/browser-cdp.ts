@@ -6,8 +6,10 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAppSettings } from "./app-settings";
 import { getFastVibePaths } from "./paths";
-import { checkBody, clickBody, pageProgram, pressBody, SNAPSHOT_BODY, typeBody } from "@shared/browser-page";
+import { checkBody, pageProgram, snapshotBody } from "@shared/browser-page";
 import type { BrowserRequest } from "@shared/types";
+import { runBrowserInput } from "./browser-input";
+import { runBrowserAccessibilitySnapshot } from "./browser-accessibility";
 import { uiText } from "./ui-text";
 
 /**
@@ -42,6 +44,7 @@ type Session = {
   title: string;
   seq: number;
   pending: Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>;
+  contextId?: number;
 };
 
 let chrome: ChildProcess | null = null;
@@ -137,9 +140,9 @@ function normalizeUrl(value: string): string {
   return `https://${trimmed}`;
 }
 
-async function endpointUp(): Promise<boolean> {
+async function endpointUp(signal?: AbortSignal): Promise<boolean> {
   try {
-    const response = await fetch(`http://127.0.0.1:${PORT}/json/version`, { signal: AbortSignal.timeout(500) });
+    const response = await fetch(`http://127.0.0.1:${PORT}/json/version`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(500)]) : AbortSignal.timeout(500) });
     return response.ok;
   } catch {
     return false;
@@ -152,9 +155,9 @@ async function endpointUp(): Promise<boolean> {
  * second one against the same profile fails, and killing whatever answers would
  * close a browser the user may be looking at.
  */
-async function ensureChrome(profileDir: string): Promise<void> {
-  if (await endpointUp()) return;
-  await mkdir(profileDir, { recursive: true });
+async function ensureChrome(profileDir: string, signal?: AbortSignal): Promise<void> {
+  if (await checked(endpointUp(signal), signal)) return;
+  await checked(mkdir(profileDir, { recursive: true }), signal);
   const binary = findBrowser();
   const child = spawn(binary, [
     `--remote-debugging-port=${PORT}`,
@@ -171,29 +174,30 @@ async function ensureChrome(profileDir: string): Promise<void> {
   });
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    if (await endpointUp()) return;
+    if (await checked(endpointUp(signal), signal)) return;
     if (child.exitCode !== null) break;
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await checked(new Promise((resolve) => setTimeout(resolve, 200)), signal);
   }
   throw fail("系统浏览器没有在限定时间内开放调试端口", "The system browser did not open its debugging port in time");
 }
 
-async function targets(): Promise<Target[]> {
-  const response = await fetch(`http://127.0.0.1:${PORT}/json/list`, { signal: AbortSignal.timeout(3_000) });
+async function targets(signal?: AbortSignal): Promise<Target[]> {
+  const response = await fetch(`http://127.0.0.1:${PORT}/json/list`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(3_000)]) : AbortSignal.timeout(3_000) });
   const list = (await response.json()) as Target[];
   return list.filter((item) => item.type === "page" && item.webSocketDebuggerUrl);
 }
 
-async function newTarget(url: string): Promise<Target> {
+async function newTarget(url: string, signal?: AbortSignal): Promise<Target> {
   // Chrome 111+ only accepts PUT here and reads the URL from the body; older builds
   // only accept the query form. Try the current one first.
   const put = await fetch(`http://127.0.0.1:${PORT}/json/new?${encodeURIComponent(url)}`, {
     method: "PUT",
     body: url,
-    signal: AbortSignal.timeout(10_000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
   }).catch(() => undefined);
+  signal?.throwIfAborted();
   if (put?.ok) return (await put.json()) as Target;
-  const response = await fetch(`http://127.0.0.1:${PORT}/json/new?${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(10_000) });
+  const response = await fetch(`http://127.0.0.1:${PORT}/json/new?${encodeURIComponent(url)}`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000) });
   return (await response.json()) as Target;
 }
 
@@ -220,7 +224,10 @@ function connect(target: Target): Promise<Session> {
       resolve(session);
     });
     socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data)) as CdpResult;
+      const message = JSON.parse(String(event.data)) as CdpResult & { method?: string; params?: { frame?: { parentId?: string }; executionContextId?: number } };
+      if (message.method === "Runtime.executionContextsCleared" ||
+        (message.method === "Runtime.executionContextDestroyed" && message.params?.executionContextId === session.contextId) ||
+        (message.method === "Page.frameNavigated" && !message.params?.frame?.parentId)) session.contextId = undefined;
       const waiter = session.pending.get(message.id);
       if (!waiter) return;
       session.pending.delete(message.id);
@@ -243,101 +250,169 @@ function connect(target: Target): Promise<Session> {
 function send(session: Session, method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const id = ++session.seq;
   return new Promise((resolve, reject) => {
-    session.pending.set(id, { resolve, reject });
-    session.socket.send(JSON.stringify({ id, method, params }));
+    const timer = setTimeout(() => {
+      session.pending.delete(id);
+      reject(new Error(`CDP command timed out: ${method}; delivery may be unknown`));
+    }, 10_000);
+    session.pending.set(id, {
+      resolve: (result) => { clearTimeout(timer); resolve(result); },
+      reject: (error) => { clearTimeout(timer); reject(error); },
+    });
+    try { session.socket.send(JSON.stringify({ id, method, params })); }
+    catch (error) {
+      session.pending.delete(id);
+      clearTimeout(timer);
+      reject(error);
+    }
   });
 }
 
-async function evaluate(session: Session, body: string): Promise<unknown> {
-  const result = await send(session, "Runtime.evaluate", {
+async function isolatedContextId(session: Session, signal?: AbortSignal): Promise<number> {
+  if (typeof session.contextId === "number") return session.contextId;
+  const tree = await checked(send(session, "Page.getFrameTree"), signal);
+  const frameId = (tree.frameTree as { frame: { id: string } }).frame.id;
+  const world = await checked(send(session, "Page.createIsolatedWorld", {
+    frameId,
+    worldName: "fastvibe-browser-automation",
+    grantUniveralAccess: false,
+  }), signal);
+  const contextId = world.executionContextId;
+  if (typeof contextId !== "number") throw new Error("Browser automation isolated world unavailable");
+  session.contextId = contextId;
+  return contextId;
+}
+
+async function evaluate(session: Session, body: string, signal?: AbortSignal): Promise<unknown> {
+  signal?.throwIfAborted();
+  const contextId = await isolatedContextId(session, signal);
+  const result = await checked(send(session, "Runtime.evaluate", {
+    contextId,
     expression: pageProgram(body),
     awaitPromise: true,
     returnByValue: true,
-  });
+  }), signal);
   const remote = result.result as { value?: { ok?: boolean; value?: unknown; error?: string } } | undefined;
   const value = remote?.value;
   if (!value || value.ok === false) throw new Error(value?.error || uiText("页面脚本执行失败", "Page script failed"));
   return value.value;
 }
 
-async function navigate(session: Session, url: string): Promise<{ loaded: boolean; url: string }> {
-  await send(session, "Page.navigate", { url });
+async function navigate(session: Session, url: string, signal?: AbortSignal): Promise<{ loaded: boolean; url: string }> {
+  await checked(send(session, "Page.navigate", { url }), signal);
+  session.contextId = undefined;
   const started = Date.now();
   while (Date.now() - started < 30_000) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const state = (await evaluate(session, "return document.readyState").catch(() => "")) as string;
+    await checked(new Promise((resolve) => setTimeout(resolve, 250)), signal);
+    const state = (await checked(evaluate(session, "return document.readyState", signal).catch(() => ""), signal)) as string;
     if (state === "complete" || state === "interactive") {
-      session.url = (await evaluate(session, "return location.href").catch(() => url)) as string;
+      session.url = (await checked(evaluate(session, "return location.href", signal).catch(() => url), signal)) as string;
       return { loaded: true, url: session.url };
     }
   }
   return { loaded: false, url };
 }
 
-async function liveSession(id: string | undefined, profileDir: string, fresh: boolean): Promise<Session> {
-  await ensureChrome(profileDir);
+async function checked<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  try {
+    const result = await pending;
+    signal?.throwIfAborted();
+    return result;
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw error;
+  }
+}
+
+const tabRequests = new Map<string, Promise<unknown>>();
+
+async function liveSession(id: string | undefined, profileDir: string, fresh: boolean, signal?: AbortSignal): Promise<Session> {
+  await checked(ensureChrome(profileDir, signal), signal);
   if (!fresh && id) {
     const known = sessions.get(id);
     if (known && known.socket.readyState === WebSocket.OPEN) return known;
+    const exact = (await checked(targets(signal), signal)).find((target) => `cdp:${target.id}` === id);
+    if (exact) return checked(connect(exact), signal);
+    throw new Error("TAB_GONE: requested tab is no longer available; observe tabs again");
   }
   if (!fresh) {
     for (const session of sessions.values()) {
       if (session.socket.readyState === WebSocket.OPEN) return session;
     }
-    const open = await targets();
+    const open = await checked(targets(signal), signal);
     const page = open.find((item) => item.url !== "about:blank") ?? open[0];
-    if (page) return connect(page);
+    if (page) return checked(connect(page), signal);
   }
-  return connect(await newTarget("about:blank"));
+  return checked(connect(await checked(newTarget("about:blank", signal), signal)), signal);
 }
 
 /** One browser-use request, answered by the system browser instead of the webview. */
-export async function runBrowserCdp(request: BrowserRequest, profileDir: string): Promise<unknown> {
+export async function runBrowserCdp(request: BrowserRequest, profileDir: string, signal?: AbortSignal): Promise<unknown> {
+  signal?.throwIfAborted();
   if (request.action === "list") {
-    if (!(await endpointUp())) return [];
-    const open = await targets();
+    if (!(await checked(endpointUp(signal), signal))) return [];
+    const open = await checked(targets(signal), signal);
     return open.map((item) => ({ tabId: `cdp:${item.id}`, url: item.url, title: item.title, alive: true }));
   }
-  const session = await liveSession(request.tabId, profileDir, request.action === "open" && request.newTab === true);
-  await send(session, "Runtime.enable").catch(() => undefined);
-  await send(session, "Page.enable").catch(() => undefined);
+  const session = await liveSession(request.tabId, profileDir, request.action === "open" && request.newTab === true, signal);
+  signal?.throwIfAborted();
+  const previous = tabRequests.get(session.id) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(() => runSessionRequest(request, session, signal));
+  tabRequests.set(session.id, current);
+  try { return await current; }
+  finally { if (tabRequests.get(session.id) === current) tabRequests.delete(session.id); }
+}
+
+async function runSessionRequest(request: BrowserRequest, session: Session, signal?: AbortSignal): Promise<unknown> {
+  signal?.throwIfAborted();
+  await checked(send(session, "Runtime.enable").catch(() => undefined), signal);
+  await checked(send(session, "Page.enable").catch(() => undefined), signal);
   switch (request.action) {
     case "open":
     case "navigate": {
       const href = normalizeUrl(request.url ?? "");
       if (!request.url) return { tabId: session.id, url: session.url || "about:blank" };
-      const outcome = await navigate(session, href);
+      const outcome = await navigate(session, href, signal);
       return { tabId: session.id, ...outcome };
     }
     case "search": {
       if (!request.text && !request.url) throw fail("search 需要 text", "search requires text");
-      const outcome = await navigate(session, normalizeUrl(request.text || request.url || ""));
+      const outcome = await navigate(session, normalizeUrl(request.text || request.url || ""), signal);
       return { tabId: session.id, query: request.text, ...outcome };
     }
     case "back":
-      await evaluate(session, "history.back(); return true");
+      session.contextId = undefined;
+      await checked(evaluate(session, "history.back(); return true", signal), signal);
       return { ok: true };
     case "forward":
-      await evaluate(session, "history.forward(); return true");
+      session.contextId = undefined;
+      await checked(evaluate(session, "history.forward(); return true", signal), signal);
       return { ok: true };
     case "reload":
-      await send(session, "Page.reload", { ignoreCache: false });
+      session.contextId = undefined;
+      await checked(send(session, "Page.reload", { ignoreCache: false }), signal);
       return { ok: true, url: session.url };
     case "snapshot":
-      return { tabId: session.id, ...(await evaluate(session, SNAPSHOT_BODY) as Record<string, unknown>) };
+      if ((request as BrowserRequest & { snapshotMode?: string }).snapshotMode === "accessibility") {
+        const contextId = () => isolatedContextId(session, signal);
+        return { tabId: session.id, ...(await runBrowserAccessibilitySnapshot(request, {
+          send: (method, params) => send(session, method, params),
+          evaluate: (body) => evaluate(session, body, signal),
+          contextId,
+        }, signal)) };
+      }
+      return { tabId: session.id, ...(await checked(evaluate(session, snapshotBody(request), signal), signal) as Record<string, unknown>) };
     case "check":
-      return { tabId: session.id, ...(await evaluate(session, checkBody(request)) as Record<string, unknown>) };
+      return { tabId: session.id, ...(await checked(evaluate(session, checkBody(request), signal), signal) as Record<string, unknown>) };
     case "click":
-      if (!request.selector && !request.ref && !request.text) throw fail("click 需要 selector、ref 或 text", "click requires selector, ref or text");
-      return evaluate(session, clickBody(request));
     case "type":
-      if (!request.selector && !request.ref) throw fail("type 需要 selector 或 ref", "type requires selector or ref");
-      return evaluate(session, typeBody(request));
     case "press":
-      return evaluate(session, pressBody(request.key ?? "Enter"));
+      return runBrowserInput(request, {
+        evaluate: (body) => evaluate(session, body, signal),
+        send: (method, params) => send(session, method, params),
+      }, signal);
     case "evaluate":
       if (!request.script) throw fail("evaluate 需要 script", "evaluate requires script");
-      return evaluate(session, request.script);
+      return checked(evaluate(session, request.script, signal), signal);
     default:
       throw fail(`未知浏览器操作：${request.action}`, `Unknown browser action: ${request.action}`);
   }

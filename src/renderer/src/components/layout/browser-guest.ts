@@ -2,7 +2,7 @@ import { normalizeBrowserUrl } from "@shared/browser-workspace";
 import { i18n } from "@/lib/i18n";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
-import { checkBody, clickBody, pageProgram, pressBody, SNAPSHOT_BODY, typeBody } from "@shared/browser-page";
+import { pageProgram } from "@shared/browser-page";
 import type { BrowserRequest } from "@shared/types";
 
 function be(key: string, options?: Record<string, unknown>): string {
@@ -499,39 +499,6 @@ export async function inject(entry: Entry, body: string): Promise<unknown> {
   return result.value;
 }
 
-/**
- * Run a page script for an action that may navigate.
- *
- * A click that loads a document can destroy the execution context before the guest
- * hands the script's result back — Electron reports that as the same opaque
- * "Script failed to execute" as a broken script, and it is a large share of what a
- * browsing session hits. The navigation is the evidence the action worked, so a
- * failure within the navigation window is reported as a success with a warning
- * rather than failing the tool call.
- */
-async function act(
-  entry: Entry,
-  body: string,
-  fallback: Record<string, unknown>,
-  grace = 500,
-): Promise<Record<string, unknown>> {
-  const navigated = waitForNavigation(entry.view, grace);
-  let outcome: Record<string, unknown>;
-  try {
-    outcome = (await inject(entry, body)) as Record<string, unknown>;
-  } catch (error) {
-    // A navigation that destroyed the guest is the click having worked; anything else,
-    // including a tab that is gone for good, must reach the caller.
-    if (error instanceof TabGoneError || !(await navigated)) throw error;
-    outcome = fallback;
-  }
-  // Read the URL after the navigation settles, so a click that moved the page reports
-  // (and remembers) where it landed rather than the document it left.
-  const navigatedTo = await navigated;
-  rememberUrl(entry);
-  return { ...outcome, navigated: navigatedTo, url: entry.url };
-}
-
 type LoadOutcome = { loaded: boolean; settled: boolean; error?: string };
 
 /**
@@ -666,7 +633,7 @@ async function openBrowserTab(request: BrowserAutomationRequest): Promise<unknow
 }
 
 /** Handle browser-use requests arriving from the main-process extension tool. */
-export async function handleBrowserRequest(request: BrowserAutomationRequest): Promise<unknown> {
+export async function handleBrowserRequest(request: BrowserAutomationRequest, requestId?: string): Promise<unknown> {
   if (request.action === "open") return openBrowserTab(request);
   if (request.action === "list") {
     return openTabIds(request.conversationId).map((tabId) => {
@@ -693,7 +660,7 @@ export async function handleBrowserRequest(request: BrowserAutomationRequest): P
   let outcome: unknown;
   for (let attempt = 0; ; attempt++) {
     try {
-      outcome = await dispatch(request, target);
+      outcome = await dispatch(request, target, requestId);
       break;
     } catch (error) {
       if (!(error instanceof TabGoneError)) throw error;
@@ -729,8 +696,26 @@ async function replace(tabId: string, url: string, request: BrowserAutomationReq
   throw new Error(be("webviewOff"));
 }
 
+/** Native input failures stay ordinary errors: the recovery loop must never replay them. */
+async function guestAction(entry: Entry, request: BrowserAutomationRequest, requestId?: string): Promise<unknown> {
+  if (!requestId) throw new Error("BROWSER_REQUEST_ID_REQUIRED");
+  // Resolve the wrapper before entering Main. Failure here is still known not delivered.
+  const guestId = entry.view.getWebContentsId();
+  if (request.action === "evaluate") return window.fastvibe.browser.guestAction(requestId, guestId);
+  if (request.action === "snapshot" || request.action === "check") {
+    const result = await window.fastvibe.browser.guestAction(requestId, guestId) as Record<string, unknown>;
+    rememberUrl(entry);
+    return { ...result, tabId: entry.id };
+  }
+  const navigated = waitForNavigation(entry.view, request.action === "type" ? 300 : 500);
+  const result = await window.fastvibe.browser.guestAction(requestId, guestId) as Record<string, unknown>;
+  const navigatedTo = await navigated;
+  rememberUrl(entry);
+  return { ...result, navigated: navigatedTo, url: entry.url };
+}
+
 /** The actions that address an already-open tab. */
-async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promise<unknown> {
+async function dispatch(request: BrowserAutomationRequest, entry: Entry, requestId?: string): Promise<unknown> {
   const view = entry.view;
   switch (request.action) {
     case "navigate": {
@@ -763,26 +748,13 @@ async function dispatch(request: BrowserAutomationRequest, entry: Entry): Promis
       rememberUrl(entry);
       return { ok: outcome.loaded, url: entry.url, ...outcome };
     }
-    case "snapshot": {
-      const result = (await inject(entry, SNAPSHOT_BODY)) as Record<string, unknown>;
-      rememberUrl(entry);
-      return { tabId: entry.id, ...result };
-    }
+    case "snapshot":
     case "check":
-      return { tabId: entry.id, ...(await inject(entry, checkBody(request)) as Record<string, unknown>) };
-    case "click": {
-      if (!request.selector && !request.ref && !request.text) throw new Error(be("needClick"));
-      return act(entry, clickBody(request), { clicked: true, warning: be("clickNav") });
-    }
-    case "type": {
-      if (!request.selector && !request.ref) throw new Error(be("needType"));
-      return act(entry, typeBody(request), { filled: true, warning: be("typeNav") }, 300);
-    }
-    case "press":
-      return act(entry, pressBody(request.key ?? "Enter"), { pressed: request.key ?? "Enter", warning: be("pressNav") });
     case "evaluate":
-      if (!request.script) throw new Error(be("needScript"));
-      return execute(entry, request.script);
+    case "click":
+    case "type":
+    case "press":
+      return guestAction(entry, request, requestId);
     default:
       throw new Error(be("unknownAction", { action: request.action }));
   }

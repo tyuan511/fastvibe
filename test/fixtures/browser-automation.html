@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Account settings</title>
+<style>body{font:16px sans-serif;margin:24px}label,input,textarea,select,button{display:block;margin:8px}section{padding:8px} </style></head>
+<body><nav aria-label="Account navigation"><a href="/profile">Profile</a><a href="/billing">Billing</a></nav>
+<main><h1>Account settings</h1><p>Update your contact details. Changes apply to future invoices only.</p>
+<form aria-label="Contact details"><label for="email">Email</label><input id="email" type="email" name="email" placeholder="you@example.com" value="person@example.com" required>
+<label for="name">Display name</label><input id="name" value="Ada Lovelace" readonly>
+<label for="password">Password</label><input id="password" type="password" value="initial-password-marker" placeholder="New password">
+<label for="upload">Avatar</label><input id="upload" type="file">
+<label for="bio">Biography</label><textarea id="bio" placeholder="Tell us about yourself">Engineer and writer</textarea>
+<label for="plan">Plan</label><select id="plan"><option value="basic">Basic</option><option selected value="pro">Professional</option></select>
+<label for="updates">Email updates</label><input id="updates" type="checkbox" checked>
+<label for="age">Age</label><input id="age" type="number" value="17" min="18" aria-invalid="true">
+<p role="alert">Age must be at least 18.</p><div role="status">Unsaved changes</div><p>Unsaved changes will be lost when you leave this page.</p>
+<input id="save" type="button" value="Save changes"><input type="reset" value="Reset form"><button disabled>Delete account</button>
+</form><section aria-label="Recent activity"><h2>Recent activity</h2><p>Your account was last updated yesterday. No billing changes are pending.</p><a href="/activity">View all activity</a></section>
+<div role="heading" aria-level="3">Privacy preferences</div><div role="textbox" aria-label="Notes" contenteditable="true" aria-readonly="true">Internal note</div>
+<p>Support is available Monday through Friday.</p></main><footer>Example account portal</footer></body></html>
+<!-- Additional scope, shadow and frame cases; original account fixture above is retained. -->
+<section id="scope-fixture" aria-label="Scope fixture">
+  <h2>Scoped workspace</h2><p>Only this workspace has the scope-only prose marker.</p>
+  <section id="scope-branch" aria-label="Nested branch">
+    <h3>Branch heading</h3><section aria-label="Deep branch"><button id="scope-action">Scoped action</button>
+    <input id="scope-password" type="password" value="scope-password-secret"><p role="status">Scoped status remains visible</p></section>
+  </section>
+  <div id="hidden-scope" style="display:none">Hidden scope must not cause a full-page read.</div>
+  <div class="scope-duplicate" role="group">First duplicate</div><div class="scope-duplicate" role="group">Second duplicate</div>
+</section>
+<section id="boundary-fixture" aria-label="Boundary fixture">
+  <div id="open-shadow-host"></div><div id="closed-shadow-host"></div>
+  <iframe title="Fixture frame" srcdoc="<button>frame-only-secret-marker</button>"></iframe>
+</section>
+<script>
+  document.querySelector('#open-shadow-host').attachShadow({mode:'open'}).innerHTML = '<button>shadow-only-secret-marker</button>';
+  document.querySelector('#closed-shadow-host').attachShadow({mode:'closed'}).innerHTML = '<button>closed-shadow-marker</button>';
+</script>

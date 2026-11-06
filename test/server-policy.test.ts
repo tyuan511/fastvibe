@@ -113,6 +113,8 @@ test("the denied set is exactly what the UI explains, so a new denial cannot go 
     "browser:capture",
     "browser:clear-data",
     "browser:download-action",
+    // Internal guest automation handoff; only the owning desktop renderer has a pending request.
+    "browser:guest-action",
     "browser:import-profile",
     "browser:library",
     "browser:list-engines",

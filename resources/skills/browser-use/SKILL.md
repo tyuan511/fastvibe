@@ -41,7 +41,14 @@ return { url: result.url, text: result.text };
 ## 操作流程
 
 1. 先调用 `browser_open` 打开网址，并记住返回的 `tabId`。如果不确定是否已有标签页，先调用 `browser_list_tabs`。
-2. 每次打开新页面、点击链接或提交表单后，调用 `browser_snapshot` 获取最新 URL、标题、正文和交互元素。
+2. 每次打开新页面、点击链接或提交表单后，调用 `browser_snapshot` 获取最新 URL、标题、正文和交互元素。模型看到紧凑语义树和状态，Codemode 仍读取 `page.elements`、`page.text` 等结构化字段。
+   - 默认 `snapshotMode: "dom"` 使用 DOM 语义；需要浏览器计算的名称/角色或 open shadow DOM 时可选 `snapshotMode: "accessibility"`。查看 `source/limitations`，不要假定 iframe 已展开。AX 不可用会明确报错。
+   - 复杂页面用 `selector` 或 `rootRef` 只读取一个区域（两者互斥），配合 `maxDepth`（1–50）、`maxElements`（1–500，默认 150）限制返回。带 `[scope]` / `targetType: "container"` 的 Ref 用于下钻，不能点击；`childrenCount` 表明还有未展开的子节点。每次下钻都重新生成 Ref，包括根 Ref。
+   - `complete: false` / `truncated: true` 表示内容不完整或存在能力边界，不能据此判断未出现的元素不存在。区域 `text` 只包含该区域。
+   - 控件同时报告 `type`、非 password/file 的当前 `value`（最多 200 字符）、`placeholder`，以及 readonly、invalid、heading level 等状态。密码和文件输入值不会进入快照；密码填值结果也不回显值。
+   - 模型正文只移除与已展示语义名称完全相同的整行；包含额外内容的正文、错误和状态仍保留。结构化 `page.text` 保留原正文，`elements` 的旧字段继续可用。
+   - `ref` 是不透明字符串，必须从最新快照完整原样传回，不要解析、截短、拼接、猜测或跨标签页复用。每次成功快照都会更新 `snapshotId` 并使旧 ref 失效。导航、页面重载、执行环境切换或 DOM 节点被替换也会使 ref 失效。
+   - 传了 ref 就只操作该原始节点。收到 `STALE_REF` 时重新快照后定位；工具不会自动改用 selector 或文字点击另一个元素。
 3. 优先用快照中的 `ref`，其次使用稳定的 `selector`；没有合适定位时，用按钮或链接的可见 `text`。不要凭页面旧状态猜测元素位置。
 4. 表单操作按“`browser_type` → `browser_press`（通常是 `Enter`）→ `browser_snapshot`”执行。需要点击提交按钮时使用 `browser_click`。
 5. 页面跳转、登录、验证码或异步加载后先重新快照，确认结果再继续。

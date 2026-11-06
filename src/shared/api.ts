@@ -737,6 +737,7 @@ export function createFastVibeApi(t: ApiTransport) {
       onLibraryChanged: (listener: () => void): (() => void) => t.subscribe(Ipc.browserLibraryChanged, listener),
       onShortcut: (listener: (payload: { guestId: number; command: BrowserShortcut; at: number }) => void): (() => void) => t.subscribe(Ipc.browserShortcut, listener),
       listEngines: (): Promise<Array<{ id: string; label: string }>> => t.invoke(Ipc.browserListEngines),
+      guestAction: (id: string, guestId: number): Promise<unknown> => t.invoke(Ipc.browserGuestAction, { id, guestId }),
       onRequest: (listener: (payload: { id: string; request: BrowserRequest }) => void): (() => void) => t.subscribe(Ipc.browserRequest, listener),
       respond: (payload: { id: string; ok: boolean; result?: unknown; error?: string }): void => {
         t.send(Ipc.browserResponse, payload);

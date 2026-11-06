@@ -124,6 +124,8 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
 
 ## 内置浏览器桥接
 
+详细实现和复验入口见 [浏览器自动化](../browser-automation.md)。默认保留 DOM 语义快照；可选原生 Accessibility 模式共享两种后端的 CDP 映射。区域读取使用唯一 selector 或最新 rootRef，深度/节点预算与未展开的 iframe 边界必须可见。
+
 - **Browser use** — `browser-use.ts` is the tool surface for FastVibe's own side-pane
   `<webview>`; it holds no browser code. Every call crosses `browser:request` /`browser:response`
   (`src/main/pi/browser-bridge.ts`, one pending map keyed by request id, 30s default budget) into
@@ -151,10 +153,23 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
     (`inject`) to return `{ok, value|error}` as data, and `pnpm check:scripts`
     (`scripts/check-injected-scripts.mjs`, wired into `typecheck` and `prebuild`) parses each one
     with its `${...}` interpolations neutralised. Add a page script → it must stay parseable.
-  - **Elements are addressed explicitly.** A snapshot stamps each interactive element with a
-    `data-fv-ref` (`e0`, `e1`, …) and reports both that `ref` and a CSS `selector` (`#id`, else a
-    short `nth-of-type` path), so `browser_click` / `browser_type` target the element instead of
-    guessing from text; a miss returns the labels that *were* on offer.
+  - **Elements are addressed explicitly.** Each snapshot owns a new opaque Ref namespace
+    and a Map of exact DOM objects; `data-fv-ref` is only an annotation, never identity.
+    Re-snapshotting, navigation and node replacement invalidate earlier refs. A supplied ref
+    that cannot resolve returns `STALE_REF` and never falls through to selector or text.
+    Snapshots retain `elements` and selectors in `structuredContent` / `details` for Codemode
+    compatibility, while model-facing `content` is compact semantic text with hierarchy,
+    names, states and non-duplicate page text. Password/file values must stay suppressed.
+    Scoped reads resolve the exact root before invalidating prior refs; invalid or ambiguous
+    scopes must fail rather than return a whole page. Drill-only refs are recorded separately
+    and cannot dispatch clicks. AX refs are bound through `backendDOMNodeId` in the same
+    private execution context, never reconstructed by role/name. Unmapped virtual nodes and
+    iframe boundaries cannot acquire actionable refs; incomplete results carry limitations.
+  - **Input routes are explicit.** Shared native input execution uses Chromium CDP `Input`
+    events; this is browser input injection, not physical hardware. Semantic controls retain
+    a labeled page-script fallback before native dispatch. An uncertain delivery cannot be
+    replayed as a DOM click. Stop/deadline checks prevent subsequent input; releasing held
+    buttons or keys remains cleanup. A successful click still needs an observed result.
   - **Reuse, not sprawl.** `browser_open` navigates the tab already on screen (one Chromium guest
     per call made later calls slow and timeout-prone); `newTab: true` is the escape hatch. A tool
     never un-collapses the pane to show that tab (`openBrowserQuiet`): the page loads parked, the

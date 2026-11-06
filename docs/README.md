@@ -29,6 +29,7 @@
 | [从其他 Agent 导入](import-from-other-agents.md) | 源格式证据和唯一写出器契约；各来源当前是否启用以 adapter 注册表为准 |
 | [SQLite 存储](sqlite-storage.md) | 数据/配置边界、事务、旧文件迁移与历史测量；schema 以 `db-schema.ts` 为准 |
 | [Pi 引擎模式](pi-engine-modes.md) | 隔离/全局配置模式、切换和数据保留边界 |
+| [浏览器自动化](browser-automation.md) | 紧凑语义快照、Codemode 结构化结果、严格 Ref、内嵌与系统浏览器的原生输入和验证边界 |
 | [网络代理](network-proxy.md) | 客户端代理配置及请求路径 |
 
 ## 已确定的重构方向

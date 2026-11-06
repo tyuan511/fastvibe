@@ -124,7 +124,7 @@ export function App(): JSX.Element {
   const { t } = useTranslation("app");
   useEffect(() => {
     return window.fastvibe.browser.onRequest(({ id, request }) => {
-      void handleBrowserRequest(request)
+      void handleBrowserRequest(request, id)
         .then((result) => window.fastvibe.browser.respond({ id, ok: true, result }))
         .catch((error: unknown) => window.fastvibe.browser.respond({ id, ok: false, error: error instanceof Error ? error.message : String(error) }));
     });

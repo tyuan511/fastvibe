@@ -89,6 +89,7 @@ const DENIED = new Map<string, string>([
   // The browser-use bridge runs in a renderer `<webview>`, which a web client has no
   // equivalent of; a request forwarded here would wait for a reply that never comes.
   [Ipc.browserResponse, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
+  [Ipc.browserGuestAction, "浏览器自动化桥只接受本机窗口中正在执行的工具请求"],
   [Ipc.browserListProfiles, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
   [Ipc.browserImportProfile, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
   [Ipc.browserClearData, "\u6d4f\u89c8\u5668\u5de5\u5177\u4f9d\u8d56\u684c\u9762\u7aef\u7684\u5185\u5d4c\u6d4f\u89c8\u5668"],
