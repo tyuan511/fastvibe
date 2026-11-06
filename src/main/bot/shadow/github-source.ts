@@ -20,6 +20,8 @@ export interface GithubPollTarget { id: string; path: string; kind: GithubStream
 export interface GithubShadowSourceOptions {
   store: ShadowStore; registry: ShadowSourceRegistry; engine: { sources: EngineForSources }; reader: GithubReader;
   source?: string; sourceId?: string; instance: string; config?: GithubSourceConfig; now?: () => number; leaseMs?: number;
+  /** M11 opt-in: enqueue launch/delivery for existing Tickets, never run SDK in intake. */
+  intake?: "shadow" | "durable";
   /** Explicit historical replay boundary. Default is the first poll time, not all repository history. */
   since?: string;
   /** Omit for notifications + repository streams + subscriptions. Explicit targets are fixture/replay scopes. */
@@ -409,7 +411,8 @@ export class GithubShadowSource {
   }
   private executionSnapshot(): string {
     const store = this.options.store;
-    return canonical([store.db.all("SELECT * FROM dsh_effects WHERE kind IN ('launch','delivery','reply','assessment') ORDER BY seq"),
+    const kinds = this.options.intake === "durable" ? "'reply','assessment'" : "'launch','delivery','reply','assessment'";
+    return canonical([store.db.all(`SELECT * FROM dsh_effects WHERE kind IN (${kinds}) ORDER BY seq`),
       store.db.all("SELECT * FROM dsh_session_receipts ORDER BY session_key,request_id")]);
   }
   async poll(): Promise<GithubPollResult> {

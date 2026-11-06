@@ -77,14 +77,18 @@ test("domain dependency closure contains only local modules and node:crypto", ()
   }
 });
 
-test("shadow dependencies stay isolated, with the SDK confined to the scratch adapter", () => {
+test("shadow dependencies stay isolated, with SDK access confined to explicit role adapters", () => {
   const lowLevel = new Set([join(root, "src/main/engine/db.ts"), join(root, "src/main/engine/db-schema.ts")]);
   const builtins = new Set(["node:crypto", "node:fs", "node:os", "node:path"]);
-  const sdkBridge = join(shadow, "pi-session.ts");
-  const sdkImports = new Set(["node:async_hooks", "node:url", "@earendil-works/pi-coding-agent", "@earendil-works/pi-agent-core", "typebox"]);
+  const bridgeImports = new Map([
+    [join(shadow, "pi-session.ts"), new Set(["node:async_hooks", "node:url", "@earendil-works/pi-coding-agent", "@earendil-works/pi-agent-core", "typebox"])],
+    [join(shadow, "pi-executor.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox"])],
+    [join(shadow, "pi-reviewer.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox"])],
+    [join(shadow, "pi-workspace.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox", "node:util"])],
+  ]);
   for (const path of files(shadow)) {
     for (const specifier of specifiers(path)) {
-      if (builtins.has(specifier) || (path === sdkBridge && sdkImports.has(specifier))) continue;
+      if (builtins.has(specifier) || bridgeImports.get(path)?.has(specifier)) continue;
       const target = resolveModule(specifier, path);
       assert.ok(target && (isStaged(target) || lowLevel.has(target)), `${relative(root, path)} has an unexpected dependency: ${specifier}`);
     }

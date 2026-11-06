@@ -65,7 +65,7 @@ export class GithubNativeDeployment {
   poll(options: Pick<GithubShadowSourceOptions, "since" | "targets" | "threads" | "branches" | "bindings"> = {}) {
     if (!this.running || this.closing) throw new Error("GitHub 原生部署尚未启动或正在停止");
     const controller = new AbortController();
-    const source = new GithubShadowSource({ ...options, store: this.store, registry: this.registry, engine: this.driver.engine,
+    const source = new GithubShadowSource({ ...options, intake: "durable", store: this.store, registry: this.registry, engine: this.driver.engine,
       reader: { read: async request => {
         const result = await this.options.reader.read(request, { signal: controller.signal });
         if (this.closing || !this.running) throw new Error("GitHub 原生轮询已停止");

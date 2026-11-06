@@ -1,6 +1,6 @@
 # Vivi 整体重构：采用 DSH 完整架构
 
-状态：**目标架构已确定；M0–M10 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session、执行资源层、Source/Policy 控制面、Local Source 回放、兼容投影、迁移 dry-run、GitHub 只读 Shadow Source 与 Source Operation dry-run 已落地，生产 Runtime 尚未切换。** 实际开发进度、验收命令与未完成范围见 [开发进度记录](vivi-dsh-development.md)。M11 的本地 HTTP、宿主授权、Issue continuation 及[原生 GitHub REST 读写/对账](vivi-dsh-github-rest.md)已实现；真实专用 GitHub 仓库闭环尚未验收。
+状态：**目标架构已确定；M0–M10 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session、执行资源层、Source/Policy 控制面、Local Source 回放、兼容投影、迁移 dry-run、GitHub 只读 Shadow Source 与 Source Operation dry-run 已落地，生产 Runtime 尚未切换。** 实际开发进度、验收命令与未完成范围见 [开发进度记录](vivi-dsh-development.md)。M11 的本地 HTTP、宿主授权、Issue continuation、[原生 GitHub REST 读写/对账](vivi-dsh-github-rest.md)和[隔离 SDK Executor/Reviewer 组装](vivi-dsh-sdk-executor.md)已实现；真实专用 GitHub 仓库闭环尚未验收。
 
 目标是把 Vivi 整体改造成 DSH Superagent 的领域与运行架构。GitHub Issue → PR → Review → 修复 → CI → Merge 是第一条验收链路；“先完成 GitHub”限定外部平台，不允许据此省略授权评估、长期工作、消息归属、持久副作用和恢复机制。
 
@@ -416,7 +416,7 @@ DSH Mandate 是业务授权，工具名单和 cwd 不是 OS 沙箱。完整迁�
 
 **当前影响：** 运行在独立进程/data-dir/仓库/profile 中；不接用户当前项目、不启动当前 Vivi 的新 Runtime，不改变旧功能。
 
-**当前进度：** loopback 实验之外，已新增[原生 GitHub REST 适配](vivi-dsh-github-rest.md)：原生 reader、纯意图、真实路径/字段的写入及对账、身份分离校验与原生 continuation。验证使用本地 HTTP 返回原生对象，不连接真实 GitHub 服务；[M11 开发记录](vivi-dsh-development.md#m11-原生适配github-rest-读写与对账已实现)区分这两层证据。真实专用仓库、Worker/Reviewer、代码修复/push、CI 和 Source 驱动端到端条件仍未验收；原生 REST 的并发限制不能继承 loopback CAS，不允许据此进入 M12。
+**当前进度：** loopback 实验之外，已新增[原生 GitHub REST 适配](vivi-dsh-github-rest.md)：原生 reader、纯意图、真实路径/字段的写入及对账、身份分离校验与原生 continuation。验证使用本地 HTTP 返回原生对象，不连接真实 GitHub 服务；[M11 开发记录](vivi-dsh-development.md#m11-原生适配github-rest-读写与对账已实现)区分这两层证据。另已实现[真实 Pi SDK Worker/独立只读 Reviewer](vivi-dsh-sdk-executor.md)与原生 Review Effect 的联合组装；使用离线脚本 provider 修改真实临时文件、生成固定 SHA 审核产物并发送 loopback HTTP。真实专用仓库与模型、代码提交/push、CI 和完整 Source 驱动端到端条件仍未验收；原生 REST 的并发限制不能继承 loopback CAS，不允许据此进入 M12。
 
 #### M12：最终切换、回滚和旧 Runtime 下线
 

@@ -30,8 +30,12 @@ export interface ScratchPiOptions {
   modelRuntime: ModelRuntime; model: NonNullable<AgentSession["model"]>;
   extensions?: ExtensionFactory[];
   context?: () => Record<string, unknown>;
+  /** Explicit isolated role identity; default is the stable Ticket Worker. */
+  sessionKey?: string;
+  activeTools?: readonly string[];
+  validate?: () => void;
   onPersisted?: (token: WorkerToken, inputIds: string[]) => void;
-  onRead?: (token: WorkerToken, inputIds: string[]) => void;
+  onRead?: (token: WorkerToken, inputIds: string[]) => boolean | void;
   onReport?: (token: WorkerToken, report: WorkerReport) => boolean | void;
 }
 export interface PiSubmission { requestId: string; text: string; inputIds?: string[]; mode?: "steer" | "followUp" }
@@ -57,7 +61,7 @@ export class ScratchPiSession {
   readonly sessionKey: string;
   readonly ledger: PiLedger;
   session!: AgentSession;
-  private readonly options: ScratchPiOptions;
+  private readonly options: Omit<ScratchPiOptions, "modelRuntime" | "model">;
   private state: PiSessionState;
   private readonly nonce: string;
   private readonly scope = new AsyncLocalStorage<Dispatch | undefined>();
@@ -65,11 +69,27 @@ export class ScratchPiSession {
   private turn?: Turn;
   private nextReads: string[] = [];
   private readonly pending = new Map<string, Promise<void>>();
+  private readonly activating = new Map<string, Promise<PiSubmissionResult>>();
   private disposed = false;
   private fault?: Error;
-  private constructor(options: ScratchPiOptions, state: PiSessionState, nonce: string) {
+  private constructor(options: Omit<ScratchPiOptions, "modelRuntime" | "model">, state: PiSessionState, nonce: string) {
     this.options = options; this.state = state; this.nonce = nonce;
     this.sessionKey = state.sessionKey; this.ledger = new PiLedger(options.store);
+  }
+  /** Reconcile a quiet Worker journal without constructing an SDK or selecting a model. */
+  static reconcileSaved(store: ShadowStore, rootInput: string, binding: WorkerToken): void {
+    const root = realpathSync(rootInput), sessionKey = `worker-${binding.ticketId}`;
+    store.atomic(() => {
+      const state = new PiLedger(store).session(sessionKey);
+      const owner = store.get<Owner | null>(`pi:owner:${sessionKey}`);
+      const base = join(root, digest(sessionKey));
+      if (!state || !same(state.binding, binding) || state.root !== root || state.cwd !== join(base, "workspace")
+        || state.sessionFile !== join(base, "sessions", `${digest(sessionKey)}.jsonl`) || (owner && alive(owner.pid))) throw new Error("Saved Worker journal is not quiet or belongs to another identity");
+      for (const path of [root, base, state.cwd, dirname(state.sessionFile), state.sessionFile]) { assertShadowPath(path); noSymlink(path); }
+      const adapter = new ScratchPiSession({ store, root, binding }, state, "quiet-reconcile");
+      if (adapter.disk()[0]?.dshStoreId !== store.get("pi:store-id")) throw new Error("Saved Worker journal belongs to another store");
+      adapter.reconcile();
+    });
   }
   static async open(options: ScratchPiOptions): Promise<ScratchPiSession> {
     checkVersion();
@@ -77,7 +97,10 @@ export class ScratchPiSession {
     mkdirSync(options.root, { recursive: true, mode: 0o700 });
     const root = realpathSync(options.root);
     const ledger = new PiLedger(options.store);
-    const sessionKey = `worker-${options.binding.ticketId}`;
+    const sessionKey = options.sessionKey ?? `worker-${options.binding.ticketId}`;
+    if (options.sessionKey && (!/^(reviewer|coordinator)-[A-Za-z0-9_.:-]{1,480}$/.test(sessionKey) && sessionKey !== `worker-${options.binding.ticketId}`)) throw new Error("Invalid isolated Pi role Session key");
+    const activeTools = [...(options.activeTools ?? ["dsh_report"])];
+    if (activeTools.some(name => !/^[a-z][a-z0-9_]*$/.test(name)) || new Set(activeTools).size !== activeTools.length) throw new Error("Invalid isolated Pi role tools");
     const base = join(root, digest(sessionKey));
     const cwd = join(base, "workspace"), sessionDir = join(base, "sessions"), agentDir = join(base, "agent");
     for (const path of [base, cwd, sessionDir, agentDir]) { assertShadowPath(path); noSymlink(path); mkdirSync(path, { recursive: true, mode: 0o700 }); chmodSync(path, 0o700); }
@@ -112,6 +135,7 @@ export class ScratchPiSession {
       const manager = SessionManager.open(sessionFile, sessionDir, cwd);
       const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false }, cacheWarming: "off" });
       const reportExtension: ExtensionFactory = pi => {
+        if (!activeTools.includes("dsh_report")) return;
         pi.registerTool({ name: "dsh_report", label: "DSH report", description: "Record the current assignment's structured report.",
           parameters: Type.Object({ state: Type.Union(["progress", "waiting", "ready", "blocked", "failed", "dropped"].map(value => Type.Literal(value))),
             summary: Type.String(), question: Type.Optional(Type.Union([Type.String(), Type.Null()])), askedBy: Type.Optional(Type.String()), answers: Type.Optional(Type.String()) }),
@@ -124,10 +148,10 @@ export class ScratchPiSession {
         extensionFactories: [{ name: "dsh-reports", factory: reportExtension }, ...(options.extensions ?? []).map((factory, i) => ({ name: `scratch-${i}`, factory }))] });
       await resourceLoader.reload();
       const result = await createAgentSession({ cwd, agentDir, modelRuntime: options.modelRuntime, model: options.model, sessionManager: manager,
-        settingsManager, resourceLoader, tools: ["dsh_report"] });
+        settingsManager, resourceLoader, tools: activeTools });
       adapter.session = result.session;
       await adapter.session.bindExtensions({ mode: "rpc" });
-      adapter.session.setActiveToolsByName(["dsh_report"]);
+      adapter.session.setActiveToolsByName(activeTools);
       adapter.install();
       adapter.reconcile();
       return adapter;
@@ -142,6 +166,7 @@ export class ScratchPiSession {
   }
   private assertLive(): void {
     if (!this.valid(this.state.epoch, this.state.binding)) throw this.fault ?? new Error("Scratch Pi Session is stopped, disposed or superseded");
+    this.options.validate?.();
   }
   private disk(): Record<string, unknown>[] {
     for (const path of [dirname(dirname(this.state.sessionFile)), dirname(this.state.sessionFile), this.state.sessionFile]) noSymlink(path);
@@ -210,7 +235,7 @@ export class ScratchPiSession {
       if (!this.valid(epoch, binding)) throw new Error("Scratch request was superseded before provider dispatch");
       const withContext = { ...context, messages: [live, ...context.messages] };
       if (!sessionRequest) return stream(model, withContext, config);
-      const requestIds = this.nextReads.filter(id => { const receipt = this.get(id); return receipt?.entryId && !["handled", "rejected"].includes(receipt.status); });
+      const requestIds = this.nextReads.filter(id => { const receipt = this.get(id); return receipt?.entryId && same(receipt.entryBinding ?? receipt.binding, binding) && !["handled", "rejected", "stopped"].includes(receipt.status); });
       // Compaction can replace raw input with a summary. A later report may
       // continue previously read work, without claiming that raw input was read again.
       const reportingIds = [...new Set([...requestIds, ...this.ledger.list(this.sessionKey)
@@ -223,8 +248,15 @@ export class ScratchPiSession {
       const dispatched = stream(model, withContext, config);
       return Promise.resolve(dispatched).then(response => {
         this.turn = turn;
-        this.session.sessionManager.appendCustomEntry(READ, marker);
-        this.recordMarker(READ, marker, true);
+        this.options.store.atomic(() => {
+          this.assertLive();
+          this.recordMarker(READ, marker, true);
+          // Domain and Pi read commit together; JSONL is their audit mirror.
+          this.options.store.afterCommit(() => {
+            try { this.session.sessionManager.appendCustomEntry(READ, marker); }
+            catch (error) { this.fault = error as Error; }
+          });
+        });
         return response;
       });
     };
@@ -245,9 +277,12 @@ export class ScratchPiSession {
     for (const id of marker.requestIds) {
       const receipt = this.get(id); if (!receipt?.entryId) continue;
       this.options.store.atomic(() => {
-        if (kind === READ && !receipt.reads.some(read => read.turnId === marker.turnId)) {
+        if (kind === READ && notify && !receipt.reads.some(read => read.turnId === marker.turnId)) {
           this.ledger.patch(this.sessionKey, id, { stage: receipt.stage === "reported" ? "reported" : "read", reads: [...receipt.reads, { entryId: receipt.entryId!, turnId: marker.turnId, binding: marker.binding, epoch: marker.epoch, at: marker.at }] });
-          if (notify && this.valid(marker.epoch, marker.binding)) this.options.onRead?.(marker.binding, receipt.inputIds);
+          if (notify && this.valid(marker.epoch, marker.binding)) {
+            this.options.validate?.();
+            if (this.options.store.atomic(() => this.options.onRead?.(marker.binding, receipt.inputIds)) === false) throw new Error("Domain refused the SDK input read");
+          }
         }
         if (kind === TURN && !receipt.turns.some(turn => turn.turnId === marker.turnId)) this.ledger.patch(this.sessionKey, id, { turns: [...receipt.turns, { turnId: marker.turnId, binding: marker.binding, epoch: marker.epoch, at: marker.at }] });
         if (kind === REPORT && marker.report) {
@@ -284,6 +319,25 @@ export class ScratchPiSession {
       if (!tag || tag.requestId !== receipt.requestId || tag.epoch !== receipt.entryEpoch
         || !receipt.entryBinding || !same(tag.binding, receipt.entryBinding)) throw new Error("Persisted request entry identity is inconsistent");
     }
+  }
+  /** Durable inbox only: no provider call or JSONL user entry. */
+  prepare(input: PiSubmission): PiReceipt {
+    this.assertLive();
+    const previous = this.get(input.requestId);
+    if (previous && !same(previous.binding, this.state.binding)) throw new Error("Prepared Pi input belongs to another binding");
+    return this.ledger.accept({ sessionKey: this.sessionKey, requestId: input.requestId, text: input.text, inputIds: input.inputIds ?? [], mode: input.mode ?? "steer", binding: this.state.binding, epoch: this.state.epoch }).receipt;
+  }
+  async activate(requestId: string): Promise<PiSubmissionResult> {
+    this.assertLive(); this.reconcile();
+    const receipt = this.get(requestId);
+    if (!receipt || !same(receipt.binding, this.state.binding)) throw new Error("Prepared Pi input belongs to another binding");
+    const activating = this.activating.get(requestId);
+    if (activating) return { ...await activating, reused: true };
+    const pending = this.pending.get(requestId);
+    if (pending) return { receipt, reused: true, completion: pending };
+    if (receipt.entryId || ["handled", "rejected", "stopped"].includes(receipt.status)) return { receipt, reused: true, completion: Promise.resolve() };
+    const run = this.dispatch(receipt); this.activating.set(requestId, run);
+    try { return await run; } finally { if (this.activating.get(requestId) === run) this.activating.delete(requestId); }
   }
   async submit(input: PiSubmission): Promise<PiSubmissionResult> {
     this.assertLive();
@@ -330,7 +384,7 @@ export class ScratchPiSession {
     try {
       return this.options.store.atomic(() => {
         if (!this.valid(captured.epoch, captured.binding)) return false;
-        if (this.options.store.atomic(() => this.options.onReport?.(captured.binding, report)) === false) throw refused;
+        if (this.options.store.atomic(() => { this.options.validate?.(); return this.options.onReport?.(captured.binding, report); }) === false) throw refused;
         this.recordMarker(REPORT, marker, false, true);
         // Domain callback and receipt commit together. JSONL is an audit mirror;
         // it can never authorize a report after a SQLite rollback.
@@ -366,7 +420,7 @@ export class ScratchPiSession {
     raw._prepareRun = async () => [];
     try { await raw._startRun.call(this.session, { messageType: "user", prompt: "" }); } finally { raw._prepareRun = prepare; }
   }
-  async reload(): Promise<void> { this.assertLive(); await this.session.waitForIdle(); this.assertLive(); await this.session.reload(); this.session.setActiveToolsByName(["dsh_report"]); this.reconcile(); }
+  async reload(): Promise<void> { this.assertLive(); await this.session.waitForIdle(); this.assertLive(); await this.session.reload(); this.session.setActiveToolsByName([...(this.options.activeTools ?? ["dsh_report"])]); this.reconcile(); }
   async compact(instructions?: string): Promise<void> { this.assertLive(); await this.session.compact(instructions); this.reconcile(); }
   async rebind(binding: WorkerToken): Promise<void> {
     if (binding.ticketId !== this.state.ticketId) throw new Error("Cannot move a Session to another Ticket");

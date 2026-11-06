@@ -10,6 +10,7 @@
 | `src/main/bot/shadow/github-native-plan.ts` | `GithubNativePlanner.buildIntent()` 纯构建；`plan()` 只保存不可变原生意图 |
 | `src/main/bot/shadow/github-native-operation.ts` | `OperationAdapter.execute/inspect`：远端前置读取、独立身份校验、写入检查点、原生 receipt 和保守对账 |
 | `src/main/bot/shadow/github-native-deployment.ts` | 显式组装 registry、Policy、Authority、ShadowDriver、native planner、reader 和 continuation；没有生产注册 |
+| `src/main/bot/shadow/github-pi-deployment.ts` | 进一步组装真实 SDK Executor、独立只读 Reviewer、固定版本产物与原生 Review Effect；[隔离验收合同](vivi-dsh-sdk-executor.md) |
 
 `GithubNativeDeployment` 需要调用方提供 reader/writer/reviewer transport、固定仓库和执行/审核账号 ID、Policy、required checks 以及受管 Executor 端口。缺少 Executor 时沿用既有 `Later`，不会伪造 Worker 或模型成功。`poll()` 是显式 Source 轮询入口；接受、执行、投递及停止仍通过原有 Engine、Effects 和角色端口。
 
@@ -60,7 +61,7 @@ node --test test/vivi-dsh-github-native-*.test.ts test/vivi-dsh-github-transport
 pnpm typecheck
 ```
 
-测试使用原生路径、字段、状态码和 Link/ETag，网络只连本地 fixture。包括实际 M9 Source reader、真实 ShadowStore/Effects/Operations、真实领域接单/binding/ready/Follow/merged、独立凭据反查、同 Ticket 新 SHA Review、默认 strict 与显式 best-effort continuation、响应丢失、分页、限流、未知证据和真实子进程退出。Worker 与审核产物在本轮仍由明确 fixture 提供。
+测试使用原生路径、字段、状态码和 Link/ETag，网络只连本地 fixture。包括实际 M9 Source reader、真实 ShadowStore/Effects/Operations、真实领域接单/binding/ready/Follow/merged、独立凭据反查、同 Ticket 新 SHA Review、默认 strict 与显式 best-effort continuation、响应丢失、分页、限流、未知证据和真实子进程退出。该原生 adapter 专项中的 Worker 与审核产物仍由明确 fixture 提供。后续 [SDK 联合验收](vivi-dsh-sdk-executor.md)使用真实 SDK 与离线脚本 provider 修改临时文件、调用只读审核工具，再经相同原生 adapter 发送 Review；它仍不代表外部模型或真实 GitHub 已验收。
 
 仍需专用真实仓库与可撤销的两个身份，完成真实模型编码、受管只读 reviewer、分支提交/push、CI、Source 自动驱动与恢复的整条链路；本地 HTTP 契约不能代替真实 GitHub 服务验收。M12 继续不允许接管生产 Runtime、用户数据、普通 settings 或现有 Session。
 

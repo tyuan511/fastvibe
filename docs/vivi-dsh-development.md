@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M10 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run、GitHub 只读 Source 和 Operation dry-run；另已实现下述 M11 前置的本地 HTTP 部署、宿主授权和 Issue continuation，以及 [原生 GitHub REST 读写与对账](vivi-dsh-github-rest.md)。**M11 的真实 GitHub 闭环尚未验收。**生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M10 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run、GitHub 只读 Source 和 Operation dry-run；另已实现下述 M11 前置的本地 HTTP 部署、宿主授权和 Issue continuation，以及 [原生 GitHub REST 读写与对账](vivi-dsh-github-rest.md)、[真实 SDK Executor 与独立 Reviewer 组装](vivi-dsh-sdk-executor.md)。**M11 的真实 GitHub 闭环尚未验收。**生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
 
 ## M0：已建立的实施基线
 
@@ -83,7 +83,7 @@
 - 稳定身份为 `worker-<ticketId>`，SessionFile 和 workspace 按该身份的哈希固定。Assignment 更换复用 Session 与目录；同一实例只接受同 Ticket 的新 binding。同 token 重绑幂等；进程 owner 使用持久 PID/nonce，epoch 和完整 WorkerToken 隔离迟到结果。
 - `PiLedger` 复用已有 Session receipt 和 KV，不加 schema。首次接受保存原始 text、inputIds、mode、binding、epoch 和 fingerprint；同 requestId 同内容复用，异内容拒绝。进度单调，entryId 不可替换；persisted 必须有 entry，read/reported 必须有真实 read 记录。
 - SDK 1.3.0 没有公开 UserMessage requestId。实验 adapter 在精确的低层 user 对象附 `__fastvibeDsh`，随真实 JSONL 保存投递时的 requestId、epoch 和 binding，并在最终 LLM 转换后去掉；`entryEpoch`/`entryBinding` 与首次接受身份分别保留。不按文本、时间或队列顺序猜 entry，重开也不把旧 entry 的 persisted 回调归给新 Assignment。输入 hook 的 handled/transform/reject、steer/followUp 各自保留身份。嵌套 SDK prompt 不继承原请求 tag，显式 adapter.submit 则建立自己的作用域。
-- accepted、persisted、read、turn boundary、report 分开记录。persisted 通过读取实际 JSONL 验证；read 在最终 context hook/LLM 转换之后、provider 成功返回 stream 的边界记录。被 context hook 排除、只入队、同步 dispatch 失败的输入不补成 read。此证据表示输入获得 provider 处理机会，不表示模型理解或外部操作成功。
+- accepted、persisted、read、turn boundary、report 分开记录。persisted 通过读取实际 JSONL 验证；read 在最终 context hook/LLM 转换之后、provider 成功返回 stream 的边界记录。被 context hook 排除、只入队、同步 dispatch 失败的输入不补成 read。此证据表示输入获得 provider 处理机会，不表示模型理解或外部操作成功。M11 组装进一步将领域 read 与 Pi read 放入同一 SQLite 接受事务，JSONL READ 改为提交后的审计镜像，不能重放未接受的 read；拒绝/异步 callback 与 SQL 回滚均不留下已读事实。
 - 每次 provider 请求重新读取 context callback，附当前 Ticket/Mandate/Assignment 等调用方快照及 binding；Continue、reload 后的请求和压缩摘要请求也更新。摘要请求不产生原输入的新 read。压缩后的报告可关联同 binding 下已有的真实 read，`readTurnId` 指回该机会，不能沿用其他 Assignment 的 read。
 
 ### 报告、停止与恢复
