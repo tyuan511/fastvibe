@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M7 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层和 Source/Policy 控制面实验，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已实现。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M8 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影和旧数据 dry-run 实验，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已实现。
 
 ## M0：已建立的实施基线
 
@@ -16,7 +16,7 @@
 | Fixture | 完整上游领域测试保留 fake Assessor/Executor/Outbox 和可控时钟；另有 [来源事件 fixture](../test/fixtures/vivi-dsh-source-events.ts) 提供重复、编辑、分页、短暂失败和状态响应样例 |
 | 外部验收边界 | 当前仅回放已标准化 Trigger，不声明已验证 GitHub HTTP 解析、分页或 API 调用；这些 fixture 将用于 M9/M10 |
 
-当前没有生产 feature flag、Source poller 或注册入口；M7 只添加 Shadow 测试路径的 registry/control 组装，M12 才执行生产切换。M0 的默认值是后续实现合同，不能解释成 GitHub 已配置或 Pi 投递已完成。
+当前没有生产 feature flag、Source poller 或注册入口；M7 只添加 Shadow 测试路径的 registry/control 组装，M8 只提供显式 Local Source 回放、兼容投影和旧数据转换器，M12 才执行生产切换。M0–M8 的新模块都没有接入旧 BotRuntime、IPC、普通 settings、远程 API、真实 Source 或真实凭据。
 
 ## M1：纯领域内核已落地
 
@@ -160,7 +160,7 @@ M5 没有增加 schema 步骤，也没有生产注册、真实 Pi 执行、Sourc
 node --test test/vivi-dsh-*.test.ts
 ```
 
-本轮结果：**593/593 通过**，39 个 suite，无跳过或取消。M0–M6 的 584 项保持通过；M7 新增 **9 项** registry/control 用例，覆盖 Source 生命周期、health/cursor/lease、配置与 Policy secret 拒绝、credential callback 隔离、Policy revision 和 test-only control mutation。
+本轮结果：**604/604 通过**，39 个 suite，无跳过或取消。M0–M7 的 593 项保持通过；M8 新增 **11 项** Local Source、兼容投影和正式迁移回归，覆盖 Source 生命周期隔离、分页 cursor/lease/health、旧形状投影、状态事实分离、稳定 replay 映射、dry-run 断点和漂移拒绝。
 
 让相同上游领域用例改用真实 SQLite repository（fake 外部端口不变）：
 
@@ -176,7 +176,7 @@ FASTVIBE_DSH_TEST_REPOSITORY=sqlite node --test test/vivi-dsh-core.test.ts
 node --test test/db.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-restart.test.ts test/bot-engine.test.ts
 ```
 
-本轮结果：**83/83 通过**；与上述新测试合并运行 **676/676 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
+本轮结果：**83/83 通过**；与上述新测试合并运行 **687/687 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
 
 类型与格式：
 
@@ -187,8 +187,19 @@ git diff --check
 
 本轮类型检查及新增测试的独立严格类型检查通过，保持原 ES2022 配置和依赖版本。新增模块仍只有测试引用，生产迁移注册保持原样。
 
+## M8：Local Source 回放、兼容投影和正式 dry-run 已落地
+
+位置：[local-source.ts](../src/main/bot/shadow/local-source.ts)、[legacy-compat.ts](../src/main/bot/shadow/legacy-compat.ts)、[migration.ts](../src/main/bot/shadow/migration.ts)。
+
+- `LocalSourceReplay` 只接受显式传入的标准化 `Trigger` 或受控分页批次；Source/instance 仍须经过 Shadow registry 的 enabled/status/scope 检查。重复事件依靠领域 Trigger ID 幂等，编辑事件使用新的稳定版本 ID 保留为新的不可变 Trigger。
+- 分页回放复用 Source cursor revision CAS 和 poll lease fencing。分页读取由调用方提供，模块不创建网络客户端、定时器或生产 Source；短暂失败保持游标不变并记录 degraded health，未知/disabled/revoked/unavailable Source 被拒绝。
+- 旧 Bot API 兼容层只构造 detached 的旧形状 `WorkSnapshot` 投影和受控 replay command。Outbox 投递、Input delivered、Input read、Worker report 分开表达；`ready` 保留为 `ready`，不会推断为 `completed`。旧 API 的直接旧表写入会被拒绝，映射保持 requestId/idempotency key 稳定，也不接 IPC 或旧 BotRuntime。
+- 正式 dry-run API 为 `begin`、`advance`、`resume`、`inspect`、`report`。它在 Shadow 库中持久化固定 `snapshotId`、digest、批次 checkpoint、稳定旧表/旧 key 映射和完整 evidence；同快照内容、分类或转换规则漂移会拒绝继续，重复执行可重入。所有记录保持 `authorized: false`，不创建 Ticket、Mandate、Decision 或 Effect。
+
+M8 新增 `test/vivi-dsh-local-source.test.ts`、`test/vivi-dsh-legacy-compat.test.ts`、`test/vivi-dsh-migration-run.test.ts`。当前仍不读取真实本地输入、不替换 `WorkSnapshot`、不广播、不修改旧表或生产数据库。
+
 ## 下一阶段与限制
 
-本文已完成 M0–M7 隔离能力的记录。下一阶段是 M8：Local Source 回放、旧 Bot API 兼容投影和正式旧数据转换 dry-run。M7 的 Source registry、Policy、凭据宿主和控制 API 仍只在 Shadow 测试路径使用。
+本文已完成 M0–M8 隔离能力的记录。下一阶段是 M9：GitHub 只读 Shadow Source，然后再进入 M10/M11 的 operation dry-run 和专用测试仓库闭环。M8 的 Local Source、兼容投影和迁移 API 仍只在显式 Shadow/replay 路径使用。
 
-M8–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
+M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。

@@ -28,8 +28,7 @@ M4 的 `../shadow/pi-ledger.ts` 和 `../shadow/pi-session.ts` 参考上游 `src/
 
 M5 的 `../shadow/effects.ts`、`passes.ts`、`outbox.ts`、`driver.ts` 移植上游 `src/app/effects.ts`、`passes.ts`、`outbox.ts`、`runtime.ts` 的六类调度、Later、退避、quiet、消息顺序与生命周期语义。FastVibe 新增不可变 attempt、owner/token/lease 尾部 fencing、uncertain 对账、IO 后提交失败保护、持久 control 和通用 source-operation/source-reconcile；这些不是上游已经提供的保证。`claims.ts` 是执行校验助手，`operations.ts` 是新操作适配；均只在临时库与 fake/sandbox 端口上组装，不接生产 Runtime、SDK 执行或 Source。
 
-M7 的 `../shadow/source-registry.ts`、`policy-host.ts`、`credential-host.ts`、`control.ts` 参考上游 `src/sources/registry.ts`、`src/sources/kind.ts` 和 `src/policy.ts` 的 Source kind/instance、scope、health、policy 配置与 admission 边界。FastVibe 改为 Shadow-only registry，复用 `dsh_source_cursors`/leases 做 cursor CAS 和 poll fencing，明确 `enabled/disabled/revoked/unavailable`，递归拒绝凭据材料，只持久化 credential reference。`ShadowPolicyHost` 只保存授权设置和 revision；`ShadowCredentialHost` 只在宿主 resolver 回调内传递 secret；`ShadowControl` 仅读摘要或在 test mode 修改配置。没有注册 Electron IPC、普通 settings、远程 API、Source poller、真实凭据或生产 Runtime。
-
+M8 的 `../shadow/local-source.ts`、`legacy-compat.ts`、`migration.ts` 是新增的 Shadow-only 适配：Local Source 只接受显式标准化 Trigger/分页回放并复用 cursor/lease fencing；兼容层输出 detached 的旧形状 WorkSnapshot 和受控命令，不依赖 `src/shared/bot.ts`、IPC 或旧 BotRuntime；迁移器只在 Shadow 表保存固定 snapshot、checkpoint、稳定映射和未授权 evidence。它们没有接入真实本地输入、旧表写入、生产数据库、Source poller 或生产 Runtime。
 这是源码移植，不是安装另一个 Agent Runtime。Pi、Store、Source 和 Effects 适配均在这些同步端口之外实现。当前只有隔离测试调用实验组装；生产 Bot API、BotRuntime、会话、数据库、通知及轮询入口无法到达它。
 
 ## 上游更新

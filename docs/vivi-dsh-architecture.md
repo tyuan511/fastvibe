@@ -1,6 +1,6 @@
 # Vivi 整体重构：采用 DSH 完整架构
 
-状态：**目标架构已确定；M0–M7 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session、执行资源层与 Source/Policy 控制面实验已落地，生产 Runtime 尚未切换。** 实际开发进度、验收命令与未完成范围见 [开发进度记录](vivi-dsh-development.md)。
+状态：**目标架构已确定；M0–M8 的隔离领域、Shadow Store、同步端口、真实 Pi SDK Session、执行资源层、Source/Policy 控制面、Local Source 回放、兼容投影与迁移 dry-run 实验已落地，生产 Runtime 尚未切换。** 实际开发进度、验收命令与未完成范围见 [开发进度记录](vivi-dsh-development.md)。
 
 目标是把 Vivi 整体改造成 DSH Superagent 的领域与运行架构。GitHub Issue → PR → Review → 修复 → CI → Merge 是第一条验收链路；“先完成 GitHub”限定外部平台，不允许据此省略授权评估、长期工作、消息归属、持久副作用和恢复机制。
 
@@ -311,7 +311,7 @@ DSH Mandate 是业务授权，工具名单和 cwd 不是 OS 沙箱。完整迁�
 1. **旧路径唯一写入。** M0–M11 不修改旧 `bot_v2_*` 事实，不让新 Engine 调用旧 `BotRuntime`，不让旧 Runtime 读取新 DSH 表。
 2. **新数据独立。** 领域和 Effect 使用 `vivi_dsh_*` 命名空间或临时/复制数据库；真实用户库只在 M12 迁移演练和最终切换时操作。迁移演练始终复制 userData 到临时目录。
 3. **运行时默认关闭。** 新 Source、Pass、Effect handler、IPC 控制面和 UI 入口默认不注册或保持 disabled；不能因为安装了新模块就启动轮询、模型调用或外部写入。
-4. **外部副作用后置。** M0–M9 只允许纯函数、fixture、fake port、Pi scratch session 和 GitHub 只读 shadow；M10 只生成 dry-run operation plan；M11 才能对专用测试仓库执行真实写入。
+4. **外部副作用后置。** M0–M8 只允许纯函数、fixture、fake port、Pi scratch session、Local Source replay、兼容投影和旧数据 dry-run；M10 只生成 dry-run operation plan；M11 才能对专用测试仓库执行真实写入。
 5. **可回滚。** 每个阶段失败时删除测试数据或关闭 feature flag 即可回到旧路径。阶段验收不能要求用户迁移数据、修改现有配置或改变现有 UI 行为。
 6. **共同回归门槛。** 每阶段都要运行新增的窄测试、`pnpm typecheck` 和 `git diff --check`；涉及旧 Bot 的阶段还要运行现有 `bot-runtime`、`bot-store`、`bot-restart`、通知和 Vivi UI 回归。历史测试数量不能代替当前结果。
 
@@ -385,11 +385,11 @@ DSH Mandate 是业务授权，工具名单和 cwd 不是 OS 沙箱。完整迁�
 
 #### M8：Local Source 回放、兼容投影和迁移 dry-run
 
-**交付：** Local Source 适配器、旧 Bot API 到新 Engine 的只读/回放映射、WorkSnapshot 兼容投影、旧数据转换报告。此阶段不接真实本地输入。
+**交付：** 显式 Local Source 标准化 Trigger/分页回放、旧 Bot API 到新 Engine 的只读/回放映射、WorkSnapshot 兼容投影、固定快照和可断点旧数据转换报告。
 
-**独立验收：** 使用复制的 userData 和固定历史 fixture 验证 Router/Worker/Input/Attention/Result/Outbox 到新领域的分类、稳定 ID 映射、stopped/uncertain 处理和重复 dry-run；报告所有无法确认授权的记录。
+**独立验收：** 使用内存或系统临时目录中的固定历史 fixture 验证重复/编辑 Trigger、分页 cursor CAS、poll lease、短暂失败 health、Router/Worker/Input/Attention/Result/Outbox 的投影边界、稳定 requestId/idempotency，以及 `begin`/`advance`/`resume`/`inspect`/`report` 的断点、漂移拒绝和只读证据。
 
-**当前影响：** 现有本地聊天仍只走旧 Bot API 和旧 Runtime；新投影只在 replay 测试中生成，不广播、不替换 UI。
+**当前影响：** 现有本地聊天仍只走旧 Bot API 和旧 Runtime；Local Source 回放必须显式调用，兼容投影只在 replay 测试中生成，不广播、不替换 UI，不写旧表或生产数据库，不接真实本地输入。
 
 #### M9：GitHub 只读 Shadow Source
 
