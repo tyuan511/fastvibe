@@ -1295,9 +1295,15 @@ export function previewFor(path: string): FilePreview {
 
 <div align="center">
 
-![license](https://img.shields.io/badge/license-MIT-blue)
+[![license](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org/licenses/MIT) ![太阳徽章](data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="96" height="20"><rect width="96" height="20" fill="#4f46e5"/><circle cx="48" cy="10" r="7" fill="#fbbf24"/></svg>')} "太阳徽章")
+
+<img src="${INLINE_SVG}" alt="指定宽度的图片" width="96" height="48" title="保持文档指定的宽度" />
 
 </div>
+
+![横图](${INLINE_SVG})
+
+![长图](data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="600" height="1800"><rect width="600" height="1800" fill="#4f46e5"/><circle cx="300" cy="900" r="220" fill="#fbbf24"/></svg>')})
 
 <style>body { display: none }</style>
 

@@ -90,6 +90,7 @@
  "loading": "Loading",
  "imagePreview": "Image preview",
  "clickToClose": "Click outside or press Esc to close",
+ "imageZoom": "Scroll to zoom",
  "status": {
   "noModel": "No model",
   "starting": "Starting",

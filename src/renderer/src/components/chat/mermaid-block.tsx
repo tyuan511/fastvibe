@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Copy01Icon, Tick02Icon, Flowchart01Icon, SourceCodeIcon, ViewIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
+import { ImagePreview } from "@/components/image-preview";
 import { useThemeId } from "@/lib/use-theme";
 import { isThemeId, THEMES } from "@/lib/themes";
 import { MAX_MERMAID_CHARS } from "@/lib/mermaid-source";
@@ -13,6 +14,7 @@ export const MermaidBlock = memo(function MermaidBlock({ code, complete }: { cod
   const [source, setSource] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [result, setResult] = useState<{ code: string; theme: string; url: string | null }>();
   const oversized = code.length > MAX_MERMAID_CHARS;
   const current = result?.code === code && result.theme === themeId ? result : undefined;
@@ -62,7 +64,21 @@ export const MermaidBlock = memo(function MermaidBlock({ code, complete }: { cod
       </div>
       {diagram ? (
         <div className="overflow-x-auto px-4 pb-5 pt-2 sm:px-6 sm:pb-6">
-          <img src={diagram} alt={t("mermaid.alt")} className="mx-auto block h-auto max-w-full" />
+          <button
+            type="button"
+            className="mx-auto block max-w-full cursor-zoom-in rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-haspopup="dialog"
+            aria-label={t("mermaid.openPreview")}
+            onClick={() => setPreviewOpen(true)}
+          >
+            <img src={diagram} alt={t("mermaid.alt")} className="mx-auto block h-auto max-w-full" />
+          </button>
+          <ImagePreview
+            src={diagram}
+            alt={t("mermaid.alt")}
+            open={previewOpen}
+            onOpenChange={setPreviewOpen}
+          />
         </div>
       ) : (
         <>

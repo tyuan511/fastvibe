@@ -227,15 +227,12 @@ Word / Excel / PowerPoint 的预览和智能体编辑都走随安装包发布的
   可展示；https 链接必须以图片/视频扩展名结尾；不收 data URL（让模型把 base64 写进参数是浪费 token）。结果
   `details.items` 记下 `{ref, title, ok, error}`，渲染层只画 `ok` 的。扩展不能 import `@shared`，所以扩展名
   清单在两处各一份，`test/inline-media.test.ts` 把它们对齐。
-- **消息里不画大图，只画名字。** 回复里的预览是行内文件名（图标 + 名字，和路径链接同一个观感；一次调用的多项同一行换行排列；markdown 的 `![]()` 同样）。工具产生的预览随工具一起进入「用时 …」，并通过 `InlineThumbStrip` 在折叠标题右侧汇总入口（最多三个，超出显示更多）；入口是折叠触发器的兄弟，点击预览不切换折叠。最终回复区仍只保留正文。点击标题右侧入口或展开过程后的文件名都打开**查看器**（`Viewer`）：全窗口深色遮罩，一次一项，图片 / 视频 / HTML 都支持，底部「‹ 第 i 项，共 n 项 ›」，← / → 在**同一批**里切换，左下是名字，右上是「在侧栏中打开」和 ⋮（在文件夹中显示 / 复制路径或链接 / 在浏览器中打开）与关闭。点遮罩空白处也关。猜出来的本地路径用 `filesExist` 核对，不存在就不画名字（`useMissingGuesses`）；明确要求展示的不核对，打不开时查看器里写「无法加载」。
+- **工具产物预览只画名字。** 工具预览是行内文件名（图标 + 名字，和路径链接同一个观感；一次调用的多项同一行换行排列）。工具产生的预览随工具一起进入「用时 …」，并通过 `InlineThumbStrip` 在折叠标题右侧汇总入口（最多三个，超出显示更多）；入口是折叠触发器的兄弟，点击预览不切换折叠。最终回复区保留正文及正文里的 Markdown 图片。点击标题右侧入口或展开过程后的文件名都打开**查看器**（`Viewer`）：全窗口深色遮罩，一次一项，图片 / 视频 / HTML 都支持，底部「‹ 第 i 项，共 n 项 ›」，← / → 在**同一批**里切换，左下是名字，右上是「在侧栏中打开」和 ⋮（在文件夹中显示 / 复制路径或链接 / 在浏览器中打开）与关闭。点遮罩空白处也关。猜出来的本地路径用 `filesExist` 核对，不存在就不画名字（`useMissingGuesses`）；明确要求展示的不核对，打不开时查看器里写「无法加载」。
 - **位置。** 预览紧跟产生它的工具卡，随运行过程一起折叠；最终回复区保留最后输出的正文，不额外提取智能体操作或工具产物。文件变更卡片在本轮结束后统一放在最终回复正文末尾、操作栏之前，独立于运行过程折叠。
   `shared/media-preview.ts` 不能用 `node:path`：渲染层也 import 它，浏览器构建里 `extname`
   是 `undefined`，第一次展示文件就会抛。
-- **Markdown 里的 `![]()`** 也走同一套：绝对路径、`file://`、相对路径按会话目录解析成媒体 URL，扩展名是视频就
-  画 `<video>`、是 `.html` 就画页面（`lib/markdown-media.ts`）。`react-markdown` 默认会丢掉 `file:` / `data:`，所以
-  `urlTransform` 放行 `file://`、`data:image|video` 和路径链接插件的 `fvpath:`。内联项的根是 `span`（`display:block`），
-  因为它会出现在 `<p>` 里。
-- **预览**：`mock.html?inline=1`（浏览器里没有 `fastvibe-media://`，HTML 框架是空的，只能看版式）；`mock.html?inline=office` 可展开「用时」查看文档产物。
+- **Markdown 图片直接内嵌显示。** `MarkdownView` 的 `![]()` 与清洗后的 HTML `<img>` 共用图片组件：保持比例、不超过容器宽度，最大高度 `20rem`，小图不放大，并保留 `alt` / `title` / `width` / `height`。不强加边框或圆角，徽章可以同行、`align="center"` 可继续居中。绝对路径、`file://`、相对路径仍按会话目录解析并经 `inlineSrc` 转成媒体 URL；HTTPS/data 图片直接加载。视频、HTML 和 Office 引用继续显示文件名入口，点击后在查看器中打开。`react-markdown` 默认会丢掉 `file:` / `data:`，所以 `urlTransform` 放行 `file://`、`data:image|video` 和路径链接插件的 `fvpath:`；清洗白名单和 CSP 不变。
+- **预览**：`mock.html?pane=files&preview=markdown` 可检查徽章、HTML 指定宽度和大图的尺寸；`mock.html?inline=1` 同时展示正文图片与工具产物入口（浏览器里没有 `fastvibe-media://`，HTML 框架是空的，只能看版式）；`mock.html?inline=office` 可展开「用时」查看文档产物。
 
 ## Git 状态轮询（`lib/use-git-status.ts`）
 

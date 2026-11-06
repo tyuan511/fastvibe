@@ -76,6 +76,7 @@
     "diagram": "图表",
     "source": "源码",
     "alt": "Mermaid 图表",
+    "openPreview": "打开图表预览",
     "invalid": "图表语法有误，已显示源码。",
     "tooLarge": "图表过大，已显示源码。"
   },

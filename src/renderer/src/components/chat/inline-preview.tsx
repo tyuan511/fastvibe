@@ -31,8 +31,8 @@ import { cn } from "@/lib/utils";
  * Images, videos and HTML pages a reply asked to show (`@shared/inline-media` decides *what*;
  * this decides how it looks and what a failure does).
  *
- * Nothing is drawn large in the transcript. A reply mentions them the way it mentions a file —
- * an inline name — and a finished run shows a few thumbnails at the end of its 「用时」 row.
+ * Tool previews stay compact: an inline name in the process and a few thumbnails at the end
+ * of a finished run's 「用时」 row. Markdown pictures render separately in `MarkdownView`.
  * A video thumb is a `<video>` the browser paints itself, not a play glyph.
  * Clicking either opens the **viewer**: the whole window, dimmed, one item at a time, with
  * ← / → through the same batch.
@@ -339,7 +339,7 @@ export function InlinePreviews({ items, className }: { items: InlinePreview[]; c
   );
 }
 
-/** A single item (a markdown image) as the same inline name. */
+/** A non-image markdown media reference as an inline name. */
 export function InlineMediaItem({ preview }: { preview: InlinePreview }): JSX.Element | null {
   return <InlinePreviews items={[preview]} className="inline-flex w-auto" />;
 }

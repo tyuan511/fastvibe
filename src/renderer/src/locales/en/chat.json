@@ -76,6 +76,7 @@
     "diagram": "Diagram",
     "source": "Source",
     "alt": "Mermaid diagram",
+    "openPreview": "Open diagram preview",
     "invalid": "Unable to render this diagram. Showing the source instead.",
     "tooLarge": "This diagram is too large. Showing the source instead."
   },

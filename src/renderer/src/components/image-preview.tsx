@@ -1,4 +1,4 @@
-import { useRef, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX, type WheelEvent } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -7,10 +7,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 5;
+
+function nextScale(current: number, deltaY: number): number {
+  const factor = Math.exp(-deltaY * 0.002);
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, current * factor));
+}
+
 /**
  * Lightbox for a single image. Controlled so a chip, a file tree, or a markdown
  * figure can all open the same overlay: click the dimmed page or press Esc to
- * dismiss. `src` is a data URL or http(s) URL — whatever `<img>` can paint.
+ * dismiss. The image can be zoomed with the mouse wheel while the overlay is open.
  */
 export function ImagePreview({
   src,
@@ -27,8 +35,25 @@ export function ImagePreview({
   const label = alt?.trim() || t("imagePreview");
   // Keep the last frame so the image does not vanish a tick before the overlay fades.
   const lastSrc = useRef(src);
+  const [scale, setScale] = useState(1);
+  const [transformOrigin, setTransformOrigin] = useState("center center");
   if (src) lastSrc.current = src;
   const imageSrc = src || lastSrc.current;
+
+  useEffect(() => {
+    if (!open) return;
+    setScale(1);
+    setTransformOrigin("center center");
+  }, [open, src]);
+
+  function zoom(event: WheelEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = bounds.width ? ((event.clientX - bounds.left) / bounds.width) * 100 : 50;
+    const y = bounds.height ? ((event.clientY - bounds.top) / bounds.height) * 100 : 50;
+    setTransformOrigin(`${x}% ${y}%`);
+    setScale((current) => nextScale(current, event.deltaY));
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -38,13 +63,21 @@ export function ImagePreview({
         className="w-fit max-w-[min(calc(100%-2rem),80rem)] gap-0 bg-transparent p-0 shadow-none ring-0 sm:max-w-[min(calc(100%-2rem),80rem)]"
       >
         <DialogTitle className="sr-only">{label}</DialogTitle>
-        <DialogDescription className="sr-only">{t("clickToClose")}</DialogDescription>
+        <DialogDescription className="sr-only">
+          {t("clickToClose")} {t("imageZoom")}
+        </DialogDescription>
         {imageSrc ? (
-          <img
-            src={imageSrc}
-            alt={label}
-            className="max-h-[85vh] max-w-full rounded-xl object-contain"
-          />
+          <div
+            className="max-h-[85vh] max-w-[min(calc(100vw-2rem),80rem)] overflow-hidden overscroll-contain rounded-xl"
+            onWheel={zoom}
+          >
+            <img
+              src={imageSrc}
+              alt={label}
+              className="block max-h-[85vh] max-w-full object-contain transition-transform duration-75"
+              style={{ transform: `scale(${scale})`, transformOrigin }}
+            />
+          </div>
         ) : null}
       </DialogContent>
     </Dialog>

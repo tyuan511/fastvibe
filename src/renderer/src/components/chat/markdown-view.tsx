@@ -18,6 +18,7 @@ import { useWorkspacePath } from "@/lib/workspace-path-context";
 import { resolvePath } from "@/lib/workspace-path";
 import { stripMemoryCitation } from "@shared/memory-citation";
 import { markdownMedia } from "@/lib/markdown-media";
+import { inlineSrc } from "@shared/inline-media";
 import { cn } from "@/lib/utils";
 import { DiffView } from "./diff-view";
 import { InlineMediaItem } from "./inline-preview";
@@ -182,13 +183,30 @@ function urlTransform(url: string): string {
   return defaultUrlTransform(url);
 }
 
-/** A markdown image: a picture, or — when the path says so — a video or an HTML page. */
-function MarkdownImage({ src, alt }: { src?: string; alt?: string }): JSX.Element | null {
+/** Markdown pictures stay in the document; other media keep their viewer entry. */
+function MarkdownImage({ src, alt, title, width, height }: {
+  src?: string;
+  alt?: string;
+  title?: string;
+  width?: number | string;
+  height?: number | string;
+}): JSX.Element | null {
   const cwd = useWorkspacePath();
   const preview = markdownMedia(src, alt, (path) => resolvePath(path, cwd));
-  if (preview) return <InlineMediaItem preview={preview} />;
+  if (preview && preview.kind !== "image") return <InlineMediaItem preview={preview} />;
   if (!src) return null;
-  return <img src={src} alt={alt ?? ""} className="my-2 max-h-80 max-w-full rounded-lg border border-border" />;
+  return (
+    <img
+      src={preview ? inlineSrc(preview) : src}
+      alt={alt ?? ""}
+      title={title}
+      width={width}
+      height={height}
+      loading="lazy"
+      decoding="async"
+      className="inline-block h-auto max-h-80 max-w-full object-contain align-middle"
+    />
+  );
 }
 
 // Stable component identities keep streamed updates from remounting CodeBlock.
@@ -206,7 +224,9 @@ const MARKDOWN_COMPONENTS: Components = {
       </a>
     );
   },
-  img: ({ src, alt }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />,
+  img: ({ src, alt, title, width, height }) => (
+    <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} title={title} width={width} height={height} />
+  ),
   table: ({ children }) => (
     <div className="my-2 overflow-x-auto rounded-lg border border-border">
       <table className="w-full min-w-96 border-collapse text-left">{children}</table>

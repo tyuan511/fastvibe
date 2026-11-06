@@ -86,6 +86,7 @@
  "loading": "加载中",
  "imagePreview": "图片预览",
  "clickToClose": "点击空白处或按 Esc 关闭",
+ "imageZoom": "滚动鼠标滚轮缩放",
  "status": {
   "noModel": "暂无模型",
   "starting": "启动中",
