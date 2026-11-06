@@ -144,9 +144,10 @@ export function ToolRow({
           // One text line, not a nested flex. A flex child with min-width: 0 shrinks
           // and its text keeps painting, so a long folded summary draws the file name
           // on top of the next clause and the query chip. Clipping the line itself
-          // ellipsizes the tail instead. The padding stays inside that clip so a path
-          // link's underline is not cut off; the negative margin keeps the row height.
-          quiet ? "block min-w-0 truncate py-0.5 -my-0.5 font-normal" : "shrink-0 font-normal",
+          // ellipsizes the tail instead. Keep the underline padding in the row's
+          // measured height: cancelling it with negative margins makes this label
+          // overflow a capped process body and gives even one line a scrollbar.
+          quiet ? "block min-w-0 truncate py-0.5 font-normal" : "shrink-0 font-normal",
           running ? "animated-gradient-text" : "text-muted-foreground",
         )}
       >
