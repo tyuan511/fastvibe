@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M8 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影和旧数据 dry-run 实验，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已实现。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M9 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run 和 GitHub 只读 Source 适配，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
 
 ## M0：已建立的实施基线
 
@@ -14,9 +14,9 @@
 | 默认关闭方式 | 当前实现没有生产调用者，而不是在旧 BotRuntime 中插入条件分支。导入隔离测试检查整个 `src/` 和内置扩展的静态模块依赖 |
 | 状态所有权 | 新代码只使用内存 repository 或临时 Shadow 库；旧 BotRuntime、BotStore、Bot API、生产数据库 schema、Session、通知、记忆和工作目录均不切换 |
 | Fixture | 完整上游领域测试保留 fake Assessor/Executor/Outbox 和可控时钟；另有 [来源事件 fixture](../test/fixtures/vivi-dsh-source-events.ts) 提供重复、编辑、分页、短暂失败和状态响应样例 |
-| 外部验收边界 | 当前仅回放已标准化 Trigger，不声明已验证 GitHub HTTP 解析、分页或 API 调用；这些 fixture 将用于 M9/M10 |
+| 外部验收边界 | M8 仅回放已标准化 Trigger；M9 增加显式注入的 GitHub reader/HTTP response adapter，验证 Link/ETag/304、分页、Source/repository identity、Issue/PR/comment/review/CI 规范化和健康映射；不连接网络、凭据或生产 poller |
 
-当前没有生产 feature flag、Source poller 或注册入口；M7 只添加 Shadow 测试路径的 registry/control 组装，M8 只提供显式 Local Source 回放、兼容投影和旧数据转换器，M12 才执行生产切换。M0–M8 的新模块都没有接入旧 BotRuntime、IPC、普通 settings、远程 API、真实 Source 或真实凭据。
+当前没有生产 feature flag、Source poller 或注册入口；M7 只添加 Shadow 测试路径的 registry/control 组装，M8 只提供显式 Local Source 回放、兼容投影和旧数据转换器，M9 只提供显式 reader 驱动的 GitHub 只读回放，M12 才执行生产切换。M0–M9 的新模块都没有接入旧 BotRuntime、IPC、普通 settings、远程 API、真实 Source 或真实凭据。
 
 ## M1：纯领域内核已落地
 
@@ -160,7 +160,7 @@ M5 没有增加 schema 步骤，也没有生产注册、真实 Pi 执行、Sourc
 node --test test/vivi-dsh-*.test.ts
 ```
 
-本轮结果：**604/604 通过**，39 个 suite，无跳过或取消。M0–M7 的 593 项保持通过；M8 新增 **11 项** Local Source、兼容投影和正式迁移回归，覆盖 Source 生命周期隔离、分页 cursor/lease/health、旧形状投影、状态事实分离、稳定 replay 映射、dry-run 断点和漂移拒绝。
+本轮组合执行中该组 **629/629 通过**，39 个 suite，无跳过或取消。M0–M8 的 604 项保持通过；M9 新增 **25 项**原生 GitHub HTTP、持久接收、生命周期、CI、并发与失败恢复回归，具体范围见下方 M9 记录。
 
 让相同上游领域用例改用真实 SQLite repository（fake 外部端口不变）：
 
@@ -176,7 +176,13 @@ FASTVIBE_DSH_TEST_REPOSITORY=sqlite node --test test/vivi-dsh-core.test.ts
 node --test test/db.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-restart.test.ts test/bot-engine.test.ts
 ```
 
-本轮结果：**83/83 通过**；与上述新测试合并运行 **687/687 通过**。测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
+本轮该组 **83/83 通过**；与上述 DSH 测试合并运行 **712/712 通过**。组合命令：
+
+```bash
+node --test test/vivi-dsh-*.test.ts test/db.test.ts test/bot-runtime.test.ts test/bot-store.test.ts test/bot-restart.test.ts test/bot-engine.test.ts
+```
+
+测试使用临时数据，不连接正在运行的真实 userData。复制库演练使用测试构造的旧库，确认源库字节、旧行和 schema 14 不变，只有副本升为 15。
 
 类型与格式：
 
@@ -198,8 +204,28 @@ git diff --check
 
 M8 新增 `test/vivi-dsh-local-source.test.ts`、`test/vivi-dsh-legacy-compat.test.ts`、`test/vivi-dsh-migration-run.test.ts`。当前仍不读取真实本地输入、不替换 `WorkSnapshot`、不广播、不修改旧表或生产数据库。
 
+## M9：GitHub 只读 Shadow Source 已落地
+
+位置：[github-source.ts](../src/main/bot/shadow/github-source.ts)、[test/vivi-dsh-github-source.test.ts](../test/vivi-dsh-github-source.test.ts)。
+
+- `GithubReader`、请求/响应类型和 `adaptGithubResponse()` 是显式 reader/response adapter。实现只接受调用方提供的响应，不创建网络客户端、解析凭据、启动 timer、注册生产 poller 或调用 IPC。
+- 原生 REST 读取覆盖账号 notifications、Issue/PR 仓库流、conversation/inline comments、订阅对象、PR Review、PR 当前 head 的 check-runs/statuses 与默认分支 CI。通知 subject 只在仓库身份和 URL 均匹配时解引用；响应支持数组、单对象和 check-runs envelope。多页读取每轮从根 URL 开始，完整 URL（包含 since）分别保存 ETag 和响应缓存，304 只能复用已提交的同 URL 缓存。
+- GitHub 状态直接复用 `ShadowStore.cursors` 的 revision CAS 和 registry 的 Source/instance poll lease。整轮 HTTP 读取只暂存在内存；所有 Trigger、Thread/Follow 事实、CI baseline、ETag、对象状态和游标在同一事务提交。读取后和事务尾部核对 Source 配置 revision、lease 和 CAS；失败回滚本轮全部接收与游标，下一轮从原位置完整重读，不会跳过失败 scope。不同于逐页提交的 Local Source，GitHub 使用整轮事务，避免跨页 CI 快照不完整。
+- 评论/Review 的 native object ID、正文、更新时间、review state、commit 和行内位置组成版本；相同平台版本从不同通知/stream 到达仍保持幂等。Issue/PR 描述使用一次性的创建身份及启动基线，正文编辑或 reopen 不产生新的交办。Thread、Channel、Trigger 和持久状态共同编码 Source ID、instance 和仓库 ID；评论 URL 与编号均校验，GitHub 原生字段留在 adapter。
+- 自身评论、空正文普通评论和无正文 `COMMENTED` review 被过滤；无正文的正式 review decision 保留状态与 commit。普通 User、bot/App、self 和无人 CI 分开标记；mention 只匹配 Source 自身账号。CI 全页聚合、按名称/context 选最新并排序，首次只保存 baseline；PR 快照或分支失败集合变化才形成独立 revision 的 CI Trigger。branch CI 运行中保留旧失败，完全恢复后才报告恢复；默认分支变化重建基线。
+- PR closed/merged 只经 `threadClosed`，不再发送人类描述 Trigger；关闭事实去重，reopen 后再次关闭仍可记录。显式 executor binding 只允许唯一的开放 Ticket、同仓库、agent 作者和分支匹配，绑定先于首批 Review 接收；reopen 不恢复 ended Ticket。410 只记录对象不可用，404 保留重试，401/非限流 403 撤权，429/primary/secondary rate-limit 与 5xx 进入 degraded；`Retry-After`/reset deadline 持久化并在后续显式 poll 时尊重。
+- 默认首轮以当前时刻建立观察基线；显式 `since` 用于固定回放，重开后不允许漂移。时间游标保留 5 秒重叠，订阅保留 14 天，活跃 Ticket 不因安静而过期；超过回溯窗口保存 coverage gap 并报告 degraded。`X-Poll-Interval` 保存建议间隔，但本阶段没有自动调度器。reader 和 Source registry 必须显式组装，接收必须使用同一个 ShadowStore；事务拒绝新增 Ticket、launch/delivery/assessment/reply 或 Session 回执，不运行模型。
+
+M9 新增 25 项 Node 原生测试及 [原生 HTTP fixture](../test/fixtures/vivi-dsh-github-http.ts)。独立只读回放命令为：
+
+```bash
+node --test test/vivi-dsh-github-source.test.ts
+```
+
+该命令显式组装 reader、临时 ShadowStore 与真实 ShadowEngine，覆盖数据库重开、重复/编辑/乱序、多页 CI/ETag/304、真实 Follow 收束、绑定/Review ownership、撤权、Retry-After、串仓库/串编号、SQL ABORT、Source 配置变化、cursor CAS、并发和过期 lease。它不读取真实用户库、真实 GitHub、凭据或 Session；Webhook、生产 poller、消息回复、GitHub 写操作与 Issue close continuation 留给后续阶段。
+
 ## 下一阶段与限制
 
-本文已完成 M0–M8 隔离能力的记录。下一阶段是 M9：GitHub 只读 Shadow Source，然后再进入 M10/M11 的 operation dry-run 和专用测试仓库闭环。M8 的 Local Source、兼容投影和迁移 API 仍只在显式 Shadow/replay 路径使用。
+本文已完成 M0–M9 隔离能力的记录。下一阶段是 M10：GitHub Source Operation dry-run，然后进入 M11 的专用测试仓库闭环和 M12 的最终切换。M8/M9 的 Local Source、GitHub reader、兼容投影和迁移 API 仍只在显式 Shadow/replay 路径使用。
 
-M9–M11 的 GitHub 闭环和 M12 的最终切换均未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
+M10–M12 尚未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。

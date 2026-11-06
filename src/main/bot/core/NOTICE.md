@@ -29,6 +29,9 @@ M4 的 `../shadow/pi-ledger.ts` 和 `../shadow/pi-session.ts` 参考上游 `src/
 M5 的 `../shadow/effects.ts`、`passes.ts`、`outbox.ts`、`driver.ts` 移植上游 `src/app/effects.ts`、`passes.ts`、`outbox.ts`、`runtime.ts` 的六类调度、Later、退避、quiet、消息顺序与生命周期语义。FastVibe 新增不可变 attempt、owner/token/lease 尾部 fencing、uncertain 对账、IO 后提交失败保护、持久 control 和通用 source-operation/source-reconcile；这些不是上游已经提供的保证。`claims.ts` 是执行校验助手，`operations.ts` 是新操作适配；均只在临时库与 fake/sandbox 端口上组装，不接生产 Runtime、SDK 执行或 Source。
 
 M8 的 `../shadow/local-source.ts`、`legacy-compat.ts`、`migration.ts` 是新增的 Shadow-only 适配：Local Source 只接受显式标准化 Trigger/分页回放并复用 cursor/lease fencing；兼容层输出 detached 的旧形状 WorkSnapshot 和受控命令，不依赖 `src/shared/bot.ts`、IPC 或旧 BotRuntime；迁移器只在 Shadow 表保存固定 snapshot、checkpoint、稳定映射和未授权 evidence。它们没有接入真实本地输入、旧表写入、生产数据库、Source poller 或生产 Runtime。
+
+M9 的 `../shadow/github-source.ts` 是新增的 Shadow-only GitHub 只读适配：它只接受显式注入的 reader 和 response，不创建网络客户端或凭据解析；Link 分页、按路径 ETag/304、cursor CAS、poll lease、Issue/PR/comment/review/CI Trigger 规范化、多 Source/repository identity、CI baseline、actor 过滤、PR `threadClosed` 和 HTTP health/status 映射均保持在 adapter 内。它复用 Shadow cursor/lease，在同一事务提交接收事实、生命周期、CI baseline、ETag 和游标；不接生产 Source registry/poller、旧 BotRuntime、IPC、真实 GitHub 或写入 Effect。
+
 这是源码移植，不是安装另一个 Agent Runtime。Pi、Store、Source 和 Effects 适配均在这些同步端口之外实现。当前只有隔离测试调用实验组装；生产 Bot API、BotRuntime、会话、数据库、通知及轮询入口无法到达它。
 
 ## 上游更新
