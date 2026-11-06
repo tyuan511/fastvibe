@@ -36,4 +36,6 @@ M10 的 `../shadow/github-operation.ts` 是新增的 Shadow-only dry-run planner
 
 ## 上游更新
 
+M11 前置的 `../shadow/github-deployment.ts`、`github-authority.ts` 和 `github-settlement.ts` 是 FastVibe 新增实验：复用 M5 的 operation/Effect 状态机，对 loopback HTTP、持久宿主权限、merge 后独立 Issue continuation、原子登记和重启对账做验证。fake HTTP server 只在测试 fixture，不是 GitHub 原生协议；host profile、Issue 版本比较和条件关闭也不冒称上游或 GitHub 已提供的能力。M7 credential callback 增加解析后的 binding/resolver fencing，M10 授权可携带精确 Assignment/binding 身份；这些模块仍不可从生产路径到达。真实 GitHub、独立 reviewer、真实 Worker 和 M11 端到端退出条件未验收，范围见 [开发记录](../../../../docs/vivi-dsh-development.md)。
+
 更新基准必须使用新的固定提交，逐文件复核差异并保留上述适配记录；先跑领域、策略和隔离回归，再单独决定是否接入生产。不能把上游 Session/inbox/flush 能力当成 Pi 已提供的能力。

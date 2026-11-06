@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M9 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run 和 GitHub 只读 Source 适配，生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M10 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run、GitHub 只读 Source 和 Operation dry-run；另已实现下述 M11 前置的本地 HTTP 部署、宿主授权和 Issue continuation。**M11 的真实 GitHub 闭环尚未验收。**生产 Vivi 继续使用现有 Router/Worker Runtime。开发分支为 `feat/vivi-dsh`，工作目录为独立 worktree。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
 
 ## M0：已建立的实施基线
 
@@ -238,3 +238,26 @@ M10 新增 5 项 Node 原生测试，覆盖五类 operation plan、幂等与参�
 本文已完成 M0–M10 隔离能力的记录。下一阶段是 M11 的专用测试仓库闭环和 M12 的最终切换。M8/M9 的 Local Source、GitHub reader、兼容投影、迁移 API 与 M10 operation planner 仍只在显式 Shadow/replay 路径使用。
 
 M11–M12 尚未验收。当前用户功能继续走旧 Runtime；没有接入旧 API、Session、通知、记忆或真实 GitHub。
+
+## M11 前置：本地 HTTP 部署、宿主授权与 Issue continuation
+
+位置：[github-deployment.ts](../src/main/bot/shadow/github-deployment.ts)、[github-authority.ts](../src/main/bot/shadow/github-authority.ts)、[github-settlement.ts](../src/main/bot/shadow/github-settlement.ts)。本轮只把部署前可独立验证的部分接起来，没有变更 M11 的真实仓库退出条件。
+
+- `GithubTestDeployment.planAndQueue()` 在同一 Shadow 事务计划不可变 operation 并交给已有 `ShadowOperations` 入队；没有第二套调度器。HTTP adapter 仅接受 `http://127.0.0.1:<port>`，禁止重定向，超时包含响应正文读取，并传递 Effect 的取消信号。fake server 放在测试 fixture，使用 M10 计划中的测试路径；这套协议不是 GitHub 原生 REST，`x-m11-operation` 仅为应答关联，server 不用它缓存或去重。
+- 五类操作的实际本地 HTTP 请求、明确拒绝、5xx、断开连接、响应正文超时及对象参数漂移分别验收。响应必须包含匹配操作和参数的成功证据；未知结果只发 GET 对账，404、错误响应或不匹配仍保持 uncertain。没有正面 not-applied 证据时不自动重发，不能据此声明 exactly-once。
+- `GithubOperationAuthority.grant()` 只由测试部署宿主调用，绑定真实 Decision/Mandate、开放 Ticket、完整 Worker binding、Source revision 和 Policy version。普通写入在异步凭据解析之后、fetch 之前重新校验，不接受请求自带的 `stopped: false` 作为域授权。宿主可明确保留 Issue 收束权限，但普通 Worker 的 `authorize()` 始终拒绝直接 issue-close；结束后的写入只能走已登记 continuation。此 profile 仍是宿主的显式测试配置，未实现生产权限配置或独立 reviewer 账号授权。
+- 凭据只经 `ShadowCredentialHost.withSourceCredential()` 回调使用。解析后核对 credential binding revision 和 resolver 身份，替换绑定或撤销 resolver 会使旧结果失效；adapter 的解析、授权和网络异常统一脱敏，响应也移除本次 secret。回归扫描 Effect 错误、operation、KV、游标与 Outbox，验证 resolver 异常不泄漏测试凭据。
+- `GithubIssueSettlement.closeMergedThread()` 将真实领域 Follow closure、Ticket ended、固定 continuation、close operation 与入队包在同一事务中；SQL ABORT 会全部回滚。登记核对 origin Issue、Source/instance/仓库、已确认 merge receipt 的 commit、接单 Decision/Mandate 和 closed Follow，不从 ready 推断 merged，不允许 stopped/closed 结果生成收束。执行前再次核对同次 ended、当前 Policy/Source、固定 intent 和取消请求。
+- continuation 的 pending/uncertain/failed/confirmed/cancelled 从持久 operation 派生，不复用 Worker、重启 Assignment 或撤销 merged 事实。本地协议给 Issue close 附观察到的 `issueVersion`，server 以版本条件应用；人工 reopen 后拒绝旧关闭，已发关闭后 reopen 的未知结果也不重发。此测试版本字段不等价于 GitHub 原生的条件写入能力，真实平台仍需使用其当前状态/事件证据实现并独立验收。
+
+独立入口：
+
+```bash
+node --test test/vivi-dsh-github-authority.test.ts test/vivi-dsh-github-deployment.test.ts test/vivi-dsh-github-credentials.test.ts test/vivi-dsh-github-http-crash.test.ts test/vivi-dsh-github-settlement.test.ts test/vivi-dsh-github-continuation-http.test.ts
+```
+
+其中新增的前置集成/故障恢复测试 **71/71 通过**。本轮组合回归为 **788/788**（39 suites），SQLite Core **113/113**；`pnpm typecheck`、所有新测试与 fixture 的严格 ES2022 类型检查、生产依赖隔离和 `git diff --check` 均通过。该结果仅覆盖本节列出的本地协议与领域组合。
+
+其中 HTTP continuation 使用真实 ShadowEngine/ShadowStore 与 M9 的原生对象规范化来建立 Issue/PR Thread；Worker 与 Review 是显式 fixture，未调用真实模型。覆盖关闭成功、丢失响应、403、关闭前人工 reopen、关闭后丢失响应再 reopen。另有真实子进程在 HTTP branch 创建后、SQLite receipt 提交前 `process.exit`；重开后只读取远端事实，POST 保持一次。普通重建 deployment 的测试与真实进程崩溃证据分开记录。
+
+**尚未完成的 M11 退出项：** 原生 GitHub 读写 transport 与平台回执/对账、专用仓库与可撤销的执行/独立审核身份、真实 Pi Worker 编码和受管只读 reviewer、Source 轮询自动驱动 Ticket、同一 Ticket 的修复/新 SHA Review 循环、真实 CI 与 Merge、由真实 Source 读回 closure 的完整 continuation，以及原生 GitHub 上的全部故障注入。loopback 测试、Core 测试或离线 SDK 测试均不替代这些证据。本阶段没有读取真实凭据或连接真实仓库，M12 继续禁止切换。

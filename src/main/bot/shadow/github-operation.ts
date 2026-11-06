@@ -14,6 +14,9 @@ export interface GithubAuthorization {
   ticketId: string;
   mandateId: string;
   generation: number;
+  /** Host-bound M11 profile identity; absent in standalone M10 simulations. */
+  assignmentId?: string;
+  bindingClaim?: number;
   allowed: readonly GithubOperationKind[];
   stopped?: boolean;
 }
@@ -32,6 +35,8 @@ export interface GithubOperationRequest {
     requiredChecks?: readonly string[];
     checks?: Readonly<Record<string, "success" | "failure" | "pending">>;
     approvedBy?: readonly string[];
+    /** Version used by the M11 loopback Issue close compare-and-set protocol. */
+    issueVersion?: number;
   };
 }
 export interface GithubOperationPlan extends Operation {
@@ -116,7 +121,8 @@ function expectedRequest(request: GithubOperationRequest): GithubOperationPayloa
       const number = integer(request.object.issueNumber, "issueNumber");
       if (request.preconditions.currentState !== "open") throw new Error("Issue 当前状态不是 open");
       if (typeof request.params.mergeCommit !== "string" || !request.params.mergeCommit) throw new Error("Issue close 必须关联 mergeCommit");
-      return { method: "PATCH", path: `/repos/${repo}/issues/${number}`, body: { state: "closed", mergeCommit: request.params.mergeCommit } };
+      return { method: "PATCH", path: `/repos/${repo}/issues/${number}`, body: { state: "closed", mergeCommit: request.params.mergeCommit,
+        ...(request.preconditions.issueVersion === undefined ? {} : { version: integer(request.preconditions.issueVersion, "issueVersion") }) } };
     }
   }
 }

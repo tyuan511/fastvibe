@@ -31,6 +31,11 @@ export class ShadowCredentialHost {
     const resolver = this.resolvers.get(binding.ref.id);
     if (!resolver) throw new Error(`凭据 resolver 不可用: ${binding.ref.id}`);
     const secret = await resolver.resolve(binding.ref, purpose);
+    // A rotation/rebind or resolver removal while resolution was pending revokes
+    // this in-memory result before any adapter can use it.
+    const current = this.registry.credentialBinding(source);
+    if (!current || current.revision !== binding.revision || current.ref.id !== binding.ref.id
+      || this.resolvers.get(binding.ref.id) !== resolver) throw new Error("凭据绑定在解析期间已变化");
     if (secret === undefined || secret === null) throw new Error("凭据 resolver 返回空值");
     return use(secret);
   }
