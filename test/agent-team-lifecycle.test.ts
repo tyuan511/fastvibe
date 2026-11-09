@@ -166,3 +166,14 @@ test("a followup to a running thread only steers and does not start a second tur
   assert.equal(f.store.messages("worker").some((m) => m.kind === "message" && m.text === "Add this correction"), true);
   resolve(response());
 });
+
+test("finishTurn keeps the mailbox result full but bounds the sidebar lastMessage snippet", (t) => {
+  const f = fixture(t);
+  f.create("worker");
+  const output = `${"x".repeat(5000)} tail marker`;
+  f.store.finishTurn("worker", 1, "completed", output);
+  const thread = f.store.get("worker")!;
+  assert.equal(thread.lastMessage!.length, 2001);
+  assert.ok(thread.lastMessage!.endsWith("…"));
+  assert.equal(f.store.messages("worker").find((mail) => mail.kind === "result")!.text, output);
+});

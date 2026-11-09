@@ -98,7 +98,7 @@ test("spawn prompt rules carry the shared team guidance and collaboration tools 
   assert.match(loaded.tools.get("wait_agent").description, /selected agent threads/);
   assert.match(loaded.tools.get("wait_agent").description, /result update/);
   assert.match(loaded.tools.get("wait_agent").description, /other selected threads finish/);
-  assert.match(loaded.tools.get("wait_agent").description, /actual results/);
+  assert.match(loaded.tools.get("wait_agent").description, /full results are delivered automatically/);
   assert.match(loaded.tools.get("wait_agent").description, /FINAL_ANSWER/);
 
   const controller = new AbortController();
@@ -157,4 +157,65 @@ test("mailbox sends do not start turns and spawn retains its original signal for
   const refused = await spawn.execute("cancelled", { message: "Do not spawn", task_name: "cancelled" }, cancelled.signal, undefined, ctx);
   assert.equal(refused.isError, true);
   assert.equal(calls.length, 3);
+});
+
+test("list_agents answers with a bounded digest and a no-change shortcut", async () => {
+  const loaded = loadExtension();
+  const thread = {
+    id: "agent-a", name: "Ray", agent: "worker", status: "working", phase: "waiting", currentTurn: 2,
+    task: "T".repeat(400), lastMessage: "L".repeat(900), systemPrompt: "S".repeat(5000),
+    tools: ["read", "edit"], cwd: "/repo", revision: 3,
+  };
+  let threads = [thread];
+  const ctx = { cwd: "/project", ui: { conversationId: "root", listAgentThreads: async () => threads } };
+  const tool = loaded.tools.get("list_agents");
+
+  const first = await tool.execute("call-1", {}, undefined, undefined, ctx);
+  const text = first.content[0].text;
+  assert.match(text, /Agent Team threads \(1\)/);
+  assert.match(text, /name=Ray agent=worker status=working\/waiting turn=2/);
+  assert.ok(text.includes(`task="${"T".repeat(200)}…"`));
+  assert.ok(text.includes(`last="${"L".repeat(400)}…"`));
+  assert.ok(!text.includes("S".repeat(100)), "system prompts must stay out of the digest");
+  assert.ok(!text.includes("T".repeat(201)));
+  assert.deepEqual(first.details.threads, [thread]);
+
+  const again = await tool.execute("call-2", {}, undefined, undefined, ctx);
+  assert.match(again.content[0].text, /no changes since your last list_agents/);
+  assert.ok(!again.content[0].text.includes('task="'));
+  assert.deepEqual(again.details.threads, [thread]);
+
+  threads = Array.from({ length: 13 }, (_, index) => ({ ...thread, id: `agent-${index}`, revision: 4 }));
+  const changed = await tool.execute("call-3", {}, undefined, undefined, ctx);
+  assert.ok(changed.content[0].text.includes('task="'));
+  assert.ok(!changed.content[0].text.includes("no changes"));
+  assert.match(changed.content[0].text, /…and 1 more threads not shown\./);
+
+  const other = await tool.execute("call-4", {}, undefined, undefined, { ...ctx, ui: { ...ctx.ui, conversationId: "branch" } });
+  assert.ok(!other.content[0].text.includes("no changes"), "a new conversation starts with a full digest");
+});
+
+test("spawn and wait answers are one-line digests while details keep full threads", async () => {
+  const loaded = loadExtension();
+  const thread = {
+    id: "agent-new", name: "Ray", agent: "worker", status: "working", currentTurn: 1,
+    task: "W".repeat(300), lastMessage: "L".repeat(900), systemPrompt: "S".repeat(4000), revision: 1,
+  };
+  const spawn = await loaded.tools.get("spawn_agent").execute("spawn", { message: "Own src", task_name: "owned-work" }, undefined, undefined, {
+    cwd: "/owned-project",
+    ui: { conversationId: "parent", spawnAgent: async () => thread },
+  });
+  assert.match(spawn.content[0].text, /^已创建 Agent thread agent-new name=Ray agent=worker status=working/);
+  assert.ok(spawn.content[0].text.includes(`task="${"W".repeat(200)}…"`));
+  assert.ok(!spawn.content[0].text.includes("S".repeat(100)));
+  assert.equal(spawn.details.thread.id, "agent-new");
+  assert.equal(spawn.details.thread.systemPrompt.length, 4000);
+
+  const wait = await loaded.tools.get("wait_agent").execute("wait", {}, undefined, undefined, {
+    cwd: "/project",
+    ui: { conversationId: "root", waitAgents: async () => [thread] },
+  });
+  assert.match(wait.content[0].text, /FINAL_ANSWER messages/);
+  assert.ok(wait.content[0].text.includes(`last="${"L".repeat(400)}…"`));
+  assert.deepEqual(wait.details.threads, [thread]);
 });

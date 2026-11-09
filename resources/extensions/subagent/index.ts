@@ -25,12 +25,62 @@ const sender = (ctx: { ui: unknown }): string => host(ctx).conversationId ?? "ro
 const roster = (agents: AgentConfig[]): string => agents.map((a) => `${a.name} — ${a.description}`).join("; ") || "none installed";
 const role = (agents: AgentConfig[], name: string): AgentConfig | undefined => agents.find((a) => a.name.toLowerCase() === name.toLowerCase());
 
+/** Shape of the host's thread rows; only these fields feed the model-facing digest. */
+type TeamThread = {
+  id: string;
+  name?: string;
+  agent?: string;
+  taskName?: string;
+  status: string;
+  phase?: string;
+  currentTurn?: number;
+  task?: string;
+  lastMessage?: string;
+  revision: number;
+};
+
+const DIGEST_MAX_THREADS = 12;
+const TASK_EXCERPT_CHARS = 200;
+const LAST_MESSAGE_EXCERPT_CHARS = 400;
+
+const clip = (text: string | undefined, max: number): string => {
+  const value = (text ?? "").replace(/\s+/g, " ").trim();
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+};
+
+/** Threads are compared by revision so an unchanged tree never repeats its digest. */
+const threadSignature = (threads: TeamThread[]): string =>
+  threads.map((thread) => `${thread.id}:${thread.revision}`).sort().join(",");
+
+const threadFields = (thread: TeamThread, detailed: boolean): string => {
+  const fields = [
+    thread.id,
+    `name=${clip(thread.name ?? thread.taskName, 64) || "?"}`,
+    `agent=${thread.agent ?? "?"}`,
+    `status=${thread.phase ? `${thread.status}/${thread.phase}` : thread.status}`,
+    ...(thread.currentTurn ? [`turn=${thread.currentTurn}`] : []),
+    ...(detailed && thread.task ? [`task="${clip(thread.task, TASK_EXCERPT_CHARS)}"`] : []),
+    ...(detailed && thread.lastMessage ? [`last="${clip(thread.lastMessage, LAST_MESSAGE_EXCERPT_CHARS)}"`] : []),
+  ];
+  return fields.join(" ");
+};
+
+const threadDigest = (threads: TeamThread[], detailed: boolean, note: string): string => {
+  const listed = threads.slice(0, DIGEST_MAX_THREADS);
+  const lines = [
+    `Agent Team threads (${threads.length})${note ? ` — ${note}` : ""}:`,
+    ...listed.map((thread) => `- ${threadFields(thread, detailed)}`),
+    ...(threads.length > listed.length ? [`…and ${threads.length - listed.length} more threads not shown.`] : []),
+  ];
+  return lines.join("\n");
+};
+
 const TEAM_GUIDANCE = [
   "You are the root (main) agent: own the user's goal, coordinate the team, integrate results, and make the final decision. Delegation supports your work; it does not replace your responsibility to inspect and verify the result.",
   "Delegate independent, useful work proactively when it can save time or improve quality. Keep dependent work in your own turn until its prerequisite is known, or delegate it with a precise dependency and acceptance condition.",
   "Use the explorer role for a focused factual investigation or codebase question whose result can be reported without editing. Use the worker role for implementation work, and always state the exact files or directories that worker owns, the desired outcome, and how to verify it.",
   "All agents share the same filesystem and project checkout. Coordinate ownership before parallel edits, inspect the current state before changing it, and never revert, reset, or overwrite another agent's work just to resolve a conflict. Integrate changes deliberately and report partial effects.",
-  "The roster is injected separately before each request with thread IDs and task names. After an interruption, reload, compaction, or continuation, call list_agents before spawning anything so you reuse existing threads and do not create duplicates.",
+  "The roster is injected separately before each request with thread IDs and task names. After an interruption, reload, compaction, or continuation, call list_agents once before spawning anything so you reuse existing threads and do not create duplicates; its reply is a compact digest, and a \"no changes\" reply already covers everything you need.",
   "send_message only adds mailbox context; it does not start or resume a turn. Use followup_task when an idle or interrupted agent must actually begin or resume work. A follow-up is a new turn informed by the thread's latest state, not a promise of exact original execution continuation.",
   "A user Stop is not a request to resume through notifications. Resume only after the user asks to continue and the same task is still relevant: inspect the latest thread state, use followup_task on the existing thread when needed, and recheck the filesystem for partial effects before proceeding.",
   "Completed or failed child turns automatically deliver a FINAL_ANSWER message containing the thread sender, turn, and status. Treat it as a result to evaluate. Ordinary interrupted turns do not send a notification; inspect them with list_agents or wait_agent when the user asks or the task requires it.",
@@ -54,8 +104,8 @@ const TOOL_GUIDELINES = {
     "Describe the next concrete task and acceptance criteria. This is a new turn, not exact continuation of the interrupted execution.",
   ],
   list: [
-    "Use list_agents after interruption, reload, compaction, or continuation before spawning, and whenever you need the latest thread state.",
-    "Use it to avoid duplicate threads; do not use it as a tight polling loop while waiting.",
+    "Call list_agents once after interruption, reload, compaction, or continuation, and before your first spawn in an inherited conversation, to reuse existing threads instead of duplicating them.",
+    "The reply is a compact digest. When it says \"no changes\", do not call list_agents again: thread results arrive automatically as FINAL_ANSWER messages, and wait_agent blocks for fresh updates.",
   ],
   wait: [
     "Use wait_agent for a meaningful wait on selected threads, including waits of several minutes; a selected result update may wake the wait while other selected threads continue running.",
@@ -64,6 +114,7 @@ const TOOL_GUIDELINES = {
 } as const;
 
 export default function (pi: ExtensionAPI): void {
+  const listSignatures = new Map<string, string>();
   pi.on("before_agent_start", (event, ctx) => {
     let agents: AgentConfig[] = [];
     try { agents = discoverAgents(ctx.cwd, "user").agents; } catch { /* optional role discovery */ }
@@ -94,8 +145,8 @@ export default function (pi: ExtensionAPI): void {
       const found = discoverAgents(ctx.cwd, params.agentScope ?? "user").agents;
       const selected = role(found, params.agent_type ?? "worker");
       if (!selected) return fail(`找不到 Agent 角色「${params.agent_type ?? "worker"}」。可用角色：${roster(found)}`);
-      const thread = await h.spawnAgent({ parentId: params.parent, taskName: params.task_name, agent: selected.name, task: params.message, systemPrompt: selected.systemPrompt, tools: selected.tools, model: params.model ?? selected.model, fallbackModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinkingLevel: params.model_reasoning_effort ?? selected.thinkingLevel, forkTurns: params.fork_turns === "none" ? "none" : "all", cwd: params.cwd ?? ctx.cwd, signal });
-      return { content: [{ type: "text", text: `已创建 Agent thread：${JSON.stringify(thread)}` }], details: { thread, forkTurns: params.fork_turns === "none" ? "none" : "all" } };
+      const thread = await h.spawnAgent({ parentId: params.parent, taskName: params.task_name, agent: selected.name, task: params.message, systemPrompt: selected.systemPrompt, tools: selected.tools, model: params.model ?? selected.model, fallbackModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinkingLevel: params.model_reasoning_effort ?? selected.thinkingLevel, forkTurns: params.fork_turns === "none" ? "none" : "all", cwd: params.cwd ?? ctx.cwd, signal }) as TeamThread;
+      return { content: [{ type: "text", text: `已创建 Agent thread ${threadFields(thread, true)}` }], details: { thread, forkTurns: params.fork_turns === "none" ? "none" : "all" } };
     },
   });
 
@@ -128,13 +179,13 @@ export default function (pi: ExtensionAPI): void {
   pi.registerTool({
     name: "wait_agent",
     label: "Wait agent",
-    description: "Wait for a meaningful update from selected agent threads, including a result update that may wake the wait before other selected threads finish. Omit targets to use the current team; returned states include actual results delivered through automatic FINAL_ANSWER messages, and cancellation aborts the wait.",
+    description: "Wait for a meaningful update from selected agent threads, including a result update that may wake the wait before other selected threads finish. Omit targets to use the current team; full results are delivered automatically as FINAL_ANSWER messages, and cancellation aborts the wait.",
     promptGuidelines: [...TOOL_GUIDELINES.wait],
     parameters: Type.Object({ targets: Type.Optional(Type.Array(Type.String())), timeout_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 1800000 })) }),
     async execute(_id, params, _signal, _update, ctx) {
       const h = host(ctx); if (!h.waitAgents) return fail("当前宿主不支持 Agent wait。");
-      const result = await h.waitAgents({ threadIds: params.targets, timeoutMs: params.timeout_ms, signal: _signal });
-      return { content: [{ type: "text", text: JSON.stringify(result) }], details: { threads: result } };
+      const result = await h.waitAgents({ threadIds: params.targets, timeoutMs: params.timeout_ms, signal: _signal }) as TeamThread[];
+      return { content: [{ type: "text", text: threadDigest(result, true, "full results arrive separately as FINAL_ANSWER messages; wait again instead of re-listing") }], details: { threads: result } };
     },
   });
 
@@ -153,13 +204,20 @@ export default function (pi: ExtensionAPI): void {
   pi.registerTool({
     name: "list_agents",
     label: "List agents",
-    description: "List the current Agent Team tree and latest thread states so you can reuse existing work instead of spawning duplicates.",
+    description: "List the current Agent Team tree and latest thread states as a compact digest so you can reuse existing work instead of spawning duplicates. A \"no changes\" reply means the tree is unchanged since your last call.",
     promptGuidelines: [...TOOL_GUIDELINES.list],
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _update, ctx) {
       const h = host(ctx); if (!h.listAgentThreads) return fail("当前宿主不支持 Agent list。");
-      const result = await h.listAgentThreads();
-      return { content: [{ type: "text", text: JSON.stringify(result) }], details: { threads: result } };
+      const result = await h.listAgentThreads() as TeamThread[];
+      const key = sender(ctx);
+      const signature = threadSignature(result);
+      const changed = listSignatures.get(key) !== signature;
+      listSignatures.set(key, signature);
+      return {
+        content: [{ type: "text", text: threadDigest(result, changed, changed ? "" : "no changes since your last list_agents; do not call it again until a FINAL_ANSWER arrives") }],
+        details: { threads: result },
+      };
     },
   });
 }

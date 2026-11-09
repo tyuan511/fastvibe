@@ -2,6 +2,9 @@ import { agentIdentityForId } from "../../shared/agent-identity.ts";
 import type { AgentMessageKind, AgentThread, AgentThreadMessage, AgentThreadStatus } from "../../shared/agent-thread.ts";
 import type { Db } from "./db.ts";
 
+/** Sidebar snippet only; the full turn output stays in the result mailbox message. */
+const LAST_MESSAGE_CHARS = 2000;
+
 export class AgentThreadStore {
   #db: Db;
   constructor(db: Db) { this.#db = db; }
@@ -62,7 +65,7 @@ export class AgentThreadStore {
       if (!current || (current.currentTurn ?? 1) !== turn) return undefined;
       const active = ["queued", "working", "waiting"].includes(current.status);
       if (!active && !(status === "interrupted" && current.status === "interrupted")) return undefined;
-      const next = this.setStatus(id, status, { endedAt: Date.now(), lastMessage: output, unread: true });
+      const next = this.setStatus(id, status, { endedAt: Date.now(), lastMessage: output.length > LAST_MESSAGE_CHARS ? `${output.slice(0, LAST_MESSAGE_CHARS)}…` : output, unread: true });
       // An interruption retains partial output for follow-up, but sends no parent notification.
       if (status === "interrupted" && !output) return next;
       const message: AgentThreadMessage = {
