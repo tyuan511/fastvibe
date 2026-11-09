@@ -276,7 +276,7 @@ node --test test/vivi-dsh-github-authority.test.ts test/vivi-dsh-github-deployme
 
 ## M11 原生适配：GitHub REST 读写与对账已实现
 
-详细端点、凭据、并发和证据合同见 [原生 REST 适配说明](vivi-dsh-github-rest.md)。新入口为 `GithubRestTransport`、`GithubNativePlanner`、`GithubNativeOperationAdapter` 与 `GithubNativeDeployment`；没有生产 Runtime、IPC、settings 或数据库迁移接入。
+详细端点、凭据、并发和证据合同见 [原生 REST 适配说明](vivi-dsh-github-rest.md)。新入口为 `GithubRestTransport`、`GithubNativePlanner`、`GithubNativeOperationAdapter` 与 `GithubNativeDeployment`；没有生产 Runtime、IPC、settings 或数据库迁移接入。另已实现 [GitHub App 认证模块](vivi-dsh-github-app.md)（App JWT、manifest 交换、installation token mint 与 bot 身份发现，以及 [manifest 一键安装流程](../src/main/bot/shadow/github-app-setup.ts)：表单 manifest 构造、loopback 回调、0600 凭据文件、安装枚举；均离线验收），供后续以 App bot 身份接入受控 Review/Merge；未接入任何部署或设置页。
 
 - 原生 reader 使用完整 Link 分页与 ETag/304 接入真实 M9 Source；凭据、取消、timeout、路径边界、响应脱敏均由 transport 收口。默认 HTTPS GitHub origin，loopback 仅供显式契约测试。
 - 原生意图使用独立 `github-rest` 协议/版本，发送原生 owner/repo 路径和字段。纯 `buildIntent()` 不落库；业务 key 区分 Ticket 与 Review 的 head/base/artifact，支持同 Ticket 新 SHA 重新审核；同身份参数漂移仍拒绝。

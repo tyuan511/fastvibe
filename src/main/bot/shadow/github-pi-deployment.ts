@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { GithubNativeDeployment, type GithubNativeDeploymentOptions } from "./github-native-deployment.ts";
 import { PiExecutor, type PiExecutorOptions } from "./pi-executor.ts";
 import { PiLedger } from "./pi-ledger.ts";
+import { renderReviewBody } from "./github-presentation.ts";
 import type { GithubOperationKind } from "./github-operation.ts";
 import type { PiReviewRecord } from "./pi-reviewer.ts";
 import type { WorkerToken } from "./engine.ts";
@@ -87,7 +88,7 @@ export class GithubPiDeployment {
         ? "REQUEST_CHANGES" : artifact.verdict === "approve" ? "APPROVE" : "COMMENT";
       const authorization = this.native.grant(binding, delivery.allowed ?? ["review"], { settleIssue: delivery.settleIssue });
       const operation = this.native.planAndQueue({ kind: "review", source: delivery.source, instance: delivery.instance, repositoryId: delivery.repositoryId,
-        object: { pullNumber: target.pullNumber }, params: { commitSha: artifact.headSha, artifactId, event, body: JSON.stringify(artifact, null, 2) },
+        object: { pullNumber: target.pullNumber }, params: { commitSha: artifact.headSha, artifactId, event, body: renderReviewBody(artifact) },
         authorization, preconditions: { currentState: "open", headSha: target.headSha, baseSha: target.baseSha } });
       return { id: operation.id, source: operation.source, instance: operation.instance, key: operation.key, status: operation.status };
     });

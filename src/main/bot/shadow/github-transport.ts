@@ -13,6 +13,10 @@ export interface GithubRestTransportOptions {
   apiVersion?: string;
   fetchImpl?: typeof fetch;
   loopbackTest?: boolean;
+  /** How the write-time principal reflection binds. "github-app" skips the /user
+   * check: installation tokens cannot read it (verified 2026-11-09); identity is
+   * bound at token mint time instead, see docs/vivi-dsh-github-app.md. */
+  principalMode?: "user" | "github-app";
   beforeRequest?: (request: { method: string; path: string }) => void;
 }
 export interface GithubRestResponse { status: number; headers: Record<string, string>; body: unknown }
@@ -33,6 +37,7 @@ export class GithubRestTransport {
   private readonly timeoutMs: number;
   private readonly apiVersion: string;
   private readonly send: typeof fetch;
+  readonly principalMode: "user" | "github-app";
   private readonly repoPath: string;
   private readonly idPath: string;
   constructor(options: GithubRestTransportOptions) {
@@ -45,12 +50,15 @@ export class GithubRestTransport {
       this.timeoutMs = options.timeoutMs ?? 10_000;
       this.apiVersion = options.apiVersion ?? "2022-11-28";
       if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(this.apiVersion)) throw failure();
+      const principalMode = options.principalMode ?? "user";
+      if (principalMode !== "user" && principalMode !== "github-app") throw failure();
       this.origin = base.origin;
       // Snapshot caller-owned configuration so mutation cannot widen repository scope.
       this.options = { ...options, repository: { ...options.repository } };
       this.repoPath = `/repos/${owner}/${name}`;
       this.idPath = `/repositories/${id}`;
       this.send = options.fetchImpl ?? fetch;
+      this.principalMode = principalMode;
     } catch { throw failure(); }
   }
   private url(path: string, method: string): URL {
@@ -101,9 +109,11 @@ export class GithubRestTransport {
           if (/^(?:if-none-match|if-modified-since|cache-control)$/i.test(key)) headers.set(key, value);
         }
         const init: RequestInit = { method, headers, redirect: "error", signal: controller.signal, ...(encoded === undefined ? {} : { body: encoded }) };
-        if (request.principal && method !== "GET" && method !== "HEAD") {
+        if (request.principal && method !== "GET" && method !== "HEAD" && this.principalMode === "user") {
           // Bind /user and the write to the same resolved secret. Resolving again
           // after a separate identity lookup could silently switch accounts.
+          // github-app mode skips this reflection: installation tokens cannot read
+          // /user; their identity is bound at mint time (docs/vivi-dsh-github-app.md).
           controller.signal.throwIfAborted(); validateCredential();
           const identity = await this.send(`${this.origin}/user`, { method: "GET", headers, redirect: "error", signal: controller.signal });
           const user = identity.status === 200 ? await identity.json() as { id?: unknown; login?: unknown } : undefined;

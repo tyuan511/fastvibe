@@ -28,7 +28,7 @@ function request(kind: Kind): GithubOperationRequest {
 }
 const writePath = (kind: Kind) => kind === "branch" ? `${ROOT}/git/refs` : kind === "pull" ? `${ROOT}/pulls` : kind === "review" ? `${ROOT}/pulls/8/reviews` : kind === "merge" ? `${ROOT}/pulls/8/merge` : `${ROOT}/issues/7`;
 const method = (kind: Kind) => kind === "merge" ? "PUT" : kind === "issue-close" ? "PATCH" : "POST";
-async function fixture(t: TestContext, kind: Kind, bestEffort = true) {
+async function fixture(t: TestContext, kind: Kind, bestEffort = true, reviewerPrincipalMode?: "user" | "github-app") {
   const server = new GithubNativeServer(); await server.start();
   const store = openShadowStore(":memory:"), registry = new ShadowSourceRegistry(store);
   registerGithubShadowSource(registry); registry.configure("github", { enabled: true, config: { repository: { id: 11, owner: "acme", name: "widget" } } });
@@ -39,9 +39,9 @@ async function fixture(t: TestContext, kind: Kind, bestEffort = true) {
   for (const [source, name] of [["github", "writer"], ["github-reviewer", "reviewer"]]) {
     const ref = { id: `fake-${name}`, kind: "github" }; credentials.register(ref, { resolve: async () => `fake-${name}` }); credentials.bind(source!, ref);
   }
-  const transport = (source: string) => new GithubRestTransport({ repository: { id: 11, owner: "acme", name: "widget" }, credentials, source, baseUrl: server.baseUrl, loopbackTest: true });
+  const transport = (source: string, principalMode?: "user" | "github-app") => new GithubRestTransport({ repository: { id: 11, owner: "acme", name: "widget" }, credentials, source, baseUrl: server.baseUrl, loopbackTest: true, ...(principalMode ? { principalMode } : {}) });
   let authorized = 0;
-  const adapter = new GithubNativeOperationAdapter({ store, writer: transport("github"), reviewer: transport("github-reviewer"),
+  const adapter = new GithubNativeOperationAdapter({ store, writer: transport("github"), reviewer: transport("github-reviewer", reviewerPrincipalMode),
     writerIdentity: { id: "1", login: "agent" }, reviewerIdentity: { id: "2", login: "reviewer" }, requiredChecks: ["test"],
     authorize: () => { authorized++; }, ...(bestEffort ? { issueClose: "best-effort" as const } : {}) });
   const effects = new ShadowEffects(store), operations = new ShadowOperations(store, effects, adapter), planner = new GithubNativePlanner(store, registry, "github", "desktop");
@@ -200,4 +200,22 @@ test("Issue reopen after lost close response remains unknown and does not PATCH 
   const f = await fixture(t, "issue-close"); f.server.fault("PATCH", writePath("issue-close"), { kind: "drop-after-apply" });
   const op = await f.run(); f.server.reopen(); assert.equal((await f.recover(op)).status, "uncertain");
   await f.recover(op); assert.equal(f.writes().length, 1); assert.equal(f.server.issue.state, "open");
+});
+
+test("github-app principal mode sends a review with no /user reflection", async t => {
+  const f = await fixture(t, "review", true, "github-app");
+  const op = await f.run();
+  assert.equal(op.status, "confirmed", JSON.stringify(op));
+  assert.equal(f.writes().length, 1);
+  assert.equal(f.writes()[0]!.path, writePath("review"));
+  // Default mode reflects /user twice (preflight identity + write binding); app mode must not read it at all.
+  assert.ok(!f.server.requests.some(r => r.path === "/user"), "app principal mode must not read /user");
+});
+
+test("principalMode 只接受 user 或 github-app", () => {
+  const credentials = new ShadowCredentialHost(new ShadowSourceRegistry(openShadowStore(":memory:")));
+  const base = { repository: { id: 11, owner: "acme", name: "widget" }, credentials, source: "github" } as const;
+  assert.throws(() => new GithubRestTransport({ ...base, principalMode: "app" as never }), /未确认/);
+  assert.equal(new GithubRestTransport({ ...base }).principalMode, "user");
+  assert.equal(new GithubRestTransport({ ...base, principalMode: "github-app" }).principalMode, "github-app");
 });

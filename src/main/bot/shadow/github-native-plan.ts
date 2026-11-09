@@ -2,6 +2,7 @@
 // Native REST intents only. The host owns authorization revalidation and execution.
 import { createHash } from "node:crypto";
 import { validateGithubOperationRequest, type GithubOperationPayload, type GithubOperationPlan, type GithubOperationRequest } from "./github-operation.ts";
+import { closingIssueNumbers } from "./github-presentation.ts";
 import type { GithubRepository } from "./github-source.ts";
 import type { ShadowSourceRegistry } from "./source-registry.ts";
 import type { Operation, ShadowStore } from "./store.ts";
@@ -86,7 +87,12 @@ export class GithubNativePlanner {
       case "pull": {
         const head = branch(params.headBranch); const base = branch(params.baseBranch);
         sha(pre.headSha, "headSha"); sha(pre.baseSha, "baseSha");
-        target = [head]; expected = { method: "POST", path: `${prefix}/pulls`, body: { title: text(params.title, "title"), body: body(params.body), head, base } }; break;
+        // A declared Issue link must be real: GitHub only auto-closes a linked Issue when the
+        // body carries a closing keyword, and strict settlement reads exactly that event.
+        const linked = request.object.issueNumber === undefined ? undefined : positive(request.object.issueNumber, "issueNumber");
+        const text_ = body(params.body);
+        if (linked !== undefined && !closingIssueNumbers(text_).includes(linked)) throw new Error(`PR 正文必须包含 Closes/Fixes/Resolves #${linked} 才能关联该 Issue`);
+        target = [head]; expected = { method: "POST", path: `${prefix}/pulls`, body: { title: text(params.title, "title"), body: text_, head, base } }; break;
       }
       case "review": {
         const number = positive(request.object.pullNumber, "pullNumber"); const head = sha(pre.headSha, "headSha"); const base = sha(pre.baseSha, "baseSha");

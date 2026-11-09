@@ -15,6 +15,7 @@ import { ShadowEngine } from "../src/main/bot/shadow/engine.ts";
 import { executionPaths } from "../src/main/bot/shadow/execution-directory.ts";
 import { GithubPiDeployment } from "../src/main/bot/shadow/github-pi-deployment.ts";
 import { GithubRestTransport } from "../src/main/bot/shadow/github-transport.ts";
+import { renderPullBody } from "../src/main/bot/shadow/github-presentation.ts";
 import { GithubShadowSource, githubEventToTrigger, registerGithubShadowSource } from "../src/main/bot/shadow/github-source.ts";
 import { ManagedGitRepository } from "../src/main/bot/shadow/git-repository.ts";
 import { ManagedPiReviewer } from "../src/main/bot/shadow/pi-reviewer.ts";
@@ -200,7 +201,10 @@ export async function runViviTest(rootInput: string, reconcileDeadWorker = false
     const push = await requireConfirmed(deployment.native.planGitAndQueue({ kind: "push", authorization, snapshot, directoryRevision, expectedRemoteSha: null }));
     log("push-confirmed", push.receipt);
     const pull = await requireConfirmed(deployment.native.planAndQueue({ kind: "pull", source, instance, repositoryId: repoId, authorization,
-      object: {}, params: { headBranch: "dsh/issue-1", baseBranch: "main", title: "Fix wrapping and overlapping quiet hours", body: "Related to #1.\n\nActual SDK Worker changes, host-verified tests and managed Git delivery. Independent model artifact will be recorded separately; native independent GitHub review remains pending." },
+      object: { issueNumber: 1 }, params: { headBranch: "dsh/issue-1", baseBranch: "main", title: "Fix wrapping and overlapping quiet hours", body: renderPullBody({
+        issueNumber: 1,
+        summary: "Actual SDK Worker changes, host-verified tests and managed Git delivery. Independent model artifact will be recorded separately; native independent GitHub review remains pending.",
+      }) },
       preconditions: { headSha: snapshot.sha, baseSha: baseline } }));
     const pullNumber = (pull.receipt as { number: number }).number;
     log("pull-confirmed", { url: `https://github.com/${repoName}/pull/${pullNumber}`, head: snapshot.sha });

@@ -74,6 +74,13 @@ export class GithubNativeOperationAdapter implements OperationAdapter {
     if (ident(row.id) !== ident(p.repository.id) || ident(row.full_name).toLowerCase() !== `${p.repository.owner}/${p.repository.name}`.toLowerCase()) throw new Refused("repository-mismatch");
   }
   private async identity(t: GithubRestTransport, principal: GithubPrincipal, context: OperationContext): Promise<void> {
+    if (t.principalMode === "github-app") {
+      // Installation tokens cannot read /user or /app (verified 2026-11-09). The
+      // credential is bound to its app bot identity at mint time by
+      // resolveAppPrincipal(), and the repository preflight above still runs
+      // through this same transport and secret. See docs/vivi-dsh-github-app.md.
+      return;
+    }
     const row = await this.get(t, "/user", context);
     if (ident(row.id) !== principal.id || !equalLogin(row.login, principal.login)) throw new Refused("credential-principal-mismatch");
   }

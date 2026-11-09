@@ -14,9 +14,9 @@
 
 `GithubNativeDeployment` 需要调用方提供 reader/writer/reviewer transport、固定仓库和执行/审核账号 ID、Policy、required checks 以及受管 Executor 端口。缺少 Executor 时沿用既有 `Later`，不会伪造 Worker 或模型成功。`poll()` 是显式 Source 轮询入口；接受、执行、投递及停止仍通过原有 Engine、Effects 和角色端口。
 
-transport 默认 origin 为 `https://api.github.com`、API version 为 `2022-11-28`；版本可由宿主明确配置。只允许配置仓库的 `/repos/{owner}/{repo}`、`/repositories/{id}`，以及只读 `/user`、`/notifications`；跨仓库、跨 origin、编码路径逃逸和重定向拒绝。只有显式 `loopbackTest: true` 才可配置 IPv4 loopback HTTP。当前认证身份验收使用 `/user`，适用于用户凭据；GitHub App installation 身份协议与 Enterprise 自定义 origin 尚未接入。
+transport 默认 origin 为 `https://api.github.com`、API version 为 `2022-11-28`；版本可由宿主明确配置。只允许配置仓库的 `/repos/{owner}/{repo}`、`/repositories/{id}`，以及只读 `/user`、`/notifications`；跨仓库、跨 origin、编码路径逃逸和重定向拒绝。只有显式 `loopbackTest: true` 才可配置 IPv4 loopback HTTP。用户凭据的认证身份验收使用 `/user`；GitHub App 凭据经 [App 认证模块](vivi-dsh-github-app.md)以 `principalMode: "github-app"` 接入（见下），Enterprise 自定义 origin 尚未接入。
 
-每次请求经 `ShadowCredentialHost` 解析显式绑定的凭据，不发现本机 `gh`、环境变量或 FastVibe 登录凭据。写入还会用**同一次解析得到的 secret**再次读取 `/user`，核对固定账号 ID/login；其后重新检查 credential binding/resolver 和本地 operation owner、Ticket、binding、Policy、Source。避免把独立的一次 `/user` 查询当成下一次解析所得凭据的身份保证。凭据、授权、网络与解析异常统一脱敏，receipt 只保存白名单事实。
+每次请求经 `ShadowCredentialHost` 解析显式绑定的凭据，不发现本机 `gh`、环境变量或 FastVibe 登录凭据。用户凭据（默认 `principalMode: "user"`）写入还会用**同一次解析得到的 secret**再次读取 `/user`，核对固定账号 ID/login；其后重新检查 credential binding/resolver 和本地 operation owner、Ticket、binding、Policy、Source。避免把独立的一次 `/user` 查询当成下一次解析所得凭据的身份保证。App installation 凭据（`principalMode: "github-app"`）没有可用的 `/user`/`/app` 反射（已验证，见 [App 认证说明](vivi-dsh-github-app.md)），preflight 与写入均跳过该反射，身份改在 token mint 时校验并发现 bot 账号。凭据、授权、网络与解析异常统一脱敏，receipt 只保存白名单事实。
 
 ## 原生意图和发送字段
 
