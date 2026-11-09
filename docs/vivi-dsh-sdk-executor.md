@@ -1,6 +1,6 @@
 # Vivi DSH：隔离 SDK Executor 与受管 Reviewer
 
-状态：M11 的显式部署现在能将真实 Pi SDK Worker、独立只读 Reviewer、领域 read/report 和原生 Review Effect 组装起来。验收使用离线脚本 provider、临时 ShadowStore、专用临时文件和 loopback 原生 HTTP 契约服务；**没有使用外部模型、真实 GitHub、真实用户凭据或生产 Runtime，不代表 M11 通过。**
+状态：M11 的显式部署现在能将真实 Pi SDK Worker、独立只读 Reviewer、领域 read/report 和原生 Review Effect 组装起来。隔离回归使用离线 provider、临时 ShadowStore 与 loopback；另已完成 [vivi-test 的真实模型、GitHub push/PR、CI 与独立模型审核](vivi-dsh-live-vivi-test.md)。原生独立 Review、Merge、Issue 收束及自动接单尚未验收，**不代表 M11 通过**；生产 Runtime 继续隔离。
 
 关联：[目标架构](vivi-dsh-architecture.md)、[开发记录](vivi-dsh-development.md)、[原生 REST 合同](vivi-dsh-github-rest.md)。
 
@@ -26,7 +26,7 @@ launch claim → 准备目录/保留 slot → 打开稳定 Worker Session
 → activate → SDK user JSONL → provider-read → 结构化 report
 ```
 
-`ScratchPiSession.prepare()` 只保存 accepted receipt，不调用 provider、不追加 SDK user。`activate()` 只接受同 binding，已有 entry/terminal 不重复派发，并发激活共享 completion；旧代输入不能以相同 requestId 在新 binding 下复用。原 `submit()` 的既有显式行为保留。
+`ScratchPiSession.prepare()` 只保存 accepted receipt，不调用 provider、不追加 SDK user。显式 `PiExecutor.initialAssignment: true` 会在 launch 已提交且当前 binding/slot 有效后，为首个 Assignment 的持久 origin 准备稳定 `assignment-*` 请求，再通过同一 sweep 激活；这是 Assignment 的首次上下文，`inputIds=[]`，不伪造 TicketInput 的 delivered/read。未开启该 profile 时保留原有仅等待显式 delivery 的实验行为。`activate()` 只接受同 binding，已有 entry/terminal 不重复派发，并发激活共享 completion；旧代输入不能以相同 requestId 在新 binding 下复用。原 `submit()` 的既有显式行为保留。
 
 Pi read 与领域 inputsRead 在同一 SQLite 事务接受；宿主校验拒绝、异步回调或 SQL 回滚时都不成立。READ 与 REPORT 的 JSONL 是提交后的审计镜像，不能从未获数据库接受的镜像恢复授权事实。稳定历史仍作为模型上下文，旧 Assignment 的 entry 不会再次成为新 Assignment 的 delivered/read/report 证据；显式 recover 的实际 entry binding 单独保留。
 

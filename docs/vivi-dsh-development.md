@@ -1,6 +1,6 @@
 # Vivi DSH 开发进度与验收记录
 
-本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M10 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run、GitHub 只读 Source 和 Operation dry-run；另已实现下述 M11 前置的本地 HTTP 部署、宿主授权和 Issue continuation，以及 [原生 GitHub REST 读写与对账](vivi-dsh-github-rest.md)与 [真实 SDK Executor 与独立 Reviewer 组装](vivi-dsh-sdk-executor.md)、[受管 Git 提交/push](vivi-dsh-git-delivery.md)。**M11 的真实 GitHub 闭环尚未验收。**生产 Vivi 继续使用现有 Router/Worker Runtime。当前恢复分支为 `feat/vivi-dsh-recovered`，工作目录为独立 worktree；此前 `feat/vivi-dsh` 的 M11 提交 `db3ca211` 及其父链已恢复。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
+本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M10 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run、GitHub 只读 Source 和 Operation dry-run；另已实现下述 M11 前置的本地 HTTP 部署、宿主授权和 Issue continuation，以及 [原生 GitHub REST 读写与对账](vivi-dsh-github-rest.md)与 [真实 SDK Executor 与独立 Reviewer 组装](vivi-dsh-sdk-executor.md)、[受管 Git 提交/push](vivi-dsh-git-delivery.md)，并已完成 [vivi-test 的部分真实仓库验收](vivi-dsh-live-vivi-test.md)。**M11 的完整 GitHub 闭环尚未验收。**生产 Vivi 继续使用现有 Router/Worker Runtime。当前恢复分支为 `feat/vivi-dsh-recovered`，工作目录为独立 worktree；此前 `feat/vivi-dsh` 的 M11 提交 `db3ca211` 及其父链已恢复。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
 
 ## M0：已建立的实施基线
 
@@ -292,4 +292,12 @@ node --test test/vivi-dsh-github-native-*.test.ts test/vivi-dsh-github-transport
 
 新增真实临时 Git/bare 与领域/SQLite 集成专项 **22/22**；包含确定性对象、普通 index/HEAD 隔离、hooks/配置/凭据隔离、CAS、symbolic refs、Stop、授权/目录版本漂移、真实 SQL ABORT，以及 commit/push 已生效但回执丢失后的重开对账。完整 DSH/旧 Bot/数据库组合 **1017/1017**，SQLite Core **113/113**，严格 ES2022 类型检查通过。当前 worktree 的依赖链接到相同 package/lockfile 的主仓库安装目录，pnpm 11 自动安装检查拒绝跨目录链接；使用 `pnpm --config.verify-deps-before-run=false typecheck` 运行原 typecheck 脚本通过，未修改 package/lockfile 或主仓库依赖。
 
-上述结果没有访问真实 GitHub、复用本机凭据或运行真实模型。M11 下一步仍需明确提供专用仓库、执行/独立审核身份与 resolver、真实模型配置和部署范围，完成真实 push、Source 驱动、CI、Merge 和独立 Issue 收束；M12 继续不允许切换。
+本节回归当时未访问真实 GitHub 或模型；后续部分真实验收见下一节。M12 继续不允许切换。
+
+## M11 vivi-test：真实模型修复、push、PR、CI 与模型审核
+
+用户授权了专用私有仓库 `tyuan511/vivi-test`，并允许复用现有登录与模型配置。实际执行和限制见 [完整验收记录](vivi-dsh-live-vivi-test.md)：Issue #1 → 显式 self-issue 回放/宿主 Decision → 真实 SDK Worker → 宿主固定测试反馈修复 → 受控 commit/push → PR #2 → 同 head 的真实 CI success → 独立只读模型 approve、0 findings。三条外部 operation（commit/push/pull）均 confirmed，审核产物另有匹配的 SDK read evidence。
+
+真实部署暴露并修复了首次 Assignment 未激活，以及多个 completion 在已释放 slot 上重复校验而误标 uncertain 的问题。新增首次 origin、重复 sweep、Stop 前激活拦截和多输入收尾回归，Executor 专项 **20/20**，完整组合 **1020/1020**，typecheck 和 runner 严格 ES2022 检查通过。
+
+当前只有执行账号一个 GitHub 身份：原生独立 Review、Merge、Issue continuation 尚待身份配置；人工 self-issue 回放与宿主 Decision 也不能作为自动接单证据。本次不声明 M11 完成。

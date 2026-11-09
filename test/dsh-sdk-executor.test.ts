@@ -35,7 +35,7 @@ async function provider(root: string, name: string, responses: Responses) {
     models: [{ id: "offline", name: "offline", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100_000, maxTokens: 4096 }] });
   return { faux, runtime, model: runtime.getModel(name, "offline")! };
 }
-interface HarnessOptions { delivery?: "reject" | "rollback"; reviewer?: (root: string) => Promise<NonNullable<PiExecutorOptions["reviewer"]>> }
+interface HarnessOptions { initialAssignment?: boolean; delivery?: "reject" | "rollback"; reviewer?: (root: string) => Promise<NonNullable<PiExecutorOptions["reviewer"]>> }
 async function harness(t: TestContext, responses: Responses = [fauxAssistantMessage("idle")], options: HarnessOptions = {}) {
   const root = mkdtempSync(join(tmpdir(), "dsh-sdk-executor-")), store = openShadowStore(join(root, "shadow.db"));
   let now = Date.now(), autoSweep = false;
@@ -44,7 +44,7 @@ async function harness(t: TestContext, responses: Responses = [fauxAssistantMess
     gate: () => ({ admissible: true, strength: "explicit", basis: { via: "listed" } }), revalidate: () => true, admitsInferred: () => true };
   let driver!: ShadowDriver;
   const executor = new PiExecutor({ store, root, engine: () => driver.engine, enabled: () => !driver.paused(), maxWorkers: () => 1,
-    now: () => now, modelRuntime: worker.runtime, model: worker.model, reviewer: await options.reviewer?.(root) });
+    initialAssignment: options.initialAssignment, now: () => now, modelRuntime: worker.runtime, model: worker.model, reviewer: await options.reviewer?.(root) });
   driver = new ShadowDriver(store, { policy: () => policy, scope: { scope: () => ({ listened: true, observed: false }) }, now: () => now,
     intervalMs: false, beforePass: () => autoSweep ? executor.sweep() : undefined }, {
     ...executor.adapters, assessment: async () => {}, relay: async () => {}, notice: async () => {}, release: async () => {},
@@ -76,6 +76,50 @@ async function harness(t: TestContext, responses: Responses = [fauxAssistantMess
   return { root, store, worker, driver, executor, binding, ledger, sessionKey, ticketId, ticket, messages, deliver, run,
     tick: (ms: number) => { now += ms; }, users: () => messages().filter(row => row.type === "message" && row.message.role === "user") };
 }
+
+test("explicit initial Assignment activates durable origins once after launch commits without fabricating TicketInput delivery", timeout, async t => {
+  const h = await harness(t, [ready()], { initialAssignment: true });
+  assert.equal(h.worker.faux.state.callCount, 0);
+  assert.equal(h.ticket().inputs.length, 0);
+  assert.equal(h.ledger.list(h.sessionKey).length, 0);
+  await h.run();
+  assert.equal(h.worker.faux.state.callCount, 1);
+  const receipt = h.ledger.list(h.sessionKey)[0]!;
+  assert.match(receipt.requestId, /^assignment-/);
+  assert.deepEqual(receipt.inputIds, []);
+  assert.equal(receipt.reads.length, 1);
+  assert.equal(receipt.reports.at(-1)?.report.state, "ready");
+  assert.equal(h.ticket().inputs.length, 0);
+  assert.equal(h.ticket().assignments[0]?.report?.state, "ready");
+  assert.equal(h.ticket().ended, undefined);
+  const text = JSON.stringify(h.users());
+  assert.ok(text.includes(h.ticket().origin.triggerId));
+  assert.ok(text.includes("Fix the bug"));
+  await h.run(); await h.run();
+  assert.equal(h.ledger.list(h.sessionKey).length, 1);
+  assert.equal(h.worker.faux.state.callCount, 1);
+});
+
+test("initial Assignment and queued delivery share idle cleanup without marking a quiet Worker uncertain", timeout, async t => {
+  const h = await harness(t, [ready(), ready()], { initialAssignment: true });
+  await h.deliver("recover the accepted origin and report the current status");
+  await h.run();
+  const receipts = h.ledger.list(h.sessionKey);
+  assert.equal(receipts.length, 2);
+  assert.ok(receipts.every(receipt => receipt.status === "settled" && receipt.reports.length > 0));
+  assert.equal(h.executor.record(h.ticketId)?.state, "opened");
+  assert.equal(h.executor.slots.used(), 0);
+  assert.equal(h.ticket().assignments[0]?.report?.state, "ready");
+});
+
+test("Stop before the first Assignment sweep prevents origin activation", timeout, async t => {
+  const h = await harness(t, [ready()], { initialAssignment: true });
+  h.driver.engine.people.stopTicket(h.ticketId, "operator stopped before initial input");
+  await h.run();
+  assert.equal(h.worker.faux.state.callCount, 0);
+  assert.equal(h.ledger.list(h.sessionKey).length, 0);
+  assert.equal(h.ticket().ended?.outcome, "stopped");
+});
 
 test("Stop waits for the entire recipe-await launch; no late Session or slot survives and a new Ticket can launch", timeout, async t => {
   const root = mkdtempSync(join(tmpdir(), "dsh-executor-stop-recipe-")), gate = deferred(), entered = deferred();

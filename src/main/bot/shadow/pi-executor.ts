@@ -26,6 +26,8 @@ export interface PiExecutorOptions {
   store: ShadowStore; root: string; engine: () => ShadowEngine; enabled: () => boolean;
   modelRuntime: ModelRuntime; model: NonNullable<AgentSession["model"]>;
   maxWorkers: () => number; now?: () => number; recipe?: PrepareRecipe;
+  /** Explicit full-assignment profile: activate the accepted origin after launch commits. */
+  initialAssignment?: boolean;
   reviewer?: {
     modelRuntime: ModelRuntime; model: NonNullable<AgentSession["model"]>;
     /** Trusted host snapshot, including the complete diff and versioned files. */
@@ -232,6 +234,22 @@ export class PiExecutor {
         if (this.interrupted(record.binding)) { this.markUncertain(record.binding); continue; }
       }
       const handle = await this.open(record.binding);
+      if (this.options.initialAssignment) {
+        const requestId = `assignment-${hash(handle.binding)}`;
+        if (!handle.sdk.get(requestId)) {
+          if (!handle.slot) { try { handle.slot = this.slots.reserve(handle.binding.ticketId, "wake", handle.binding); } catch { continue; } }
+          this.check(handle.binding);
+          const ticket = this.options.store.tickets.get(handle.binding.ticketId);
+          if (!ticket || !liveTicket(ticket)) continue;
+          const origins = ticket.origin.triggerIds.map(id => this.options.store.triggers.get(id));
+          if (!origins.length || origins.some(trigger => !trigger)) throw new Error("Initial Assignment has no durable origin");
+          handle.sdk.prepare({ requestId, inputIds: [], mode: "followUp", text: JSON.stringify({
+            kind: "initial-assignment", ticket: { id: ticket.id, title: ticket.title, mandate: ticket.mandate, execution: ticket.execution },
+            assignmentId: handle.binding.assignmentId, origins,
+            instructions: "Implement the accepted origin requirements using the workspace tools. Record a structured dsh_report when ready for host verification. Do not claim tests were run unless the host provided evidence. Git delivery and followed-thread completion are separate host steps.",
+          }) });
+        }
+      }
       for (const receipt of handle.sdk.ledger.list(handle.sdk.sessionKey)) {
         if (!this.current(handle.binding) || handle.stopping || !same(receipt.binding, handle.binding) || receipt.entryId || ["handled", "rejected", "stopped"].includes(receipt.status)) continue;
         const ticket = this.options.store.tickets.get(handle.binding.ticketId);
@@ -256,14 +274,14 @@ export class PiExecutor {
   }
   private idleReport(handle: Handle, requestId: string): void {
     if (handle.stopping || !this.current(handle.binding)) return;
-    this.check(handle.binding);
+    this.check(handle.binding, !!handle.slot);
     const receipt = handle.sdk.get(requestId), read = receipt?.reads.filter(item => same(item.binding, handle.binding)).at(-1);
     const report = receipt?.reports.filter(item => same(item.binding, handle.binding) && (item.turnId === read?.turnId || item.readTurnId === read?.turnId)).at(-1)?.report;
     const last = handle.sdk.session.agent.state.messages.filter(message => message.role === "assistant").at(-1);
     const failed = last?.role === "assistant" && ["error", "aborted"].includes(last.stopReason);
     const idleKey = `pi:executor-idle:${hash([handle.binding, read?.turnId ?? requestId])}`;
     this.options.store.atomic(() => {
-      this.check(handle.binding);
+      this.check(handle.binding, !!handle.slot);
       if (this.options.store.get(idleKey)) return;
       if (!report || report.state === "progress") {
         if (failed) this.options.engine().worker.report(handle.binding, { state: "failed", summary: "SDK Worker run failed. Inspect the persistent input and external operation receipts before retrying." });

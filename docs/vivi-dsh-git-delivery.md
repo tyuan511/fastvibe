@@ -1,6 +1,6 @@
 # Vivi DSH：宿主管理的 Git 提交与推送
 
-状态：M11 隔离部署增加固定快照的 Git commit/push 端口，接入已有 `ShadowOperations`，不注册生产 Runtime。验证范围为临时真实 Git 仓库与本地 bare 远端；没有向真实 GitHub 推送，也没有使用真实用户凭据。真实仓库、真实模型、CI、Merge 与 Issue 收束仍是 M11 退出条件。
+状态：M11 隔离部署增加固定快照的 Git commit/push 端口，接入已有 `ShadowOperations`，不注册生产 Runtime。回归使用临时真实 Git 仓库与本地 bare 远端；另已在用户授权下完成 [vivi-test 的真实模型修复、受控 GitHub push、PR 与 CI](vivi-dsh-live-vivi-test.md)。原生独立 Review、Merge、Issue 收束与自动接单仍是 M11 退出条件。
 
 关联：[SDK Executor](vivi-dsh-sdk-executor.md)、[原生 REST](vivi-dsh-github-rest.md)、[开发记录](vivi-dsh-development.md)。
 

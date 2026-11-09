@@ -1,6 +1,6 @@
 # Vivi DSH：原生 GitHub REST 适配
 
-状态：M11 的原生 reader、operation planner、写入/对账 adapter 和隔离部署已实现，使用本地服务返回原生 REST 响应完成契约与恢复验收。**尚未对真实专用 GitHub 仓库执行端到端验收，不代表 M11 或 M12 完成。**进度入口见 [开发记录](vivi-dsh-development.md)，完整授权、生命周期和生产隔离合同见 [目标架构](vivi-dsh-architecture.md)。
+状态：M11 的原生 reader、operation planner、写入/对账 adapter 和隔离部署已实现，使用本地服务返回原生 REST 响应完成契约与恢复验收。**尚未对真实专用 GitHub 仓库执行端到端验收，不代表 M11 或 M12 完成。**后续 [vivi-test 实测](vivi-dsh-live-vivi-test.md)已确认真实 PR 创建、push 和 CI；独立原生 Review、Merge 与 Issue 收束仍待验收。进度入口见 [开发记录](vivi-dsh-development.md)，完整授权、生命周期和生产隔离合同见 [目标架构](vivi-dsh-architecture.md)。
 
 ## 实现入口
 
