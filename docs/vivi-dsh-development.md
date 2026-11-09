@@ -2,6 +2,18 @@
 
 本文记录 [目标架构与阶段计划](vivi-dsh-architecture.md#14-实施顺序与数据切换) 的实际实施状态。当前已完成 M0–M10 的隔离领域、Shadow Store、真实 Pi SDK Session、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、旧数据 dry-run、GitHub 只读 Source 和 Operation dry-run；另已实现下述 M11 前置的本地 HTTP 部署、宿主授权和 Issue continuation，以及 [原生 GitHub REST 读写与对账](vivi-dsh-github-rest.md)与 [真实 SDK Executor 与独立 Reviewer 组装](vivi-dsh-sdk-executor.md)、[受管 Git 提交/push](vivi-dsh-git-delivery.md)，并已完成 [vivi-test 的部分真实仓库验收](vivi-dsh-live-vivi-test.md)。**M11 的完整 GitHub 闭环尚未验收。**生产 Vivi 继续使用现有 Router/Worker Runtime。当前恢复分支为 `feat/vivi-dsh-recovered`，工作目录为独立 worktree；此前 `feat/vivi-dsh` 的 M11 提交 `db3ca211` 及其父链已恢复。下列结果只证明本文列出的隔离能力，不代表生产调度、真实执行资源或 GitHub 集成已接入。
 
+### 当前新增的生产前置组合边界
+
+新增的 [`main-host.ts`](../src/main/bot/shadow/main-host.ts)、[`vivi-dsh-runtime.ts`](../src/main/bot/shadow/vivi-dsh-runtime.ts) 和 [`dsh-bot-facade.ts`](../src/main/bot/shadow/dsh-bot-facade.ts) 现在提供了可独立验收的 Main 生命周期组合，但仍未由 `PiProcessManager` 默认构造，也未替换现有 Bot IPC。`ViviDshMainHost` 只接受 Main 已初始化且已认证的 `ModelRuntime`/model，不创建第二个模型 Runtime；无模型是正常首启状态，host 只提供持久 Shadow snapshot，不接受执行请求。显式 `start()` 后才创建 Driver/Executor，`stop()` 等待 SDK/Effect 收尾后才释放该 owner，下一次 start 创建新的 owner。
+
+本阶段同时完成了以下接入前合同：
+
+- `ShadowStore` 生产文件必须使用显式 `allowedRoot` 与 `purpose: "vivi-dsh-production"`；执行目录、Session JSONL、Ledger 恢复路径会沿用同一边界，并继续拒绝符号链接逃逸。实验库仍只能使用临时目录。
+- `DshBotFacade` 只把 Shadow facts 投影为现有 `BotApi`。真实 Worker report 才能产生 `ready`；relay 经过 Effect claim、binding 和稳定 requestId 校验后才进入持久聊天投影。旧 `bot_*` 表不写入，`ask/answer` 等尚无主 Session port 的能力明确报错。
+- `test/dsh-main-host.test.ts`、`test/dsh-bot-facade.test.ts`、`test/vivi-dsh-runtime.test.ts`、`test/vivi-dsh-production-store.test.ts` 与 `test/vivi-dsh-isolation.test.ts` 共同覆盖无模型首启、真实 faux SDK ready、停止/重开、late report 隔离、IPC facade、生产路径授权和隔离依赖。
+
+因此这一步的结论是“生产组合边界与回归已具备”，不是“FastVibe Vivi 已完成生产切换”。默认启动、Main 内存读取迁移、GitHub Source 注册、Router 主 Session、通知/记忆全面切换仍要等 M11 完整验收与 M12 数据切换。
+
 ## M0：已建立的实施基线
 
 | 决定 | 本次落实 |

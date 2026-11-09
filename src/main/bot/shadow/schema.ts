@@ -9,10 +9,13 @@ import type { Db } from "../../engine/db.ts";
 export const SHADOW_BASE_SCHEMA_VERSION = 14;
 export const SHADOW_SCHEMA_VERSION = 15;
 
-/** M2 may touch only memory databases and disposable files beneath the real OS temp directory. */
-export function assertShadowPath(file: string): void {
+export type ShadowPathOptions = { allowedRoot?: string };
+
+/** M2 may touch only memory databases and disposable files beneath the real OS temp directory.
+ * Production DSH opens use an explicit userData sub-root; callers must opt into that root. */
+export function assertShadowPath(file: string, options: ShadowPathOptions = {}): void {
   if (file === ":memory:") return;
-  const temp = realpathSync(tmpdir());
+  const root = options.allowedRoot === undefined ? realpathSync(tmpdir()) : realpathSync(options.allowedRoot);
   let ancestor = resolve(file);
   const tail: string[] = [];
   for (;;) {
@@ -26,9 +29,11 @@ export function assertShadowPath(file: string): void {
     }
   }
   const actual = join(realpathSync(ancestor), ...tail);
-  const fromTemp = relative(temp, actual);
-  if (!fromTemp || fromTemp === ".." || fromTemp.startsWith(`..${sep}`) || isAbsolute(fromTemp)) {
-    throw new Error("Shadow 数据库只允许内存库或系统临时目录，不得连接真实 userData");
+  const fromRoot = relative(root, actual);
+  if (!fromRoot || fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+    throw new Error(options.allowedRoot === undefined
+      ? "Shadow 数据库只允许内存库或系统临时目录，不得连接真实 userData"
+      : "Shadow 数据库必须位于显式授权的 DSH 数据目录");
   }
 }
 

@@ -1,10 +1,11 @@
 import { Ipc } from "../../shared/ipc.ts";
-import type { BotCreateWorkRequest, BotReportRequest, BotSubmitRequest } from "../../shared/bot.ts";
-import type { PiProcessManager } from "../pi/process-manager";
-import { handle } from "./registry";
+import type { BotActivity, BotApi, BotCreateWorkRequest, BotReportRequest, BotSubmitRequest } from "../../shared/bot.ts";
+import { handle } from "./registry.ts";
+
+type BotIpcPort = Omit<BotApi, "getActivity" | "onChanged" | "onNavigate"> & { activity(): BotActivity };
 
 /** The same business API on desktop and headless hosts; desktop pet controls remain separate. */
-export function registerBotIpc(engine: PiProcessManager): void {
+export function registerBotIpc(engine: { bot: BotIpcPort }): void {
   handle(Ipc.botGetActivity, () => engine.bot.activity());
   handle(Ipc.botGetWorkSnapshot, () => engine.bot.getWorkSnapshot());
   handle(Ipc.botSubmit, (input: BotSubmitRequest) => engine.bot.submit(input));

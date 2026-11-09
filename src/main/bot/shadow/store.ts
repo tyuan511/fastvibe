@@ -2,6 +2,7 @@
 // Repository/receipt semantics adapted from deepseek-ai/dsh-superagent-prototype
 // at 8c32a9dc5d72c033816c6a8110b37f40cf94fba4; see ../core/NOTICE.md and LICENSE.
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { openDatabaseConnection, type Db, type DbRow } from "../../engine/db.ts";
 import { threadKey, type Decision, type Thread, type Ticket, type Trigger, type TriggerDisposition } from "../core/model.ts";
 import type { OutboundMessage, Repositories, ReplyStatus } from "../core/ports.ts";
@@ -22,6 +23,7 @@ function synchronous<T>(value: T): T {
   }
   return value;
 }
+function shadowPurpose(db: Db): string | undefined { return db.get<{ value: string }>("SELECT value FROM dsh_shadow_meta WHERE key='purpose'")?.value; }
 function duration(now: number, ttl: number): number {
   if (!Number.isSafeInteger(now) || !Number.isSafeInteger(ttl) || ttl <= 0 || !Number.isSafeInteger(now + ttl)) throw new Error("租约时间必须为安全整数且有效期大于零");
   return now + ttl;
@@ -48,11 +50,22 @@ export interface SessionReceipt {
   [field: string]: unknown;
 }
 
+export type ShadowStoreOpenOptions = {
+  /** Explicitly authorize a persistent userData DSH root; omitted means disposable temp-only mode. */
+  allowedRoot?: string;
+  purpose?: "isolated-m2" | "vivi-dsh-production";
+};
+
 /** No model, timers, source registry or production factory references this disposable store. */
-export function openShadowStore(file = ":memory:", report: (error: unknown) => void = () => {}): ShadowStore {
-  assertShadowPath(file);
+export function openShadowStore(file = ":memory:", report: (error: unknown) => void = () => {}, options: ShadowStoreOpenOptions = {}): ShadowStore {
+  assertShadowPath(file, { allowedRoot: options.allowedRoot });
+  const purpose = options.purpose ?? "isolated-m2";
+  const existed = file !== ":memory:" && existsSync(file);
   const db = openDatabaseConnection(file, { migrations: SHADOW_MIGRATIONS });
-  try { return new ShadowStore(db, report); }
+  try {
+    if (purpose === "vivi-dsh-production" && !existed && shadowPurpose(db) === "isolated-m2") db.run("UPDATE dsh_shadow_meta SET value=? WHERE key='purpose'", purpose);
+    return new ShadowStore(db, report, purpose, options.allowedRoot);
+  }
   catch (error) { db.close(); throw error; }
 }
 
@@ -60,17 +73,23 @@ export function openShadowStore(file = ":memory:", report: (error: unknown) => v
 export class ShadowStore implements Repositories {
   readonly db: Db;
   private readonly report: (error: unknown) => void;
-  private callbacks: (() => void)[][] = [];
+  private readonly callbacks: (() => void)[][] = [];
   private savepoint = 0;
-  constructor(db: Db, report: (error: unknown) => void = () => {}) {
-    assertShadowPath(db.file);
-    if (db.userVersion() !== SHADOW_SCHEMA_VERSION || db.get<{ value: string }>("SELECT value FROM dsh_shadow_meta WHERE key='purpose'")?.value !== "isolated-m2") {
-      throw new Error("必须使用已完成独立迁移的 Shadow 数据库");
+  private readonly purposeValue: "isolated-m2" | "vivi-dsh-production";
+  private readonly allowedRootValue?: string;
+  constructor(db: Db, report: (error: unknown) => void = () => {}, purpose: "isolated-m2" | "vivi-dsh-production" = "isolated-m2", allowedRoot?: string) {
+    assertShadowPath(db.file, { allowedRoot });
+    if (db.userVersion() !== SHADOW_SCHEMA_VERSION || shadowPurpose(db) !== purpose) {
+      throw new Error(`必须使用已完成 DSH 迁移的 Shadow 数据库 (${purpose})`);
     }
     this.db = db;
     this.report = report;
+    this.purposeValue = purpose;
+    this.allowedRootValue = allowedRoot;
   }
   close(): void { this.db.close(); }
+  get purpose(): "isolated-m2" | "vivi-dsh-production" { return this.purposeValue; }
+  get allowedRoot(): string | undefined { return this.allowedRootValue; }
 
   atomic<T>(work: () => T): T {
     if (this.callbacks.length === 0) {

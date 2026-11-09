@@ -9,7 +9,7 @@ import { ownedEffect } from "./claims.ts";
 import { DeliveryRejected, type ShadowAdapters } from "./driver.ts";
 import { Later, type EffectContext } from "./effects.ts";
 import type { ShadowEngine, WorkerToken } from "./engine.ts";
-import { ExecutionDirectories, type PrepareRecipe } from "./execution-directory.ts";
+import { ExecutionDirectories, assertExecutionPath, type PrepareRecipe } from "./execution-directory.ts";
 import { PiLedger } from "./pi-ledger.ts";
 import { ManagedPiReviewer, type PiReviewInput, type PiReviewRecord } from "./pi-reviewer.ts";
 import { ScratchPiSession } from "./pi-session.ts";
@@ -23,7 +23,7 @@ export interface PiExecutorRecord {
   pid: number; revision: number; quiet?: boolean;
 }
 export interface PiExecutorOptions {
-  store: ShadowStore; root: string; engine: () => ShadowEngine; enabled: () => boolean;
+  store: ShadowStore; root: string; allowedRoot?: string; engine: () => ShadowEngine; enabled: () => boolean;
   modelRuntime: ModelRuntime; model: NonNullable<AgentSession["model"]>;
   maxWorkers: () => number; now?: () => number; recipe?: PrepareRecipe;
   /** Explicit full-assignment profile: activate the accepted origin after launch commits. */
@@ -58,9 +58,10 @@ export class PiExecutor {
   private closing = false;
   private scanning?: Promise<void>;
   constructor(options: PiExecutorOptions) {
+    assertExecutionPath(options.root, options.allowedRoot, options.store);
     mkdirSync(options.root, { recursive: true, mode: 0o700 });
     this.options = { ...options, root: realpathSync(options.root) }; this.clock = options.now ?? Date.now;
-    this.directories = new ExecutionDirectories(options.store, this.options.root, { now: this.clock });
+    this.directories = new ExecutionDirectories(options.store, this.options.root, { now: this.clock, allowedRoot: options.allowedRoot });
     this.slots = new WorkerSlots(options.store, { max: options.maxWorkers, now: this.clock });
     this.timer = setInterval(() => {
       for (const [ticketId, slot] of this.preparingSlots) {
@@ -121,7 +122,7 @@ export class PiExecutor {
           return { content: [{ type: "text", text: JSON.stringify({ review, ...(delivery === undefined ? {} : { delivery }) }) }], details: { artifactId: input.artifactId, status: review.status } };
         } });
     };
-    const sdk = await ScratchPiSession.open({ store: this.options.store, root: this.options.root, binding,
+    const sdk = await ScratchPiSession.open({ store: this.options.store, root: this.options.root, allowedRoot: this.options.allowedRoot, binding,
       modelRuntime: this.options.modelRuntime, model: this.options.model,
       extensions: [files.extension(), reviewExtension], activeTools: ["dsh_report", "read_file", "write_file", "edit_file", "list_files", ...(this.options.reviewer ? ["request_review"] : [])],
       validate: () => this.check(binding),
@@ -230,7 +231,7 @@ export class PiExecutor {
       if (record.state !== "opened" || !this.current(record.binding)) continue;
       if (!this.handles.has(record.binding.ticketId)) {
         if (this.slots.get(record.binding.ticketId)) { this.markUncertain(record.binding); continue; }
-        ScratchPiSession.reconcileSaved(this.options.store, this.options.root, record.binding);
+        ScratchPiSession.reconcileSaved(this.options.store, this.options.root, record.binding, this.options.allowedRoot);
         if (this.interrupted(record.binding)) { this.markUncertain(record.binding); continue; }
       }
       const handle = await this.open(record.binding);
@@ -302,7 +303,7 @@ export class PiExecutor {
     const owner = record && this.options.store.get<{ pid: number } | null>(`pi:owner:${record.sessionKey}`);
     if (options.quiet !== true || !record || record.state === "stopped" || !this.current(record.binding) || this.handles.has(ticketId) || this.opening.has(ticketId) || this.launches.has(ticketId) || (!dead(record.pid) && !(record.pid === process.pid && record.quiet)) || (owner && !dead(owner.pid))) throw new Error("SDK recovery requires a dead previous process or confirmed local disposal and no live session");
     if (slot) { this.slots.used(); const current = this.slots.get(ticketId)!; if (current.phase !== "uncertain" || !this.slots.reconcile(current, { quiet: true })) throw new Error("SDK slot requires expiry and exact quiet reconciliation"); }
-    ScratchPiSession.reconcileSaved(this.options.store, this.options.root, record.binding);
+    ScratchPiSession.reconcileSaved(this.options.store, this.options.root, record.binding, this.options.allowedRoot);
     const interrupted = this.interrupted(record.binding);
     this.save(record.binding, interrupted ? "uncertain" : "opened", true);
     if (interrupted) this.options.engine().worker.interrupted(record.binding);

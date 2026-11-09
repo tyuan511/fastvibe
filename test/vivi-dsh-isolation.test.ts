@@ -87,8 +87,22 @@ test("shadow dependencies stay isolated, with SDK access confined to explicit ro
     [join(shadow, "pi-reviewer.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox"])],
     [join(shadow, "pi-workspace.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox", "node:util"])],
   ]);
+  // Shared API shapes and SDK model handles are type-only at the composition boundary.
+  // These entries do not allow importing another scheduler, settings, IPC, or a credential host.
+  const typeBridges = new Map([
+    [join(shadow, "dsh-bot-facade.ts"), new Set(["../../../shared/bot.ts"])],
+    [join(shadow, "vivi-dsh-runtime.ts"), new Set(["@earendil-works/pi-coding-agent"])],
+    [join(shadow, "main-host.ts"), new Set(["@earendil-works/pi-coding-agent"])],
+  ]);
   for (const path of files(shadow)) {
     for (const specifier of specifiers(path)) {
+      if (typeBridges.get(path)?.has(specifier)) {
+        const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true);
+        const imports = source.statements.filter((node): node is ts.ImportDeclaration => ts.isImportDeclaration(node)
+          && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === specifier);
+        assert.ok(imports.length > 0 && imports.every(node => node.importClause?.isTypeOnly), `${relative(root, path)} may only use types from ${specifier}`);
+        continue;
+      }
       if (builtins.has(specifier) || bridgeImports.get(path)?.has(specifier)) continue;
       const target = resolveModule(specifier, path);
       assert.ok(target && (isStaged(target) || lowLevel.has(target)), `${relative(root, path)} has an unexpected dependency: ${specifier}`);

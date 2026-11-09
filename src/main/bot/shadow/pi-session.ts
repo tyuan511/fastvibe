@@ -11,7 +11,7 @@ import { Type } from "typebox";
 import type { WorkerReport } from "../core/engine.ts";
 import type { WorkerToken } from "./engine.ts";
 import { PiLedger, type PiReceipt, type PiSessionState } from "./pi-ledger.ts";
-import { assertShadowPath } from "./schema.ts";
+import { assertExecutionPath } from "./execution-directory.ts";
 import type { ShadowStore } from "./store.ts";
 
 export const SUPPORTED_SCRATCH_PI_VERSION = "1.3.0";
@@ -26,7 +26,7 @@ interface Turn extends Dispatch { turnId: string; requestIds: string[]; reportin
 interface Marker { sessionKey: string; epoch: number; binding: WorkerToken; turnId: string; requestIds: string[]; at: number; report?: WorkerReport }
 interface Owner { pid: number; nonce: string }
 export interface ScratchPiOptions {
-  store: ShadowStore; root: string; binding: WorkerToken;
+  store: ShadowStore; root: string; allowedRoot?: string; binding: WorkerToken;
   modelRuntime: ModelRuntime; model: NonNullable<AgentSession["model"]>;
   extensions?: ExtensionFactory[];
   context?: () => Record<string, unknown>;
@@ -77,7 +77,8 @@ export class ScratchPiSession {
     this.sessionKey = state.sessionKey; this.ledger = new PiLedger(options.store);
   }
   /** Reconcile a quiet Worker journal without constructing an SDK or selecting a model. */
-  static reconcileSaved(store: ShadowStore, rootInput: string, binding: WorkerToken): void {
+  static reconcileSaved(store: ShadowStore, rootInput: string, binding: WorkerToken, allowedRoot?: string): void {
+    assertExecutionPath(rootInput, allowedRoot, store);
     const root = realpathSync(rootInput), sessionKey = `worker-${binding.ticketId}`;
     store.atomic(() => {
       const state = new PiLedger(store).session(sessionKey);
@@ -85,15 +86,15 @@ export class ScratchPiSession {
       const base = join(root, digest(sessionKey));
       if (!state || !same(state.binding, binding) || state.root !== root || state.cwd !== join(base, "workspace")
         || state.sessionFile !== join(base, "sessions", `${digest(sessionKey)}.jsonl`) || (owner && alive(owner.pid))) throw new Error("Saved Worker journal is not quiet or belongs to another identity");
-      for (const path of [root, base, state.cwd, dirname(state.sessionFile), state.sessionFile]) { assertShadowPath(path); noSymlink(path); }
-      const adapter = new ScratchPiSession({ store, root, binding }, state, "quiet-reconcile");
+      for (const path of [root, base, state.cwd, dirname(state.sessionFile), state.sessionFile]) { assertExecutionPath(path, allowedRoot, store); noSymlink(path); }
+      const adapter = new ScratchPiSession({ store, root, allowedRoot, binding }, state, "quiet-reconcile");
       if (adapter.disk()[0]?.dshStoreId !== store.get("pi:store-id")) throw new Error("Saved Worker journal belongs to another store");
       adapter.reconcile();
     });
   }
   static async open(options: ScratchPiOptions): Promise<ScratchPiSession> {
     checkVersion();
-    assertShadowPath(join(resolve(options.root), "scratch.guard"));
+    assertExecutionPath(options.root, options.allowedRoot, options.store);
     mkdirSync(options.root, { recursive: true, mode: 0o700 });
     const root = realpathSync(options.root);
     const ledger = new PiLedger(options.store);
@@ -103,9 +104,9 @@ export class ScratchPiSession {
     if (activeTools.some(name => !/^[a-z][a-z0-9_]*$/.test(name)) || new Set(activeTools).size !== activeTools.length) throw new Error("Invalid isolated Pi role tools");
     const base = join(root, digest(sessionKey));
     const cwd = join(base, "workspace"), sessionDir = join(base, "sessions"), agentDir = join(base, "agent");
-    for (const path of [base, cwd, sessionDir, agentDir]) { assertShadowPath(path); noSymlink(path); mkdirSync(path, { recursive: true, mode: 0o700 }); chmodSync(path, 0o700); }
+    for (const path of [base, cwd, sessionDir, agentDir]) { assertExecutionPath(path, options.allowedRoot, options.store); noSymlink(path); mkdirSync(path, { recursive: true, mode: 0o700 }); chmodSync(path, 0o700); }
     const sessionFile = join(sessionDir, `${digest(sessionKey)}.jsonl`);
-    assertShadowPath(sessionFile); noSymlink(sessionFile);
+    assertExecutionPath(sessionFile, options.allowedRoot, options.store); noSymlink(sessionFile);
     const nonce = randomUUID();
     let state!: PiSessionState;
     const dbId = options.store.atomic(() => {
@@ -170,7 +171,7 @@ export class ScratchPiSession {
   }
   private disk(): Record<string, unknown>[] {
     for (const path of [dirname(dirname(this.state.sessionFile)), dirname(this.state.sessionFile), this.state.sessionFile]) noSymlink(path);
-    assertShadowPath(this.state.sessionFile);
+    assertExecutionPath(this.state.sessionFile, this.options.allowedRoot, this.options.store);
     const text = readFileSync(this.state.sessionFile, "utf8");
     const rows = text.split("\n").filter(line => line.trim()).map(line => JSON.parse(line) as Record<string, unknown>);
     if (rows[0]?.type !== "session" || rows[0].version !== 3 || rows[0].id !== digest(this.sessionKey) || rows[0].cwd !== this.state.cwd) throw new Error("Invalid scratch Session header");
