@@ -81,6 +81,7 @@ test("shadow dependencies stay isolated, with SDK access confined to explicit ro
   const lowLevel = new Set([join(root, "src/main/engine/db.ts"), join(root, "src/main/engine/db-schema.ts")]);
   const builtins = new Set(["node:crypto", "node:fs", "node:os", "node:path"]);
   const bridgeImports = new Map([
+    [join(shadow, "git-repository.ts"), new Set(["node:child_process", "node:fs/promises"])],
     [join(shadow, "pi-session.ts"), new Set(["node:async_hooks", "node:url", "@earendil-works/pi-coding-agent", "@earendil-works/pi-agent-core", "typebox"])],
     [join(shadow, "pi-executor.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox"])],
     [join(shadow, "pi-reviewer.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox"])],

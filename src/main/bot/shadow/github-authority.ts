@@ -3,7 +3,7 @@
 import type { Mandate } from "../core/model.ts";
 import type { Policy } from "../core/ports.ts";
 import type { ShadowEngine, WorkerToken } from "./engine.ts";
-import type { GithubAuthorization as OperationAuth, GithubOperationKind, GithubOperationPayload } from "./github-operation.ts";
+import type { GithubAuthorization as OperationAuth, GithubOperationKind } from "./github-operation.ts";
 import type { ShadowSourceRegistry } from "./source-registry.ts";
 import type { Operation, ShadowStore } from "./store.ts";
 
@@ -59,13 +59,13 @@ export class GithubOperationAuthority {
   /** Call immediately before each write, including after credential resolution or HTTP preflight. Reads may continue after Stop. */
   authorize(operation: Operation): void {
     this.store.atomic(() => {
-      const payload = operation.payload as GithubOperationPayload | undefined;
+      const payload = operation.payload as { kind?: GithubOperationKind; authorization?: OperationAuth } | undefined;
       const auth = payload?.authorization;
       if (payload?.kind === "issue-close") throw new Error("Issue 收束必须使用独立 continuation");
       if (!auth || auth.source !== operation.source || auth.instance !== operation.instance) throw new Error("GitHub operation 缺少宿主授权");
       const profile = this.store.cursors.get<Profile>(operation.source, operation.instance,
         profileKey(auth))?.value;
-      if (!profile || stable(profile.authorization) !== stable(auth) || !profile.authorization.allowed.includes(payload!.kind)) throw new Error("GitHub operation 与宿主授权不匹配");
+      if (!profile || stable(profile.authorization) !== stable(auth) || !payload?.kind || !profile.authorization.allowed.includes(payload.kind)) throw new Error("GitHub operation 与宿主授权不匹配");
       const ticket = this.store.tickets.get(auth.ticketId); const policy = this.policy(); const source = this.registry.instance(operation.source);
       if (!ticket || ticket.ended || ticket.decisionId !== auth.mandateId || stable(ticket.mandate) !== stable(profile.mandate)
         || !sameToken(this.engine.currentBinding(ticket.id), profile.token)) throw new Error("GitHub operation Ticket、Stop 或 binding 已失效");

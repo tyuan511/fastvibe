@@ -11,6 +11,8 @@ import type { WorkerToken } from "./engine.ts";
 import type { GithubRestTransport } from "./github-transport.ts";
 import type { ShadowStore } from "./store.ts";
 import type { ShadowSourceRegistry } from "./source-registry.ts";
+import { GithubGitOperations, isGithubGitOperation, type GithubGitRequest } from "./github-git-operation.ts";
+import type { ManagedGitRepository } from "./git-repository.ts";
 
 export interface GithubNativeDeploymentOptions extends Omit<GithubNativeAdapterOptions, "store" | "authorize" | "now"> {
   reader: GithubRestTransport;
@@ -18,6 +20,8 @@ export interface GithubNativeDeploymentOptions extends Omit<GithubNativeAdapterO
   instance?: string;
   driver: Omit<ShadowDriverOptions, "scope">;
   adapters?: Omit<ShadowAdapters, "operations">;
+  /** Trusted host configuration only; never inherited by SDK tools. */
+  git?: { repository: ManagedGitRepository; directoryRevision: () => number | undefined };
 }
 
 export class GithubNativeDeployment {
@@ -25,6 +29,7 @@ export class GithubNativeDeployment {
   readonly planner: GithubNativePlanner;
   readonly authority: GithubOperationAuthority;
   readonly settlement: GithubIssueSettlement;
+  readonly git?: GithubGitOperations;
   private readonly store: ShadowStore;
   private readonly registry: ShadowSourceRegistry;
   private readonly options: GithubNativeDeploymentOptions;
@@ -42,7 +47,21 @@ export class GithubNativeDeployment {
       if ((operation.payload as { kind: string }).kind === "issue-close") this.settlement.authorize(operation);
       else this.authority.authorize(operation);
     } });
-    this.driver = new ShadowDriver(store, { ...options.driver, scope: registry, intervalMs: options.driver.intervalMs ?? false }, { ...options.adapters, operations: adapter });
+    this.git = options.git && new GithubGitOperations({ ...options.git, store, source: this.sourceId, instance: this.instanceId,
+      repositoryId: String((registry.instance(this.sourceId)?.config.repository as { id?: unknown } | undefined)?.id ?? ""),
+      authorize: operation => { if (this.closing) throw new Error("受管 Git 部署已停止"); this.authority.authorize(operation); }, now: options.driver.now });
+    const operations = {
+      execute: (operation: Parameters<typeof adapter.execute>[0], context: Parameters<typeof adapter.execute>[1]) => {
+        if (!isGithubGitOperation(operation)) return adapter.execute(operation, context);
+        if (!this.git) throw new Error("受管 Git 未配置");
+        return this.git.execute(operation, context);
+      },
+      inspect: (operation: Parameters<typeof adapter.inspect>[0], context: Parameters<typeof adapter.inspect>[1]) => {
+        if (!isGithubGitOperation(operation)) return adapter.inspect(operation, context);
+        return this.git ? this.git.inspect(operation, context) : Promise.resolve({ status: "unknown" as const });
+      },
+    };
+    this.driver = new ShadowDriver(store, { ...options.driver, scope: registry, intervalMs: options.driver.intervalMs ?? false }, { ...options.adapters, operations });
     this.authority = new GithubOperationAuthority(store, registry, this.driver.engine, options.driver.policy);
     this.settlement = new GithubIssueSettlement(store, this.driver.operations!, { registry, policy: options.driver.policy,
       buildIntent: request => this.planner.buildIntent(request) });
@@ -59,6 +78,14 @@ export class GithubNativeDeployment {
       const intent = this.planner.buildIntent(request);
       this.authority.authorize({ ...intent, status: "planned", revision: 1 });
       return this.driver.operations!.plan(intent) as GithubOperationPlan;
+    });
+  }
+  planGitAndQueue(request: GithubGitRequest) {
+    if (this.closing || !this.git) throw new Error("受管 Git 未配置或部署已停止");
+    return this.store.atomic(() => {
+      const intent = this.git!.buildIntent(request);
+      this.authority.authorize({ ...intent, status: "planned", revision: 1 });
+      return this.driver.operations!.plan(intent);
     });
   }
   /** Explicit poll only. Production lifecycle and real Worker/reviewer wiring are separate M11 exit items. */

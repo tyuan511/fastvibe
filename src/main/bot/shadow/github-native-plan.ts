@@ -7,6 +7,7 @@ import type { ShadowSourceRegistry } from "./source-registry.ts";
 import type { Operation, ShadowStore } from "./store.ts";
 
 export interface GithubNativePayload extends GithubOperationPayload {
+  kind: Exclude<GithubOperationRequest["kind"], "commit" | "push">;
   mode: "github-rest";
   schemaVersion: 1;
   repository: GithubRepository;
@@ -73,6 +74,7 @@ export class GithubNativePlanner {
     const params = request.params; const pre = request.preconditions;
     let target: unknown; let expected: GithubOperationPayload["expected"];
     switch (request.kind) {
+      case "commit": case "push": throw new Error("Git commit/push 必须使用受管 Git planner");
       case "branch": {
         const name = branch(request.object.branch ?? params.branch);
         if (params.branch !== undefined && params.branch !== name) throw new Error("branch 目标不一致");

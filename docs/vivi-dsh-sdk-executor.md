@@ -13,7 +13,7 @@
 
 部署方必须提供明确的专用仓库、已注册 Source、reader/writer/reviewer transport、两个独立可撤销用户身份和选定模型。模块不发现本机 `gh`/SSH 登录，不搜索现有 token，不加载普通 settings，不替用户选择模型，也不从 FastVibe 账号登录推导模型可用。
 
-当前 assessment、消息端口、PR/分支/merge 计划、版本快照及后续 Git 提交/push 仍由显式宿主提供或待实现。这个入口没有自动用模型文字创建 Decision，也没有赋予 shell 或直接 git push。生产 Bot API、IPC、旧数据、普通会话、通知与记忆继续由旧 Runtime 管理。
+当前 assessment、消息端口、PR/分支/merge 计划和版本快照仍由显式宿主提供。[受管 Git 提交/push](vivi-dsh-git-delivery.md) 通过独立宿主端口和既有 Effects 处理；Worker 不获得 shell 或直接 Git 能力。这个入口没有自动用模型文字创建 Decision。生产 Bot API、IPC、旧数据、普通会话、通知与记忆继续由旧 Runtime 管理。
 
 ## 持久输入与真实模型读取
 
@@ -67,4 +67,4 @@ pnpm typecheck
 
 SDK/原生 HTTP 联合测试能证明工具真实调用、临时文件真实修改、领域回执与审核产物分离、原生 Review POST/receipt、修复后新 SHA 重新审核，以及停止/事务/恢复边界。离线 provider 不证明模型能自主解决真实问题；原生契约服务不等于 GitHub。
 
-M11 尚需专用真实仓库与身份部署、真实模型编码与修复、宿主管理的分支提交/push、真实 CI、Merge、独立 Issue 收束、完整 Source 驱动和真实平台故障演练。M11 全部验收前不得进入 M12。
+M11 尚需专用真实仓库与身份部署、真实模型编码与修复、[受管 Git 端口](vivi-dsh-git-delivery.md)的真实 GitHub 推送、真实 CI、Merge、独立 Issue 收束、完整 Source 驱动和真实平台故障演练。M11 全部验收前不得进入 M12。

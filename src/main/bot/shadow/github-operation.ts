@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { ShadowSourceInstance, ShadowSourceRegistry } from "./source-registry.ts";
 import type { Operation, ShadowStore } from "./store.ts";
 
-export type GithubOperationKind = "branch" | "pull" | "review" | "merge" | "issue-close";
+export type GithubOperationKind = "branch" | "pull" | "review" | "merge" | "issue-close" | "commit" | "push";
 export type GithubEvidence = "confirmed" | "not-applied" | "unknown";
 
 export interface GithubAuthorization {
@@ -100,6 +100,7 @@ function checksPass(preconditions: GithubOperationRequest["preconditions"]): voi
 function expectedRequest(request: GithubOperationRequest): GithubOperationPayload["expected"] {
   const repo = encodeURIComponent(String(request.repositoryId));
   switch (request.kind) {
+    case "commit": case "push": throw new Error("Git commit/push 必须使用受管 Git planner");
     case "branch": {
       const name = branch(request.object.branch ?? request.params.branch); const baseSha = sha(request.params.baseSha ?? request.preconditions.baseSha, "baseSha");
       return { method: "POST", path: `/repositories/${repo}/git/refs`, body: { ref: `refs/heads/${name}`, sha: baseSha } };
