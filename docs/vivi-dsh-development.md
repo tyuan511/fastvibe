@@ -300,4 +300,6 @@ node --test test/vivi-dsh-github-native-*.test.ts test/vivi-dsh-github-transport
 
 真实部署暴露并修复了首次 Assignment 未激活，以及多个 completion 在已释放 slot 上重复校验而误标 uncertain 的问题。新增首次 origin、重复 sweep、Stop 前激活拦截和多输入收尾回归，Executor 专项 **20/20**，完整组合 **1020/1020**，typecheck 和 runner 严格 ES2022 检查通过。
 
-当前只有执行账号一个 GitHub 身份：原生独立 Review、Merge、Issue continuation 尚待身份配置；人工 self-issue 回放与宿主 Decision 也不能作为自动接单证据。本次不声明 M11 完成。
+恢复分支已按用户要求提交并推送到 `origin/feat/vivi-dsh-recovered`，本轮实现提交为 `d8adef89`。后续宿主曾通过 workflow 发布 Actions bot 审批，并直接合并 PR #2、关闭 Issue #1；workflow 改变了 head，原模型产物没有覆盖新版本，且 Merge/close 未经过 DSH Operation，因此这些行政操作不计 M11 的受控收束验收。无条件审批已从 main 移除、仓库默认只读权限已恢复。实际 Source 轮询已观察 PR merged 并结束原 Follow/Ticket，重复轮询新增事件为 0，Operation 和 SDK receipts 均未改变；没有补造 Merge receipt 或 continuation。完整 SHA、CI 与纠正证据见[真实验收记录](vivi-dsh-live-vivi-test.md#后续行政操作与证据纠正)。
+
+当前受控 adapter 仍需要以 `/user` 核验的独立 reviewer 凭据，不能将 workflow 的 Actions token 当作已接入的审核身份。后续须在新的专用验收轮次中补齐当前版本模型审核、原生 Review/修复、受控 Merge 与 Issue continuation；人工 self-issue 回放与宿主 Decision 也不能作为自动接单证据。本次不声明 M11 完成。
