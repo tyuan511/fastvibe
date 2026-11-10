@@ -52,12 +52,13 @@ type Event = { type: string; running?: boolean; conversationId?: string };
 function harness(options: { stopFails?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "queue-now-"));
   const Harness = new Function(
-    "uiText", "parseCompactCommand", "parseHandoffCommand", "isAbortOutcome", "verdictContinuesQueue",
+    "uiText", "parseCompactCommand", "parseHandoffCommand", "parseReviewCommand", "isAbortOutcome", "verdictContinuesQueue",
     `${compiled}; return Harness;`,
   )(
     (zh: string) => zh,
     (text: string) => (text.startsWith("/compact") ? {} : null),
     () => null,
+    (text: string) => (text.startsWith("/review") ? {} : null),
     () => false,
     verdictContinuesQueue,
   );
