@@ -14,7 +14,7 @@ export function agentToolAction(name: string): typeof ACTIONS[keyof typeof ACTIO
   return ACTIONS[name as keyof typeof ACTIONS];
 }
 
-export type AgentToolIdentity = { id: string; name?: string; avatarSeed?: number };
+export type AgentToolIdentity = { id: string; name?: string; avatarSeed?: number; review?: boolean };
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
@@ -26,11 +26,11 @@ export function agentToolTargets(
   messages: readonly ChatMessage[],
   registry: readonly SubagentInfo[],
 ): AgentToolIdentity[] {
-  if (tool.name === "spawn_agent") return subagentToolRuns(tool);
+  if (tool.name === "spawn_agent") return subagentToolRuns(tool).map((entry) => entry.agent === "review" ? { ...entry, review: true } : entry);
   const identities = new Map<string, AgentToolIdentity>();
   history: for (const message of messages) for (const call of message.tools) {
     if (call.id === tool.id) break history;
-    if (call.name === "spawn_agent") for (const entry of subagentToolRuns(call)) identities.set(entry.id, entry);
+    if (call.name === "spawn_agent") for (const entry of subagentToolRuns(call)) identities.set(entry.id, entry.agent === "review" ? { ...entry, review: true } : entry);
   }
   const details = record(tool.details);
   const resultThreads = Array.isArray(details?.threads) ? details.threads : undefined;
@@ -43,6 +43,7 @@ export function agentToolTargets(
       id: item.id,
       name: typeof item.name === "string" ? item.name : previous?.name,
       avatarSeed: typeof item.avatarSeed === "number" ? item.avatarSeed : previous?.avatarSeed,
+      ...(item.agent === "review" || item.review || previous?.review ? { review: true } : {}),
     });
   };
   resultThreads?.forEach(add);

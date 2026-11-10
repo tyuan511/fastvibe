@@ -230,7 +230,7 @@ viewer、`present_files` 都不存在，流程要落到对话里；`find-skills`
   parsed into `SessionManager.inMemory`, never `SessionManager.open`, so a read cannot migrate
   or rewrite the transcript. System prompts, thinking blocks, images and hidden custom messages
   are excluded. It is available to main sessions only;
-  throwaway subagents still load just `folder-consent`.
+  ordinary throwaway subagents still load just `folder-consent`; Review additionally installs its host-owned snapshot tools, with no shell, write, image or recursive delegation tools.
 
 ## 应用配置、展示与 Worktree
 

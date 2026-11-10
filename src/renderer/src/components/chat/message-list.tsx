@@ -509,7 +509,10 @@ export function MessageList({
     projectionRef.current = next;
     return next;
   }, [messages]);
-  const { rows, turns, rowIndex, rowIndexByMessage } = projection;
+  const { rows, turns, rowIndexByMessage } = projection;
+  // Review rows can arrive after the current assistant while its parent is still
+  // streaming. They must not make that assistant look settled and fold its work.
+  const lastTranscriptRowId = useMemo(() => rows.findLast((row) => !row.messages[0].review)?.id, [rows]);
   // Retry/edit rewind the conversation, so they are only offered on the newest
   // prompt: an older turn's actions would silently discard everything after it.
   const lastUserRowId = useMemo(() => {
@@ -831,7 +834,7 @@ export function MessageList({
                             <ThreadRow
                               key={row.id}
                               row={row}
-                              last={(rowIndex.get(row.id) ?? 0) === rows.length - 1}
+                              last={row.id === lastTranscriptRowId}
                               streaming={streaming}
                               amendable={row.id === lastUserRowId}
                               onRetry={onRetry}

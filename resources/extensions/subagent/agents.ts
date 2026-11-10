@@ -152,6 +152,9 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 
 	const agentMap = new Map<string, AgentConfig>();
 	for (const agent of [...builtinAgents, ...userAgents, ...projectAgents]) {
+		// Review's prompt and tool protocol belong to the product. Model and
+		// reasoning overrides are read by the host, never from shadowing files.
+		if (agent.name.toLowerCase() === "review" && !builtinAgents.includes(agent)) continue;
 		agentMap.set(agent.name, agent);
 	}
 

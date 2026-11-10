@@ -33,6 +33,7 @@ export const Ipc = {
   engineSteer: "engine:steer",
   engineFollowUp: "engine:follow-up",
   engineAbort: "engine:abort",
+  engineStartReview: "engine:start-review",
   engineGetAgentThreads: "engine:get-agent-threads",
   engineGetAgentThreadMessages: "engine:get-agent-thread-messages",
   engineSendAgentMessage: "engine:send-agent-message",

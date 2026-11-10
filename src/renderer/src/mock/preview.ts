@@ -1,3 +1,4 @@
+import type { SubmitPromptRequest } from "@shared/prompt-submission";
 import { decodeRemoteProjectKey, remoteProjectKey } from "@shared/project-binding";
 import type { ChatMessage, Conversation, ConversationOpenResult, ConversationQueueState, DirEntry, EngineSessionState, EngineStatus, ImportSourceId, MessagePart, WorkspaceSnapshot } from "@shared/types";
 import type { AppInfo, GitStatus, RemoteServerState } from "@shared/ipc";
@@ -45,6 +46,10 @@ import { imageModelsFromProviders, imageModelKey } from "@shared/image-model";
 import type { ProviderModel, ProviderApi } from "@shared/types";
 import { gitTreeFixture } from "./git-tree-fixture";
 import { gitHistoryFixture } from "./git-history-fixture";
+import { createReviewFixture } from "./review-fixture";
+import type { ReviewStartRequest } from "@shared/review";
+import { parseReviewCommand } from "@shared/slash";
+import type { SubagentDraft } from "@shared/types";
 
 /**
  * Browser preview harness.
@@ -528,6 +533,12 @@ const runOnStart = params.get("running") === "1";
 
 /** The store's engine-event subscribers, so the replay above has somewhere to land. */
 const eventListeners = new Set<(event: unknown) => void>();
+const reviewRepairRequests: SubmitPromptRequest[] = [];
+if (params.has("review")) Object.assign(window, { __reviewRepairRequests: reviewRepairRequests });
+const reviewFixture = createReviewFixture({
+  cwd: fixtureCwd, conversationId: fixtureActiveId, mode: params.get("review"), english: websiteLanguage === "en",
+  emit: (event) => { for (const listener of eventListeners) listener(event); },
+});
 const viviRequestsPreview = params.get("vivi") === "requests";
 const viviPendingUi = createViviPendingUiFixture(params.get("lang") === "en", viviRequestsPreview, fixtureActiveId);
 let rejectNextViviResponse = viviRequestsPreview && params.get("requestError") === "1";
@@ -834,7 +845,19 @@ const api = {
     getStatus: async () => status,
     start: async () => status,
     stop: async () => status,
-    prompt: async () => undefined,
+    // A `/review` line is the one prompt the preview can answer for real: it starts a
+    // fixture review instead of a model turn, so the command row and the card below it
+    // can be checked against the same path production takes.
+    prompt: async (message: string, options?: { conversationId?: string }) => {
+      const command = parseReviewCommand(message);
+      if (!command) return;
+      await reviewFixture.start({ conversationId: options?.conversationId ?? fixtureActiveId, cwd: fixtureCwd, scope: "worktree", ...(command.instructions ? { instructions: command.instructions } : {}), command: message.trim() });
+    },
+    submitPrompt: async (request: SubmitPromptRequest) => {
+      if (params.get("reviewRepairError") === "1") throw new Error("Preview: repair request could not be sent");
+      reviewRepairRequests.push(structuredClone(request));
+      return null;
+    },
     steer: async () => undefined,
     replaceSteering: async () => undefined,
     followUp: async () => undefined,
@@ -917,13 +940,15 @@ const api = {
     }),
     getPiEngine: async () => ({ mode: "isolated" as const, agentDir: "/Users/dev/Library/Application Support/FastVibe/runtime/engine/agent", isolatedAgentDir: "/Users/dev/Library/Application Support/FastVibe/runtime/engine/agent", globalAgentDir: "/Users/dev/.pi/agent" }),
     switchPiEngine: async (mode: "global" | "isolated") => ({ mode, agentDir: mode === "global" ? "/Users/dev/.pi/agent" : "/Users/dev/Library/Application Support/FastVibe/runtime/engine/agent", isolatedAgentDir: "/Users/dev/Library/Application Support/FastVibe/runtime/engine/agent", globalAgentDir: "/Users/dev/.pi/agent", backupDir: "/tmp/fastvibe-backup", restartRequired: false }),
-    getAgentThreads: async () => [],
-    getAgentThreadMessages: async () => [],
+    startReview: async (request: ReviewStartRequest) => reviewFixture.start(request),
+    getAgentThreads: async (conversationId?: string) => reviewFixture.threads.filter((thread) => !conversationId || thread.conversationId === conversationId),
+    getAgentThreadMessages: async (threadId: string) => reviewFixture.messages(threadId),
+    interruptAgent: async (threadId: string) => reviewFixture.interrupt(threadId),
     getSubagents: async () => [],
-    listAgentConfigs: async () => [],
-    saveAgentConfig: async () => [],
-    removeAgentConfig: async () => [],
-    getSubagentMessages: async (): Promise<ChatMessage[]> => [],
+    listAgentConfigs: async () => reviewFixture.configs(),
+    saveAgentConfig: async (draft: SubagentDraft) => reviewFixture.save(draft),
+    removeAgentConfig: async () => reviewFixture.configs(),
+    getSubagentMessages: async (runId: string): Promise<ChatMessage[]> => reviewFixture.process(runId),
     respondPermission: async (payload: { id: string; confirmed?: boolean; value?: string; cancelled?: boolean; answers?: Array<string | null> }) => {
       if (!viviRequestsPreview || !viviPendingUi.requests().some((request) => request.id === payload.id)) return;
       if (rejectNextViviResponse) { rejectNextViviResponse = false; throw new Error("Preview: response could not be sent"); }
@@ -1808,6 +1833,17 @@ if (viviPromo) {
       const worker = viviPromo.conversations.find((item) => item.conversationId === open);
       if (worker) useSidePaneStore.getState().openBotConversation(worker.conversationId, worker.title);
       else if (open === "tasks") useSidePaneStore.getState().openBotTasks();
+    });
+  }, 800);
+}
+
+if (params.has("review") && params.get("review") !== "unconfigured" && params.get("reviewPane") !== "0") {
+  window.setTimeout(() => {
+    void import("@/stores/side-pane").then(({ useSidePaneStore }) => {
+      const thread = reviewFixture.threads[0];
+      if (!thread) return;
+      useSidePaneStore.getState().openReview(thread.id, thread.conversationId);
+      if (maximize) useSidePaneStore.getState().toggleMaximized();
     });
   }, 800);
 }

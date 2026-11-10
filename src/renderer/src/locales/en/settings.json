@@ -227,7 +227,16 @@
  "subagents": {
   "title": "Agent workspace",
   "desc": "Manage delegatable roles, each with its own model and reasoning level.",
-  "fallback": "An unset model follows the parent agent; reasoning defaults to Medium.",
+  "fallback": "Other roles may follow the parent model. Review requires its own selected model.",
+  "chooseReviewModel": "Choose review model",
+  "reviewRead": "Read review snapshot",
+  "reviewSearch": "Search review snapshot",
+  "reviewSubmit": "Submit review report",
+  "roles": {
+   "explorer": { "name": "Explorer", "description": "Investigate focused codebase questions and return supporting evidence." },
+   "worker": { "name": "Worker", "description": "Implement and verify work within explicitly assigned files or modules." },
+   "review": { "name": "Review", "description": "Check code changes using the preset review model, verify findings and submit a structured report." }
+  },
   "builtins": "Built-in agents",
   "customs": "Custom agents",
   "builtin": "Built-in",

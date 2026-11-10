@@ -2,6 +2,7 @@ import { memo, useCallback, type JSX } from "react";
 import { MessageList } from "@/components/chat/message-list";
 import { createTextAttachment } from "@/lib/attachments";
 import { getModels } from "@/lib/engine-client";
+import { useReviewMessages } from "@/lib/use-review-messages";
 import { useDraftPersistence } from "@/lib/draft-persistence";
 import { useSessionStore } from "@/stores/session";
 import { useSidePaneStore } from "@/stores/side-pane";
@@ -50,6 +51,7 @@ export const MessageThread = memo(function MessageThread({
   const messages = useSessionStore((state) => state.messages);
   const streaming = useSessionStore((state) => state.streaming);
   const activeId = useSessionStore((state) => state.activeId);
+  const presentedMessages = useReviewMessages(messages, activeId);
   const addSelectionToConversation = useCallback((text: string) => {
     const store = useSessionStore.getState();
     store.setComposer(store.draft, [...store.attachments, selectionAttachment(text)]);
@@ -69,7 +71,7 @@ export const MessageThread = memo(function MessageThread({
   }, [activeId]);
   return (
     <MessageList
-      messages={messages}
+      messages={presentedMessages}
       streaming={streaming}
       conversationId={activeId}
       loading={loading}

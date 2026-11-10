@@ -246,6 +246,7 @@ const ALLOWED = new Set<string>([
   Ipc.engineGetStats,
   Ipc.engineGetStatus,
   Ipc.engineGetPiEngine,
+  Ipc.engineStartReview,
   Ipc.engineGetAgentThreads,
   Ipc.engineGetAgentThreadMessages,
   Ipc.engineSendAgentMessage,

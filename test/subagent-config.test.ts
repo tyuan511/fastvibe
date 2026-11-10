@@ -40,9 +40,9 @@ function fixture(t: test.TestContext) {
   return new SubagentManager({ agentDir: dir, subagentsFile: join(dir, "subagents.json") } as FastVibePaths);
 }
 
-test("built-in roles match the Codex child-role set", (t) => {
+test("built-in roles include one dedicated Review alongside the collaboration roles", (t) => {
   const manager = fixture(t);
-  assert.deepEqual(manager.list().filter((agent) => agent.source === "builtin").map((agent) => agent.id), ["explorer", "worker"]);
+  assert.deepEqual(manager.list().filter((agent) => agent.source === "builtin").map((agent) => agent.id), ["explorer", "worker", "review"]);
 });
 
 test("saved builtin reasoning wins over the discovered template's default", (t) => {

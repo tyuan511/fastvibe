@@ -335,5 +335,9 @@
   },
   "model": {
     "switched": "模型已切换至"
+  },
+  "review": {
+    "needChat": "还没有对话可以发起审查",
+    "command": "代码审查"
   }
 }

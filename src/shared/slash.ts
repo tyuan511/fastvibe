@@ -20,3 +20,15 @@ export function parseHandoffCommand(text: string): { goal?: string } | null {
   const goal = match[1]?.trim();
   return { goal: goal || undefined };
 }
+
+/**
+ * `/review` starts a code review, so it must never reach the model as text. Everything
+ * after the command is the review's own requirement list, the same field the review
+ * dialog and the Git panel fill in — not a chat prompt.
+ */
+export function parseReviewCommand(text: string): { instructions?: string } | null {
+  const match = text.trim().match(/^\/review(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+  const instructions = match[1]?.trim();
+  return { instructions: instructions || undefined };
+}

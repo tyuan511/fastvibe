@@ -13,6 +13,7 @@ import {
 } from "../../shared/project-binding.ts";
 import type { RemoteConnectionStatus } from "../../shared/remote-connection.ts";
 import {
+  namespaceAgentThread,
   namespaceCatalogSnapshot,
   namespaceConversationRecord,
   namespaceIdList,
@@ -687,6 +688,10 @@ export class RemoteGateway {
     if (method === Ipc.workspaceCreateEntry || method === Ipc.workspaceRenameEntry) return scopePathField(result, serverInstanceId);
     if (method === Ipc.workspaceReadDir) return scopeReadDir(result, serverInstanceId);
     if (method === Ipc.engineGetRunning) return namespaceIdList(result, serverInstanceId);
+    if (method === Ipc.engineStartReview || method === Ipc.engineFollowupAgent) return namespaceAgentThread(result, serverInstanceId);
+    if (method === Ipc.engineGetAgentThreads || method === Ipc.engineWaitAgents) {
+      return Array.isArray(result) ? result.map((thread) => namespaceAgentThread(thread, serverInstanceId)) : result;
+    }
     if (method === Ipc.engineGetSubagents) return scopeSubagents(result, serverInstanceId);
     if (method === Ipc.scheduleCreate || method === Ipc.scheduleUpdate) return namespaceScheduleTask(result as ScheduledTask, serverInstanceId);
     if (method === Ipc.scheduleRunNow) return namespaceScheduleRun(result as ScheduledTaskRun, serverInstanceId);
@@ -893,6 +898,9 @@ function scopeUiItem(value: unknown, serverInstanceId: string): unknown {
   const next: Record<string, unknown> = { ...value };
   if (typeof next.conversationId === "string" && next.conversationId) {
     next.conversationId = scopeId(next.conversationId, serverInstanceId);
+  }
+  if (next.type === "agent_thread_changed") {
+    next.thread = namespaceAgentThread(next.thread, serverInstanceId);
   }
   if (
     (next.type === "extension_ui_request" || next.type === "extension_ui_dismiss")

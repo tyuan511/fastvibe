@@ -50,3 +50,13 @@ test("an implicit wait excludes later creations and respects an empty persisted 
     { id: "agent-one:turn:1", conversationId: "chat", name: "Warm Seal", avatarSeed: 42, status: "running" },
   ]), [{ id: "agent-one", name: "Warm Seal", avatarSeed: 42 }]);
 });
+
+test("Review links retain their dedicated view routing from creation, history and live results", () => {
+  const review = { ...spawn, details: { thread: { id: "agent-review", agent: "review", name: "Review" } } };
+  assert.equal(agentToolTargets(review, "chat", [], [])[0].review, true);
+  const history = [{ ...messages[0], tools: [review, { ...wait, args: { targets: ["agent-review"] } }] }];
+  assert.equal(agentToolTargets(history[0].tools[1], "chat", history, [])[0].review, true);
+  const persisted = { ...wait, args: { targets: ["agent-review"] }, details: { threads: [{ id: "agent-review", agent: "review", conversationId: "chat" }] } };
+  assert.equal(agentToolTargets(persisted, "chat", [], [])[0].review, true);
+  assert.equal(agentToolTargets(persisted, "other", [], [])[0].review, undefined);
+});

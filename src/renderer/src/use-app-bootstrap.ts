@@ -7,7 +7,7 @@ import { refreshPendingUi } from "@/lib/pending-ui-client";
 import { createConversationRefresh } from "@/lib/conversation-refresh";
 import { coalesce } from "@/lib/coalesce";
 import { createWorkspaceRestore } from "@/lib/workspace-restore";
-import { findSubagent } from "@shared/subagent-state";
+import { agentThreadIdForRun, findSubagent } from "@shared/subagent-state";
 import { conversationIdFromHash, conversationPath } from "@/lib/routes";
 import { resolvePath } from "@/lib/workspace-path";
 import { isRemoteRef, shouldFollowCatalogActive } from "@/lib/remote-project";
@@ -250,8 +250,13 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
       // tab (`subagent:<toolCallId>:<index>`), keyed to the conversation that
       // spawned it, so two chats delegating at once never share a view.
       if (event.type === "agent_thread_changed" && event.thread && typeof event.thread === "object") {
-        const thread = event.thread as { id?: unknown; conversationId?: unknown; name?: unknown; avatarSeed?: unknown; status?: unknown; task?: unknown };
+        const thread = event.thread as { id?: unknown; conversationId?: unknown; name?: unknown; avatarSeed?: unknown; status?: unknown; task?: unknown; review?: unknown };
         const threadId = typeof thread.id === "string" ? thread.id : "";
+        if (threadId && thread.review) {
+          const owner = typeof thread.conversationId === "string" ? thread.conversationId : conversationId;
+          if (owner) useSidePaneStore.getState().openReview(threadId, owner, true);
+          return;
+        }
         if (threadId) useSidePaneStore.getState().registerSubagent(threadId, {
           conversationId: typeof thread.conversationId === "string" ? thread.conversationId : (conversationId ?? undefined),
           title: typeof thread.name === "string" ? thread.name : threadId,
@@ -271,6 +276,11 @@ export function useAppBootstrap(args: AppBootstrapArgs): boolean {
           const subagentId = typeof event.subagentId === "string" ? event.subagentId : "";
           if (subagentId) {
             const info = findSubagent(useSessionStore.getState().subagents, subagentId, conversationId);
+            if (info?.agent === "review" || event.agent === "review") {
+              const owner = typeof event.conversationId === "string" ? event.conversationId : info?.conversationId;
+              if (owner) useSidePaneStore.getState().openReview(agentThreadIdForRun(subagentId), owner, true);
+              return;
+            }
             useSidePaneStore.getState().registerSubagent(subagentId, {
               conversationId: typeof event.conversationId === "string" ? event.conversationId : info?.conversationId,
               title: info?.name || info?.agent,

@@ -202,7 +202,7 @@ function ResourceBody({ conversation, project, onClose }: { conversation: Conver
     const attention = agent.info?.phase === "waiting" || ["blocked", "failed", "error"].includes(agent.status);
     const label = subagentStatusText(agent.info, agent.status);
     return <Button key={agent.id} variant="ghost" className={cn(ROW, agent.parentId && "pl-6")} title={agent.brief} onClick={() => {
-      useSidePaneStore.getState().openSubagent(agent.id, { conversationId: conversation.id, title: agent.name, avatarSeed: agent.avatarSeed, status: agent.status, brief: agent.brief });
+      useSidePaneStore.getState().openSubagent(agent.id, { conversationId: conversation.id, title: agent.name, avatarSeed: agent.avatarSeed, status: agent.status, brief: agent.brief, review: agent.info?.agent === "review" || threadAgents.some((thread) => thread.id === agent.id && Boolean(thread.review)) });
       onClose();
     }}>
       <AgentAvatar seed={agent.avatarSeed ?? 0} size="size-6" className={cn(attention && "opacity-70")} />

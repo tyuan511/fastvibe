@@ -129,6 +129,7 @@ timestamps always show.
   compact formatter it replaced is gone, and `formatDuration` returns `""` for a null span, so
   the statistics popover spells out its own `—`.
 - **Agent actions and artifact content stay in the process.** Creating agents, task graphs and presented file content remain inside the process fold. The header may expose the same files through `InlineThumbStrip` shortcut buttons; these do not move or duplicate the artifact body. Expanding the process restores the original controls in place. The turn's changed-file card appears once after the final answer and before the message actions when the run settles, regardless of whether the process is folded.
+- **Review 报告在主聊天中是独立结果行。** 卡片由持久审查线程和结构化报告派生，显示进度、问题摘要和完整报告入口，不进入助手的过程折叠；创建审查的工具动作仍按原规则归入过程。详见 [Review 模式](../review-mode.md)。
 - **Collapsed by default, and entirely the reader's afterwards** — nothing re-folds it under
   them. Every transcript draws it the same way: the main thread, 辅助对话, and 子 Agent.
 - **展开之后仍然限高，过程在折叠块内部滚动。** 一个长运行的过程可以有几十段思考与上百张工具卡，

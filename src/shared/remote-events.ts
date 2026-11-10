@@ -115,12 +115,37 @@ export function namespaceConversationRecord(value: unknown, serverInstanceId: st
   return record;
 }
 
-/** `ConversationSnapshot` — the id only; messages and turn events stay verbatim. */
+/** Agent identities and report content stay server-owned; qualify only routing metadata. */
+export function namespaceAgentThread(value: unknown, serverInstanceId: string): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  const thread = { ...(value as Record<string, unknown>) };
+  if (typeof thread.conversationId === "string" && thread.conversationId) {
+    thread.conversationId = namespaceConversationId(thread.conversationId, serverInstanceId);
+  }
+  if (typeof thread.cwd === "string" && thread.cwd) {
+    thread.cwd = scopeWorkspaceId(serverInstanceId, thread.cwd);
+  }
+  if (typeof thread.review === "object" && thread.review !== null && !Array.isArray(thread.review)) {
+    const review = thread.review as Record<string, unknown>;
+    if (typeof review.root === "string" && review.root) {
+      thread.review = { ...review, root: scopeWorkspaceId(serverInstanceId, review.root) };
+    }
+  }
+  return thread;
+}
+
+/** `ConversationSnapshot` — qualify routing metadata in retained thread events only. */
 export function namespaceConversationSnapshot(value: unknown, serverInstanceId: string): unknown {
   if (typeof value !== "object" || value === null) return value;
   const record = { ...(value as Record<string, unknown>) };
   if (typeof record.conversationId === "string" && record.conversationId) {
     record.conversationId = namespaceConversationId(record.conversationId, serverInstanceId);
+  }
+  if (Array.isArray(record.turnEvents)) {
+    record.turnEvents = record.turnEvents.map((event) => {
+      if (typeof event !== "object" || event === null || (event as Record<string, unknown>).type !== "agent_thread_changed") return event;
+      return namespaceEngineEvent(event, serverInstanceId);
+    });
   }
   return record;
 }
@@ -233,6 +258,9 @@ function namespaceEngineEvent(payload: unknown, serverInstanceId: string): unkno
     && next.id
   ) {
     next.id = namespaceConversationId(next.id, serverInstanceId);
+  }
+  if (next.type === "agent_thread_changed") {
+    next.thread = namespaceAgentThread(next.thread, serverInstanceId);
   }
   if (next.queue && typeof next.queue === "object") {
     next.queue = namespaceQueueState(next.queue, serverInstanceId);

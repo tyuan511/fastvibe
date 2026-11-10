@@ -148,6 +148,55 @@ function gateway(over: {
   return { instance, file, localCalls, broadcasts, connections };
 }
 
+test("review start, thread lists, follow-up and retained events scope metadata for each host", async () => {
+  const thread = {
+    id: "agent-review", rootId: "agent-root", parentId: "agent-parent", conversationId: "chat-1", cwd: "/repo/sub",
+    review: { id: "review-1", root: "/repo", files: [{ path: "src/app.ts" }] },
+    reviewReport: { findings: [{ id: "finding-1", location: { path: "src/app.ts" } }] },
+    messages: [{ id: "msg-1", text: "review /repo" }],
+  };
+  const ordinary = { id: "agent-normal", rootId: "agent-normal", conversationId: "chat-1", cwd: "/repo" };
+  const event = { type: "agent_thread_changed", conversationId: "chat-1", thread };
+  const untouched = { type: "message_update", conversationId: "chat-1", content: { thread } };
+  const snapshot = { conversationId: "chat-1", messages: thread.messages, turnEvents: [event, untouched] };
+  const results = {
+    [Ipc.engineStartReview]: thread,
+    [Ipc.engineFollowupAgent]: thread,
+    [Ipc.engineGetAgentThreads]: [thread, ordinary],
+    [Ipc.engineWaitAgents]: [thread, ordinary],
+    [Ipc.engineGetSnapshot]: snapshot,
+    [Ipc.workspacePreview]: { path: "/repo/src/app.ts" },
+  };
+  const original = structuredClone(results);
+  const connections = fakeConnections({
+    servers: ["srv_alpha", "srv_beta"].map((serverInstanceId) => ({ connectionId: serverInstanceId, serverInstanceId, capabilities: ["engine"] })),
+    results,
+  });
+  const { instance, broadcasts } = gateway({ connections });
+  for (const server of ["srv_alpha", "srv_beta"]) {
+    const conversationId = encodeRemoteConversationId(server, "chat-1");
+    const expected = { ...thread, conversationId, cwd: `remote:${server}:/repo/sub`, review: { ...thread.review, root: `remote:${server}:/repo` } };
+    for (const method of [Ipc.engineStartReview, Ipc.engineFollowupAgent, Ipc.engineGetAgentThreads, Ipc.engineWaitAgents]) {
+      const payload = { conversationId, id: "agent-review", cwd: `remote:${server}:/repo/sub` };
+      const value = await instance.dispatch(method, payload, {});
+      if (method === Ipc.engineGetAgentThreads || method === Ipc.engineWaitAgents) {
+        assert.deepEqual(value, [expected, { ...ordinary, conversationId, cwd: `remote:${server}:/repo` }]);
+      } else assert.deepEqual(value, expected);
+      assert.deepEqual(connections.calls.at(-1), { server, method, payload: { conversationId: "chat-1", id: "agent-review", cwd: "/repo/sub" } });
+      assert.equal(payload.conversationId, conversationId);
+    }
+    instance.acceptRemotePush(Ipc.event, event, server);
+    assert.deepEqual(broadcasts.at(-1)?.payload, { ...event, conversationId, thread: expected });
+    const scoped = await instance.dispatch(Ipc.engineGetSnapshot, { conversationId }, {}) as typeof snapshot;
+    assert.deepEqual(scoped.turnEvents[0], { ...event, conversationId, thread: expected });
+    assert.equal(scoped.turnEvents[1]!.content, untouched.content);
+    assert.equal(scoped.messages, snapshot.messages);
+    await instance.dispatch(Ipc.workspacePreview, { conversationId, cwd: expected.review.root, path: "src/app.ts" }, {});
+    assert.deepEqual(connections.calls.at(-1)?.payload, { conversationId: "chat-1", cwd: "/repo", path: "src/app.ts" });
+  }
+  assert.deepEqual(results, original);
+});
+
 test("startup connects bound servers in parallel once each and publishes their catalogs without navigating", async () => {
   const file = bindingsFile();
   saveBinding(file, binding());

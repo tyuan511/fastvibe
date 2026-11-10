@@ -8,6 +8,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
+import { ReviewStartDialog } from "@/components/review/review-start-dialog";
 import { DiffView } from "@/components/chat/diff-view";
 import { FileIcon } from "@/components/file-icon";
 import { IconButton } from "@/components/icon-button";
@@ -82,6 +83,8 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
   const { t } = useTranslation("sidepane");
   const messages = useSessionStore((state) => state.messages);
   const streaming = useSessionStore((state) => state.streaming);
+  const conversationId = useSessionStore((state) => state.activeId);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [view, setView] = useState<View>(focusSource === "branch" || focusSource === "last-turn" ? focusSource : "workspace");
   const [commit, setCommit] = useState<GitHistoryEntry>();
@@ -330,6 +333,7 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
       <span className="min-w-0 flex-1 truncate text-xs font-medium">{status?.branch ?? "HEAD"}</span>
       {status?.behind ? <span className="text-xs text-muted-foreground">↓{status.behind}</span> : null}
       {status?.ahead ? <span className="text-xs text-muted-foreground">↑{status.ahead}</span> : null}
+      <Button size="xs" variant="outline" disabled={!conversationId || !!busy || !status?.isRepository} onClick={() => setReviewOpen(true)}>{t("review.start")}</Button>
       <IconButton size="icon-xs" variant="ghost" label={t("git.pull")} disabled={!!busy} onClick={() => void run("pull", () => window.fastvibe.workspace.gitPull(cwd), t("git.pullDone", { branch: status?.branch }))}>{busy === "pull" ? <Spinner /> : <HugeiconsIcon icon={ArrowDown02Icon} />}</IconButton>
       <IconButton size="icon-xs" variant="ghost" label={t("git.push")} disabled={!!busy} onClick={() => void run("push", () => window.fastvibe.workspace.gitPush(cwd), t("git.pushDone", { branch: status?.branch }))}>{busy === "push" ? <Spinner /> : <HugeiconsIcon icon={ArrowUp02Icon} />}</IconButton>
       <IconButton size="icon-xs" variant="ghost" label={t(tree ? "git.listView" : "git.treeView")} onClick={() => { preferTree = !tree; setTree(!tree); }}><HugeiconsIcon icon={tree ? ListIcon : FolderTreeIcon} /></IconButton>
@@ -343,6 +347,7 @@ function RepositoryChanges({ cwd, onError, focusPath, focusSource, focusRevision
       {selected ? <DiffPane key={`${selected.source}:${selected.revision ?? ""}:${selected.file.path}`} cwd={cwd} selection={selected} mode={diffMode} setMode={setDiffMode} epoch={epoch} busy={!!busy} onStage={view === "workspace" && !commit && selected.source === "unstaged" ? () => stage([selected.file.path]) : undefined} onUnstage={selected.source === "staged" ? () => unstage([selected.file.path]) : undefined} onDiscard={view === "workspace" && !commit && selected.source === "unstaged" && !isConflict(selected.file) ? () => setDiscard(selected.file) : undefined} onError={onError} /> : <div className="flex min-w-0 flex-1 items-center justify-center p-8 text-xs text-muted-foreground">{commit ? (!comparison && !comparisonError ? <Spinner /> : t(comparisonError ? "git.comparisonFailed" : "git.emptyCommit")) : !status ? <Spinner /> : t(fileCount ? "git.pickDiff" : "git.clean")}</div>}
       </div>
     </div>
+    {reviewOpen ? <ReviewStartDialog key={`${cwd}:${conversationId}:${commit?.hash ?? view}`} open onOpenChange={setReviewOpen} cwd={cwd} defaultScope={commit ? "commit" : view === "branch" ? "branch" : selection?.source === "staged" ? "staged" : "worktree"} revision={commit?.hash} /> : null}
     <AlertDialog open={!!discard} onOpenChange={(open) => { if (!open) setDiscard(undefined); }}>
       <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t("git.discardTitle")}</AlertDialogTitle><AlertDialogDescription>{t(discard?.index === "?" ? "git.discardUntracked" : "git.discardDescription", { path: discard?.path })}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t("git.cancel")}</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={!!busy} onClick={() => { const file = discard; setDiscard(undefined); if (file) void run("discard", () => window.fastvibe.workspace.gitDiscard(cwd, [file.path]), t("git.discardDone", { path: file.path })); }}>{t("git.discard")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
     </AlertDialog>

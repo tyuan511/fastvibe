@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Ipc } from "../src/shared/ipc.ts";
 import {
+  namespaceAgentThread,
   classifyRemotePush,
   isConversationPush,
   namespaceCatalogSnapshot,
@@ -14,6 +15,38 @@ import {
 } from "../src/shared/remote-events.ts";
 
 const SERVER = "srv_alpha";
+
+test("agent thread metadata is scoped per host without changing identities or review content", () => {
+  const thread = {
+    id: "agent-review", rootId: "agent-root", parentId: "agent-parent", conversationId: "chat-1", cwd: "/repo/sub",
+    review: { id: "review-1", root: "/repo", files: [{ path: "src/app.ts" }] },
+    reviewReport: { findings: [{ id: "finding-1", location: { path: "src/app.ts" } }] },
+    messages: [{ id: "msg-1", conversationId: "model-content", cwd: "/quoted" }],
+  };
+  const original = structuredClone(thread);
+  for (const server of [SERVER, "srv_beta"]) {
+    const scoped = namespaceAgentThread(thread, server) as typeof thread;
+    assert.deepEqual(scoped, { ...thread, conversationId: `remote:${server}:chat-1`, cwd: `remote:${server}:/repo/sub`, review: { ...thread.review, root: `remote:${server}:/repo` } });
+    assert.equal(scoped.reviewReport, thread.reviewReport);
+    assert.equal(scoped.messages, thread.messages);
+    assert.deepEqual(namespaceAgentThread(scoped, server), scoped);
+    const event = { type: "agent_thread_changed", conversationId: "chat-1", thread };
+    const next = namespaceRemotePush(Ipc.event, event, server) as typeof event;
+    assert.equal(next.conversationId, `remote:${server}:chat-1`);
+    assert.deepEqual(next.thread, scoped);
+    const ordinaryEvent = { type: "message_update", thread };
+    const snapshot = { conversationId: "chat-1", messages: thread.messages, turnEvents: [event, ordinaryEvent] };
+    const nextSnapshot = namespaceConversationSnapshot(snapshot, server) as typeof snapshot;
+    assert.deepEqual(nextSnapshot.turnEvents[0], next);
+    assert.equal(nextSnapshot.turnEvents[1], ordinaryEvent);
+    assert.equal(nextSnapshot.messages, snapshot.messages);
+    assert.equal(snapshot.turnEvents[0], event);
+  }
+  assert.deepEqual(thread, original);
+  const ordinary = { id: "agent-normal", rootId: "agent-normal", conversationId: "chat-1", cwd: "/repo" };
+  assert.deepEqual(namespaceAgentThread(ordinary, SERVER), { ...ordinary, conversationId: "remote:srv_alpha:chat-1", cwd: "remote:srv_alpha:/repo" });
+  assert.equal(namespaceAgentThread(null, SERVER), null);
+});
 
 test("schedule pushes qualify task/project ids but leave prompts and calendar rules intact", () => {
   const payload = { revision: 2, tasks: [{ id: "task-1", name: "review", prompt: "Review /tmp/app", project: "/tmp/app", schedule: { kind: "daily", time: "09:00", timeZone: "UTC" }, enabled: true, createdAt: 1, updatedAt: 1 }] };

@@ -32,10 +32,10 @@ for (const scope of ["user", "project", "both"] as const satisfies readonly Agen
     const { cwd } = fixture(t);
     const result = discoverAgents(cwd, scope);
     assert.equal(result.projectAgentsDir, null);
-    assert.deepEqual(result.agents.map((agent) => agent.name).sort(), ["explorer", "worker"]);
+    assert.deepEqual(result.agents.map((agent) => agent.name).sort(), ["explorer", "review", "worker"]);
     for (const agent of result.agents) {
       assert.ok(agent.systemPrompt.trim(), `${agent.name} must retain its bundled instructions`);
-      assert.ok(agent.tools?.includes("read"));
+      assert.ok(agent.tools?.includes(agent.name === "review" ? "submit_review_result" : "read"));
     }
   });
 
@@ -45,7 +45,7 @@ for (const scope of ["user", "project", "both"] as const satisfies readonly Agen
     writeRole(projectRoles, "specialist", "Project role");
     const result = discoverAgents(cwd, scope);
     assert.equal(result.projectAgentsDir, projectRoles);
-    const expected = ["explorer", "worker"];
+    const expected = ["explorer", "review", "worker"];
     if (scope !== "project") expected.push("personal");
     if (scope !== "user") expected.push("specialist");
     assert.deepEqual(result.agents.map((agent) => agent.name).sort(), expected.sort());

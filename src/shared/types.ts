@@ -268,6 +268,8 @@ export type ChatMessage = {
     title?: string;
     result?: import("./bot.ts").BotResult;
   };
+  /** Desktop-only presentation row derived from the durable Review thread, never a model message. */
+  review?: import("./agent-thread.ts").AgentThread;
   /** Extension custom message (`pi.sendMessage`): the plugin's own type id. */
   customType?: string;
   /** Structured spans of the extension's registered message renderer. */

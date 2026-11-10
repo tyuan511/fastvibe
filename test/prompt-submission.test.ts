@@ -41,6 +41,15 @@ test("queued submission uses current host settings and keeps conditional rollbac
   const compact = host({ behavior: "steer" });
   await submitPrompt(compact, { ...input, text: "/compact" });
   assert.equal((compact.calls[1] as unknown[])[2], "followUp");
+  // A queued `/review` is a command too: steering it would hand the model the literal line.
+  for (const text of ["/review", "/review 重点看停止路径", "/handoff 下一步"]) {
+    const command = host({ behavior: "steer" });
+    await submitPrompt(command, { ...input, text });
+    assert.equal((command.calls[1] as unknown[])[2], "followUp", text);
+  }
+  const plain = host({ behavior: "steer" });
+  await submitPrompt(plain, { ...input, text: "/reviews are useful" });
+  assert.equal((plain.calls[1] as unknown[])[2], "steer", "only the command itself is excluded, not text that starts with it");
 });
 
 test("refused admission restores its preview, and never touches another conversation", async () => {

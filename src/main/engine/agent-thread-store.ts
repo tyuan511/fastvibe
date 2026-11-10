@@ -1,6 +1,7 @@
 import { agentIdentityForId } from "../../shared/agent-identity.ts";
 import type { AgentMessageKind, AgentThread, AgentThreadMessage, AgentThreadStatus } from "../../shared/agent-thread.ts";
 import type { Db } from "./db.ts";
+import type { ReviewReport } from "../../shared/review.ts";
 
 /** Sidebar snippet only; the full turn output stays in the result mailbox message. */
 const LAST_MESSAGE_CHARS = 2000;
@@ -59,13 +60,14 @@ export class AgentThreadStore {
   }
 
   /** Commit the outcome and its parent mailbox message together, once per thread turn. */
-  finishTurn(id: string, turn: number, status: "completed" | "failed" | "interrupted", output: string, error?: string): AgentThread | undefined {
+  finishTurn(id: string, turn: number, status: "completed" | "failed" | "interrupted", output: string, error?: string, reviewReport?: ReviewReport): AgentThread | undefined {
     return this.#db.transaction(() => {
       const current = this.get(id);
       if (!current || (current.currentTurn ?? 1) !== turn) return undefined;
       const active = ["queued", "working", "waiting"].includes(current.status);
       if (!active && !(status === "interrupted" && current.status === "interrupted")) return undefined;
-      const next = this.setStatus(id, status, { endedAt: Date.now(), lastMessage: output.length > LAST_MESSAGE_CHARS ? `${output.slice(0, LAST_MESSAGE_CHARS)}…` : output, unread: true });
+      const excerpt = current.review && status === "failed" ? [error, output].filter(Boolean).join("\n\n") : output;
+      const next = this.setStatus(id, status, { endedAt: Date.now(), ...(status === "completed" && reviewReport ? { reviewReport } : {}), lastMessage: excerpt.length > LAST_MESSAGE_CHARS ? `${excerpt.slice(0, LAST_MESSAGE_CHARS)}…` : excerpt, unread: true });
       // An interruption retains partial output for follow-up, but sends no parent notification.
       if (status === "interrupted" && !output) return next;
       const message: AgentThreadMessage = {
@@ -74,6 +76,7 @@ export class AgentThreadStore {
         senderId: id,
         recipientId: status === "interrupted" ? undefined : current.conversationId,
         kind: "result",
+        ...(status === "completed" && reviewReport ? { reviewReport } : {}),
         text: status === "failed" ? [error || "Agent turn failed.", output].filter(Boolean).join("\n\n") : output || "Agent completed without a text result.",
         turn,
         status: status === "interrupted" ? undefined : status,

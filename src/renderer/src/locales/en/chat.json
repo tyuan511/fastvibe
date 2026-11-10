@@ -335,5 +335,9 @@
   },
   "model": {
     "switched": "Model switched to"
+  },
+  "review": {
+    "needChat": "Start the review from a conversation first",
+    "command": "Code review"
   }
 }

@@ -22,7 +22,11 @@ export async function submitPrompt(host: Host, input: SubmitPromptRequest): Prom
   const expected = { ...host.preview(input.conversationId)! };
   try {
     if (input.enqueue) {
-      const behavior = !/^\/compact(?:\s|$)/.test(input.text) && host.behavior() === "steer" ? "steer" : "followUp";
+      // A command must never be steered into the reply in flight: a steer is injected as
+      // a user message, so the model would be handed the literal `/compact` or `/review`.
+      // The queue hands these to the engine once the run has settled.
+      const command = /^\/(?:compact|handoff|review)(?:\s|$)/.test(input.text);
+      const behavior = !command && host.behavior() === "steer" ? "steer" : "followUp";
       return await host.enqueue(input, behavior, {
         previousTitle: before.title, previousPreview: before.preview,
         nextTitle: expected.title, nextPreview: expected.preview,

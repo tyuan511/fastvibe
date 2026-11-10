@@ -34,6 +34,9 @@ import {
   type SubagentHostUsage,
 } from "./process-manager-events";
 import { builtinExtensionFile } from "./extension-manager";
+import type { ReviewSnapshot } from "../engine/review-snapshot";
+import type { ReviewReport } from "../../shared/review";
+import { createReviewTools } from "./review-tools";
 
 export type SubagentHostRequest = {
   /** `${parentToolCallId}:${index}` — the same id the tool-call tracker mints. */
@@ -52,6 +55,9 @@ export type SubagentHostRequest = {
   initialEntries?: FileEntry[];
   cwd: string;
   signal?: AbortSignal;
+  /** Review runs pin both their model and their read-only source snapshot. */
+  reviewSnapshot?: ReviewSnapshot;
+  pinnedModel?: NonNullable<ReturnType<ModelRegistry["find"]>>;
 };
 
 export type SubagentHostResponse = {
@@ -61,6 +67,7 @@ export type SubagentHostResponse = {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+  reviewReport?: ReviewReport;
 };
 
 type ReasoningBlocks = { blocks: ThinkingTiming[] };
@@ -185,6 +192,7 @@ export class SubagentTurnRunner {
     let messages: unknown[] = [];
     let summary = summarizeSubagentMessages([]);
     let usedModel: string | undefined;
+    const reviewTools = request.reviewSnapshot ? createReviewTools(request.reviewSnapshot) : undefined;
     try {
       lifecycle("running");
       control.check();
@@ -213,7 +221,9 @@ export class SubagentTurnRunner {
         noPromptTemplates: true,
         noSkills: true,
         additionalExtensionPaths: [folderConsent].filter((path): path is string => Boolean(path)),
-        extensionFactories: this.#host.imageGeneration ? [{ name: "fastvibe-image-generation", hidden: true, factory: this.#host.imageGeneration(conversationId) }] : [],
+        extensionFactories: reviewTools
+          ? [{ name: "fastvibe-review", hidden: true, factory: reviewTools.factory }]
+          : this.#host.imageGeneration ? [{ name: "fastvibe-image-generation", hidden: true, factory: this.#host.imageGeneration(conversationId) }] : [],
         ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
       });
       await loader.reload();
@@ -225,13 +235,17 @@ export class SubagentTurnRunner {
       // for a parent session that has no usable model of its own.
       const preferred = readDefaultModel(this.#paths);
       const configuredModel = this.#subagentManager.modelFor(request.agent, request.model, request.agentSource);
-      const thinkingLevel = this.#subagentManager.thinkingLevelFor(request.agent, request.thinkingLevel, request.agentSource);
-      const model = this.#resolveSubagentModel(
+      const thinkingLevel = request.reviewSnapshot
+        ? request.thinkingLevel ?? "medium"
+        : this.#subagentManager.thinkingLevelFor(request.agent, request.thinkingLevel, request.agentSource);
+      const model = request.pinnedModel ?? this.#resolveSubagentModel(
         configuredModel,
         request.fallbackModel ?? (preferred ? `${preferred.provider}/${preferred.id}` : undefined),
       );
       const hasImageTool = loader.getExtensions().extensions.some((extension) => extension.tools.has("generate_image"));
-      const tools = availableImageTools(
+      const tools = request.reviewSnapshot
+        ? ["review_read_file", "review_search", "submit_review_result"]
+        : availableImageTools(
         request.tools && request.tools.length > 0
           ? request.tools
           : ["read", "bash", "edit", "write", "grep", "find", "ls", ...(this.#host.imageGeneration ? ["generate_image"] : [])],
@@ -291,6 +305,15 @@ export class SubagentTurnRunner {
       control.check();
       const task = request.task;
       await session.prompt(task);
+      if (reviewTools) {
+        control.check();
+        const verdict = summarizeSubagentMessages(session.messages);
+        if (verdict.stopReason !== "error" && verdict.stopReason !== "aborted" && !reviewTools.getReport()) {
+          await session.prompt("The Review task has no valid structured report. Finish your self-review, then call submit_review_result. If coverage is incomplete, state every omitted file and reason. Do not replace the report with prose.");
+          control.check();
+        }
+        if (!reviewTools.getReport()) throw new Error(uiText("审查未提交有效的结构化报告，请重试", "Review did not submit a valid structured report. Please retry."));
+      }
     } catch (error) {
       thrown = error;
     }
@@ -360,6 +383,7 @@ export class SubagentTurnRunner {
       model: usedModel,
       stopReason,
       errorMessage,
+      ...(!failed && reviewTools?.getReport() ? { reviewReport: reviewTools.getReport() } : {}),
     };
   }
 

@@ -21,7 +21,7 @@ type StoredOverrides = {
   thinkingLevels: Record<string, ThinkingLevel>;
 };
 
-const BUILTIN_IDS = ["explorer", "worker"] as const;
+const BUILTIN_IDS = ["explorer", "worker", "review"] as const;
 const LEGACY_SCOUT_ID = "scout";
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MODEL_PATTERN = /^[^\s/]+\/[^\s]+$/;

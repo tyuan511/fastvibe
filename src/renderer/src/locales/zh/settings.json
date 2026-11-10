@@ -227,7 +227,16 @@
  "subagents": {
   "title": "智能体 工作台",
   "desc": "管理可委派的角色，每个角色可独立设置模型和推理强度。",
-  "fallback": "未指定模型时跟随主 Agent，推理强度默认中等。",
+  "fallback": "普通角色未指定模型时跟随主模型；Review 需单独选择审查模型。",
+  "chooseReviewModel": "选择审查模型",
+  "reviewRead": "读取审查快照",
+  "reviewSearch": "搜索审查快照",
+  "reviewSubmit": "提交审查报告",
+  "roles": {
+   "explorer": { "name": "Explorer", "description": "调查明确的代码问题，为主智能体提供代码证据。" },
+   "worker": { "name": "Worker", "description": "在指定的文件或模块范围内完成实现与验证。" },
+   "review": { "name": "Review", "description": "使用预设审查模型检查代码变更，复核问题并提交结构化报告。" }
+  },
   "builtins": "内置智能体",
   "customs": "自定义智能体",
   "builtin": "内置",

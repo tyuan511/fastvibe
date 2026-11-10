@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatMessage, MessagePart, PromptDraft } from "@shared/types";
 import { collectInlinePreviews, type InlinePreview } from "@shared/inline-media";
 import { skillCommandOf } from "@shared/skill-invocation";
+import { REVIEW_COMMAND_TYPE } from "@shared/review";
 import { prettyProviderDetail } from "@shared/assistant-error";
 import { resolvePath } from "@/lib/workspace-path";
 import { useWorkspacePath } from "@/lib/workspace-path-context";
@@ -42,6 +43,8 @@ import { RunCollapse, RunProgress } from "./run-collapse";
 import { TuiLines } from "./tui-lines";
 import { isRemoteRef } from "@/lib/remote-project";
 import { ViviChatRow } from "@/components/bot/vivi-chat-row";
+import { ReviewChatCard } from "@/components/review/review-chat-card";
+import { ReviewCommandRow } from "@/components/review/review-command-row";
 
 function AttachmentStrip({
   items,
@@ -670,6 +673,8 @@ function ChatMessageRowImpl({
   }, [parts, processOverflow]);
 
   if (message.role === "system") {
+    if (message.review) return <ReviewChatCard thread={message.review} />;
+    if (message.customType === REVIEW_COMMAND_TYPE) return <ReviewCommandRow text={message.text} />;
     if (message.bot) return <ViviChatRow message={message} />;
     if (message.kind === "compact") {
       return <CompactNotice message={message} />;

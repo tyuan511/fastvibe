@@ -383,6 +383,7 @@ function SubagentPanel({ tool }: { tool: ToolCallBlock }): JSX.Element {
                 avatarSeed,
                 status: state?.status ?? fallback,
                 brief: entry.task ?? state?.detail,
+                review: entry.agent === "review",
               })
             }
           >

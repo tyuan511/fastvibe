@@ -12,6 +12,7 @@ export type SidePaneTabType =
   | "bot-tasks"
   | "bot-task"
   | "git"
+  | "review"
   | "terminal"
   | "browser"
   | "selection-side-chat"
@@ -22,6 +23,8 @@ export type SidePaneTabType =
 export type SubagentTabInit = {
   /** Stable per-thread avatar seed. */
   avatarSeed?: number;
+  /** Route a Review execution to its dedicated report page. */
+  review?: boolean;
   /** The conversation whose tool call spawned the run. */
   conversationId?: string;
   /** Display name; defaults to the run's role. */
@@ -43,6 +46,11 @@ export type SidePaneTab = {
   id: string;
   type: SidePaneTabType;
   botConversationId?: string;
+  reviewThreadId?: string;
+  reviewFindingId?: string;
+  reviewFocusRevision?: number;
+  /** The chat card's 查看: list every issue at once instead of one focused finding. */
+  reviewShowAll?: boolean;
   parentId?: string;
   openedAt: number;
   title: string;
@@ -282,6 +290,7 @@ type SidePaneStore = {
    * Open (or focus) one subagent run in its own tab. Runs are never merged into a
    * shared pane: two chats delegating at once, or a chain, must stay distinct.
    */
+  openReview: (threadId: string, conversationId: string, quiet?: boolean, findingId?: string, showAll?: boolean) => void;
   openSubagent: (subagentId: string, init?: SubagentTabInit) => void;
   /**
    * Ensure a run has its own tab, without focusing it or un-collapsing the pane.
@@ -373,7 +382,7 @@ export function sidePaneTabTitle(tab: SidePaneTab): string {
 /** The single tab that shows one run. */
 function upsertSubagentTab(tabs: SidePaneTab[], subagentId: string, init?: SubagentTabInit, quiet?: boolean): SidePaneTab {
   const id = subagentTabId(subagentId, init?.conversationId);
-  const existing = tabs.find((item) => item.id === id);
+  const existing = tabs.find((item) => item.id === id || (item.type === "review" && item.reviewThreadId === subagentId));
   return {
     ...(existing ?? { id, type: "subagent" as const, openedAt: Date.now(), quiet }),
     subagentId,
@@ -468,7 +477,7 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
   ): { scopes: Record<string, SidePaneScopeState>; key: string } | null => {
     for (const key of Object.keys(scopes)) {
       const scope = scopes[key];
-      const index = scope.tabs.findIndex((item) => item.conversationId === conversationId);
+      const index = scope.tabs.findIndex((item) => item.type !== "review" && item.conversationId === conversationId);
       if (index < 0) continue;
       const tab = scope.tabs[index];
       let messages = tab.messages ?? [];
@@ -848,8 +857,18 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         { collapsed: false },
       );
     }),
-  openSubagent: (subagentId, init) =>
-    set((state) => {
+  openReview: (threadId, conversationId, quiet = false, findingId, showAll) => set((state) => {
+    const key = conversationId;
+    const scope = state.scopes[key] ?? EMPTY_SCOPE;
+    const id = `review:${threadId}`;
+    const existing = scope.tabs.find((item) => item.type === "review" && item.reviewThreadId === threadId);
+    const tab: SidePaneTab = { ...(existing ?? { id, type: "review", title: "", openedAt: Date.now(), quiet }), reviewThreadId: threadId, conversationId, ...(!quiet ? { quiet: undefined, reviewFindingId: findingId, reviewShowAll: showAll === true, reviewFocusRevision: (existing?.reviewFocusRevision ?? 0) + 1 } : {}) };
+    const tabs = scope.tabs.filter((item) => item.type !== "subagent" || item.subagentId !== threadId);
+    return writeScope(state, key, { ...scope, tabs: upsert(tabs, tab), activeTabId: quiet ? scope.activeTabId : tab.id }, !quiet && key === scopeKeyOf(state) ? { collapsed: false } : undefined);
+  }),
+  openSubagent: (subagentId, init) => init?.review
+    ? get().openReview(subagentId, init.conversationId ?? scopeKeyOf(get()))
+    : set((state) => {
       // A run belongs to the conversation that spawned it: focus its tab there even
       // when a background chat's stream is what triggered the open.
       const key = init?.conversationId ?? scopeKeyOf(state);
@@ -862,8 +881,9 @@ export const useSidePaneStore = create<SidePaneStore>((set, get) => {
         key === scopeKeyOf(state) ? { collapsed: false } : undefined,
       );
     }),
-  registerSubagent: (subagentId, init) =>
-    set((state) => {
+  registerSubagent: (subagentId, init) => init?.review
+    ? get().openReview(subagentId, init.conversationId ?? scopeKeyOf(get()), true)
+    : set((state) => {
       // A run only gains a tab; it never steals the pane or un-collapses it — that
       // is the tool card's job. Route it to its own conversation's scope so a
       // background run cannot appear in the chat on screen.

@@ -148,6 +148,8 @@ export const abortSubagent: FastVibeEngine["abortSubagent"] = (subagentId, conve
   window.fastvibe.engine.abortSubagent(subagentId, conversationId ?? activeId());
 export const getSubagents: FastVibeEngine["getSubagents"] = (conversationId) =>
   window.fastvibe.engine.getSubagents(conversationId ?? activeId());
+export const startReview: FastVibeEngine["startReview"] = (request) =>
+  window.fastvibe.engine.startReview({ ...request, conversationId: request.conversationId || activeId()! });
 export const getAgentThreads: FastVibeEngine["getAgentThreads"] = (conversationId) =>
   window.fastvibe.engine.getAgentThreads(conversationId ?? activeId());
 export const getAgentThreadMessages: FastVibeEngine["getAgentThreadMessages"] = (threadId, conversationId) =>

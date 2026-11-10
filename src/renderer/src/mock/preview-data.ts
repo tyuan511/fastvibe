@@ -882,6 +882,7 @@ export const MODELS: FastVibeModel[] = [
 export const COMMANDS: SlashCommand[] = [
   { name: "goal", description: "设置或管理持续目标与 Token 预算", source: "extension" },
   { name: "compact", description: "压缩当前会话的上下文", source: "builtin" },
+  { name: "review", description: "审查当前代码变更（可在后面写审查要求）", source: "builtin" },
   { name: "init", description: "为项目生成 AGENTS.md", source: "builtin" },
 ];
 

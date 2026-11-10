@@ -86,6 +86,7 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   );
   handle(Ipc.engineSkillMarketDetail, (payload: SkillMarketTarget) => engine.skillMarketDetail(payload));
   handle(Ipc.engineInstallSkillMarket, (payload: SkillMarketTarget) => engine.installMarketSkill(payload));
+  handle(Ipc.engineStartReview, (payload: import("../shared/review").ReviewStartRequest) => engine.startReview({ ...payload, cwd: cwd(payload.cwd) }));
   handle(Ipc.engineGetAgentThreads, (payload?: { conversationId?: string }) => engine.listAgentThreads(payload?.conversationId));
   handle(Ipc.engineGetAgentThreadMessages, (payload: { threadId: string; conversationId?: string }) => engine.getAgentThreadMessages(payload.threadId, payload.conversationId));
   handle(Ipc.engineSendAgentMessage, (payload: { conversationId: string; threadId: string; message: string; senderId: string }) => engine.sendAgentMessage(payload));

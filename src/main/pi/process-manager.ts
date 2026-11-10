@@ -1,3 +1,7 @@
+import { createReviewSnapshot } from "../engine/review-snapshot";
+import type { ReviewStartRequest } from "../../shared/review";
+import { resolveReviewModel } from "./review-model";
+import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -90,7 +94,7 @@ import type {
   ImportSourceStatus,
 } from "@shared/types";
 import type { ProviderTestResult } from "@shared/provider-test";
-import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
+import { parseCompactCommand, parseHandoffCommand, parseReviewCommand } from "@shared/slash";
 import { skillDisplayOf } from "@shared/skill-invocation";
 import {
   buildCommitGroupSummaryPrompt,
@@ -321,6 +325,9 @@ type AgentSpawnRequest = {
   thinkingLevel?: ThinkingLevel;
   forkTurns?: "none" | "all";
   initialEntries?: FileEntry[];
+  reviewScope?: ReviewStartRequest["scope"];
+  reviewBase?: string;
+  reviewRevision?: string;
   cwd: string;
   signal?: AbortSignal;
 };
@@ -1347,6 +1354,7 @@ export class PiProcessManager {
     if (id) this.#backgroundCompactions?.apply(id);
     const held = this.#holdCommand(id, message);
     try {
+      if (await this.#reviewIfCommand(id, message)) return;
       if (await this.#compactIfCommand(session, message)) return;
       // The first message after launch should see the MCP tools the engine is still connecting.
       // A person typing gets a short wait; the tools reach a later turn if a server is slower.
@@ -1615,7 +1623,7 @@ export class PiProcessManager {
     if (!item) return null;
     const conversationId = item.conversationId;
     const queuedText = item.sentText ?? item.text;
-    const command = parseCompactCommand(queuedText) !== null || parseHandoffCommand(queuedText) !== null;
+    const command = parseCompactCommand(queuedText) !== null || parseHandoffCommand(queuedText) !== null || parseReviewCommand(queuedText) !== null;
     this.#sendNow.begin(conversationId, id, this.#isLive(conversationId));
     this.#announceWorking(conversationId);
     try {
@@ -2074,7 +2082,10 @@ export class PiProcessManager {
     const managed = this.#sessions.get(conversationId ?? this.#activeId ?? "");
     const promptCommands = session.promptTemplates.map((item) => ({ name: item.name, description: item.description, source: "prompt" }));
     const extensionCommands = managed?.extensions.extensions.flatMap((extension) => [...extension.commands.values()].map((command) => ({ name: command.name, description: command.description, source: "extension" }))) ?? [];
-    const builtins: SlashCommand[] = [{ name: "compact", description: uiText("压缩当前会话的上下文", "Compact this conversation's context"), source: "builtin" }];
+    const builtins: SlashCommand[] = [
+      { name: "compact", description: uiText("压缩当前会话的上下文", "Compact this conversation's context"), source: "builtin" },
+      { name: "review", description: uiText("审查当前代码变更（可在后面写审查要求）", "Review the current code changes (add requirements after it)"), source: "builtin" },
+    ];
     const unique = new Map<string, SlashCommand>();
     for (const command of [...promptCommands, ...extensionCommands, ...builtins]) unique.set(command.name, command);
     return [...unique.values()];
@@ -2309,14 +2320,65 @@ export class PiProcessManager {
     return this.#agentThreads.messages(threadId);
   }
 
+  async startReview(request: ReviewStartRequest, signal?: AbortSignal): Promise<AgentThread> {
+    const conversation = this.#catalog.get(request.conversationId);
+    if (!conversation) throw new Error(uiText("找不到审查所属的会话", "Review conversation not found"));
+    const epoch = this.#queueEpochs.get(conversation.id) ?? 0;
+    const check = (): void => {
+      if (signal?.aborted || (this.#queueEpochs.get(conversation.id) ?? 0) !== epoch || !this.#catalog.get(conversation.id)) {
+        throw new DOMException("Review cancelled", "AbortError");
+      }
+    };
+    check();
+    await this.#ensureReady();
+    const config = this.#subagentManager.list().find((item) => item.id === "review" && item.source === "builtin");
+    if (!config?.systemPrompt) throw new Error(uiText("内置 Review 配置不可用", "The built-in Review configuration is unavailable"));
+    const model = resolveReviewModel(this.#models, config.model);
+    const thinkingLevel = clampThinkingLevel(model, config.thinkingLevel);
+    const id = `review-${randomUUID()}`;
+    // Snapshot preparation is read-only. Stop invalidates it before any child can start.
+    const snapshot = await createReviewSnapshot(request, { id, model: `${model.provider}/${model.id}`, thinkingLevel });
+    check();
+    await this.#ensureSession(conversation);
+    check();
+    const thread = await this.#spawnAgentThread({
+      conversationId: conversation.id,
+      taskName: "review",
+      agent: "review",
+      task: snapshot.task,
+      systemPrompt: config.systemPrompt,
+      tools: ["review_read_file", "review_search", "submit_review_result"],
+      model: `${model.provider}/${model.id}`,
+      thinkingLevel,
+      forkTurns: "none",
+      cwd: snapshot.context.root,
+      signal,
+      reviewSnapshot: snapshot,
+      pinnedModel: model,
+    });
+    // A UI-started review is real conversation content even without a user prompt.
+    // Keep the catalog from collecting this report's owner as an empty draft.
+    if (!this.#catalog.get(conversation.id)?.preview) {
+      this.#writePromptPreview(conversation.id, uiText("代码审查", "Code review"));
+    }
+    return thread;
+  }
+
   async spawnAgent(request: AgentSpawnRequest): Promise<AgentThread> {
+    if (request.agent.toLowerCase() === "review") {
+      return this.startReview({ conversationId: request.conversationId, cwd: request.cwd, scope: request.reviewScope ?? "worktree", base: request.reviewBase, revision: request.reviewRevision, instructions: request.task }, request.signal);
+    }
+    return this.#spawnAgentThread(request);
+  }
+
+  async #spawnAgentThread(request: AgentSpawnRequest & Pick<SubagentHostRequest, "reviewSnapshot" | "pinnedModel">): Promise<AgentThread> {
     const id = `agent-${randomUUID()}`;
     const identity = agentIdentityForId(id);
-    const thread = this.#agentThreads.create({ id, conversationId: request.conversationId, parentId: request.parentId, taskName: request.taskName, agent: request.agent, name: identity.name, avatarSeed: identity.avatarSeed, task: request.task, cwd: request.cwd, systemPrompt: request.systemPrompt, tools: request.tools, fallbackModel: request.fallbackModel, status: "queued" });
+    const thread = this.#agentThreads.create({ id, conversationId: request.conversationId, parentId: request.parentId, taskName: request.taskName, agent: request.agent, name: identity.name, avatarSeed: identity.avatarSeed, task: request.task, cwd: request.cwd, systemPrompt: request.systemPrompt, tools: request.tools, fallbackModel: request.fallbackModel, ...(request.reviewSnapshot ? { review: request.reviewSnapshot.context, model: { provider: request.pinnedModel!.provider, id: request.pinnedModel!.id }, thinkingLevel: request.thinkingLevel } : {}), status: "queued" });
     const runId = `${id}:turn:1`;
     const initialEntries = request.forkTurns === "all" ? this.#sessions.get(request.conversationId)?.session.sessionManager.getBranch() : undefined;
     this.#agentThreadRunIds.set(id, runId);
-    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: request.agent, displayName: identity.name, avatarSeed: identity.avatarSeed, task: request.task, systemPrompt: request.systemPrompt, tools: request.tools, model: request.model, fallbackModel: request.fallbackModel, thinkingLevel: request.thinkingLevel, forkTurns: request.forkTurns ?? "all", initialEntries, cwd: request.cwd, signal: request.signal });
+    const run = this.#runSubagent(request.conversationId, { subagentId: runId, agent: request.agent, displayName: identity.name, avatarSeed: identity.avatarSeed, task: request.task, systemPrompt: request.systemPrompt, tools: request.tools, model: request.model, fallbackModel: request.fallbackModel, thinkingLevel: request.thinkingLevel, forkTurns: request.forkTurns ?? "all", initialEntries, cwd: request.cwd, signal: request.signal, reviewSnapshot: request.reviewSnapshot, pinnedModel: request.pinnedModel });
     this.#agentThreadRuns.set(id, run);
     const started = this.#agentThreads.setStatus(id, "working", { startedAt: Date.now(), currentTurn: 1 });
     if (started) this.#emit({ type: "agent_thread_changed", conversationId: request.conversationId, thread: started });
@@ -2338,6 +2400,10 @@ export class PiProcessManager {
     const thread = this.#agentThreads.get(request.threadId);
     if (!thread || thread.conversationId !== request.conversationId) throw new Error("找不到这个 Agent thread");
     const task = request.message.trim();
+    if (thread.review) {
+      // A review is always a new immutable snapshot, never a generic writable follow-up.
+      return this.startReview({ conversationId: thread.conversationId, cwd: thread.cwd, scope: thread.review.scope, ...(thread.review.scope === "branch" ? { base: thread.review.base } : {}), ...(thread.review.scope === "commit" ? { revision: thread.review.target } : {}), instructions: task });
+    }
     if (!task) throw new Error("followup_task 需要任务内容");
     // The message is the new turn's prompt and the thread's visible brief, so the
     // history blob must only cover mailbox messages that came before it.
@@ -2365,7 +2431,10 @@ export class PiProcessManager {
     const finish = (response: SubagentHostResponse): void => {
       if (this.#agentThreadRunIds.get(threadId) !== runId) return;
       const status = response.stopReason === "aborted" ? "interrupted" : response.exitCode === 0 ? "completed" : "failed";
-      const thread = this.#agentThreads.finishTurn(threadId, turn, status, lastAssistantText(response.messages), response.errorMessage);
+      const output = response.reviewReport
+        ? [response.reviewReport.summary, ...response.reviewReport.findings.map((finding) => `[${finding.severity}] ${finding.title}\n${finding.location.path}:${finding.location.startLine}\n${finding.trigger}\n${finding.impact}\n${finding.evidence.join("\n")}\n${finding.recommendation}`), ...response.reviewReport.coverage.unreviewedPaths.map((item) => `${item.path}: ${item.reason}`)].join("\n\n")
+        : lastAssistantText(response.messages);
+      const thread = this.#agentThreads.finishTurn(threadId, turn, status, output, response.errorMessage, response.reviewReport);
       // Release before waking wait_agent: an immediate followup_task may start a new turn.
       this.#agentThreadRuns.delete(threadId);
       this.#agentThreadRunIds.delete(threadId);
@@ -4963,6 +5032,7 @@ export class PiProcessManager {
     try {
       if (signal?.aborted) throw new Error("任务已停止");
       if (conversationId) this.#backgroundCompactions?.apply(conversationId);
+      if (await this.#reviewIfCommand(conversationId, message)) return;
       if (await this.#compactIfCommand(session, message)) return;
       // Queued rows, scheduled tasks and delegated work have no one waiting at a keyboard, and
       // a run that silently lacks its MCP tools is worse than one that starts a moment later.
@@ -5342,6 +5412,29 @@ export class PiProcessManager {
       // unhandled rejection. The claimed row remains durable and cannot be replayed.
       this.#queueDrainFaults.add(conversationId);
     });
+  }
+  /**
+   * `/review` starts a code review instead of becoming a prompt.
+   *
+   * The line is the command, and everything after it is the review's own requirement
+   * list — the same field the review dialog fills in. Intercepting here is what keeps
+   * `/review` from reaching the model as literal text on every entry path (composer,
+   * queue drain, a remote client), not just the ones this renderer happens to use.
+   */
+  async #reviewIfCommand(conversationId: string | undefined, message: string): Promise<boolean> {
+    const command = parseReviewCommand(message);
+    if (!command) return false;
+    if (!conversationId) throw new Error(uiText("请先在会话中发起审查", "Start the review from a conversation"));
+    const conversation = this.#catalog.get(conversationId);
+    if (!conversation) throw new Error(uiText("找不到审查所属的会话", "Review conversation not found"));
+    await this.startReview({
+      conversationId,
+      cwd: conversation.cwd,
+      scope: "worktree",
+      ...(command.instructions ? { instructions: command.instructions } : {}),
+      command: message.trim(),
+    });
+    return true;
   }
   /**
    * `/compact` is a TUI builtin, not an SDK prompt. Intercept it so the composer

@@ -79,7 +79,7 @@ import type {
   SlashCommand,
   WorkspaceSnapshot,
 } from "@shared/types";
-import { parseCompactCommand, parseHandoffCommand } from "@shared/slash";
+import { parseCompactCommand, parseHandoffCommand, parseReviewCommand } from "@shared/slash";
 import { TASKS_PATH, conversationIdFromPath, conversationPath, workspacePath } from "@/lib/routes";
 import { useSidePaneStore, VIVI_PANE_SCOPE } from "@/stores/side-pane";
 import { useAppShortcuts, useNativeMenuActions, useShortcutLabel } from "@/lib/use-shortcuts";
@@ -135,6 +135,7 @@ export function App(): JSX.Element {
   const projects = useSessionStore((state) => state.projects);
   const conversations = useSessionStore((state) => state.conversations);
   const activeId = useSessionStore((state) => state.activeId);
+  // A choice belongs to the project's unfinished conversation, just like its draft.
   // `messages` is intentionally not subscribed here: the array changes on every
   // streamed token. Derive only the stable facts the shell needs, and let
   // `MessageThread` read the transcript itself.
@@ -796,6 +797,25 @@ export function App(): JSX.Element {
         }
         return;
       }
+      // `/review` is a command too, and the engine is what turns it into a review run:
+      // the row it leaves behind is derived from that run's durable thread, so nothing
+      // here records a title, preview or optimistic prompt for it.
+      const review = parseReviewCommand(text);
+      if (review && !queueAtSubmit) {
+        if (!submitOwner) {
+          setError(i18n.t("chat:review.needChat"));
+          return;
+        }
+        const owner = submitOwner;
+        setDraft("");
+        setComposer("", []);
+        void engine.prompt(text, { conversationId: owner }).catch((err: unknown) => {
+          if (isAbortOutcome(err)) return;
+          if (useSessionStore.getState().activeId === owner) setDraft(text);
+          setError(err instanceof Error ? err.message : String(err));
+        });
+        return;
+      }
       // `/handoff` is a command too. Awaiting it would hold the send lock across the
       // review dialog and every other chat; the engine refuses a second prompt to
       // this conversation until the command returns.
@@ -847,9 +867,9 @@ export function App(): JSX.Element {
       }
       consumedOwner = conversationId;
       consumedVersion = useSessionStore.getState().composerDrafts[conversationId]?.version;
-      // A queued `/compact` or `/handoff` is a command, not a prompt: it must not
-      // become the chat's title or preview.
-      if (!compact && !handoff) {
+      // A queued `/compact`, `/handoff` or `/review` is a command, not a prompt: it must
+      // not become the chat's title or preview.
+      if (!compact && !handoff && !review) {
         const beforePrompt = useSessionStore.getState().conversations.find((item) => item.id === conversationId);
         const nextList = await window.fastvibe.conversations.recordPrompt(conversationId, promptText);
         applyList(nextList);

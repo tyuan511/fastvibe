@@ -1,3 +1,5 @@
+import type { ReviewContext, ReviewReport } from "./review.ts";
+
 export const AGENT_THREAD_STATUSES = ["queued", "working", "waiting", "completed", "failed", "interrupted", "closed"] as const;
 export type AgentThreadStatus = (typeof AGENT_THREAD_STATUSES)[number];
 export const AGENT_MESSAGE_KINDS = ["task", "message", "result"] as const;
@@ -20,6 +22,9 @@ export type AgentThread = {
   fallbackModel?: string;
   model?: { provider: string; id: string };
   thinkingLevel?: string;
+  /** Immutable scope and model selected for this one Review task. */
+  review?: ReviewContext;
+  reviewReport?: ReviewReport;
   status: AgentThreadStatus;
   phase?: "working" | "waiting" | "retrying" | "compacting";
   createdAt: number;
@@ -42,6 +47,7 @@ export type AgentThreadMessage = {
   turn?: number;
   /** Terminal outcome captured with this result, independent of later thread turns. */
   status?: "completed" | "failed";
+  reviewReport?: ReviewReport;
   createdAt: number;
   deliveredAt?: number;
 };

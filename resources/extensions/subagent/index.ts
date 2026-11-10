@@ -6,7 +6,7 @@ import { type AgentConfig, discoverAgents } from "./agents";
 
 type Host = {
   conversationId?: string;
-  spawnAgent?: (request: { parentId?: string; taskName?: string; agent: string; task: string; systemPrompt: string; tools?: string[]; model?: string; fallbackModel?: string; thinkingLevel?: string; forkTurns?: "none" | "all"; cwd: string; signal?: AbortSignal }) => Promise<unknown>;
+  spawnAgent?: (request: { parentId?: string; taskName?: string; agent: string; task: string; systemPrompt: string; tools?: string[]; model?: string; fallbackModel?: string; thinkingLevel?: string; forkTurns?: "none" | "all"; reviewScope?: "worktree" | "staged" | "branch" | "commit"; reviewBase?: string; reviewRevision?: string; cwd: string; signal?: AbortSignal }) => Promise<unknown>;
   sendAgentMessage?: (request: { threadId: string; message: string; senderId: string }) => Promise<unknown>;
   followupAgent?: (request: { threadId: string; message: string; senderId: string }) => Promise<unknown>;
   forkTurns?: "none" | "all";
@@ -17,7 +17,7 @@ type Host = {
 
 const scope = StringEnum(["user", "project", "both"] as const, {
   default: "user",
-  description: "Select additional role definitions from user, project, or both. Built-in explorer and worker roles are always available.",
+  description: "Select additional role definitions from user, project, or both. Built-in explorer, worker and review roles are always available.",
 });
 const fail = (message: string) => ({ content: [{ type: "text" as const, text: message }], details: {}, isError: true });
 const host = (ctx: { ui: unknown }): Host => ctx.ui as Host;
@@ -79,6 +79,7 @@ const TEAM_GUIDANCE = [
   "You are the root (main) agent: own the user's goal, coordinate the team, integrate results, and make the final decision. Delegation supports your work; it does not replace your responsibility to inspect and verify the result.",
   "Delegate independent, useful work proactively when it can save time or improve quality. Keep dependent work in your own turn until its prerequisite is known, or delegate it with a precise dependency and acceptance condition.",
   "Use the explorer role for a focused factual investigation or codebase question whose result can be reported without editing. Use the worker role for implementation work, and always state the exact files or directories that worker owns, the desired outcome, and how to verify it.",
+  "Use the built-in review role for code review. It runs one read-only reviewer with the user's configured Review model and a validated structured report; do not override its model or create extra specialist reviewers. Set review_scope, review_base or review_revision to match the requested comparison.",
   "All agents share the same filesystem and project checkout. Coordinate ownership before parallel edits, inspect the current state before changing it, and never revert, reset, or overwrite another agent's work just to resolve a conflict. Integrate changes deliberately and report partial effects.",
   "The roster is injected separately before each request with thread IDs and task names. After an interruption, reload, compaction, or continuation, call list_agents once before spawning anything so you reuse existing threads and do not create duplicates; its reply is a compact digest, and a \"no changes\" reply already covers everything you need.",
   "send_message only adds mailbox context; it does not start or resume a turn. Use followup_task when an idle or interrupted agent must actually begin or resume work. A follow-up is a new turn informed by the thread's latest state, not a promise of exact original execution continuation.",
@@ -91,7 +92,7 @@ const TEAM_GUIDANCE = [
 const TOOL_GUIDELINES = {
   spawn: [
     "Use spawn_agent for independent work that is useful enough to justify coordination overhead.",
-    "Choose explorer for focused facts and worker for edits. For worker, include exact owned files or directories, acceptance criteria, and a narrow verification command in message.",
+        "Choose explorer for focused facts, worker for edits, or review for a structured code review with the user's preset review model. For worker, include exact owned files or directories, acceptance criteria, and a narrow verification command in message.",
     "Before spawning after interruption, reload, compaction, or continuation, use list_agents and reuse an existing thread when it matches the task.",
     "The child shares the filesystem; do not assign overlapping write ownership without coordinating the order.",
   ],
@@ -131,6 +132,9 @@ export default function (pi: ExtensionAPI): void {
       message: Type.String({ description: "Initial task for the new agent" }),
       task_name: Type.String({ description: "Lowercase task name for the new agent" }),
       agent_type: Type.Optional(Type.String({ description: "Optional Codex role override" })),
+      review_scope: Type.Optional(StringEnum(["worktree", "staged", "branch", "commit"] as const, { description: "Review role only: compare working tree, index, branch or a commit. Defaults to worktree." })),
+      review_base: Type.Optional(Type.String({ description: "Review branch comparison base, for example main." })),
+      review_revision: Type.Optional(Type.String({ description: "Review commit id when review_scope is commit." })),
       model: Type.Optional(Type.String()),
       model_reasoning_effort: Type.Optional(Type.String()),
       fork_turns: Type.Optional(StringEnum(["none", "all"] as const)),
@@ -145,7 +149,7 @@ export default function (pi: ExtensionAPI): void {
       const found = discoverAgents(ctx.cwd, params.agentScope ?? "user").agents;
       const selected = role(found, params.agent_type ?? "worker");
       if (!selected) return fail(`找不到 Agent 角色「${params.agent_type ?? "worker"}」。可用角色：${roster(found)}`);
-      const thread = await h.spawnAgent({ parentId: params.parent, taskName: params.task_name, agent: selected.name, task: params.message, systemPrompt: selected.systemPrompt, tools: selected.tools, model: params.model ?? selected.model, fallbackModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinkingLevel: params.model_reasoning_effort ?? selected.thinkingLevel, forkTurns: params.fork_turns === "none" ? "none" : "all", cwd: params.cwd ?? ctx.cwd, signal }) as TeamThread;
+      const thread = await h.spawnAgent({ parentId: params.parent, taskName: params.task_name, agent: selected.name, task: params.message, systemPrompt: selected.systemPrompt, tools: selected.tools, model: params.model ?? selected.model, fallbackModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinkingLevel: params.model_reasoning_effort ?? selected.thinkingLevel, forkTurns: params.fork_turns === "none" ? "none" : "all", cwd: params.cwd ?? ctx.cwd, signal, ...(selected.name.toLowerCase() === "review" ? { reviewScope: params.review_scope, reviewBase: params.review_base, reviewRevision: params.review_revision } : {}) }) as TeamThread;
       return { content: [{ type: "text", text: `已创建 Agent thread ${threadFields(thread, true)}` }], details: { thread, forkTurns: params.fork_turns === "none" ? "none" : "all" } };
     },
   });

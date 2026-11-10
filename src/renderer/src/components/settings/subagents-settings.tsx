@@ -167,7 +167,7 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
         model={modelValue(agent.model)}
         thinkingLevel={agent.thinkingLevel}
         fallbackThinkingLevels={THINKING_EFFORT_LEVELS}
-        inheritModelLabel={t("subagents.inheritModel")}
+        inheritModelLabel={t(agent.id === "review" ? "subagents.chooseReviewModel" : "subagents.inheritModel")}
         surface="settings"
         disabled={saving}
         ariaLabel={`${agent.name} · ${t("subagents.modelAndThinking")}`}
@@ -200,16 +200,16 @@ export function SubagentsSettings({ models }: { models: FastVibeModel[] }): JSX.
         </ItemMedia>
         <ItemContent className="min-w-0 gap-1.5">
           <div className="flex min-w-0 items-center gap-2">
-            <ItemTitle className="min-w-0 truncate text-base">{agent.name}</ItemTitle>
+            <ItemTitle className="min-w-0 truncate text-base">{isBuiltin && ["explorer", "worker", "review"].includes(agent.id) ? t(`subagents.roles.${agent.id}.name`) : agent.name}</ItemTitle>
             <Badge variant={isBuiltin ? "secondary" : "outline"} className="shrink-0 rounded-full px-2 py-0.5 text-xs">
               {isBuiltin ? t("subagents.builtin") : t("subagents.custom")}
             </Badge>
           </div>
-          <ItemDescription className="line-clamp-1">{agent.description}</ItemDescription>
+          <ItemDescription className="line-clamp-2">{isBuiltin && ["explorer", "worker", "review"].includes(agent.id) ? t(`subagents.roles.${agent.id}.description`) : agent.description}</ItemDescription>
           <div className="flex flex-wrap items-center gap-1.5 pt-1">
             {agent.tools.map((tool) => (
               <span key={tool} className="rounded-md bg-muted/70 px-1.5 py-0.5 text-xs text-muted-foreground">
-                {AGENT_TOOLS.includes(tool as AgentTool) ? t(`subagents.toolOptions.${tool}.label`) : t("subagents.toolOptions.other")}
+                {tool === "submit_review_result" ? t("subagents.reviewSubmit") : tool === "review_search" ? t("subagents.reviewSearch") : tool.startsWith("review_") ? t("subagents.reviewRead") : AGENT_TOOLS.includes(tool as AgentTool) ? t(`subagents.toolOptions.${tool}.label`) : t("subagents.toolOptions.other")}
               </span>
             ))}
           </div>

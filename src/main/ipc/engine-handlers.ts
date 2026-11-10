@@ -144,6 +144,7 @@ export function registerEngineIpc(engine: PiProcessManager): void {
   handle(Ipc.engineSkillMarketDetail, async (payload: import("@shared/types").SkillMarketTarget) => engine.skillMarketDetail(payload));
   handle(Ipc.engineInstallSkillMarket, async (payload: import("@shared/types").SkillMarketTarget) => engine.installMarketSkill(payload));
 
+  handle(Ipc.engineStartReview, (payload: import("@shared/review").ReviewStartRequest) => engine.startReview(payload));
   handle(Ipc.engineGetAgentThreads, async (payload?: { conversationId?: string }) => engine.listAgentThreads(payload?.conversationId));
   handle(Ipc.engineGetAgentThreadMessages, async (payload: { threadId: string; conversationId?: string }) => engine.getAgentThreadMessages(payload.threadId, payload.conversationId));
   handle(Ipc.engineSendAgentMessage, async (payload: { conversationId: string; threadId: string; message: string; senderId: string }) => engine.sendAgentMessage(payload));

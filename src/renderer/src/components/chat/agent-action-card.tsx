@@ -31,7 +31,7 @@ export function AgentActionCard({ tool, showIcon, children }: {
       className="mx-1 inline-flex max-w-full cursor-pointer items-center gap-1 align-middle text-foreground [-webkit-text-fill-color:currentColor] underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
       title={agent.name ?? agent.id}
       onClick={() => useSidePaneStore.getState().openSubagent(agent.id, {
-        conversationId: conversationId ?? undefined, title: agent.name ?? t("tool.agentUnnamed"), avatarSeed: agent.avatarSeed,
+        conversationId: conversationId ?? undefined, title: agent.name ?? t("tool.agentUnnamed"), avatarSeed: agent.avatarSeed, review: agent.review,
       })}
     >
       {agent.avatarSeed !== undefined ? <AgentAvatar seed={agent.avatarSeed} size="size-4" /> : <HugeiconsIcon icon={BotIcon} className="size-3.5 shrink-0" />}

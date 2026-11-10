@@ -2,6 +2,7 @@ import { Ipc } from "@shared/ipc";
 import type { ImagesApi, ImageGenerateRequest, ImagesChanged } from "./image-generation";
 import type { BotApi, BotActivity, BotChanged, BotCreateWorkRequest, BotReportRequest, BotSubmitRequest, BotConversationMeta, BotResult, BotAttention, WorkSnapshot } from "./bot";
 import type { AgentThread, AgentThreadMessage } from "@shared/agent-thread";
+import type { ReviewStartRequest } from "./review";
 import type { ViviBubbleKind, ViviDragMotion, ViviSettings, ViviSnapshot, ViviState } from "./vivi";
 import type { BrowserLibrary, BrowserClearData, BrowserDownloadAction, BrowserShortcut } from "./browser-workspace";
 import type { SubmitPromptRequest } from "./prompt-submission";
@@ -211,6 +212,7 @@ export function createFastVibeApi(t: ApiTransport) {
         t.invoke(Ipc.engineSkillMarketDetail, target),
       installMarketSkill: (target: SkillMarketTarget): Promise<SkillMarketInstallResult> =>
         t.invoke(Ipc.engineInstallSkillMarket, target),
+      startReview: (request: ReviewStartRequest): Promise<AgentThread> => t.invoke(Ipc.engineStartReview, request),
       getAgentThreads: (conversationId?: string): Promise<AgentThread[]> =>
         t.invoke(Ipc.engineGetAgentThreads, { conversationId }),
       getAgentThreadMessages: (threadId: string, conversationId?: string): Promise<AgentThreadMessage[]> =>
