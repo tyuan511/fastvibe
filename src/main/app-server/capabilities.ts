@@ -4,6 +4,11 @@ import { remotePolicy } from "../../shared/remote-policy.ts";
 function capabilityOf(method: string): AppCapability | null {
   if (method.startsWith("bot:")) return "engine";
   if (method.startsWith("engine:")) return "engine";
+  // The image workbench is a session-centred surface on this host, registered through the same
+  // neutral call table as `bot:` (see `registerImagesIpc`): a remote client drives it exactly
+  // as the desktop does, and it resolves its models from this host's providers rather than
+  // fetching anything upstream by itself.
+  if (method.startsWith("images:")) return "engine";
   if (method.startsWith("conversations:")) return "conversations";
   if (method.startsWith("projects:")) return "conversations";
   if (method.startsWith("schedule:")) return "engine";
