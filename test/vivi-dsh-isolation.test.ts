@@ -86,6 +86,7 @@ test("shadow dependencies stay isolated, with SDK access confined to explicit ro
     [join(shadow, "pi-session.ts"), new Set(["node:async_hooks", "node:url", "@earendil-works/pi-coding-agent", "@earendil-works/pi-agent-core", "typebox"])],
     [join(shadow, "pi-executor.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox"])],
     [join(shadow, "pi-reviewer.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox"])],
+    [join(shadow, "pi-assessor.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox"])],
     [join(shadow, "pi-workspace.ts"), new Set(["@earendil-works/pi-coding-agent", "typebox", "node:util"])],
   ]);
   // Shared API shapes and SDK model handles are type-only at the composition boundary.

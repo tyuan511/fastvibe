@@ -13,7 +13,15 @@ export interface GithubRequest { path: string; headers: Record<string, string>; 
 export interface GithubReader { read(request: GithubRequest): GithubResponse | Promise<GithubResponse> }
 export interface GithubRepository { id: string | number; owner: string; name: string; fullName?: string }
 export interface GithubActor { login?: string; id?: string | number; type?: string }
-export interface GithubSourceConfig { repository: GithubRepository; selfLogins?: readonly string[]; botLogins?: readonly string[]; credentialRef?: string }
+export interface GithubSourceConfig { repository: GithubRepository; selfLogins?: readonly string[]; botLogins?: readonly string[]; credentialRef?: string;
+  /**
+   * Treat the configured own account as a person rather than as this agent.
+   *
+   * A single-account deployment cannot have a separate human: the repository owner's own
+   * Issue IS the person's request. The default (false) keeps the historical behaviour, where
+   * `self` marks the agent's own events so they are never mistaken for someone asking.
+   */
+  selfIsHuman?: boolean }
 export type GithubRawEvent = Record<string, unknown>;
 export type GithubStreamKind = "notifications" | "issue" | "issue-comment" | "inline" | "review" | "check-run" | "status";
 export interface GithubPollTarget { id: string; path: string; kind: GithubStreamKind; since?: boolean }
@@ -92,15 +100,17 @@ function validateConfig(input: unknown): GithubSourceConfig {
   const v = object(input); const r = object(v.repository);
   if ((typeof r.id !== "string" && typeof r.id !== "number") || !String(r.id).trim() || !/^[A-Za-z0-9_.-]+$/.test(text(r.owner))
     || !/^[A-Za-z0-9_.-]+$/.test(text(r.name)) || [".", ".."].includes(text(r.name))) throw new Error("GitHub repository 配置无效");
-  if (Object.keys(v).some(k => !["repository", "selfLogins", "botLogins", "credentialRef"].includes(k))) throw new Error("GitHub 配置含未知字段");
+  if (Object.keys(v).some(k => !["repository", "selfLogins", "botLogins", "credentialRef", "selfIsHuman"].includes(k))) throw new Error("GitHub 配置含未知字段");
   const names = (x: unknown): string[] => {
     if (x === undefined) return [];
     if (!Array.isArray(x) || x.some(y => typeof y !== "string" || !/^[a-z0-9][a-z0-9_-]*(?:\[bot\])?$/i.test(y))) throw new Error("GitHub login 列表无效");
     return [...new Set(x.map(y => (y as string).toLowerCase()))].sort();
   };
   if (v.credentialRef !== undefined && (typeof v.credentialRef !== "string" || !v.credentialRef.trim())) throw new Error("GitHub credentialRef 必须是引用");
+  if (v.selfIsHuman !== undefined && typeof v.selfIsHuman !== "boolean") throw new Error("GitHub selfIsHuman 必须是 boolean");
   return { repository: { id: String(r.id), owner: text(r.owner), name: text(r.name), fullName: `${text(r.owner)}/${text(r.name)}` },
-    selfLogins: names(v.selfLogins), botLogins: names(v.botLogins), ...(v.credentialRef ? { credentialRef: v.credentialRef as string } : {}) };
+    selfLogins: names(v.selfLogins), botLogins: names(v.botLogins), ...(v.credentialRef ? { credentialRef: v.credentialRef as string } : {}),
+    ...(v.selfIsHuman === true ? { selfIsHuman: true } : {}) };
 }
 function assertRepo(event: Obj, config: GithubSourceConfig): void {
   const r = object(event.repository); const expected = config.repository;
@@ -140,8 +150,12 @@ function nativeSubject(input: Obj, stream?: GithubStreamKind): { event: Obj; val
 function actorFacts(event: Obj, value: Obj, config: GithubSourceConfig, ci: boolean, source: string) {
   const raw = object(value.user ?? value.author ?? value.sender ?? event.sender ?? event.user ?? event.actor);
   const login = text(raw.login); const lowered = login.toLowerCase(); const type = text(raw.type).toLowerCase();
-  const self = (config.selfLogins ?? []).some(x => x.toLowerCase() === lowered);
-  const bot = /\[bot\]$/i.test(login) || (type !== "" && type !== "user") || (config.botLogins ?? []).some(x => x.toLowerCase() === lowered);
+  const own = (config.selfLogins ?? []).some(x => x.toLowerCase() === lowered);
+  const isBot = /\[bot\]$/i.test(login) || (type !== "" && type !== "user") || (config.botLogins ?? []).some(x => x.toLowerCase() === lowered);
+  // `selfIsHuman` moves the own account out of "this agent" and into "the person here". The bot
+  // classification always wins: an account that is genuinely a bot stays machine even when listed.
+  const self = own && !(config.selfIsHuman === true && !isBot);
+  const bot = isBot;
   return { actor: { source, id: ci ? "" : login }, human: !!login && !ci && !bot && !self, self, bot, ci, actorType: ci ? "ci" : type || "unknown" };
 }
 function addressed(message: string, config: GithubSourceConfig): boolean {

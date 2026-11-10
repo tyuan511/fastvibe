@@ -99,7 +99,7 @@ export class ScratchPiSession {
     const root = realpathSync(options.root);
     const ledger = new PiLedger(options.store);
     const sessionKey = options.sessionKey ?? `worker-${options.binding.ticketId}`;
-    if (options.sessionKey && (!/^(reviewer|coordinator)-[A-Za-z0-9_.:-]{1,480}$/.test(sessionKey) && sessionKey !== `worker-${options.binding.ticketId}`)) throw new Error("Invalid isolated Pi role Session key");
+    if (options.sessionKey && (!/^(reviewer|coordinator|assessor)-[A-Za-z0-9_.:-]{1,480}$/.test(sessionKey) && sessionKey !== `worker-${options.binding.ticketId}`)) throw new Error("Invalid isolated Pi role Session key");
     const activeTools = [...(options.activeTools ?? ["dsh_report"])];
     if (activeTools.some(name => !/^[a-z][a-z0-9_]*$/.test(name)) || new Set(activeTools).size !== activeTools.length) throw new Error("Invalid isolated Pi role tools");
     const base = join(root, digest(sessionKey));

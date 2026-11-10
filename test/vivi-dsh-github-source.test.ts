@@ -39,6 +39,25 @@ test("human classification excludes unknown actors, Apps, bots, self and CI", ()
   assert.equal(ci.human, false); assert.equal(ci.actor.id, "");
 });
 
+test("selfIsHuman moves the own account into the person path without weakening bot classification", () => {
+  const owner = { login: "tyuan511", type: "User" };
+  const issue = () => githubEventToTrigger({ type: "issues", issue: { ...gh.issue, user: owner }, repository: gh.repository }, "github", "desktop", config);
+  const config = { ...gh.config, selfLogins: ["tyuan511"], botLogins: [] as string[] };
+  // Default: the configured own account is this agent, so its own events are self and never a request.
+  const strict = issue();
+  assert.equal(strict.meta.self, true); assert.equal(strict.human, false);
+  // Opted in: a single-account deployment has no other person, so the owner's Issue IS the request.
+  const single = githubEventToTrigger({ type: "issues", issue: { ...gh.issue, user: owner }, repository: gh.repository },
+    "github", "desktop", { ...config, selfIsHuman: true });
+  assert.equal(single.meta.self, false); assert.equal(single.human, true);
+  // A real bot stays machine even when it is also listed as own.
+  for (const bot of [{ login: "fastvibe-vivi[bot]", type: "Bot" }, { login: "deployer", type: "Bot" }]) {
+    const trigger = githubEventToTrigger({ type: "issues", issue: { ...gh.issue, user: bot }, repository: gh.repository },
+      "github", "desktop", { ...config, selfLogins: [bot.login.toLowerCase()], selfIsHuman: true });
+    assert.equal(trigger.human, false); assert.equal(trigger.meta.bot, true);
+  }
+});
+
 function fixture(t: test.TestContext, persistent = false, source = "github") {
   const directory = persistent ? mkdtempSync(join(tmpdir(), "vivi-dsh-github-")) : undefined;
   const file = directory ? join(directory, "shadow.db") : ":memory:";

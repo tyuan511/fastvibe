@@ -314,4 +314,11 @@ node --test test/vivi-dsh-github-native-*.test.ts test/vivi-dsh-github-transport
 
 恢复分支已按用户要求提交并推送到 `origin/feat/vivi-dsh-recovered`，本轮实现提交为 `d8adef89`。后续宿主曾通过 workflow 发布 Actions bot 审批，并直接合并 PR #2、关闭 Issue #1；workflow 改变了 head，原模型产物没有覆盖新版本，且 Merge/close 未经过 DSH Operation，因此这些行政操作不计 M11 的受控收束验收。无条件审批已从 main 移除、仓库默认只读权限已恢复。实际 Source 轮询已观察 PR merged 并结束原 Follow/Ticket，重复轮询新增事件为 0，Operation 和 SDK receipts 均未改变；没有补造 Merge receipt 或 continuation。完整 SHA、CI 与纠正证据见[真实验收记录](vivi-dsh-live-vivi-test.md#后续行政操作与证据纠正)。
 
-后续在 2026-11-10 的 Round 2–3 中完成了 GitHub App bot 身份链的真实验收（详见[验收记录](vivi-dsh-live-vivi-test.md#round-2-3github-app-bot-的完整闭环2026-11-10)）：用户一键注册 App `fastvibe-vivi` 后，round-3（Issue #6 / PR #7）六个 operation 全部 confirmed——commit、push、pull、App bot Review（APPROVED）、App bot Merge、best-effort Issue 收束（writer 身份经 DSH PATCH 关闭）。期间确认两个平台事实（App 合并不触发关联 Issue 自动关闭；merge 权限需 contents:write + statuses:read）并修复三处宿主缺陷。剩余未验收：自动 Source 接单、REQUEST_CHANGES → 修复 → 新 head 复审、真实平台故障注入；生产继续使用旧 Runtime。
+后续在 2026-11-10 的 Round 2–3 中完成了 GitHub App bot 身份链的真实验收（详见[验收记录](vivi-dsh-live-vivi-test.md#round-2-3github-app-bot-的完整闭环2026-11-10)）：用户一键注册 App `fastvibe-vivi` 后，round-3（Issue #6 / PR #7）六个 operation 全部 confirmed——commit、push、pull、App bot Review（APPROVED）、App bot Merge、best-effort Issue 收束（writer 身份经 DSH PATCH 关闭）。期间确认两个平台事实（App 合并不触发关联 Issue 自动关闭；merge 权限需 contents:write + statuses:read）并修复三处宿主缺陷。
+
+同轮之后补齐了两个剩余验收项的实现（离线已验收，真实 GitHub 轮次待跑）：
+
+- **REQUEST_CHANGES 往返**：`test/dsh-github-sdk.test.ts` 的专项证明，独立 reviewer 发出 `REQUEST_CHANGES` 后 Ticket 保持开放（`ready` 不等于结束），bot 自身的 review 经 Source 轮询为机事件（`human=false`、`meta.bot=true`，不因此获得人类授权），反馈以 bot Trigger 的形式送达**同一个** Assignment/Session（不新建 Assignment、不改变 Mandate/Decision），修复后的新 head 再获一个独立 Review。
+- **自动 Source 接单**：两处阻塞已消除。`GithubSourceConfig.selfIsHuman` 让单账号部署把仓库所有者自己的 Issue 当作人的请求（默认仍保持历史语义；真正的 bot 账号始终走机器路径）；新增 [`pi-assessor.ts`](../src/main/bot/shadow/pi-assessor.ts) 让 assessor 变成一个隔离 Session 里的真实模型——它只用 `dsh_assess` 作出 accept/ignore/unavailable，Ticket 的 `title` 与 `scope` 由宿主的 `describe` 提供，模型即使被诱导也无法扩大仓库范围。按 Eval 幂等：同一 Eval 重投不会二次询问模型；模型不作出决定则 fail closed（无 Ticket 产生）。
+
+这两个实现均未接入生产 Runtime/IPC/settings；真实 GitHub 轮次与平台故障注入仍待验收。

@@ -410,3 +410,64 @@ test("GitHub App installation 凭据以 github-app principal 模式完成受控 
   assert.ok(h.appRequests().length > 0 && h.appRequests().every(request => request.verified), JSON.stringify(h.appRequests()));
   assert.ok(!h.server.requests.some(row => row.path === "/user"), "app principal mode must not read /user");
 }, timeout);
+
+test("REQUEST_CHANGES round trip: bot review reaches the open Worker, a new head earns a new Review", timeout, async t => {
+  // Round 1: the independent reviewer rejects the head it read.
+  const h = await harness(t, { reviewer: [tool("read_file", { path: "a.ts" }),
+    tool("dsh_review", artifact({ verdict: "request-changes", findings: [{ severity: "high", path: "a.ts", line: 1, message: "Half-open start boundary is wrong" }] }))] });
+  await h.deliver();
+  assert.equal(h.posts().length, 1);
+  assert.equal(h.posts()[0]!.body?.event, "REQUEST_CHANGES");
+  assert.equal(h.posts()[0]!.body?.commit_id, HEAD);
+  assert.ok(h.operations().every(operation => operation.status === "confirmed"));
+  // The verdict is rendered for a reader, and the finding survives into the body.
+  assert.match(String(h.posts()[0]!.body?.body), /## Changes requested/);
+  assert.match(String(h.posts()[0]!.body?.body), /Half-open start boundary is wrong/);
+  // A rejected head leaves the ticket open: `ready` waits for followed work, it does not end the ticket.
+  assert.equal(h.ticket().assignments[0]?.report?.state, "ready");
+  assert.equal(h.ticket().ended, undefined);
+  const workerCalls = h.worker.faux.state.callCount, reviewerCalls = h.reviewer.faux.state.callCount;
+
+  // Round 2: the bot's own review is polled back as a machine event on the followed PR thread.
+  Object.assign(h.server.reviews[0]!, { submitted_at: new Date().toISOString(), user: { id: 2, login: "reviewer", type: "User" } });
+  for (const path of [`${ROOT}/pulls/8/comments`, `${ROOT}/issues/8/comments`, `${ROOT}/issues/7/comments`]) h.server.fault("GET", path, { kind: "status", status: 410 });
+  const polled = await h.d.native.poll({ targets: [{ id: "host-pr", kind: "issue", path: `${ROOT}/pulls/8` }], branches: [] });
+  assert.equal(polled.status, "completed", JSON.stringify(polled));
+  const review = h.store.db.get<{ id: string; data: string }>("SELECT id,data FROM dsh_triggers WHERE json_extract(data,'$.meta.kind')='review'")!;
+  const feedback = JSON.parse(review.data) as { human: boolean; text: string; meta: { bot: boolean; commit_id: string } };
+  // A bot never becomes a person: the feedback resumes the worker, it does not grant authorization.
+  assert.equal(feedback.human, false); assert.equal(feedback.meta.bot, true);
+  assert.equal(feedback.meta.commit_id, HEAD);
+  assert.match(feedback.text, /CHANGES_REQUESTED/);
+  const input = h.ticket().inputs.find(item => item.kind === "trigger" && item.triggerId === review.id)!;
+  assert.ok(input && input.kind === "trigger");
+  const mandateBefore = h.ticket().mandate, decisionBefore = h.ticket().decisionId;
+
+  // The feedback is delivered to the SAME assignment/session, not a new one.
+  h.worker.faux.setResponses([report()]);
+  await h.d.idle();
+  assert.equal(h.worker.faux.state.callCount, workerCalls + 1);
+  assert.equal(h.reviewer.faux.state.callCount, reviewerCalls);
+  const delivered = h.ticket().inputs.find(item => item.id === input.id)!;
+  assert.ok(delivered.kind === "trigger" && delivered.deliveredTo === h.binding.assignmentId);
+  assert.ok(delivered.readAt);
+  // Delivery is a fact of the transcript, and the bot input carried the review text.
+  assert.ok(h.transcript(h.sessionKey).some(row => JSON.stringify(row).includes("Half-open start boundary is wrong")));
+  assert.equal(h.ticket().assignments.length, 1);
+  assert.deepEqual(h.ticket().mandate, mandateBefore); assert.equal(h.ticket().decisionId, decisionBefore);
+
+  // Round 3: the fix produces a new head, which earns a fresh independent review.
+  const repaired = "d".repeat(40);
+  h.server.driftHead(repaired); h.setHead(repaired);
+  h.worker.faux.setResponses([request("review-2"), report()]);
+  h.reviewer.faux.setResponses([tool("read_file", { path: "a.ts" }), tool("dsh_review", artifact({ artifactId: "review-2", headSha: repaired }))]);
+  await h.deliver();
+  assert.equal(h.posts().length, 2);
+  assert.equal(h.posts()[1]!.body?.commit_id, repaired);
+  assert.equal(h.posts()[1]!.body?.event, "APPROVE");
+  assert.equal(h.operations().length, 2);
+  assert.ok(h.operations().every(operation => operation.status === "confirmed"));
+  // The repaired head reuses the same worker session but a separate reviewer session.
+  assert.equal(h.ticket().assignments.length, 1);
+  assert.notEqual(h.records()[1]!.sessionKey, h.records()[0]!.sessionKey);
+}, timeout);
