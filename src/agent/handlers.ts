@@ -287,6 +287,10 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.statsUsage, (payload?: { range?: UsageRange }) => collectUsageStats(paths, payload?.range ?? "30d", engine.usageConversations()));
 
   handle(Ipc.providersList, () => engine.listProviders());
+  handle(Ipc.providersReload, async () => {
+    await engine.reloadProviders();
+    return engine.listProviders();
+  });
   handle(Ipc.providersReorder, (payload: { ids: string[] }) => engine.reorderProviders(payload.ids));
   handle(Ipc.providersNative, () => engine.listNativeProviders());
   handle(Ipc.providersAdd, (payload: { name: string; baseUrl: string; apiKey: string; api?: any; models: ProviderModel[] }) => engine.addProvider({ name: payload.name, baseUrl: payload.baseUrl, apiKey: payload.apiKey, api: payload.api }, payload.models));

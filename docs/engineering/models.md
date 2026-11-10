@@ -153,6 +153,8 @@ the first provider, or `start()` after a crash) takes
 the `start()` path. Do not reintroduce `stop()` + `start()` here: it disposed every
 AgentSession, so a change in Settings → 供应商 aborted the reply in flight.
 
+设置 → 模型与默认的供应商标题右侧提供「刷新模型列表」。其他程序改动配置后，用户可手动重新读取当前模式的配置并调用 `reloadProviders()`，随后更新设置页供应商行和聊天模型菜单；不启用文件监听。隔离模式读取 `providers.json` 与对应凭据并重新生成 `models.json`，全局模式直接重读 pi 的 `models.json` / `auth.json`。该操作不向供应商拉取 `/models`；单个供应商的「同步模型」仍负责上游模型发现。
+
 **Model parameters have a single source: the bundled models.dev snapshot.** There is
 no hand-maintained catalog — context window, max output, input modalities, reasoning
 efforts and list prices all come from models.dev (`loadModelsDev()` →

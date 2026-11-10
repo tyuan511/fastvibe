@@ -314,6 +314,7 @@ const ALLOWED = new Set<string>([
   Ipc.providersCcSwitchImport,
   Ipc.providersCcSwitchScan,
   Ipc.providersList,
+  Ipc.providersReload,
   Ipc.providersLogout,
   Ipc.providersNative,
   // Balance reads are allowed: the URL comes from the stored provider and the key from

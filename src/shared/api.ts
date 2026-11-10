@@ -314,6 +314,8 @@ export function createFastVibeApi(t: ApiTransport) {
     providers: {
       test: (id: string, model: string): Promise<import("./provider-test").ProviderTestResult> => t.invoke(Ipc.providersTest, { id, model }),
       list: (): Promise<ProviderConfig[]> => t.invoke(Ipc.providersList),
+      /** Apply configuration changed by another program to the running engine. */
+      reload: (): Promise<ProviderConfig[]> => t.invoke(Ipc.providersReload),
       reorder: (ids: string[]): Promise<ProviderConfig[]> => t.invoke(Ipc.providersReorder, { ids }),
       native: (): Promise<NativeProviderConfig[]> => t.invoke(Ipc.providersNative),
       addNative: (payload: {

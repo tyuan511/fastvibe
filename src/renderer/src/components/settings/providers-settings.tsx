@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, BoxesIcon, Download01Icon, Loading03Icon, Search01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, BoxesIcon, Download01Icon, Loading03Icon, RefreshIcon, Search01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -37,6 +37,7 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [natives, setNatives] = useState<NativeProviderConfig[]>([]);
   const [loading, setLoading] = useState(true);
+  const [reloading, setReloading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [reordering, setReordering] = useState(false);
@@ -80,6 +81,19 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
     setProviders(next);
     onChanged();
     return next;
+  }
+
+  async function reloadModels(): Promise<void> {
+    if (reloading) return;
+    setReloading(true);
+    try {
+      await mutate(() => window.fastvibe.providers.reload());
+      toast.success(t("providers.modelsReloaded"));
+    } catch (error) {
+      toast.error(cleanError(error));
+    } finally {
+      setReloading(false);
+    }
   }
 
   /**
@@ -181,6 +195,10 @@ export function ProvidersSettings({ onChanged, models = [] }: { onChanged: () =>
         <div className="flex flex-wrap items-center justify-between gap-3 px-1">
           <h3 className="text-sm font-medium">{t("providers.providers")} <span className="ml-1 font-normal text-muted-foreground">{providers.length}</span></h3>
           <div className="flex flex-wrap items-center gap-2">
+            <Button variant="ghost" size="sm" disabled={reloading || reordering} onClick={() => void reloadModels()}>
+              <HugeiconsIcon strokeWidth={2} icon={RefreshIcon} className={reloading ? "animate-spin" : undefined} />
+              {t(reloading ? "providers.reloadingModels" : "providers.reloadModels")}
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setCcSwitchOpen(true)}>
               <HugeiconsIcon strokeWidth={2} icon={Download01Icon} />
               {t("providers.importCcSwitch")}

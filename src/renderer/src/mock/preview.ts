@@ -1022,6 +1022,7 @@ const api = {
    */
   account: accountMock(),
   providers: {
+    reload: async () => PROVIDERS,
     test: async (_provider: string, model: string) => ({ model, api: "openai-responses", status: "passed", tools: "passed", firstTokenMs: 180, elapsedMs: 650 }),
     list: async () => PROVIDERS,
     reorder: async (ids: string[]) => {

@@ -272,6 +272,8 @@ export const Ipc = {
   /** Pushed whenever who is signed in changes: a login finishing, a logout, a refresh. */
   accountState: "account:state",
   providersList: "providers:list",
+  /** Re-read local provider/model configuration without restarting the engine. */
+  providersReload: "providers:reload",
   providersReorder: "providers:reorder",
   providersNative: "providers:native",
   providersFetch: "providers:fetch",

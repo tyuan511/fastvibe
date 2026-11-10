@@ -3849,7 +3849,10 @@ export class PiProcessManager {
       const registry = this.#models;
       if (!runtime || !registry) return this.#status;
       if (this.#paths.engineMode === "global") {
-        await registry.refresh({ allowNetwork: false });
+        const result = await registry.refresh({ allowNetwork: false });
+        if (result.aborted || result.errors.size || registry.getError()) {
+          throw new Error(uiText("模型配置加载失败，请检查配置后重试。", "Could not load model configuration. Check it and try again."));
+        }
         this.#modelsCache = globalPiModels(registry, this.#paths);
         this.#prices = modelPriceIndex(this.#paths);
         await this.#rebindModels();
@@ -3857,10 +3860,9 @@ export class PiProcessManager {
       }
       const keys = await loadProviderKeys(this.#paths);
       const providers = usableProviders(this.#paths, keys);
-      // The overlay is the only thing we put keys in, so it also lists exactly the
-      // providers we set — drop the ones the user just removed or disabled.
+      // Remove stale overlay keys too when a provider now only has OAuth credentials.
       for (const credential of await runtime.listCredentials()) {
-        if (!providers.some((item) => item.id === credential.providerId)) {
+        if (!providers.some((item) => item.id === credential.providerId && keys[item.apiKeyEnv])) {
           await runtime.removeRuntimeApiKey(credential.providerId);
         }
       }
@@ -3870,11 +3872,15 @@ export class PiProcessManager {
       }
       // Rewrite models.json — the only provider config the SDK reads — then let the
       // shared registry re-read it, so every session resolves the new definition.
-      this.#modelsCache = applyProviders(this.#paths);
-      this.#prices = modelPriceIndex(this.#paths);
+      const models = applyProviders(this.#paths);
       // `refresh()` is async; the rebind below reads the registry synchronously, so it
       // must finish before we swap the model objects in.
-      await registry.refresh({ allowNetwork: false });
+      const result = await registry.refresh({ allowNetwork: false });
+      if (result.aborted || result.errors.size || registry.getError()) {
+        throw new Error(uiText("模型配置加载失败，请检查配置后重试。", "Could not load model configuration. Check it and try again."));
+      }
+      this.#modelsCache = models;
+      this.#prices = modelPriceIndex(this.#paths);
       // Removing the last provider lands here too: the registry is now empty, every
       // session's model is gone, and `#rebindModel` leaves the ones it cannot replace
       // alone. Nothing can be sent until a model exists again, which the composer says.
