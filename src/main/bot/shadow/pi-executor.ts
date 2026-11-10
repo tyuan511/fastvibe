@@ -124,7 +124,7 @@ export class PiExecutor {
     };
     const sdk = await ScratchPiSession.open({ store: this.options.store, root: this.options.root, allowedRoot: this.options.allowedRoot, binding,
       modelRuntime: this.options.modelRuntime, model: this.options.model,
-      extensions: [files.extension(), reviewExtension], activeTools: ["dsh_report", "read_file", "write_file", "edit_file", "list_files", ...(this.options.reviewer ? ["request_review"] : [])],
+      extensions: [files.extension(), reviewExtension], activeTools: ["vivi_report", "read_file", "write_file", "edit_file", "list_files", ...(this.options.reviewer ? ["request_review"] : [])],
       validate: () => this.check(binding),
       context: () => ({ ticketId: binding.ticketId, assignmentId: binding.assignmentId, role: "github-worker", instructions: "Work within the host-provided mandate. Use request_review for independent review. ready means ready for followed work, not merged or completed. External delivery receipts are separate facts. Never claim tests ran without host execution evidence." }),
       onRead: (token, inputIds) => { if (!this.options.engine().worker.read(token, inputIds)) throw new Error("SDK read has no committed domain delivery"); },
@@ -225,7 +225,7 @@ export class PiExecutor {
   }
   private async scan(): Promise<void> {
     if (this.closing || !this.options.enabled()) return;
-    const rows = this.options.store.db.all<{ data: string }>("SELECT data FROM dsh_kv WHERE key LIKE 'pi:executor:%'");
+    const rows = this.options.store.db.all<{ data: string }>("SELECT data FROM vivi_kv WHERE key LIKE 'pi:executor:%'");
     for (const row of rows) {
       const record = JSON.parse(row.data) as PiExecutorRecord;
       if (record.state !== "opened" || !this.current(record.binding)) continue;
@@ -247,7 +247,7 @@ export class PiExecutor {
           handle.sdk.prepare({ requestId, inputIds: [], mode: "followUp", text: JSON.stringify({
             kind: "initial-assignment", ticket: { id: ticket.id, title: ticket.title, mandate: ticket.mandate, execution: ticket.execution },
             assignmentId: handle.binding.assignmentId, origins,
-            instructions: "Implement the accepted origin requirements using the workspace tools. Record a structured dsh_report when ready for host verification. Do not claim tests were run unless the host provided evidence. Git delivery and followed-thread completion are separate host steps.",
+            instructions: "Implement the accepted origin requirements using the workspace tools. Record a structured vivi_report when ready for host verification. Do not claim tests were run unless the host provided evidence. Git delivery and followed-thread completion are separate host steps.",
           }) });
         }
       }

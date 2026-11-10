@@ -87,7 +87,7 @@ function inputEvidence(ticket: Ticket, input: TicketInput, assignment?: Assignme
     ...(deliveredAt ? { deliveredAt } : {}), ...(readAt ? { readAt } : {}) };
 }
 function receiptRows(store: ShadowStore): Receipt[] {
-  return store.db.all<{ data: string }>("SELECT data FROM dsh_outbox ORDER BY rowid").map(row => JSON.parse(row.data) as Receipt);
+  return store.db.all<{ data: string }>("SELECT data FROM vivi_outbox ORDER BY rowid").map(row => JSON.parse(row.data) as Receipt);
 }
 
 /** Build a detached old-shaped snapshot from Shadow facts. This function performs no writes. */

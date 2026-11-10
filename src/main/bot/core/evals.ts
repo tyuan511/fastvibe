@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Derived from deepseek-ai/dsh-superagent-prototype; see NOTICE.md.
+// Derived from dsh-superagent/repo; see NOTICE.md.
 /** Evals: the Thread-level assessments of queued Triggers, and the Decisions they end with. */
 import { key } from './ids.ts'
 import { UserError } from './errors.ts'

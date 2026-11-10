@@ -128,7 +128,7 @@ export class ManagedPiReviewer {
           validate(); if (signal?.aborted || result.version !== file.version) throw new Error("Reviewer file version changed");
           return { content: [{ type: "text", text: result.content }], details: { path: file.path, version: file.version } };
         } });
-      pi.registerTool({ name: "dsh_review", label: "Record structured review", description: "Submit findings for the exact head/base. Checks without host execution evidence are stored as not-run.",
+      pi.registerTool({ name: "vivi_review", label: "Record structured review", description: "Submit findings for the exact head/base. Checks without host execution evidence are stored as not-run.",
         parameters: artifactSchema,
         execute: async (toolCallId, args) => {
           validate();
@@ -157,13 +157,14 @@ export class ManagedPiReviewer {
     try {
       validate();
       const record = this.load(key)!.value;
-      adapter = await ScratchPiSession.open({ ...this.options, sessionKey: record.sessionKey, activeTools: ["read_file", "dsh_review"], validate,
+      adapter = await ScratchPiSession.open({ ...this.options, sessionKey: record.sessionKey, activeTools: ["read_file", "vivi_review"], validate,
         extensions: [extension], context: () => ({ reviewer: true, headSha: input.headSha, baseSha: input.baseSha, artifactId: input.artifactId }) });
       this.sessions.set(key, adapter); validate();
-      if (adapter.session.getActiveToolNames().slice().sort().join(",") !== "dsh_review,read_file") throw new Error("Reviewer tool set mismatch");
+      // Sorted, so the expected order follows the tool name after any rename.
+      if (adapter.session.getActiveToolNames().slice().sort().join(",") !== "read_file,vivi_review") throw new Error("Reviewer tool set mismatch");
       // Accept before activation, so the durable intent exists even if dispatch fails.
       this.options.store.atomic(() => {
-        validate(); adapter!.prepare({ requestId: record.requestId, text: JSON.stringify({ instruction: "Review the full fixed diff and requirements. Use read_file for context and dsh_review for the only accepted result. No test execution is available; never claim unverified checks passed.", ...input }) });
+        validate(); adapter!.prepare({ requestId: record.requestId, text: JSON.stringify({ instruction: "Review the full fixed diff and requirements. Use read_file for context and vivi_review for the only accepted result. No test execution is available; never claim unverified checks passed.", ...input }) });
         this.update(key, value => ({ ...value, status: "running" }));
       });
       const submission = await adapter.activate(record.requestId);

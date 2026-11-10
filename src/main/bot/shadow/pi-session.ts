@@ -15,12 +15,12 @@ import { assertExecutionPath } from "./execution-directory.ts";
 import type { ShadowStore } from "./store.ts";
 
 export const SUPPORTED_SCRATCH_PI_VERSION = "1.3.0";
-const TAG = "__fastvibeDsh";
-const READ = "fastvibe-dsh-read";
-const TURN = "fastvibe-dsh-turn";
-const REPORT = "fastvibe-dsh-report";
+const TAG = "__fastvibeVivi";
+const READ = "fastvibe-vivi-read";
+const TURN = "fastvibe-vivi-turn";
+const REPORT = "fastvibe-vivi-report";
 interface InputTag { version: 1; sessionKey: string; requestId: string; epoch: number; binding: WorkerToken }
-type Tagged = AgentMessage & { __fastvibeDsh?: InputTag };
+type Tagged = AgentMessage & { __fastvibeVivi?: InputTag };
 interface Dispatch { requestId: string; epoch: number; binding: WorkerToken; tagged?: boolean }
 interface Turn extends Dispatch { turnId: string; requestIds: string[]; reportingIds: string[] }
 interface Marker { sessionKey: string; epoch: number; binding: WorkerToken; turnId: string; requestIds: string[]; at: number; report?: WorkerReport }
@@ -88,7 +88,7 @@ export class ScratchPiSession {
         || state.sessionFile !== join(base, "sessions", `${digest(sessionKey)}.jsonl`) || (owner && alive(owner.pid))) throw new Error("Saved Worker journal is not quiet or belongs to another identity");
       for (const path of [root, base, state.cwd, dirname(state.sessionFile), state.sessionFile]) { assertExecutionPath(path, allowedRoot, store); noSymlink(path); }
       const adapter = new ScratchPiSession({ store, root, allowedRoot, binding }, state, "quiet-reconcile");
-      if (adapter.disk()[0]?.dshStoreId !== store.get("pi:store-id")) throw new Error("Saved Worker journal belongs to another store");
+      if (adapter.disk()[0]?.viviStoreId !== store.get("pi:store-id")) throw new Error("Saved Worker journal belongs to another store");
       adapter.reconcile();
     });
   }
@@ -100,7 +100,7 @@ export class ScratchPiSession {
     const ledger = new PiLedger(options.store);
     const sessionKey = options.sessionKey ?? `worker-${options.binding.ticketId}`;
     if (options.sessionKey && (!/^(reviewer|coordinator|assessor)-[A-Za-z0-9_.:-]{1,480}$/.test(sessionKey) && sessionKey !== `worker-${options.binding.ticketId}`)) throw new Error("Invalid isolated Pi role Session key");
-    const activeTools = [...(options.activeTools ?? ["dsh_report"])];
+    const activeTools = [...(options.activeTools ?? ["vivi_report"])];
     if (activeTools.some(name => !/^[a-z][a-z0-9_]*$/.test(name)) || new Set(activeTools).size !== activeTools.length) throw new Error("Invalid isolated Pi role tools");
     const base = join(root, digest(sessionKey));
     const cwd = join(base, "workspace"), sessionDir = join(base, "sessions"), agentDir = join(base, "agent");
@@ -129,15 +129,15 @@ export class ScratchPiSession {
         // The sole initial write, with an SDK-produced v3 header; all later writes belong to SessionManager.
         const header = SessionManager.inMemory(cwd, { id: digest(sessionKey) }).getHeader();
         const fd = openSync(sessionFile, "wx", 0o600);
-        try { writeSync(fd, JSON.stringify({ ...header, dshStoreId: dbId }) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
+        try { writeSync(fd, JSON.stringify({ ...header, viviStoreId: dbId }) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
       }
       const disk = adapter.disk();
-      if (disk[0]?.dshStoreId !== dbId) throw new Error("Scratch transcript belongs to another receipt store");
+      if (disk[0]?.viviStoreId !== dbId) throw new Error("Scratch transcript belongs to another receipt store");
       const manager = SessionManager.open(sessionFile, sessionDir, cwd);
       const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false }, cacheWarming: "off" });
       const reportExtension: ExtensionFactory = pi => {
-        if (!activeTools.includes("dsh_report")) return;
-        pi.registerTool({ name: "dsh_report", label: "DSH report", description: "Record the current assignment's structured report.",
+        if (!activeTools.includes("vivi_report")) return;
+        pi.registerTool({ name: "vivi_report", label: "Vivi report", description: "Record the current assignment's structured report.",
           parameters: Type.Object({ state: Type.Union(["progress", "waiting", "ready", "blocked", "failed", "dropped"].map(value => Type.Literal(value))),
             summary: Type.String(), question: Type.Optional(Type.Union([Type.String(), Type.Null()])), askedBy: Type.Optional(Type.String()), answers: Type.Optional(Type.String()) }),
           execute: async (_id, input) => {
@@ -146,7 +146,7 @@ export class ScratchPiSession {
           } });
       };
       const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, noSkills: true, noContextFiles: true, noExtensions: true, noPromptTemplates: true,
-        extensionFactories: [{ name: "dsh-reports", factory: reportExtension }, ...(options.extensions ?? []).map((factory, i) => ({ name: `scratch-${i}`, factory }))] });
+        extensionFactories: [{ name: "vivi-reports", factory: reportExtension }, ...(options.extensions ?? []).map((factory, i) => ({ name: `scratch-${i}`, factory }))] });
       await resourceLoader.reload();
       const result = await createAgentSession({ cwd, agentDir, modelRuntime: options.modelRuntime, model: options.model, sessionManager: manager,
         settingsManager, resourceLoader, tools: activeTools });
@@ -224,7 +224,7 @@ export class ScratchPiSession {
       this.assertLive();
       const result = await convert(messages);
       this.nextReads = [...new Set(messages.flatMap(message => { const tag = this.tag(message); return tag ? [tag.requestId] : []; }))];
-      return result.map(message => { const { __fastvibeDsh: _identity, ...plain } = message as typeof message & Tagged; return plain; });
+      return result.map(message => { const { __fastvibeVivi: _identity, ...plain } = message as typeof message & Tagged; return plain; });
     };
     const stream = agent.streamFunction;
     agent.streamFunction = (model, context, config) => {
@@ -232,7 +232,7 @@ export class ScratchPiSession {
       const epoch = this.state.epoch, binding = copy(this.state.binding);
       const sessionRequest = config?.sessionId === this.session.sessionId;
       if (sessionRequest) this.reconcile();
-      const live = { role: "system" as const, content: JSON.stringify({ dsh_context: this.options.context?.() ?? {}, binding, sessionKey: this.sessionKey, epoch }), timestamp: Date.now() };
+      const live = { role: "system" as const, content: JSON.stringify({ vivi_context: this.options.context?.() ?? {}, binding, sessionKey: this.sessionKey, epoch }), timestamp: Date.now() };
       if (!this.valid(epoch, binding)) throw new Error("Scratch request was superseded before provider dispatch");
       const withContext = { ...context, messages: [live, ...context.messages] };
       if (!sessionRequest) return stream(model, withContext, config);
@@ -304,8 +304,8 @@ export class ScratchPiSession {
     for (const row of rows) {
       if (row.type !== "message") continue;
       const message = row.message as Tagged; const tag = message && this.tag(message); if (!tag) continue;
-      const receipt = this.get(tag.requestId); if (!receipt) throw new Error("Transcript contains an unregistered DSH request");
-      if (receipt.entryId && receipt.entryId !== row.id) throw new Error("DSH request has duplicate transcript entries");
+      const receipt = this.get(tag.requestId); if (!receipt) throw new Error("Transcript contains an unregistered Vivi request");
+      if (receipt.entryId && receipt.entryId !== row.id) throw new Error("Vivi request has duplicate transcript entries");
       if (!receipt.entryId) this.options.store.atomic(() => {
         this.ledger.patch(this.sessionKey, receipt.requestId, { stage: "persisted", entryId: String(row.id), entryEpoch: tag.epoch, entryBinding: tag.binding });
         if (this.valid(tag.epoch, tag.binding)) this.options.onPersisted?.(tag.binding, receipt.inputIds);
@@ -421,7 +421,7 @@ export class ScratchPiSession {
     raw._prepareRun = async () => [];
     try { await raw._startRun.call(this.session, { messageType: "user", prompt: "" }); } finally { raw._prepareRun = prepare; }
   }
-  async reload(): Promise<void> { this.assertLive(); await this.session.waitForIdle(); this.assertLive(); await this.session.reload(); this.session.setActiveToolsByName([...(this.options.activeTools ?? ["dsh_report"])]); this.reconcile(); }
+  async reload(): Promise<void> { this.assertLive(); await this.session.waitForIdle(); this.assertLive(); await this.session.reload(); this.session.setActiveToolsByName([...(this.options.activeTools ?? ["vivi_report"])]); this.reconcile(); }
   async compact(instructions?: string): Promise<void> { this.assertLive(); await this.session.compact(instructions); this.reconcile(); }
   async rebind(binding: WorkerToken): Promise<void> {
     if (binding.ticketId !== this.state.ticketId) throw new Error("Cannot move a Session to another Ticket");

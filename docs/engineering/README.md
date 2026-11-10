@@ -16,7 +16,7 @@
 | 转写呈现与运行过程 | [transcript.md](transcript.md) | [Markdown 渲染](markdown.md)、[会话生命周期](session-lifecycle.md) |
 | 供应商、模型与旁路请求 | [models.md](models.md) | [Pi 引擎模式](../pi-engine-modes.md)、[扩展与 MCP](extensions.md) |
 | 扩展、技能、MCP 与工具桥接 | [extensions.md](extensions.md) | [Agent 编排](automation.md)、[会话生命周期](session-lifecycle.md)、[工作区与媒体](workspace-and-media.md) |
-| 普通记忆与 Vivi 的补充工程约束 | [memory-and-vivi.md](memory-and-vivi.md) | [普通长期记忆](../memory.md)、[Vivi 当前实现](../vivi-bot-implementation.md)、[Vivi 记忆](../vivi-memory-design.md)、[Vivi DSH 目标](../vivi-dsh-architecture.md) |
+| 普通记忆与 Vivi 的补充工程约束 | [memory-and-vivi.md](memory-and-vivi.md) | [普通长期记忆](../memory.md)、[Vivi 当前实现](../vivi-bot-implementation.md)、[Vivi 记忆](../vivi-memory-design.md)、[Vivi DSH 目标](../vivi-architecture.md) |
 | 桌面运行环境与应用服务 | [desktop-runtime.md](desktop-runtime.md) | [Agent runtime](../agent-runtime.md)、[引擎进程隔离评估](../engine-utility-process.md) |
 | Agent Team、Goal、Todo、定时任务与历史 DAG | [automation.md](automation.md) | [扩展与 MCP](extensions.md)、[会话生命周期](session-lifecycle.md) |
 | 会话生命周期、队列与压缩 | [session-lifecycle.md](session-lifecycle.md) | [持久化与恢复](storage.md)、[Agent 编排](automation.md) |
@@ -25,7 +25,7 @@
 ## 当前实现、历史资料与设计目标
 
 - 手机端以 [Flutter + Rust FFI / iroh 合同](mobile.md)、[手机 README](../../apps/mobile/README.md) 和 [iroh 节点列表](../iroh-relay-nodes.md) 为当前基线。[远程资料](remote-access.md) 中旧 WebRTC/TURN、密码扫码及旧服务发现章节有单独范围标注；仍保留的 HTTP/WS/SSH 服务端合同不能据此删除。
-- [Vivi 当前实现](../vivi-bot-implementation.md)、[Vivi 记忆](../vivi-memory-design.md) 与 [DSH 目标设计](../vivi-dsh-architecture.md) 各有明确边界；[补充工程约束](memory-and-vivi.md) 只承接运行时与呈现细节，不另立一套完整架构。
+- [Vivi 当前实现](../vivi-bot-implementation.md)、[Vivi 记忆](../vivi-memory-design.md) 与 [DSH 目标设计](../vivi-architecture.md) 各有明确边界；[补充工程约束](memory-and-vivi.md) 只承接运行时与呈现细节，不另立一套完整架构。
 - [SQLite](../sqlite-storage.md)、[OfficeCLI](../office-officecli.md)、[普通记忆](../memory.md)、[导入格式](../import-from-other-agents.md) 与 [Pi 引擎模式](../pi-engine-modes.md) 仍是各自的专项文档。工程合同保留原根文件的接入约束、故障案例与验证入口，修改同一事实时同步相关段落，避免扩写第二套设计。
 - 当前独立委派使用 [Agent Team 持久线程](automation.md)；同页的旧 DAG 调度、`subagent` 批量参数及相关测试路径保留为历史资料，不能当成当前内置能力。
 - 实测数字、固定上游提交、历史版本和未在真实设备/供应商上验证的限制随原资料保留；它们不是当前测试通过声明。

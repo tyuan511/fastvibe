@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Composition and relay rules adapted from deepseek-ai/dsh-superagent-prototype
+// Composition and relay rules adapted from dsh-superagent/repo
 // at 8c32a9dc5d72c033816c6a8110b37f40cf94fba4; see ../core/NOTICE.md and LICENSE.
 import { Engine, type EngineForMainSession, type EngineForPeople, type EngineForSources, type WorkerReport } from "../core/engine.ts";
 import { key } from "../core/ids.ts";

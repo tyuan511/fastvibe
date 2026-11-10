@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Port semantics adapted from deepseek-ai/dsh-superagent-prototype; see ../core/NOTICE.md.
+// Port semantics adapted from dsh-superagent/repo; see ../core/NOTICE.md.
 import type { Assessor, Executor, Outbox } from "../core/ports.ts";
 import type { ShadowStore } from "./store.ts";
 import type { WorkerToken } from "./engine.ts";

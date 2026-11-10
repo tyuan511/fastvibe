@@ -33,7 +33,7 @@ function paths(root: string, ticketId: string): ExecutionPaths {
 function empty(path: string): boolean { return existsSync(path) && readdirSync(path).length === 0; }
 
 export function assertExecutionPath(path: string, allowedRoot?: string, store?: ShadowStore): void {
-  if (allowedRoot && (!store || store.db.get<{ value: string }>("SELECT value FROM dsh_shadow_meta WHERE key='purpose'")?.value !== "vivi-dsh-production")) throw new Error("Explicit execution root requires production store purpose");
+  if (allowedRoot && (!store || store.db.get<{ value: string }>("SELECT value FROM vivi_shadow_meta WHERE key='purpose'")?.value !== "vivi-production")) throw new Error("Explicit execution root requires production store purpose");
   assertShadowPath(path, { allowedRoot });
   const boundary = realpathSync(allowedRoot ?? tmpdir());
   let current = resolve(path);
@@ -103,12 +103,12 @@ export class ExecutionDirectories {
         const current = this.get(ticketId); const live = this.store.leases.get(leaseKey(ticketId));
         if (!current || current.revision !== lease.revision || current.state !== "preparing" || current.attemptId !== attemptId || live?.owner !== this.owner || live.generation !== lease.leaseGeneration || live.expiresAt <= this.now()) throw new Error("Directory prepare ownership changed");
         const result: DirectoryRecord = { ...current, state: "ready", revision: current.revision + 1, leaseOwner: undefined, leaseUntil: undefined, leaseGeneration: undefined, ...(metadata ? { metadata: copy(metadata) } : {}) };
-        this.store.set(key(ticketId), result); this.store.db.run("DELETE FROM dsh_leases WHERE resource=? AND owner=? AND generation=?", leaseKey(ticketId), this.owner, lease.leaseGeneration); return result;
+        this.store.set(key(ticketId), result); this.store.db.run("DELETE FROM vivi_leases WHERE resource=? AND owner=? AND generation=?", leaseKey(ticketId), this.owner, lease.leaseGeneration); return result;
       });
       return copy(ready);
     } catch (error) {
       await Promise.resolve();
-      this.store.atomic(() => { const current = this.get(ticketId); if (current?.attemptId === attemptId && current.state === "preparing") this.store.set(key(ticketId), { ...current, state: "failed", revision: current.revision + 1, error: String(error), leaseOwner: undefined, leaseUntil: undefined, leaseGeneration: undefined }); this.store.db.run("DELETE FROM dsh_leases WHERE resource=? AND owner=?", leaseKey(ticketId), this.owner); });
+      this.store.atomic(() => { const current = this.get(ticketId); if (current?.attemptId === attemptId && current.state === "preparing") this.store.set(key(ticketId), { ...current, state: "failed", revision: current.revision + 1, error: String(error), leaseOwner: undefined, leaseUntil: undefined, leaseGeneration: undefined }); this.store.db.run("DELETE FROM vivi_leases WHERE resource=? AND owner=?", leaseKey(ticketId), this.owner); });
       throw error;
     }
   }

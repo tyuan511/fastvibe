@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Durable scheduling adapted from deepseek-ai/dsh-superagent-prototype
+// Durable scheduling adapted from dsh-superagent/repo
 // at 8c32a9dc5d72c033816c6a8110b37f40cf94fba4; see ../core/NOTICE.md and LICENSE.
 import { createHash, randomUUID } from "node:crypto";
 import type { EffectKind, EffectRecord, ShadowStore } from "./store.ts";
@@ -132,7 +132,7 @@ export class ShadowEffects {
     });
   }
   private rows(kind: EffectKind): EffectRecord[] {
-    return this.store.db.all<{ key: string }>("SELECT key FROM dsh_effects WHERE kind=? AND status IN ('pending','running','uncertain') ORDER BY seq", kind)
+    return this.store.db.all<{ key: string }>("SELECT key FROM vivi_effects WHERE kind=? AND status IN ('pending','running','uncertain') ORDER BY seq", kind)
       .map(row => this.store.effects.get(kind, row.key)!);
   }
   private claim(kind: EffectKind, handler: Handler): EffectRecord | undefined {

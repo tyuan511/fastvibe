@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Derived from deepseek-ai/dsh-superagent-prototype; see NOTICE.md.
+// Derived from dsh-superagent/repo; see NOTICE.md.
 /** Ports the core depends on. Sources, policies, assessors, executors, and channels are project-specific. */
 import type { Assignment, ChannelRef, Decision, DecisionKind, Mandate, MandateBasis, Strength, Thread, Ticket, TicketEndBy, TicketOutcome, Trigger }
   from './model.ts'

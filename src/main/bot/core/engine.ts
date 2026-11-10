@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Derived from deepseek-ai/dsh-superagent-prototype; see NOTICE.md.
+// Derived from dsh-superagent/repo; see NOTICE.md.
 /** The domain Engine: the single entry point of the core, and the role interfaces its callers receive. */
 import { UserError } from './errors.ts'
 import { isoTime, liveTicket } from './model.ts'

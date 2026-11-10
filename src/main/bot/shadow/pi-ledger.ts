@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Pi receipt ledger boundaries are specific to FastVibe's isolated DSH adapter; see ../core/NOTICE.md.
+// Pi receipt ledger boundaries are specific to FastVibe's isolated Vivi adapter; see ../core/NOTICE.md.
 import { createHash } from "node:crypto";
 import type { WorkerReport } from "../core/engine.ts";
 import type { WorkerToken } from "./engine.ts";
@@ -114,7 +114,7 @@ export class PiLedger {
 
   list(sessionKey: string): PiReceipt[] {
     return this.store.atomic(() => this.store.db
-      .all<{ data: string }>("SELECT data FROM dsh_session_receipts WHERE session_key=? ORDER BY rowid", sessionKey)
+      .all<{ data: string }>("SELECT data FROM vivi_session_receipts WHERE session_key=? ORDER BY rowid", sessionKey)
       .map(row => clone(JSON.parse(row.data) as PiReceipt)));
   }
 

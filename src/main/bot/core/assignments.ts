@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Derived from deepseek-ai/dsh-superagent-prototype; see NOTICE.md.
+// Derived from dsh-superagent/repo; see NOTICE.md.
 /** What the Executor and its workers report about the Assignments that run tickets. */
 import { key } from './ids.ts'
 import { UserError } from './errors.ts'

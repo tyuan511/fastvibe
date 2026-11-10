@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Repository/receipt semantics adapted from deepseek-ai/dsh-superagent-prototype
+// Repository/receipt semantics adapted from dsh-superagent/repo
 // at 8c32a9dc5d72c033816c6a8110b37f40cf94fba4; see ../core/NOTICE.md and LICENSE.
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -23,7 +23,7 @@ function synchronous<T>(value: T): T {
   }
   return value;
 }
-function shadowPurpose(db: Db): string | undefined { return db.get<{ value: string }>("SELECT value FROM dsh_shadow_meta WHERE key='purpose'")?.value; }
+function shadowPurpose(db: Db): string | undefined { return db.get<{ value: string }>("SELECT value FROM vivi_shadow_meta WHERE key='purpose'")?.value; }
 function duration(now: number, ttl: number): number {
   if (!Number.isSafeInteger(now) || !Number.isSafeInteger(ttl) || ttl <= 0 || !Number.isSafeInteger(now + ttl)) throw new Error("租约时间必须为安全整数且有效期大于零");
   return now + ttl;
@@ -51,9 +51,9 @@ export interface SessionReceipt {
 }
 
 export type ShadowStoreOpenOptions = {
-  /** Explicitly authorize a persistent userData DSH root; omitted means disposable temp-only mode. */
+  /** Explicitly authorize a persistent userData Vivi root; omitted means disposable temp-only mode. */
   allowedRoot?: string;
-  purpose?: "isolated-m2" | "vivi-dsh-production";
+  purpose?: "isolated-m2" | "vivi-production";
 };
 
 /** No model, timers, source registry or production factory references this disposable store. */
@@ -63,7 +63,7 @@ export function openShadowStore(file = ":memory:", report: (error: unknown) => v
   const existed = file !== ":memory:" && existsSync(file);
   const db = openDatabaseConnection(file, { migrations: SHADOW_MIGRATIONS });
   try {
-    if (purpose === "vivi-dsh-production" && !existed && shadowPurpose(db) === "isolated-m2") db.run("UPDATE dsh_shadow_meta SET value=? WHERE key='purpose'", purpose);
+    if (purpose === "vivi-production" && !existed && shadowPurpose(db) === "isolated-m2") db.run("UPDATE vivi_shadow_meta SET value=? WHERE key='purpose'", purpose);
     return new ShadowStore(db, report, purpose, options.allowedRoot);
   }
   catch (error) { db.close(); throw error; }
@@ -75,12 +75,12 @@ export class ShadowStore implements Repositories {
   private readonly report: (error: unknown) => void;
   private readonly callbacks: (() => void)[][] = [];
   private savepoint = 0;
-  private readonly purposeValue: "isolated-m2" | "vivi-dsh-production";
+  private readonly purposeValue: "isolated-m2" | "vivi-production";
   private readonly allowedRootValue?: string;
-  constructor(db: Db, report: (error: unknown) => void = () => {}, purpose: "isolated-m2" | "vivi-dsh-production" = "isolated-m2", allowedRoot?: string) {
+  constructor(db: Db, report: (error: unknown) => void = () => {}, purpose: "isolated-m2" | "vivi-production" = "isolated-m2", allowedRoot?: string) {
     assertShadowPath(db.file, { allowedRoot });
     if (db.userVersion() !== SHADOW_SCHEMA_VERSION || shadowPurpose(db) !== purpose) {
-      throw new Error(`必须使用已完成 DSH 迁移的 Shadow 数据库 (${purpose})`);
+      throw new Error(`必须使用已完成 Vivi 迁移的 Shadow 数据库 (${purpose})`);
     }
     this.db = db;
     this.report = report;
@@ -88,7 +88,7 @@ export class ShadowStore implements Repositories {
     this.allowedRootValue = allowedRoot;
   }
   close(): void { this.db.close(); }
-  get purpose(): "isolated-m2" | "vivi-dsh-production" { return this.purposeValue; }
+  get purpose(): "isolated-m2" | "vivi-production" { return this.purposeValue; }
   get allowedRoot(): string | undefined { return this.allowedRootValue; }
 
   atomic<T>(work: () => T): T {
@@ -102,7 +102,7 @@ export class ShadowStore implements Repositories {
       for (const action of actions) this.notify(action);
       return value;
     }
-    const name = `dsh_shadow_${++this.savepoint}`;
+    const name = `vivi_shadow_${++this.savepoint}`;
     this.db.exec(`SAVEPOINT ${name}`);
     const actions: (() => void)[] = [];
     this.callbacks.push(actions);
@@ -128,66 +128,66 @@ export class ShadowStore implements Repositories {
   }
 
   readonly triggers = {
-    get: (id: string): Trigger | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_triggers WHERE id=?", id)),
+    get: (id: string): Trigger | undefined => decode(this.db.get<JsonRow>("SELECT data FROM vivi_triggers WHERE id=?", id)),
     save: (trigger: Trigger): void => this.atomic(() => {
-      this.db.run("INSERT INTO dsh_triggers(id,source,at,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET source=excluded.source,at=excluded.at,data=excluded.data", trigger.id, trigger.source, trigger.at, json(trigger));
-      this.db.run("DELETE FROM dsh_trigger_threads WHERE trigger_id=?", trigger.id);
-      for (const ref of trigger.threads) this.db.run("INSERT OR IGNORE INTO dsh_trigger_threads VALUES(?,?,?,?)", threadKey(ref), trigger.id, trigger.at, trigger.human);
+      this.db.run("INSERT INTO vivi_triggers(id,source,at,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET source=excluded.source,at=excluded.at,data=excluded.data", trigger.id, trigger.source, trigger.at, json(trigger));
+      this.db.run("DELETE FROM vivi_trigger_threads WHERE trigger_id=?", trigger.id);
+      for (const ref of trigger.threads) this.db.run("INSERT OR IGNORE INTO vivi_trigger_threads VALUES(?,?,?,?)", threadKey(ref), trigger.id, trigger.at, trigger.human);
     }),
-    disposition: (id: string): TriggerDisposition | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_dispositions WHERE id=?", id)),
+    disposition: (id: string): TriggerDisposition | undefined => decode(this.db.get<JsonRow>("SELECT data FROM vivi_dispositions WHERE id=?", id)),
     saveDisposition: (id: string, value: TriggerDisposition): void => {
-      this.db.run("INSERT INTO dsh_dispositions(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", id, json(value));
+      this.db.run("INSERT INTO vivi_dispositions(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", id, json(value));
     },
-    byThread: (key: string): Trigger[] => many(this.db.all<JsonRow>("SELECT t.data FROM dsh_trigger_threads x JOIN dsh_triggers t ON t.id=x.trigger_id WHERE x.thread_key=? ORDER BY x.at,x.trigger_id", key)),
+    byThread: (key: string): Trigger[] => many(this.db.all<JsonRow>("SELECT t.data FROM vivi_trigger_threads x JOIN vivi_triggers t ON t.id=x.trigger_id WHERE x.thread_key=? ORDER BY x.at,x.trigger_id", key)),
   };
   readonly threads = {
-    get: (key: string): Thread | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_threads WHERE key=?", key)),
+    get: (key: string): Thread | undefined => decode(this.db.get<JsonRow>("SELECT data FROM vivi_threads WHERE key=?", key)),
     save: (thread: Thread): void => {
       if (thread.key !== threadKey(thread.ref) || (thread.evaluating && thread.evaluating.threadKey !== thread.key)) throw new Error("Thread 与 Evaluation 的归属不一致");
-      this.db.run("INSERT INTO dsh_threads(key,source,data) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET source=excluded.source,data=excluded.data", thread.key, thread.ref.source, json(thread));
+      this.db.run("INSERT INTO vivi_threads(key,source,data) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET source=excluded.source,data=excluded.data", thread.key, thread.ref.source, json(thread));
     },
-    list: (): Thread[] => many(this.db.all<JsonRow>("SELECT data FROM dsh_threads ORDER BY rowid")),
-    active: (): Thread[] => many(this.db.all<JsonRow>("SELECT data FROM dsh_threads WHERE active=1 ORDER BY rowid")),
+    list: (): Thread[] => many(this.db.all<JsonRow>("SELECT data FROM vivi_threads ORDER BY rowid")),
+    active: (): Thread[] => many(this.db.all<JsonRow>("SELECT data FROM vivi_threads WHERE active=1 ORDER BY rowid")),
   };
   readonly tickets = {
-    get: (id: string): Ticket | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_tickets WHERE id=?", id)),
+    get: (id: string): Ticket | undefined => decode(this.db.get<JsonRow>("SELECT data FROM vivi_tickets WHERE id=?", id)),
     save: (ticket: Ticket): void => this.atomic(() => {
-      this.db.run("INSERT INTO dsh_tickets(id,decision_id,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET decision_id=excluded.decision_id,data=excluded.data", ticket.id, ticket.decisionId, json(ticket));
-      this.db.run("DELETE FROM dsh_assignments WHERE ticket_id=?", ticket.id);
-      for (const item of ticket.assignments) this.db.run("INSERT INTO dsh_assignments VALUES(?,?,?)", item.id, ticket.id, item.state);
+      this.db.run("INSERT INTO vivi_tickets(id,decision_id,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET decision_id=excluded.decision_id,data=excluded.data", ticket.id, ticket.decisionId, json(ticket));
+      this.db.run("DELETE FROM vivi_assignments WHERE ticket_id=?", ticket.id);
+      for (const item of ticket.assignments) this.db.run("INSERT INTO vivi_assignments VALUES(?,?,?)", item.id, ticket.id, item.state);
     }),
-    list: (): Ticket[] => many(this.db.all<JsonRow>("SELECT data FROM dsh_tickets ORDER BY rowid DESC")),
-    open: (): Ticket[] => many(this.db.all<JsonRow>("SELECT data FROM dsh_tickets WHERE open=1 ORDER BY rowid DESC")),
-    active: (): Ticket[] => many(this.db.all<JsonRow>("SELECT data FROM dsh_tickets WHERE active=1 ORDER BY rowid DESC")),
+    list: (): Ticket[] => many(this.db.all<JsonRow>("SELECT data FROM vivi_tickets ORDER BY rowid DESC")),
+    open: (): Ticket[] => many(this.db.all<JsonRow>("SELECT data FROM vivi_tickets WHERE open=1 ORDER BY rowid DESC")),
+    active: (): Ticket[] => many(this.db.all<JsonRow>("SELECT data FROM vivi_tickets WHERE active=1 ORDER BY rowid DESC")),
   };
   readonly decisions = {
-    get: (id: string): Decision | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_decisions WHERE id=?", id)),
+    get: (id: string): Decision | undefined => decode(this.db.get<JsonRow>("SELECT data FROM vivi_decisions WHERE id=?", id)),
     save: (decision: Decision): void => this.atomic(() => {
       const existing = this.decisions.get(decision.id);
       if (existing && (existing.evalId !== decision.evalId || existing.threadKey !== decision.threadKey
         || existing.kind !== decision.kind || json(existing.triggerIds) !== json(decision.triggerIds))) throw new Error("Decision 的归属、结果与批次不可改变");
-      this.db.run("INSERT INTO dsh_decisions(id,thread_key,eval_id,kind,at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", decision.id, decision.threadKey, decision.evalId, decision.kind, decision.at, json(decision));
+      this.db.run("INSERT INTO vivi_decisions(id,thread_key,eval_id,kind,at,data) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", decision.id, decision.threadKey, decision.evalId, decision.kind, decision.at, json(decision));
       if (decision.kind === "accept") {
         for (const triggerId of new Set(decision.triggerIds)) {
-          const current = this.db.get<{ decision_id: string }>("SELECT decision_id FROM dsh_accepted_triggers WHERE trigger_id=?", triggerId);
+          const current = this.db.get<{ decision_id: string }>("SELECT decision_id FROM vivi_accepted_triggers WHERE trigger_id=?", triggerId);
           if (current && current.decision_id !== decision.id) throw new Error("Trigger 已由其他 Decision 接受");
-          this.db.run("INSERT OR IGNORE INTO dsh_accepted_triggers VALUES(?,?)", triggerId, decision.id);
+          this.db.run("INSERT OR IGNORE INTO vivi_accepted_triggers VALUES(?,?)", triggerId, decision.id);
         }
       }
     }),
-    byThread: (key: string): Decision[] => many(this.db.all<JsonRow>("SELECT data FROM dsh_decisions WHERE thread_key=? ORDER BY rowid", key)),
+    byThread: (key: string): Decision[] => many(this.db.all<JsonRow>("SELECT data FROM vivi_decisions WHERE thread_key=? ORDER BY rowid", key)),
   };
-  get<T>(key: string): T | undefined { return decode(this.db.get<JsonRow>("SELECT data FROM dsh_kv WHERE key=?", key)); }
-  set(key: string, value: unknown): void { this.db.run("INSERT INTO dsh_kv VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data", key, json(value)); }
+  get<T>(key: string): T | undefined { return decode(this.db.get<JsonRow>("SELECT data FROM vivi_kv WHERE key=?", key)); }
+  set(key: string, value: unknown): void { this.db.run("INSERT INTO vivi_kv VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data", key, json(value)); }
 
   readonly receipts = {
-    get: (id: string): Receipt | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_outbox WHERE id=?", id)),
+    get: (id: string): Receipt | undefined => decode(this.db.get<JsonRow>("SELECT data FROM vivi_outbox WHERE id=?", id)),
     add: (message: OutboundMessage): boolean => this.atomic(() => {
-      const added = this.db.run("INSERT INTO dsh_outbox(id,status,ticket_id,thread_key,data) VALUES(?,'pending',?,?,?) ON CONFLICT(id) DO NOTHING", message.id, message.ticketId, message.channel.thread, json({ ...message, status: "pending" })).changes > 0;
+      const added = this.db.run("INSERT INTO vivi_outbox(id,status,ticket_id,thread_key,data) VALUES(?,'pending',?,?,?) ON CONFLICT(id) DO NOTHING", message.id, message.ticketId, message.channel.thread, json({ ...message, status: "pending" })).changes > 0;
       if (added && this.get<boolean>(`shadow:withdraw:${message.id}`)) this.set(`shadow:withdraw:${message.id}`, false);
       return added;
     }),
-    waiting: (): Receipt[] => many(this.db.all<JsonRow>("SELECT data FROM dsh_outbox WHERE status='pending' ORDER BY rowid")),
+    waiting: (): Receipt[] => many(this.db.all<JsonRow>("SELECT data FROM vivi_outbox WHERE status='pending' ORDER BY rowid")),
     /** Withdraw only an unsent message; sent/dropped IDs remain permanent receipts. */
     withdrawPending: (id: string): boolean => this.atomic(() => {
       const receipt = this.receipts.get(id);
@@ -197,21 +197,21 @@ export class ShadowStore implements Repositories {
         this.set(`shadow:withdraw:${id}`, true);
         return false;
       }
-      return this.db.run("DELETE FROM dsh_outbox WHERE id=? AND status='pending'", id).changes > 0;
+      return this.db.run("DELETE FROM vivi_outbox WHERE id=? AND status='pending'", id).changes > 0;
     }),
     settle: (id: string, status: "sent" | "dropped", dropped?: Receipt["dropped"]): boolean => this.atomic(() => {
       const receipt = this.receipts.get(id);
       if (!receipt || receipt.status !== "pending") return false;
       if (status === "dropped" && !dropped) throw new Error("丢弃消息必须记录原因");
-      return this.db.run("UPDATE dsh_outbox SET status=?,data=? WHERE id=? AND status='pending'", status, json({ ...receipt, status, ...(dropped ? { dropped } : {}) }), id).changes > 0;
+      return this.db.run("UPDATE vivi_outbox SET status=?,data=? WHERE id=? AND status='pending'", status, json({ ...receipt, status, ...(dropped ? { dropped } : {}) }), id).changes > 0;
     }),
   };
 
   readonly effects = {
-    get: (kind: EffectKind, key: string): EffectRecord | undefined => this.effectRow(this.db.get("SELECT * FROM dsh_effects WHERE kind=? AND key=?", kind, key)),
+    get: (kind: EffectKind, key: string): EffectRecord | undefined => this.effectRow(this.db.get("SELECT * FROM vivi_effects WHERE kind=? AND key=?", kind, key)),
     enqueue: (kind: EffectKind, key: string, payload: unknown, now: number): EffectRecord => this.atomic(() => {
-      this.db.run(`INSERT INTO dsh_effects(kind,key,payload,seq,generation,due,since,status)
-        VALUES(?,?,?,(SELECT COALESCE(MAX(seq),0)+1 FROM dsh_effects),0,?,?,'pending') ON CONFLICT(kind,key) DO UPDATE SET
+      this.db.run(`INSERT INTO vivi_effects(kind,key,payload,seq,generation,due,since,status)
+        VALUES(?,?,?,(SELECT COALESCE(MAX(seq),0)+1 FROM vivi_effects),0,?,?,'pending') ON CONFLICT(kind,key) DO UPDATE SET
         payload=excluded.payload,generation=generation+1,
         attempts=CASE WHEN status IN ('running','uncertain') THEN attempts ELSE 0 END,
         error=CASE WHEN status='uncertain' THEN error ELSE '' END,due=excluded.due,
@@ -220,20 +220,20 @@ export class ShadowStore implements Repositories {
     }),
     /** Domain cancellation may withdraw queued work, but never pretend an in-flight attempt stopped. */
     cancelPending: (kind: EffectKind, key: string): boolean =>
-      this.db.run("UPDATE dsh_effects SET status='cancelled' WHERE kind=? AND key=? AND status='pending' AND lease_owner IS NULL", kind, key).changes > 0,
-    due: (kind: EffectKind, now: number, limit = 100): EffectRecord[] => this.db.all("SELECT * FROM dsh_effects WHERE kind=? AND status='pending' AND due<=? ORDER BY seq LIMIT ?", kind, now, limit).map(row => this.effectRow(row)!),
+      this.db.run("UPDATE vivi_effects SET status='cancelled' WHERE kind=? AND key=? AND status='pending' AND lease_owner IS NULL", kind, key).changes > 0,
+    due: (kind: EffectKind, now: number, limit = 100): EffectRecord[] => this.db.all("SELECT * FROM vivi_effects WHERE kind=? AND status='pending' AND due<=? ORDER BY seq LIMIT ?", kind, now, limit).map(row => this.effectRow(row)!),
     claim: (kind: EffectKind, key: string, owner: string, now: number, ttl: number): EffectRecord | undefined => this.atomic(() => {
       const until = duration(now, ttl);
-      const changed = this.db.run(`UPDATE dsh_effects SET status='running',lease_owner=?,lease_until=?,claimed_generation=generation,claim_token = 1 + claim_token,attempts=attempts+1
+      const changed = this.db.run(`UPDATE vivi_effects SET status='running',lease_owner=?,lease_until=?,claimed_generation=generation,claim_token = 1 + claim_token,attempts=attempts+1
         WHERE kind=? AND key=? AND due<=? AND status='pending' AND lease_owner IS NULL`, owner, until, kind, key, now).changes;
       return changed ? this.effects.get(kind, key) : undefined;
     }),
     // Expired attempts become uncertain, never silently reissued after an unknown external write.
-    expire: (now: number): number => this.db.run("UPDATE dsh_effects SET status='uncertain',lease_owner=NULL,lease_until=NULL WHERE status='running' AND lease_until<=?", now).changes,
+    expire: (now: number): number => this.db.run("UPDATE vivi_effects SET status='uncertain',lease_owner=NULL,lease_until=NULL WHERE status='running' AND lease_until<=?", now).changes,
     settle: (claim: EffectRecord, status: "done" | "pending" | "uncertain" | "cancelled", now: number, due = now, error = ""): boolean => this.atomic(() => {
       const current = this.effects.get(claim.kind, claim.key);
       if (!current) return false;
-      const changed = this.db.run(`UPDATE dsh_effects SET
+      const changed = this.db.run(`UPDATE vivi_effects SET
         status=CASE WHEN generation!=? AND ? IN ('done','cancelled') THEN 'pending' ELSE ? END,
         due=CASE WHEN generation=? THEN ? ELSE due END,error=?,
         attempts=CASE WHEN generation=? THEN attempts ELSE 0 END,
@@ -246,7 +246,7 @@ export class ShadowStore implements Repositories {
     }),
     /** Explicit result of reconciliation; ordinary enqueue can never clear uncertain. */
     reconcile: (expected: EffectRecord, outcome: "retry" | "done" | "cancelled", now: number): boolean =>
-      this.db.run(`UPDATE dsh_effects SET status=CASE WHEN ?='retry' OR (? IN ('done','cancelled') AND generation!=claimed_generation) THEN 'pending' ELSE ? END,
+      this.db.run(`UPDATE vivi_effects SET status=CASE WHEN ?='retry' OR (? IN ('done','cancelled') AND generation!=claimed_generation) THEN 'pending' ELSE ? END,
         due=?,error='',claimed_generation=NULL WHERE kind=? AND key=? AND status='uncertain' AND generation=? AND claim_token=?`,
       outcome, outcome, outcome, now, expected.kind, expected.key, expected.generation, expected.claimToken).changes > 0,
   };
@@ -260,34 +260,34 @@ export class ShadowStore implements Repositories {
   }
   readonly leases = {
     get: (resource: string): Lease | undefined => {
-      const row = this.db.get("SELECT * FROM dsh_leases WHERE resource=?", resource);
+      const row = this.db.get("SELECT * FROM vivi_leases WHERE resource=?", resource);
       return row ? { resource, owner: String(row.owner), generation: Number(row.generation), expiresAt: Number(row.expires_at) } : undefined;
     },
     acquire: (resource: string, owner: string, now: number, ttl: number): Lease | undefined => this.atomic(() => {
       const until = duration(now, ttl);
-      const changed = this.db.run(`INSERT INTO dsh_leases VALUES(?,?,1,?) ON CONFLICT(resource) DO UPDATE SET
+      const changed = this.db.run(`INSERT INTO vivi_leases VALUES(?,?,1,?) ON CONFLICT(resource) DO UPDATE SET
         owner=excluded.owner,generation=generation+1,expires_at=excluded.expires_at WHERE expires_at<=?`, resource, owner, until, now).changes;
       return changed ? this.leases.get(resource) : undefined;
     }),
-    renew: (lease: Lease, now: number, ttl: number): boolean => this.db.run("UPDATE dsh_leases SET expires_at=? WHERE resource=? AND owner=? AND generation=? AND expires_at>?", duration(now, ttl), lease.resource, lease.owner, lease.generation, now).changes > 0,
-    release: (lease: Lease, now: number): boolean => this.db.run("UPDATE dsh_leases SET expires_at=? WHERE resource=? AND owner=? AND generation=? AND expires_at>?", now, lease.resource, lease.owner, lease.generation, now).changes > 0,
+    renew: (lease: Lease, now: number, ttl: number): boolean => this.db.run("UPDATE vivi_leases SET expires_at=? WHERE resource=? AND owner=? AND generation=? AND expires_at>?", duration(now, ttl), lease.resource, lease.owner, lease.generation, now).changes > 0,
+    release: (lease: Lease, now: number): boolean => this.db.run("UPDATE vivi_leases SET expires_at=? WHERE resource=? AND owner=? AND generation=? AND expires_at>?", now, lease.resource, lease.owner, lease.generation, now).changes > 0,
   };
   readonly cursors = {
     get: <T>(source: string, instance: string, key: string): { revision: number; value: T } | undefined => {
-      const row = this.db.get<{ revision: number; data: string }>("SELECT revision,data FROM dsh_source_cursors WHERE source=? AND instance=? AND cursor_key=?", source, instance, key);
+      const row = this.db.get<{ revision: number; data: string }>("SELECT revision,data FROM vivi_source_cursors WHERE source=? AND instance=? AND cursor_key=?", source, instance, key);
       return row ? { revision: row.revision, value: JSON.parse(row.data) as T } : undefined;
     },
     // CAS prevents an overlapping poll from overwriting a newer cursor. Instances never share progress.
     save: (source: string, instance: string, key: string, value: unknown, expectedRevision = 0): boolean => this.atomic(() => {
       const current = this.cursors.get(source, instance, key);
       if ((current?.revision ?? 0) !== expectedRevision) return false;
-      this.db.run(`INSERT INTO dsh_source_cursors VALUES(?,?,?,1,?) ON CONFLICT(source,instance,cursor_key) DO UPDATE SET
+      this.db.run(`INSERT INTO vivi_source_cursors VALUES(?,?,?,1,?) ON CONFLICT(source,instance,cursor_key) DO UPDATE SET
         revision=revision+1,data=excluded.data`, source, instance, key, json(value));
       return true;
     }),
   };
   readonly operations = {
-    get: (source: string, instance: string, key: string): Operation | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_operations WHERE source=? AND instance=? AND operation_key=?", source, instance, key)),
+    get: (source: string, instance: string, key: string): Operation | undefined => decode(this.db.get<JsonRow>("SELECT data FROM vivi_operations WHERE source=? AND instance=? AND operation_key=?", source, instance, key)),
     plan: (operation: Omit<Operation, "status" | "revision">): Operation => this.atomic(() => {
       const current = this.operations.get(operation.source, operation.instance, operation.key);
       if (current) {
@@ -295,7 +295,7 @@ export class ShadowStore implements Repositories {
         return current;
       }
       const planned: Operation = { ...operation, status: "planned", revision: 1 };
-      this.db.run("INSERT INTO dsh_operations VALUES(?,?,?,?,?,?,?)", operation.id, operation.source, operation.instance, operation.key, planned.status, planned.revision, json(planned));
+      this.db.run("INSERT INTO vivi_operations VALUES(?,?,?,?,?,?,?)", operation.id, operation.source, operation.instance, operation.key, planned.status, planned.revision, json(planned));
       return planned;
     }),
     transition: (expected: Operation, next: Operation["status"], receipt?: unknown): boolean => this.atomic(() => {
@@ -308,13 +308,13 @@ export class ShadowStore implements Repositories {
       };
       if (!allowed[current.status].includes(next)) throw new Error("外部操作不可按此路径重试；未知结果必须先对账，已收束操作不可重新执行");
       const updated: Operation = { ...current, status: next, revision: current.revision + 1, ...(receipt === undefined ? {} : { receipt }) };
-      return this.db.run("UPDATE dsh_operations SET status=?,revision=?,data=? WHERE source=? AND instance=? AND operation_key=? AND status=? AND revision=?", next, updated.revision, json(updated), current.source, current.instance, current.key, expected.status, expected.revision).changes > 0;
+      return this.db.run("UPDATE vivi_operations SET status=?,revision=?,data=? WHERE source=? AND instance=? AND operation_key=? AND status=? AND revision=?", next, updated.revision, json(updated), current.source, current.instance, current.key, expected.status, expected.revision).changes > 0;
     }),
   };
   /** Archive-only conversion checkpoints. No row here is consumable by Engine or Effects. */
   readonly migrations = {
     get: (snapshotId: string): MigrationProgress | undefined => {
-      const row = this.db.get("SELECT * FROM dsh_migration_runs WHERE snapshot_id=?", snapshotId);
+      const row = this.db.get("SELECT * FROM vivi_migration_runs WHERE snapshot_id=?", snapshotId);
       return row ? { snapshotId, digest: String(row.digest), total: Number(row.total), nextRow: Number(row.next_row),
         status: row.status as MigrationProgress["status"], plan: JSON.parse(String(row.report)) as LegacyMigrationPlan } : undefined;
     },
@@ -333,7 +333,7 @@ export class ShadowStore implements Repositories {
       const recordIdentities = new Set(plan.records.map(record => json([record.table, record.legacyKey])));
       if (identities.size !== plan.mappings.length || new Set(identities.values()).size !== identities.size
         || identities.size !== recordIdentities.size || plan.records.some(record => identities.get(json([record.table, record.legacyKey])) !== record.newId)) throw new Error("旧数据映射存在重复身份或遗漏");
-      this.db.run("INSERT INTO dsh_migration_runs VALUES(?,?,?,0,?,?)", plan.snapshotId, digest, plan.mappings.length, plan.mappings.length ? "pending" : "completed", serialized);
+      this.db.run("INSERT INTO vivi_migration_runs VALUES(?,?,?,0,?,?)", plan.snapshotId, digest, plan.mappings.length, plan.mappings.length ? "pending" : "completed", serialized);
       return this.migrations.get(plan.snapshotId)!;
     }),
     advance: (snapshotId: string, batchSize = 100): MigrationProgress => this.atomic(() => {
@@ -353,23 +353,23 @@ export class ShadowStore implements Repositories {
         const levels = ["archived", "needs-reconciliation", "blocked", "invalid"];
         const classification = levels[Math.max(...records.map(record => levels.indexOf(record.classification)))];
         if (!classification) throw new Error("未知的旧数据分类");
-        this.db.run("INSERT INTO dsh_legacy_mappings VALUES(?,?,?,?,?,?)", snapshotId, mapping.table, mapping.legacyKey, mapping.newId, classification, json({ mapping, records }));
+        this.db.run("INSERT INTO vivi_legacy_mappings VALUES(?,?,?,?,?,?)", snapshotId, mapping.table, mapping.legacyKey, mapping.newId, classification, json({ mapping, records }));
       }
-      const count = Number(this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM dsh_legacy_mappings WHERE snapshot_id=?", snapshotId)?.n);
+      const count = Number(this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM vivi_legacy_mappings WHERE snapshot_id=?", snapshotId)?.n);
       if (count !== next) throw new Error("迁移映射行数与检查点不一致");
-      this.db.run("UPDATE dsh_migration_runs SET next_row=?,status=? WHERE snapshot_id=?", next, next === progress.total ? "completed" : "pending", snapshotId);
+      this.db.run("UPDATE vivi_migration_runs SET next_row=?,status=? WHERE snapshot_id=?", next, next === progress.total ? "completed" : "pending", snapshotId);
       return this.migrations.get(snapshotId)!;
     }),
     records: (snapshotId: string): { mapping: LegacyMigrationPlan["mappings"][number]; records: LegacyRecord[] }[] =>
-      many(this.db.all<JsonRow>("SELECT data FROM dsh_legacy_mappings WHERE snapshot_id=? ORDER BY legacy_table,legacy_id", snapshotId)),
+      many(this.db.all<JsonRow>("SELECT data FROM vivi_legacy_mappings WHERE snapshot_id=? ORDER BY legacy_table,legacy_id", snapshotId)),
   };
   readonly sessionReceipts = {
-    get: (sessionKey: string, requestId: string): SessionReceipt | undefined => decode(this.db.get<JsonRow>("SELECT data FROM dsh_session_receipts WHERE session_key=? AND request_id=?", sessionKey, requestId)),
+    get: (sessionKey: string, requestId: string): SessionReceipt | undefined => decode(this.db.get<JsonRow>("SELECT data FROM vivi_session_receipts WHERE session_key=? AND request_id=?", sessionKey, requestId)),
     save: (receipt: SessionReceipt): void => this.atomic(() => {
       const current = this.sessionReceipts.get(receipt.sessionKey, receipt.requestId);
       const stages = ["accepted", "persisted", "read", "reported"];
       if (current && stages.indexOf(receipt.stage) < stages.indexOf(current.stage)) throw new Error("Session 回执不可倒退");
-      this.db.run("INSERT INTO dsh_session_receipts VALUES(?,?,?,?) ON CONFLICT(session_key,request_id) DO UPDATE SET stage=excluded.stage,data=excluded.data", receipt.sessionKey, receipt.requestId, receipt.stage, json({ ...current, ...receipt }));
+      this.db.run("INSERT INTO vivi_session_receipts VALUES(?,?,?,?) ON CONFLICT(session_key,request_id) DO UPDATE SET stage=excluded.stage,data=excluded.data", receipt.sessionKey, receipt.requestId, receipt.stage, json({ ...current, ...receipt }));
     }),
   };
 }

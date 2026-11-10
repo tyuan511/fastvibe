@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Derived from deepseek-ai/dsh-superagent-prototype; see NOTICE.md.
+// Derived from dsh-superagent/repo; see NOTICE.md.
 /** Reusable proactive-agent core: model, ports, engine and in-memory repositories. */
 export * from './model.ts'
 export * from './ports.ts'

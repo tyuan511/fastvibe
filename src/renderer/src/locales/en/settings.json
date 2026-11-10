@@ -1027,7 +1027,7 @@
   "manageInstallations": "Manage installations",
   "manageInstallationsDescription": "Reinstall or revoke repository access.",
   "open": "Open",
-  "registerHint": "Registration and installation selection run from the script: node scripts/dsh-github-app-register.ts. Credentials stay in a local file and never pass through this page."
+  "registerHint": "Registration and installation selection run from the script: node scripts/vivi-github-app-register.ts. Credentials stay in a local file and never pass through this page."
  },
  "providerTest": {
   "check": "Sends two small requests to check replies and tool calls. Provider charges apply.",

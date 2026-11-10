@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Derived from deepseek-ai/dsh-superagent-prototype; see NOTICE.md.
+// Derived from dsh-superagent/repo; see NOTICE.md.
 /** Ticket stage classification and retry eligibility (docs/003). */
 import { latestAssignment, waitsForPerson, type Ticket } from './model.ts'
 

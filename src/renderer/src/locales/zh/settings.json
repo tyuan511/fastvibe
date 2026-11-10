@@ -1025,7 +1025,7 @@
   "manageInstallations": "管理安装",
   "manageInstallationsDescription": "重新安装或撤销仓库授权。",
   "open": "打开",
-  "registerHint": "首次注册与选择安装由脚本完成：node scripts/dsh-github-app-register.ts。凭据保存在本机独立文件中，不会经过设置页面。"
+  "registerHint": "首次注册与选择安装由脚本完成：node scripts/vivi-github-app-register.ts。凭据保存在本机独立文件中，不会经过设置页面。"
  },
  "providerTest": {
   "check": "发送两个小请求检测回答与工具调用，按供应商计费。",

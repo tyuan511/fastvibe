@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Isolated composition adapted from deepseek-ai/dsh-superagent-prototype; see ../core/NOTICE.md.
+// Isolated composition adapted from dsh-superagent/repo; see ../core/NOTICE.md.
 import { liveTicket, type Assignment, type Ticket } from "../core/model.ts";
 import type { Candidate } from "../core/ports.ts";
 import { ownedEffect } from "./claims.ts";
@@ -106,7 +106,7 @@ export class ShadowDriver {
   recover(): void {
     this.effects.pulse();
     this.store.atomic(() => {
-      const controls = this.store.db.all<{ key: string; data: string }>("SELECT key,data FROM dsh_kv WHERE key LIKE 'shadow:stop:%' OR key LIKE 'shadow:release:%'");
+      const controls = this.store.db.all<{ key: string; data: string }>("SELECT key,data FROM vivi_kv WHERE key LIKE 'shadow:stop:%' OR key LIKE 'shadow:release:%'");
       for (const row of controls) {
         const control = JSON.parse(row.data) as StopControl | ReleaseControl;
         if (control.status !== "pending" || this.store.effects.get("control", row.key)) continue;

@@ -33,7 +33,7 @@
 
 ## 已确定的重构方向
 
-[Vivi 采用 DSH 完整架构](vivi-dsh-architecture.md)：整体替换当前会话运行器，完整保留 Source、Policy/Evaluation/Mandate、Ticket/Assignment、同步 Engine、Effects/Outbox、Session 投递、资源与恢复机制。GitHub Issue/PR 外部事件闭环是首个验收场景，不以最小闭环为由省略核心架构。M0–M10 的隔离领域、Shadow Store、Pi Session 实验、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、迁移 dry-run、GitHub 只读 Source 和 operation dry-run 已落地，另有 M11 前置的本地 HTTP 部署、宿主授权、Issue continuation、[原生 GitHub REST 读写/对账](vivi-dsh-github-rest.md)与[隔离 SDK Executor/Reviewer 组装](vivi-dsh-sdk-executor.md)、[宿主管理的 Git 提交/push](vivi-dsh-git-delivery.md)实现；[vivi-test 真实模型、GitHub push/PR、CI 与模型审核](vivi-dsh-live-vivi-test.md)已部分验收，完整 GitHub 闭环仍未验收，当前生产实现仍以上表为准；实际进度、独立验收命令与后续缺口见 [Vivi DSH 开发记录](vivi-dsh-development.md)。
+[Vivi 采用 DSH 完整架构](vivi-architecture.md)：整体替换当前会话运行器，完整保留 Source、Policy/Evaluation/Mandate、Ticket/Assignment、同步 Engine、Effects/Outbox、Session 投递、资源与恢复机制。GitHub Issue/PR 外部事件闭环是首个验收场景，不以最小闭环为由省略核心架构。M0–M10 的隔离领域、Shadow Store、Pi Session 实验、Shadow 调度、执行资源层、Source/Policy 控制面、Local Source 回放、旧 Bot 兼容投影、迁移 dry-run、GitHub 只读 Source 和 operation dry-run 已落地，另有 M11 前置的本地 HTTP 部署、宿主授权、Issue continuation、[原生 GitHub REST 读写/对账](vivi-github-rest.md)与[隔离 SDK Executor/Reviewer 组装](vivi-sdk-executor.md)、[宿主管理的 Git 提交/push](vivi-git-delivery.md)实现；[vivi-test 真实模型、GitHub push/PR、CI 与模型审核](vivi-live-vivi-test.md)已部分验收，完整 GitHub 闭环仍未验收，当前生产实现仍以上表为准；实际进度、独立验收命令与后续缺口见 [Vivi DSH 开发记录](vivi-development.md)。
 
 ## 协议、部署与维护
 

@@ -1,6 +1,6 @@
 /**
  * SPDX-License-Identifier: MIT
- * Adapted from DSH src/policy.ts (MIT); attribution and license: ./NOTICE.md.
+ * Adapted from the upstream prototype src/policy.ts (MIT); attribution and license: ./NOTICE.md.
  * Pure authorization and assessment logic; no runtime settings or source registration.
  */
 import { ADMISSION_DEFAULTS, type Admission, type AdmissionCell, type AdmissionRow } from './admission.ts'

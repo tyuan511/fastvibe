@@ -2,7 +2,7 @@
 // Isolated, model-driven assessment for automatic Source intake. No production Runtime, IPC or
 // settings references this module.
 //
-// Why this exists: DSH keeps semantic judgement outside the domain. Intake stores a Trigger,
+// Why this exists: The domain keeps semantic judgement outside the domain. Intake stores a Trigger,
 // the policy gate decides whether it may be evaluated at all, and then *someone* has to read it
 // and decide accept / ignore. Until now that someone was the host operator (manual `decide`) or
 // a test double. This adapter makes the assessor a real model in its own isolated Session, which
@@ -108,7 +108,7 @@ export class ManagedPiAssessor {
     };
     const extension: ExtensionFactory = pi => {
       pi.registerTool({
-        name: "dsh_assess",
+        name: "vivi_assess",
         label: "Record the intake decision",
         description: "Decide whether this message asks you to do work. accept starts a ticket in the host-provided scope; ignore records why it is not your work; unavailable says the message cannot be judged. Call exactly once.",
         parameters: outcomeSchema,
@@ -135,15 +135,15 @@ export class ManagedPiAssessor {
     try {
       adapter = await ScratchPiSession.open({ store: this.options.store, root: this.options.root, ...(this.options.allowedRoot ? { allowedRoot: this.options.allowedRoot } : {}),
         binding, sessionKey, modelRuntime: this.options.modelRuntime, model: this.options.model,
-        extensions: [extension], activeTools: ["dsh_assess"], validate,
+        extensions: [extension], activeTools: ["vivi_assess"], validate,
         context: () => ({ assessor: true, evalId: candidate.evalId, strength: candidate.strength }) });
       this.sessions.set(key, adapter);
-      if (adapter.session.getActiveToolNames().slice().sort().join(",") !== "dsh_assess") throw new Error("Assessor tool set mismatch");
+      if (adapter.session.getActiveToolNames().slice().sort().join(",") !== "vivi_assess") throw new Error("Assessor tool set mismatch");
       const requestId = `assess-${candidate.evalId}`;
       adapter.prepare({ requestId, text: JSON.stringify({
         instruction: "Decide whether these messages ask you to do work in the repository you serve. "
           + "accept only when a person is clearly requesting work; ignore chatter, status notes, and anything already handled by an open ticket; "
-          + "unavailable when the message is genuinely unjudgeable. Answer with dsh_assess exactly once. "
+          + "unavailable when the message is genuinely unjudgeable. Answer with vivi_assess exactly once. "
           + "You cannot write files, run commands, or reach the network.",
         candidate: assessorInput(candidate),
       }) });

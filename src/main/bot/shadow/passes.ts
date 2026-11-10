@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Pass lifecycle adapted from deepseek-ai/dsh-superagent-prototype; see ../core/NOTICE.md.
+// Pass lifecycle adapted from dsh-superagent/repo; see ../core/NOTICE.md.
 import type { EngineForSources } from "../core/engine.ts";
 import type { Trigger } from "../core/model.ts";
 import type { ShadowEffects } from "./effects.ts";

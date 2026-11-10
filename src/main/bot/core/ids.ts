@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Derived from deepseek-ai/dsh-superagent-prototype; see NOTICE.md.
+// Derived from dsh-superagent/repo; see NOTICE.md.
 /** Stable content-derived identifiers; equal inputs always produce the same id. */
 import { createHash } from 'node:crypto'
 export function key(...values: string[]): string {

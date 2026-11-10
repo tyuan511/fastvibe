@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// GitHub App manifest one-click install flow for the isolated DSH deployment. No
+// GitHub App manifest one-click install flow for the isolated Vivi deployment. No
 // production runtime, IPC, settings, or credential path references this module.
 //
 // Flow (docs.github.com "Registering a GitHub App from a manifest", checked
@@ -9,7 +9,7 @@
 // resolves with the App configuration (id, slug, PEM, secrets). The caller then
 // persists it with `saveGithubAppCredential` and picks an installation with
 // `listInstallations`. Whether GitHub accepts a loopback `redirect_url` is still
-// to be confirmed by a real registration; see docs/vivi-dsh-github-app.md.
+// to be confirmed by a real registration; see docs/vivi-github-app.md.
 
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";

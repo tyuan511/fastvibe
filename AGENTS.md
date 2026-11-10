@@ -78,7 +78,7 @@ Electron + React 桌面客户端，面向 Code / Office / Cowork；默认引擎�
 
 - 手机只维护 Flutter 页面 + Dart FFI + Rust core；阻塞命令在专用 isolate，Dart 管交互、Rust 管协议与状态。网络用账号鉴权 iroh + App Protocol；不要恢复旧 WebRTC、密码扫码、Compose/SwiftUI 产品页或 JNI/SwiftPM 桥接。
 - 保留 `dev.fastvibe.mobile` 与现有发布签名；版本源是 `pubspec.yaml`，同步 Android 发布元数据。iroh `relays` 必须保留完整节点列表，显式空/损坏报错；LAN 地址仅作线索，设备与端点身份必须匹配当前账号。
-- Vivi 当前是 Router/Worker 持久会话，见当前实现文档；[整体采用 DSH](docs/vivi-dsh-architecture.md) 是已确定但尚未实现的目标，不能描述成已上线，也不沿用已删除的旧审核技能流程。
+- Vivi 当前是 Router/Worker 持久会话，见当前实现文档；[整体采用 DSH](docs/vivi-architecture.md) 是已确定但尚未实现的目标，不能描述成已上线，也不沿用已删除的旧审核技能流程。
 - Vivi 与普通记忆的数据、开关和清理边界独立；停止、恢复、epoch、迟到结果隔离等约束先读对应合同。
 
 ## 开发与验证

@@ -13,7 +13,7 @@ const INSTALLATIONS_URL = "https://github.com/settings/installations";
  *
  * Vivi 以 GitHub App 的机器人身份工作：它需要自己的账号来提交 Review、合并 PR 和关闭
  * Issue，而不是借用你的个人凭据。这一页只负责把「需要哪些权限」和「改完权限为什么还不
- * 生效」讲清楚——真正的注册与安装走 `scripts/dsh-github-app-register.ts`，凭据落在
+ * 生效」讲清楚——真正的注册与安装走 `scripts/vivi-github-app-register.ts`，凭据落在
  * userData 的独立文件里，不经过设置。
  *
  * 权限清单来自 2026-11-10 的真实闭环验收，不是猜测：

@@ -49,7 +49,7 @@ export class ShadowOperations {
   recover(): void {
     this.store.atomic(() => {
       this.store.effects.expire(this.now());
-      for (const row of this.store.db.all<{ data: string }>("SELECT data FROM dsh_operations WHERE status IN ('planned','uncertain')")) {
+      for (const row of this.store.db.all<{ data: string }>("SELECT data FROM vivi_operations WHERE status IN ('planned','uncertain')")) {
         const operation = this.checkpointClaim(JSON.parse(row.data) as StoredOperation);
         if (operation.status === "uncertain") this.enqueue("reconcile", operation);
       }
@@ -77,7 +77,7 @@ export class ShadowOperations {
       } else if (current.status === "uncertain" && !current.cancelRequested) {
         // Cancellation is an orthogonal request, not evidence of an absent external write.
         // Keep revision unchanged so a live execution can still report its actual result.
-        const changed = this.store.db.run("UPDATE dsh_operations SET data=? WHERE id=? AND status='uncertain' AND revision=?",
+        const changed = this.store.db.run("UPDATE vivi_operations SET data=? WHERE id=? AND status='uncertain' AND revision=?",
           JSON.stringify({ ...current, cancelRequested: true }), current.id, current.revision).changes;
         if (!changed) throw new Error("操作取消请求 CAS 失败");
         this.enqueue("reconcile", { ...current, cancelRequested: true } as StoredOperation);

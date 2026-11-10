@@ -7,7 +7,7 @@ import { isAbsolute, join, resolve } from "node:path";
 
 export interface ManagedGitRepositoryOptions {
   directory: string;
-  ref: `refs/heads/dsh/${string}`;
+  ref: `refs/heads/vivi/${string}`;
   remote: string;
   localTest?: true;
   credentials?: () => Promise<{ username: string; password: string }>;
@@ -46,7 +46,7 @@ export class ManagedGitRepository {
   constructor(options: ManagedGitRepositoryOptions) {
     this.directory = resolve(options.directory); this.ref = options.ref; this.remote = options.remote;
     this.local = options.localTest === true; this.credentials = options.credentials;
-    check(/^refs\/heads\/dsh\/[A-Za-z0-9_/-]+(?:[.][A-Za-z0-9_/-]+)*$/.test(this.ref)
+    check(/^refs\/heads\/vivi\/[A-Za-z0-9_/-]+(?:[.][A-Za-z0-9_/-]+)*$/.test(this.ref)
       && !this.ref.endsWith("/") && !this.ref.includes("//") && !this.ref.includes("..")
       && this.ref.split("/").every(part => !part.startsWith(".") && !part.endsWith(".") && !part.endsWith(".lock")));
     check(this.local ? isAbsolute(this.remote) && this.remote === resolve(this.remote) && !/[\x00-\x1f\x7f]/.test(this.remote)
@@ -57,7 +57,7 @@ export class ManagedGitRepository {
   private async session<T>(options: GitFenceOptions, action: (run: (args: string[], input?: string, extra?: Record<string, string>, accept?: number[]) => Promise<{ text: string; code: number }>, home: string) => Promise<T>): Promise<T> {
     let home: string | undefined;
     try {
-      fence(options); home = await mkdtemp(join(tmpdir(), "dsh-managed-git-"));
+      fence(options); home = await mkdtemp(join(tmpdir(), "vivi-managed-git-"));
       const env = { PATH: "/usr/bin:/bin", TMPDIR: home, TMP: home, HOME: home, XDG_CONFIG_HOME: home,
         GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1",
         GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/usr/bin/false", GIT_PROTOCOL_FROM_USER: "0", LC_ALL: "C" };

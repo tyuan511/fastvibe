@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// GitHub App authentication for the isolated DSH deployment. No production runtime,
+// GitHub App authentication for the isolated Vivi deployment. No production runtime,
 // IPC, settings, or credential file references this module.
 //
 // Verified platform semantics (docs.github.com REST OpenAPI + "Get the authenticated
@@ -19,7 +19,7 @@
 // verifies the key against the App id via `GET /app` and discovers the bot user via
 // the public user endpoint), not per write. The structural guarantee — an
 // installation token can only ever act as its own app's bot — replaces the PAT
-// `/user` reflection; see docs/vivi-dsh-github-app.md.
+// `/user` reflection; see docs/vivi-github-app.md.
 
 import { createSign } from "node:crypto";
 import type { CredentialResolver } from "./credential-host.ts";

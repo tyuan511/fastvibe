@@ -23,7 +23,7 @@ export class WorkerSlots {
     if (!Number.isSafeInteger(this.leaseMs) || this.leaseMs <= 0) throw new Error("Invalid slot lease");
   }
   get(ticketId: string): SlotReservation | undefined { return this.store.get<SlotReservation>(key(ticketId)); }
-  records(): SlotReservation[] { return this.store.db.all<{ data: string }>("SELECT data FROM dsh_kv WHERE key LIKE 'shadow:slot:%' ORDER BY key").map(row => JSON.parse(row.data) as SlotReservation); }
+  records(): SlotReservation[] { return this.store.db.all<{ data: string }>("SELECT data FROM vivi_kv WHERE key LIKE 'shadow:slot:%' ORDER BY key").map(row => JSON.parse(row.data) as SlotReservation); }
   private normalize(): void {
     const now = this.now();
     for (const slot of this.records()) {
@@ -61,9 +61,9 @@ export class WorkerSlots {
     const current = this.get(slot.ticketId); return !!current && current.phase !== "uncertain" && current.revision === slot.revision && sameBinding(current.binding, slot.binding) && current.lease.owner === this.owner && current.lease.generation === slot.lease.generation && current.lease.expiresAt > this.now();
   }
   release(slot: SlotReservation): boolean {
-    return this.store.atomic(() => { const current = this.get(slot.ticketId); if (!current || current.revision !== slot.revision || !this.valid(slot)) return false; this.store.db.run("DELETE FROM dsh_kv WHERE key=?", key(slot.ticketId)); this.store.db.run("DELETE FROM dsh_leases WHERE resource=? AND owner=? AND generation=?", resource(slot.ticketId), this.owner, slot.lease.generation); return true; });
+    return this.store.atomic(() => { const current = this.get(slot.ticketId); if (!current || current.revision !== slot.revision || !this.valid(slot)) return false; this.store.db.run("DELETE FROM vivi_kv WHERE key=?", key(slot.ticketId)); this.store.db.run("DELETE FROM vivi_leases WHERE resource=? AND owner=? AND generation=?", resource(slot.ticketId), this.owner, slot.lease.generation); return true; });
   }
   reconcile(expected: SlotReservation, result: { quiet: boolean }): boolean {
-    return this.store.atomic(() => { const current = this.get(expected.ticketId); if (!result.quiet || !current || current.phase !== "uncertain" || current.revision !== expected.revision || !sameBinding(current.binding, expected.binding)) return false; this.store.db.run("DELETE FROM dsh_kv WHERE key=?", key(expected.ticketId)); this.store.db.run("DELETE FROM dsh_leases WHERE resource=?", resource(expected.ticketId)); return true; });
+    return this.store.atomic(() => { const current = this.get(expected.ticketId); if (!result.quiet || !current || current.phase !== "uncertain" || current.revision !== expected.revision || !sameBinding(current.binding, expected.binding)) return false; this.store.db.run("DELETE FROM vivi_kv WHERE key=?", key(expected.ticketId)); this.store.db.run("DELETE FROM vivi_leases WHERE resource=?", resource(expected.ticketId)); return true; });
   }
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Receipt ordering adapted from deepseek-ai/dsh-superagent-prototype; see ../core/NOTICE.md.
+// Receipt ordering adapted from dsh-superagent/repo; see ../core/NOTICE.md.
 import type { ChannelRef } from "../core/model.ts";
 import type { OutboundMessage } from "../core/ports.ts";
 import { ownedEffect } from "./claims.ts";

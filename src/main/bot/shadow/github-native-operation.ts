@@ -78,7 +78,7 @@ export class GithubNativeOperationAdapter implements OperationAdapter {
       // Installation tokens cannot read /user or /app (verified 2026-11-09). The
       // credential is bound to its app bot identity at mint time by
       // resolveAppPrincipal(), and the repository preflight above still runs
-      // through this same transport and secret. See docs/vivi-dsh-github-app.md.
+      // through this same transport and secret. See docs/vivi-github-app.md.
       return;
     }
     const row = await this.get(t, "/user", context);

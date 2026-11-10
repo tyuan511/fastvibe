@@ -102,7 +102,7 @@ export class GithubIssueSettlement {
         mergeOperation: clone(input.mergeOperation), closeOperation: { source: planned.source, instance: planned.instance, key: planned.key, id: planned.id }, intent: clone(input.closeRequest) };
       if (existing && !same(existing, record)) throw new Error("同一 Ticket 的 continuation intent 已漂移");
       // Insert once under the transaction; there is no mutable status or overwrite path.
-      if (!existing) this.store.db.run("INSERT INTO dsh_kv(key,data) VALUES(?,?)", recordKey(ticket.id), JSON.stringify(record));
+      if (!existing) this.store.db.run("INSERT INTO vivi_kv(key,data) VALUES(?,?)", recordKey(ticket.id), JSON.stringify(record));
       const operation = this.operations.plan({ id: planned.id, source: planned.source, instance: planned.instance, key: planned.key, payload: planned.payload });
       return this.view(record, operation);
     });

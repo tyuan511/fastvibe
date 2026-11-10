@@ -1,6 +1,6 @@
 /**
  * SPDX-License-Identifier: MIT
- * Adapted from DSH src/admission.ts (MIT); attribution and license: ./NOTICE.md.
+ * Adapted from the upstream prototype src/admission.ts (MIT); attribution and license: ./NOTICE.md.
  * Per-scope admission matrix; a listed sender addressing the agent is always explicit.
  */
 import type { AdmissionCell } from './model.ts'

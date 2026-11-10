@@ -15,7 +15,7 @@ export interface GithubRestTransportOptions {
   loopbackTest?: boolean;
   /** How the write-time principal reflection binds. "github-app" skips the /user
    * check: installation tokens cannot read it (verified 2026-11-09); identity is
-   * bound at token mint time instead, see docs/vivi-dsh-github-app.md. */
+   * bound at token mint time instead, see docs/vivi-github-app.md. */
   principalMode?: "user" | "github-app";
   beforeRequest?: (request: { method: string; path: string }) => void;
 }
@@ -113,7 +113,7 @@ export class GithubRestTransport {
           // Bind /user and the write to the same resolved secret. Resolving again
           // after a separate identity lookup could silently switch accounts.
           // github-app mode skips this reflection: installation tokens cannot read
-          // /user; their identity is bound at mint time (docs/vivi-dsh-github-app.md).
+          // /user; their identity is bound at mint time (docs/vivi-github-app.md).
           controller.signal.throwIfAborted(); validateCredential();
           const identity = await this.send(`${this.origin}/user`, { method: "GET", headers, redirect: "error", signal: controller.signal });
           const user = identity.status === 200 ? await identity.json() as { id?: unknown; login?: unknown } : undefined;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// GitHub semantics adapted from the pinned DSH prototype; see ../core/NOTICE.md.
+// GitHub semantics adapted from the pinned Vivi prototype; see ../core/NOTICE.md.
 // M9 is an explicit, disposable Shadow reader. No network, credentials, timers or production registration.
 import { createHash, randomUUID } from "node:crypto";
 import type { EngineForSources } from "../core/engine.ts";
@@ -426,8 +426,8 @@ export class GithubShadowSource {
   private executionSnapshot(): string {
     const store = this.options.store;
     const kinds = this.options.intake === "durable" ? "'reply','assessment'" : "'launch','delivery','reply','assessment'";
-    return canonical([store.db.all(`SELECT * FROM dsh_effects WHERE kind IN (${kinds}) ORDER BY seq`),
-      store.db.all("SELECT * FROM dsh_session_receipts ORDER BY session_key,request_id")]);
+    return canonical([store.db.all(`SELECT * FROM vivi_effects WHERE kind IN (${kinds}) ORDER BY seq`),
+      store.db.all("SELECT * FROM vivi_session_receipts ORDER BY session_key,request_id")]);
   }
   async poll(): Promise<GithubPollResult> {
     let lease: Lease | undefined; let round: Round | undefined;

@@ -4,7 +4,7 @@ Vivi 使用一个长期 Router 会话协调多个持久 Worker 会话。本文�
 
 上游机制研究见 [DSH Superagent 源码报告](dsh-superagent-architecture.md)，产品参考与尚未实现的外部渠道约束见 [Vivi 产品参考](vivi-product-references.md)。
 
-**目标架构已改为整体采用 DSH。** 新的领域、运行机制与迁移方案见 [Vivi DSH 架构重构](vivi-dsh-architecture.md)；GitHub Issue/PR 作为外部事件驱动完整闭环。本篇继续描述重构前当前代码，以下“不直接采用”等取舍是现状说明，不再作为未来架构约束；新设计尚未实现。
+**目标架构已改为整体采用 DSH。** 新的领域、运行机制与迁移方案见 [Vivi DSH 架构重构](vivi-architecture.md)；GitHub Issue/PR 作为外部事件驱动完整闭环。本篇继续描述重构前当前代码，以下“不直接采用”等取舍是现状说明，不再作为未来架构约束；新设计尚未实现。
 
 ## 架构取舍
 

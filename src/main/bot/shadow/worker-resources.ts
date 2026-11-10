@@ -30,7 +30,7 @@ export class WorkerResources {
     this.store = store; this.slots = slots; this.adapter = adapter; this.now = options.now ?? Date.now; this.owner = options.owner ?? randomUUID();
   }
   get(id: string): ResourceRecord | undefined { return this.store.get<ResourceRecord>(key(id)); }
-  list(ticketId: string): ResourceRecord[] { return this.store.db.all<{ data: string }>("SELECT data FROM dsh_kv WHERE key LIKE 'shadow:resource:%' ORDER BY key").map(row => JSON.parse(row.data) as ResourceRecord).filter(row => row.ticketId === ticketId); }
+  list(ticketId: string): ResourceRecord[] { return this.store.db.all<{ data: string }>("SELECT data FROM vivi_kv WHERE key LIKE 'shadow:resource:%' ORDER BY key").map(row => JSON.parse(row.data) as ResourceRecord).filter(row => row.ticketId === ticketId); }
   async start(ticketId: string, binding: WorkerToken, kind: ResourceKind, name: string, by: "launch" | "wake" | "person" = "wake"): Promise<ResourceRecord> {
     const existing = this.list(ticketId).find(r => r.kind === kind && r.name === name && ["running", "handed-off", "stopping"].includes(r.state));
     if (existing) return copy(existing);
@@ -63,7 +63,7 @@ export class WorkerResources {
     finally { this.running.delete(record.id); }
   }
   async shutdown(): Promise<void> {
-    const records = this.store.db.all<{ data: string }>("SELECT data FROM dsh_kv WHERE key LIKE 'shadow:resource:%'").map(row => JSON.parse(row.data) as ResourceRecord).filter(r => ["running", "stopping"].includes(r.state));
+    const records = this.store.db.all<{ data: string }>("SELECT data FROM vivi_kv WHERE key LIKE 'shadow:resource:%'").map(row => JSON.parse(row.data) as ResourceRecord).filter(r => ["running", "stopping"].includes(r.state));
     await Promise.allSettled(records.map(record => this.stopOne(record, "shutdown")));
     for (const slot of this.slots.records()) if (slot.phase !== "uncertain" && ["settling", "stopping", "running"].includes(slot.phase)) {
       const remaining = this.list(slot.ticketId).some(resource => ["running", "stopping", "uncertain"].includes(resource.state));

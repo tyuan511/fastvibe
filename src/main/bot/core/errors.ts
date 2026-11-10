@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Derived from deepseek-ai/dsh-superagent-prototype; see NOTICE.md.
+// Derived from dsh-superagent/repo; see NOTICE.md.
 /** User-facing error codes mapped to their category ('missing' or 'refused') and English message template. */
 export const USER_ERRORS = {
   unknownTicket: ['missing', 'Unknown ticket'],

@@ -616,7 +616,7 @@ API 包含状态/健康、overview、来源、Thread/Decision/Ticket、retry/sto
 
 ## 19. 对 FastVibe/Vivi 这类本地助手的借鉴
 
-本节保留针对不同产品目标的通用建议，不是当前 FastVibe 实现审计。**Vivi 已明确选择整体采用 DSH 架构并由 GitHub Issue/PR 外部事件驱动**，具体目标以 [完整重构设计](vivi-dsh-architecture.md) 为准；下文“单用户本机可用薄编排层”的条件性建议不作为 Vivi 此次实施方向。
+本节保留针对不同产品目标的通用建议，不是当前 FastVibe 实现审计。**Vivi 已明确选择整体采用 DSH 架构并由 GitHub Issue/PR 外部事件驱动**，具体目标以 [完整重构设计](vivi-architecture.md) 为准；下文“单用户本机可用薄编排层”的条件性建议不作为 Vivi 此次实施方向。
 
 ### 19.1 优先吸收的机制
 

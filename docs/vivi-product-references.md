@@ -33,7 +33,7 @@
 
 ## 未来外部渠道：尚未实现
 
-接入飞书、Telegram、Slack 或 Webhook 时，渠道应是统一领域的 Source 适配器，不再建立第二套模型运行时。Vivi 已确定整体采用 DSH；GitHub 事件、授权工作与交付的完整目标以 [DSH 架构重构设计](vivi-dsh-architecture.md) 为准。本节仅保留通用外部身份边界，当前没有完成这些渠道的端到端接入。
+接入飞书、Telegram、Slack 或 Webhook 时，渠道应是统一领域的 Source 适配器，不再建立第二套模型运行时。Vivi 已确定整体采用 DSH；GitHub 事件、授权工作与交付的完整目标以 [DSH 架构重构设计](vivi-architecture.md) 为准。本节仅保留通用外部身份边界，当前没有完成这些渠道的端到端接入。
 
 适配器需要维护：
 

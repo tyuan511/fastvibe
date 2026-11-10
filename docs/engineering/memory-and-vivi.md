@@ -2,7 +2,7 @@
 
 本页补充运行时接入、呈现与回归细节，不替代既有记忆设计或 Vivi 当前架构。
 
-关联入口：[普通长期记忆](../memory.md)、[Vivi 当前实现](../vivi-bot-implementation.md)、[Vivi 记忆](../vivi-memory-design.md)、[Vivi DSH 目标](../vivi-dsh-architecture.md)。返回[工程合同索引](README.md) / [文档总索引](../README.md)。
+关联入口：[普通长期记忆](../memory.md)、[Vivi 当前实现](../vivi-bot-implementation.md)、[Vivi 记忆](../vivi-memory-design.md)、[Vivi DSH 目标](../vivi-architecture.md)。返回[工程合同索引](README.md) / [文档总索引](../README.md)。
 
 本页承接根 `AGENTS.md` 拆出的详细合同、故障背景和验证资料。反引号中的源码与脚本路径相对仓库根；Markdown 链接相对本文件。历史实测只说明所述环境，不能当作当前性能保证；当前行为以源码、类型和所属功能文档核对。
 

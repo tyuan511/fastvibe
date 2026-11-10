@@ -64,7 +64,7 @@ export class ShadowSourceRegistry implements SourceScope {
   }
   kind(id: string): ShadowSourceKind | undefined { return this.kinds.get(id); }
   instances(): ShadowSourceInstance[] {
-    const stored = this.store.db.all<{ data: string }>("SELECT data FROM dsh_kv WHERE key LIKE 'shadow:m7:source:instance:%' ORDER BY key").map(row => JSON.parse(row.data) as ShadowSourceInstance);
+    const stored = this.store.db.all<{ data: string }>("SELECT data FROM vivi_kv WHERE key LIKE 'shadow:m7:source:instance:%' ORDER BY key").map(row => JSON.parse(row.data) as ShadowSourceInstance);
     const byId = new Map(stored.map(value => [value.id, value]));
     for (const [id, kind] of this.kinds) if (!byId.has(id)) byId.set(id, { id, kind: kind.kind, enabled: false, status: "disabled", config: kind.validate({}), revision: 0 });
     return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id)).map(copy);
@@ -150,6 +150,6 @@ export class ShadowSourceRegistry implements SourceScope {
     return copy(this.store.get(credentialKey(source)));
   }
   credentialBindings(): { source: string; ref: CredentialReference; revision: number }[] {
-    return this.store.db.all<{ data: string }>("SELECT data FROM dsh_kv WHERE key LIKE 'shadow:m7:source:credential:%' ORDER BY key").map(row => copy(JSON.parse(row.data)));
+    return this.store.db.all<{ data: string }>("SELECT data FROM vivi_kv WHERE key LIKE 'shadow:m7:source:credential:%' ORDER BY key").map(row => copy(JSON.parse(row.data)));
   }
 }
