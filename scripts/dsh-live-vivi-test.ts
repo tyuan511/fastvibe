@@ -21,6 +21,8 @@ import { ManagedGitRepository } from "../src/main/bot/shadow/git-repository.ts";
 import { ManagedPiReviewer } from "../src/main/bot/shadow/pi-reviewer.ts";
 import { PiLedger } from "../src/main/bot/shadow/pi-ledger.ts";
 import { ShadowCredentialHost } from "../src/main/bot/shadow/credential-host.ts";
+import { GithubAppInstallationCredentials, resolveAppPrincipal } from "../src/main/bot/shadow/github-app-auth.ts";
+import { loadGithubAppCredential } from "../src/main/bot/shadow/github-app-setup.ts";
 import { ShadowSourceRegistry } from "../src/main/bot/shadow/source-registry.ts";
 import { assertShadowPath } from "../src/main/bot/shadow/schema.ts";
 import { openShadowStore, type Operation } from "../src/main/bot/shadow/store.ts";
@@ -40,7 +42,7 @@ async function api(path: string): Promise<any> { return JSON.parse(await command
 const runtime = () => ModelRuntime.create({ modelsPath: join(homedir(), ".pi/agent/models.json"), authPath: join(homedir(), ".pi/agent/auth.json"),
   modelsStore: new InMemoryModelsStore(), allowModelNetwork: false, refreshOnCreate: false });
 
-export async function runViviTest(rootInput: string, reconcileDeadWorker = false, feedbackFile?: string): Promise<void> {
+export async function runViviTest(rootInput: string, reconcileDeadWorker = false, feedbackFile?: string, githubAppFile?: string, issueNumber = 1, branchName?: string): Promise<void> {
   const root = realpathSync(resolve(rootInput)); assertShadowPath(root);
   assert.ok(!existsSync(join(root, "evidence.json")), "This acceptance attempt is complete; inspect its evidence instead of rerunning it");
   const seed = join(root, "seed"), workerRoot = join(root, "workers"), file = join(root, "state.db");
@@ -58,51 +60,69 @@ export async function runViviTest(rootInput: string, reconcileDeadWorker = false
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     const [remoteRepo, user, issue, reservedBot, workerRuntime, reviewerRuntime] = await Promise.all([
-      api(`repos/${repoName}`), api("user"), api(`repos/${repoName}/issues/1`), api("users/github-actions%5Bbot%5D"), runtime(), runtime(),
+      api(`repos/${repoName}`), api("user"), api(`repos/${repoName}/issues/${issueNumber}`), api("users/github-actions%5Bbot%5D"), runtime(), runtime(),
     ]);
     assert.equal(String(remoteRepo.id), repoId); assert.equal(remoteRepo.full_name, repoName);
-    assert.equal(user.login, "tyuan511"); assert.equal(issue.number, 1); assert.equal(issue.state, "open");
+    assert.equal(user.login, "tyuan511"); assert.equal(issue.number, issueNumber); assert.equal(issue.state, "open");
     const baseline = (await command("/usr/bin/git", ["-C", seed, "rev-parse", "HEAD"])).trim();
     assert.equal((await api(`repos/${repoName}/git/ref/heads/main`)).object.sha, baseline);
     const modelId = process.env.PI_MODEL ?? "codex/gpt-6.1-sol", provider = process.env.PI_PROVIDER ?? "magpie";
     const model = workerRuntime.getModel(provider, modelId), reviewModel = reviewerRuntime.getModel(provider, modelId);
     assert.ok(model && reviewModel, "The explicitly allowed model configuration must resolve");
     assert.ok(await workerRuntime.getAuth(model)); assert.ok(await reviewerRuntime.getAuth(reviewModel));
-    log("configured", { repositoryId: repoId, writer: user.login, provider, model: modelId, independentGithubReviewer: "not-configured" });
+    const appRecord = githubAppFile === undefined ? undefined : loadGithubAppCredential(githubAppFile);
+    if (githubAppFile !== undefined) assert.ok(appRecord !== undefined, `GitHub App 凭据文件不存在或无效：${githubAppFile}`);
+    if (appRecord !== undefined) assert.ok(appRecord.installationId !== undefined, "GitHub App 凭据缺少 installationId；请用注册脚本 --installation 选择安装");
+    // Mint-time verification: the PEM must really belong to this App before it may act as reviewer.
+    const appPrincipal = appRecord === undefined ? undefined
+      : await resolveAppPrincipal({ appId: appRecord.appId, privateKeyPem: appRecord.pem, expectedSlug: appRecord.slug });
+    const reviewerIdentity = appPrincipal === undefined
+      ? { id: String(reservedBot.id), login: reservedBot.login }
+      : { id: appPrincipal.botUserId, login: appPrincipal.botLogin };
+    log("configured", { repositoryId: repoId, writer: user.login, provider, model: modelId, independentGithubReviewer: reviewerIdentity.login, reviewerCredential: appRecord === undefined ? "reserved-bot" : "github-app-installation" });
     const registry = new ShadowSourceRegistry(store); registerGithubShadowSource(registry);
     if (!registry.instance(source)?.revision) registry.configure(source, { enabled: true,
-      config: { repository, selfLogins: [user.login], botLogins: [reservedBot.login] } });
+      config: { repository, selfLogins: [user.login], botLogins: [reviewerIdentity.login] } });
     const credentialHost = new ShadowCredentialHost(registry);
     credentialHost.register({ id: "vivi-test.gh.writer", kind: "github" }, { resolve: async () =>
       (await command("/opt/homebrew/bin/gh", ["auth", "token", "--hostname", "github.com"])).trim() });
-    // This real bot identity is reserved for a future explicit credential. No identity is impersonated.
-    credentialHost.register({ id: "vivi-test.unconfigured-reviewer", kind: "github" }, { resolve: async () => { throw new Error("Independent reviewer credential is not configured"); } });
+    if (appRecord !== undefined) {
+      // A real installation credential. Identity is bound at mint time (resolveAppPrincipal
+      // above); reviewer writes run in principalMode "github-app" without /user reflection.
+      credentialHost.register({ id: "vivi-test.gh.app-reviewer", kind: "github" }, new GithubAppInstallationCredentials({
+        appId: appRecord.appId, privateKeyPem: appRecord.pem, installationId: appRecord.installationId!, expectedSlug: appRecord.slug, repositories: [repository.name] }));
+      if (!registry.credentialBinding("github-review")) credentialHost.bind("github-review", { id: "vivi-test.gh.app-reviewer", kind: "github" });
+    } else {
+      // This real bot identity is reserved for a future explicit credential. No identity is impersonated.
+      credentialHost.register({ id: "vivi-test.unconfigured-reviewer", kind: "github" }, { resolve: async () => { throw new Error("Independent reviewer credential is not configured"); } });
+      if (!registry.credentialBinding("github-review")) credentialHost.bind("github-review", { id: "vivi-test.unconfigured-reviewer", kind: "github" });
+    }
     if (!registry.credentialBinding(source)) credentialHost.bind(source, { id: "vivi-test.gh.writer", kind: "github" });
-    if (!registry.credentialBinding("github-review")) credentialHost.bind("github-review", { id: "vivi-test.unconfigured-reviewer", kind: "github" });
     const writer = new GithubRestTransport({ repository, credentials: credentialHost, source });
-    const reviewerTransport = new GithubRestTransport({ repository, credentials: credentialHost, source: "github-review" });
+    const reviewerTransport = new GithubRestTransport({ repository, credentials: credentialHost, source: "github-review",
+      ...(appRecord !== undefined ? { principalMode: "github-app" as const } : {}) });
     const policy: Policy = { version: "vivi-test-explicit-owner-v1", paused: false, evalTimeoutMs: 120_000,
-      gate: trigger => trigger.source === source && String(trigger.meta.repositoryId) === repoId && trigger.meta.number === 1
+      gate: trigger => trigger.source === source && String(trigger.meta.repositoryId) === repoId && trigger.meta.number === issueNumber
         ? { admissible: true, strength: "explicit", basis: { via: "listed" } } : { admissible: false, reason: "ignored" as never },
       revalidate: () => true, admitsInferred: () => false };
     const host = new ShadowEngine(store, { scope: registry, policy: () => policy });
     let ticketId = store.get<string>("live:ticket");
     if (!ticketId) {
       const result = await new GithubShadowSource({ store, registry, engine: host, reader: writer, source, instance,
-        since: new Date(Date.parse(issue.created_at) - 1000).toISOString(), targets: [{ id: "issue-1", path: `/repos/${repoName}/issues/1`, kind: "issue" }] }).poll();
+        since: new Date(Date.parse(issue.created_at) - 1000).toISOString(), targets: [{ id: `issue-${issueNumber}`, path: `/repos/${repoName}/issues/${issueNumber}`, kind: "issue" }] }).poll();
       assert.equal(result.status, "completed", `Source poll failed: ${result.error ?? result.status}`);
       // Source deliberately ignores its writer's own events. This one-account laboratory
       // requires the explicitly authorized operator to replay their own issue; preserve
       // self=true/human=false rather than fabricating an independent human event.
       if (!store.db.countRows("dsh_triggers")) {
         const trigger = githubEventToTrigger({ type: "issues", issue, repository: remoteRepo }, source, instance,
-          { repository, selfLogins: [user.login], botLogins: [reservedBot.login] });
+          { repository, selfLogins: [user.login], botLogins: [reviewerIdentity.login] });
         assert.equal(trigger.meta.self, true); assert.equal(trigger.human, false);
         host.sources.receive(trigger);
         log("explicit-self-issue-replay", { issue: issue.html_url, self: true, human: false, reason: "operator-authorized manual replay; automatic Source suppresses self events" });
       }
       host.evaluateDue();
-      const triggers = store.db.all<{ id: string }>("SELECT id FROM dsh_triggers").map(row => store.triggers.get(row.id)!).filter(t => t.meta.kind === "issue" && t.meta.number === 1);
+      const triggers = store.db.all<{ id: string }>("SELECT id FROM dsh_triggers").map(row => store.triggers.get(row.id)!).filter(t => t.meta.kind === "issue" && t.meta.number === issueNumber);
       assert.equal(triggers.length, 1); const trigger = triggers[0]!, candidate = host.main.candidate(trigger.id); assert.ok(candidate);
       ticketId = host.main.decide(trigger.id, { evalId: candidate.evalId, kind: "accept", title: issue.title, scope: repoName,
         reason: "The operator explicitly authorized this dedicated acceptance repository", audit: { operator: user.login, assessment: "manual-host-decision" } }).ticketId;
@@ -136,12 +156,20 @@ export async function runViviTest(rootInput: string, reconcileDeadWorker = false
         log("resume-settled-host-delivery", { ticketId: id, assignmentId: previous.assignmentId, receipts: receipts.length, replayProvider: false });
       }
     }
-    const paths = executionPaths(workerRoot, id), ref = `refs/heads/dsh/issue-1` as const;
+    const branch = branchName ?? `dsh/issue-${issueNumber}`;
+    assert.ok(new RegExp("^dsh/[A-Za-z0-9._-]+$").test(branch), `分支名必须匹配 dsh/<name>：${branch}`);
+    const paths = executionPaths(workerRoot, id), ref = `refs/heads/${branch}` as `refs/heads/dsh/${string}`;
     const git = new ManagedGitRepository({ directory: paths.cwd, ref, remote, credentials: async () => ({ username: user.login,
       password: (await command("/opt/homebrew/bin/gh", ["auth", "token", "--hostname", "github.com"])).trim() }) });
+    let prTarget: { pullNumber: number; headSha: string; baseSha: string } = { pullNumber: 0, headSha: "", baseSha: "" };
     deployment = new GithubPiDeployment(store, registry, {
       native: { reader: writer, writer, reviewer: reviewerTransport, writerIdentity: { id: String(user.id), login: user.login },
-        reviewerIdentity: { id: String(reservedBot.id), login: reservedBot.login }, requiredChecks: ["test"], source, instance,
+        reviewerIdentity, requiredChecks: ["test"], source, instance,
+        // Verified on real GitHub (2026-11-10): an App-bot API squash merge does NOT
+        // trigger the linked-issue auto-close, so the strict external-fact path never
+        // fires. The documented best-effort profile closes the Issue as a controlled
+        // DSH operation instead; see docs/vivi-dsh-github-app.md.
+        ...(appRecord !== undefined ? { issueClose: "best-effort" as const } : {}),
         git: { repository: git, directoryRevision: () => deployment?.executor.directories.get(id)?.revision },
         driver: { policy: () => policy, intervalMs: false },
         adapters: { assessment: async () => { throw new Error("Only the explicit host decision is configured"); }, release: async () => {}, relay: async () => {}, notice: async () => {} } },
@@ -151,14 +179,16 @@ export async function runViviTest(rootInput: string, reconcileDeadWorker = false
           if (!existsSync(join(context.cwd, ".git"))) {
             const args = ["-C", context.cwd];
             const runGit = (rest: string[]) => command("/usr/bin/git", [...args, ...rest], { env: { ...safeEnv, HOME: context.base, GIT_COMMITTER_NAME: "Vivi acceptance", GIT_COMMITTER_EMAIL: "15307345+tyuan511@users.noreply.github.com" }, signal: context.signal });
-            await runGit(["init", "-b", "dsh/issue-1"]);
+            await runGit(["init", "-b", branch]);
             await runGit(["-c", "protocol.file.allow=always", "fetch", "--no-tags", seed, baseline]);
             await runGit(["update-ref", ref, baseline]); await runGit(["read-tree", "--reset", "-u", baseline]);
           }
           return { repositoryId: repoId, baselineSha: baseline };
-        } } }, poll: false,
+        } } },
+      ...(appRecord !== undefined ? { reviewDelivery: { source, instance, repositoryId: repoId, target: () => ({ ...prTarget }),
+        allowed: ["commit", "push", "pull", "review", "merge", "issue-close"], settleIssue: true } } : {}), poll: false,
     });
-    deadline = setTimeout(() => { log("deadline"); void deployment?.stop({ abort: true }); }, 6 * 60_000);
+    deadline = setTimeout(() => { log("deadline"); void deployment?.stop({ abort: true }); }, 20 * 60_000);
     deadline.unref();
     deployment.start();
     if (reconcileDeadWorker) {
@@ -193,23 +223,24 @@ export async function runViviTest(rootInput: string, reconcileDeadWorker = false
     const changes = [...changed].sort().map(path => ({ path, content: files.read(path), mode: "100644" as const }));
     const authorization = deployment.native.grant(binding, ["commit", "push", "pull", "review", "merge", "issue-close"], { settleIssue: true });
     const directoryRevision = deployment.executor.directories.get(id)!.revision;
-    const snapshot = await deployment.native.git!.prepareCommit({ parentSha: baseline, changes, message: "fix: handle wrapping and overlapping quiet hours", author: { name: "Vivi acceptance", email: "15307345+tyuan511@users.noreply.github.com" }, timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z") }, authorization, directoryRevision);
-    const requireConfirmed = async (operation: Operation) => { await deployment!.native.idle(); const row = store.operations.get(operation.source, operation.instance, operation.key); assert.equal(row?.status, "confirmed", `Operation ${operation.key} is not confirmed`); return row!; };
+    const snapshot = await deployment.native.git!.prepareCommit({ parentSha: baseline, changes, message: `fix: ${issue.title}`, author: { name: "Vivi acceptance", email: "15307345+tyuan511@users.noreply.github.com" }, timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z") }, authorization, directoryRevision);
+    const requireConfirmed = async (operation: Pick<Operation, "source" | "instance" | "key">) => { await deployment!.native.idle(); const row = store.operations.get(operation.source, operation.instance, operation.key); assert.equal(row?.status, "confirmed", `Operation ${operation.key} is not confirmed`); return row!; };
     const commit = await requireConfirmed(deployment.native.planGitAndQueue({ kind: "commit", authorization, snapshot, directoryRevision }));
     log("commit-confirmed", commit.receipt);
     const remoteHead = await git.remoteRef(); assert.ok(remoteHead === null || remoteHead === snapshot.sha, "An unrelated remote branch requires reconciliation");
     const push = await requireConfirmed(deployment.native.planGitAndQueue({ kind: "push", authorization, snapshot, directoryRevision, expectedRemoteSha: null }));
     log("push-confirmed", push.receipt);
     const pull = await requireConfirmed(deployment.native.planAndQueue({ kind: "pull", source, instance, repositoryId: repoId, authorization,
-      object: { issueNumber: 1 }, params: { headBranch: "dsh/issue-1", baseBranch: "main", title: "Fix wrapping and overlapping quiet hours", body: renderPullBody({
-        issueNumber: 1,
-        summary: "Actual SDK Worker changes, host-verified tests and managed Git delivery. Independent model artifact will be recorded separately; native independent GitHub review remains pending.",
+      object: { issueNumber }, params: { headBranch: branch, baseBranch: "main", title: `Fix: ${issue.title}`, body: renderPullBody({
+        issueNumber,
+        summary: "Actual SDK Worker changes, host-verified tests and managed Git delivery. Independent App bot review, controlled merge and issue settlement follow.",
       }) },
       preconditions: { headSha: snapshot.sha, baseSha: baseline } }));
     const pullNumber = (pull.receipt as { number: number }).number;
     log("pull-confirmed", { url: `https://github.com/${repoName}/pull/${pullNumber}`, head: snapshot.sha });
     const pr = await api(`repos/${repoName}/pulls/${pullNumber}`);
-    await deployment.native.poll({ targets: [], threads: [pullNumber], bindings: [{ ticketId: id, branch: "dsh/issue-1", repositoryId: repoId }] });
+    prTarget = { pullNumber, headSha: pr.head.sha, baseSha: pr.base.sha };
+    await deployment.native.poll({ targets: [], threads: [pullNumber], bindings: [{ ticketId: id, branch, repositoryId: repoId }] });
     const reviewFiles = ["src/quiet-hours.js", "test/quiet-hours.test.js"].map(path => ({ path, content: readFileSync(join(paths.cwd, path), "utf8") }));
     const contents = new Map(reviewFiles.map(file => [file.path, file.content]));
     reviewer = await ManagedPiReviewer.open({ store, root: workerRoot, modelRuntime: reviewerRuntime, model: reviewModel, binding,
@@ -220,9 +251,66 @@ export async function runViviTest(rootInput: string, reconcileDeadWorker = false
       files: reviewFiles.map(file => ({ path: file.path, version: digest(file.content) })), verifiedChecks: checks });
     assert.equal(artifact.status, "completed");
     log("model-review-completed", { verdict: artifact.artifact?.verdict, findings: artifact.artifact?.findings.length, artifactId: artifact.artifactId });
+    let reviewOperation: Operation | undefined, mergeOperation: Operation | undefined, settlementEvidence: unknown;
+    if (appRecord !== undefined) {
+      // 1) The durable artifact becomes the App bot's GitHub review via the reviewer transport.
+      reviewOperation = await requireConfirmed(deployment.planReview(binding, artifact.artifactId));
+      log("github-review-confirmed", { operation: reviewOperation.key, receipt: reviewOperation.receipt });
+      // 2) Wait for the required CI check on the exact head; a refused merge operation
+      //    cannot be replayed under the same identity, so plan merge only when green.
+      const ciDeadline = Date.now() + 12 * 60_000;
+      for (;;) {
+        const runs = await api(`repos/${repoName}/commits/${snapshot.sha}/check-runs?per_page=100`) as { check_runs?: { name?: unknown; id?: unknown; status?: unknown; conclusion?: unknown }[] };
+        const latest = new Map<string, { id: number; status?: unknown; conclusion?: unknown }>();
+        for (const run of runs.check_runs ?? []) { const name = String(run.name); const current = latest.get(name); if (current === undefined || Number(run.id) > current.id) latest.set(name, { id: Number(run.id), status: run.status, conclusion: run.conclusion }); }
+        const test = latest.get("test");
+        if (test?.status === "completed" && test.conclusion === "success") break;
+        assert.ok(Date.now() < ciDeadline, `CI did not succeed in time: ${JSON.stringify([...latest.entries()])}`);
+        await new Promise(done => setTimeout(done, 15_000));
+      }
+      log("ci-success", { head: snapshot.sha, requiredChecks: ["test"] });
+      // 3) Observe the Issue before merging; the settlement continuation needs the pre-merge snapshot.
+      const issueBefore = await api(`repos/${repoName}/issues/${issueNumber}`) as { updated_at?: unknown };
+      const eventsBefore = await api(`repos/${repoName}/issues/${issueNumber}/events?per_page=100`) as unknown[];
+      const frontier = eventsBefore.reduce<number>((max, event) => Math.max(max, Number((event as { id?: unknown }).id) || 0), 0);
+      assert.ok(typeof issueBefore.updated_at === "string", "Issue observation lacks updated_at");
+      // 4) Controlled merge through the same App bot credential.
+      mergeOperation = await requireConfirmed(deployment.native.planAndQueue({ kind: "merge", source, instance, repositoryId: repoId, authorization,
+        object: { pullNumber }, params: { method: "squash" }, preconditions: { headSha: snapshot.sha, baseSha: baseline, currentState: "open" } }));
+      const mergeReceipt = mergeOperation.receipt as Record<string, unknown>;
+      const mergeSha = String(mergeReceipt.sha ?? mergeReceipt.merge_commit_sha ?? "");
+      assert.ok(/^[0-9a-f]{40}$/i.test(mergeSha), `Merge receipt lacks a SHA: ${JSON.stringify(mergeReceipt)}`);
+      log("merge-confirmed", { operation: mergeOperation.key, mergeSha });
+      // 5) GitHub auto-closed the linked Issue (Closes #N). Register the settlement
+      //    continuation; the strict issue-close confirms from the linked-merge close
+      //    event without sending a PATCH.
+      const pullThread = githubEventToTrigger({ type: "pull_request", pull_request: pr, repository: remoteRepo }, source, instance,
+        { repository, selfLogins: [user.login], botLogins: [reviewerIdentity.login] }).threads[0]!;
+      settlementEvidence = deployment.native.settlement.closeMergedThread(deployment.native.driver.engine.sources, pullThread, {
+        ticketId: id, originIssue: issueNumber, pullThread, closedAt: new Date().toISOString(),
+        mergeOperation: { source: mergeOperation.source, instance: mergeOperation.instance, key: mergeOperation.key },
+        closeRequest: { kind: "issue-close" as const, source, instance, repositoryId: repoId,
+          object: { issueNumber }, authorization,
+          params: { mergeCommit: mergeSha, pullNumber },
+          preconditions: { currentState: "open" as const, issueUpdatedAt: issueBefore.updated_at as string, issueEventFrontier: frontier } },
+      });
+      await deployment.native.idle();
+      const continuationView = deployment.native.settlement.get(id);
+      assert.equal(continuationView?.status, "confirmed", `Issue settlement is not confirmed: ${JSON.stringify(continuationView)}`);
+      settlementEvidence = continuationView;
+      log("issue-settlement-confirmed", { status: continuationView?.status, mergeSha });
+      // 6) The Source observes the merged PR and the closed Issue.
+      await deployment.native.poll({ targets: [], threads: [pullNumber], bindings: [{ ticketId: id, branch, repositoryId: repoId }] });
+    }
     const evidence = { repository: repoName, repositoryId: repoId, issue: issue.html_url, pull: pr.html_url, ticketId: id, binding,
       baselineSha: baseline, headSha: snapshot.sha, checks, commit: commit.receipt, push: push.receipt, pullReceipt: pull.receipt, review: artifact,
-      workerReports: reports, status: "independent-github-review-required", limitation: "manual self-issue replay and host Decision; no independent GitHub reviewer credential; CI/Merge/Issue settlement not yet accepted", at: new Date().toISOString() };
+      ...(reviewOperation === undefined ? {} : { githubReview: reviewOperation.receipt }), ...(mergeOperation === undefined ? {} : { merge: mergeOperation.receipt }),
+      ...(settlementEvidence === undefined ? {} : { settlement: settlementEvidence }),
+      workerReports: reports, status: appRecord === undefined ? "independent-github-review-required" : "app-bot-closed-loop-confirmed",
+      limitation: appRecord === undefined
+        ? "manual self-issue replay and host Decision; no independent GitHub reviewer credential; CI/Merge/Issue settlement not yet accepted"
+        : "manual self-issue replay and host Decision; App bot review, controlled merge and strict issue settlement confirmed",
+      at: new Date().toISOString() };
     writeFileSync(join(root, "evidence.json"), JSON.stringify(evidence, null, 2), { mode: 0o600 });
     store.set("live:evidence", evidence); log("awaiting-native-review", { evidence: join(root, "evidence.json"), pull: pr.html_url });
   } catch (error) {
@@ -234,5 +322,8 @@ export async function runViviTest(rootInput: string, reconcileDeadWorker = false
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const index = process.argv.indexOf("--root"); assert.ok(index >= 0 && process.argv[index + 1], "Pass --root with the explicit disposable acceptance directory");
   const feedbackIndex = process.argv.indexOf("--feedback-file");
-  await runViviTest(process.argv[index + 1]!, process.argv.includes("--reconcile-dead-worker"), feedbackIndex < 0 ? undefined : process.argv[feedbackIndex + 1]);
+  const appIndex = process.argv.indexOf("--github-app");
+  const issueIndex = process.argv.indexOf("--issue");
+  const branchIndex = process.argv.indexOf("--branch");
+  await runViviTest(process.argv[index + 1]!, process.argv.includes("--reconcile-dead-worker"), feedbackIndex < 0 ? undefined : process.argv[feedbackIndex + 1], appIndex < 0 ? undefined : process.argv[appIndex + 1], issueIndex < 0 ? 1 : Number(process.argv[issueIndex + 1]), branchIndex < 0 ? undefined : process.argv[branchIndex + 1]);
 }

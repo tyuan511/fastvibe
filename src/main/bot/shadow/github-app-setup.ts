@@ -64,6 +64,8 @@ export function loadGithubAppCredential(file: string): GithubAppCredentialRecord
 export interface GithubAppSetupHandle {
   /** The loopback redirect_url already embedded in `registration.manifest`. */
   readonly callbackUrl: string;
+  /** Served on "/" when `startPage` is enabled: open it in a browser to begin. */
+  readonly startUrl?: string;
   readonly state: string;
   /** Render as an auto-submitting form: action + hidden `manifest`/`state` fields. */
   readonly registration: { action: string; manifest: string; state: string };
@@ -80,12 +82,19 @@ export function organizationRegistrationAction(organization: string): string {
 const PERSONAL_REGISTRATION_ACTION = "https://github.com/settings/apps/new";
 const CALLBACK_PAGE = "<!doctype html><html><body><p>FastVibe 已收到 GitHub App 注册回调，可以关闭此页面返回应用。</p></body></html>";
 
+const escapeHtml = (value: string): string => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+
+/** The local page that auto-POSTs the manifest to GitHub, so a plain browser can run the flow. */
+function registrationPage(action: string, manifest: string, state: string): string {
+  return `<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>注册 FastVibe GitHub App</title></head><body><p>正在跳转到 GitHub 注册页面……未自动跳转时请点击下面的按钮。</p><form id="register" action="${escapeHtml(`${action}?state=${encodeURIComponent(state)}`)}" method="post"><input type="hidden" name="manifest" value="${escapeHtml(manifest)}"><button type="submit">注册 GitHub App</button></form><script>document.getElementById("register").submit();</script></body></html>`;
+}
+
 /**
  * Starts the loopback callback server and returns how to open GitHub plus the
  * `completed` exchange promise. `manifest.redirectUrl` is derived from the bound
  * port, so callers never have to guess it.
  */
-export async function beginGithubAppSetup(options: { manifest: Omit<GithubAppManifestInput, "redirectUrl">; expectedState?: string; callbackPath?: string; timeoutMs?: number } & GithubAppHttpOptions): Promise<GithubAppSetupHandle> {
+export async function beginGithubAppSetup(options: { manifest: Omit<GithubAppManifestInput, "redirectUrl">; expectedState?: string; callbackPath?: string; timeoutMs?: number; startPage?: boolean; registrationAction?: string } & GithubAppHttpOptions): Promise<GithubAppSetupHandle> {
   const callbackPath = options.callbackPath ?? "/callback";
   if (!callbackPath.startsWith("/") || callbackPath.includes("..") || callbackPath.includes("?") || /[^\w/.-]/.test(callbackPath)) throw new Error("回调路径无效");
   const state = options.expectedState ?? randomUUID();
@@ -94,11 +103,17 @@ export async function beginGithubAppSetup(options: { manifest: Omit<GithubAppMan
   let settle: (conversion: GithubAppManifestConversion) => void;
   let reject: (error: Error) => void;
   let settled = false;
+  let startPageHtml: string | undefined;
   const completed = new Promise<GithubAppManifestConversion>((resolve, reject_) => { settle = resolve; reject = reject_; });
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     const reply = (status: number): void => { response.writeHead(status, { "Content-Type": "text/html; charset=utf-8" }); response.end(status === 200 ? CALLBACK_PAGE : ""); };
     if (request.method !== "GET") return reply(405);
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (url.pathname === "/") {
+      if (options.startPage !== true || startPageHtml === undefined) return reply(404);
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return void response.end(startPageHtml);
+    }
     if (url.pathname !== callbackPath) return reply(404);
     if (url.searchParams.get("state") !== state) return reply(403);
     const code = url.searchParams.get("code");
@@ -117,11 +132,16 @@ export async function beginGithubAppSetup(options: { manifest: Omit<GithubAppMan
   options.signal?.addEventListener("abort", () => { if (!settled) { settled = true; clearTimeout(timer); close(); reject!(new Error("GitHub App 注册流程已取消")); } }, { once: true });
   const port = await new Promise<number>((resolve, reject_) => { server.once("error", reject_); server.listen(0, "127.0.0.1", () => resolve((server.address() as { port: number }).port)); });
   const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
+  const action = options.registrationAction ?? PERSONAL_REGISTRATION_ACTION;
   const manifest = buildAppManifest({ ...options.manifest, redirectUrl: callbackUrl });
+  const manifestJson = JSON.stringify(manifest);
+  const startUrl = options.startPage === true ? `http://127.0.0.1:${port}/` : undefined;
+  if (startUrl !== undefined) startPageHtml = registrationPage(action, manifestJson, state);
   return {
     callbackUrl,
+    ...(startUrl === undefined ? {} : { startUrl }),
     state,
-    registration: { action: PERSONAL_REGISTRATION_ACTION, manifest: JSON.stringify(manifest), state },
+    registration: { action, manifest: manifestJson, state },
     completed,
     cancel: () => { if (!settled) { settled = true; clearTimeout(timer); close(); reject!(new Error("GitHub App 注册流程已取消")); } },
   };

@@ -38,7 +38,9 @@ export class GithubPiDeployment {
   constructor(store: ShadowStore, registry: ShadowSourceRegistry, options: GithubPiDeploymentOptions) {
     this.store = store; this.options = options;
     const reviewer = options.worker.reviewer;
-    if (options.reviewDelivery && !reviewer) throw new Error("Review delivery requires a managed SDK reviewer");
+    // reviewDelivery may be driven either by an executor-managed reviewer (onCompleted
+    // wrapper below) or by a host-opened ManagedPiReviewer whose durable cursor record
+    // planReview() validates; the identity fence below applies to both.
     if (options.reviewDelivery) {
       const delivery = options.reviewDelivery, source = options.native.source ?? "github", instance = options.native.instance ?? source;
       const config = registry.instance(source)?.config as { selfLogins?: string[]; botLogins?: string[]; repository?: { id?: string | number } } | undefined;

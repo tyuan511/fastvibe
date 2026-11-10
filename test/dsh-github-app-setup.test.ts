@@ -96,6 +96,29 @@ test("回调路径与组织注册入口校验", async t => {
   assert.throws(() => organizationRegistrationAction("ac me!"), /组织名/);
 });
 
+test("startPage 服务自动提交表单页，未启用时根路径 404", async t => {
+  const f = await conversions(t);
+  const handle = await beginGithubAppSetup({ manifest, expectedState: "state-2", origin: f.origin, loopbackTest: true, startPage: true });
+  assert.ok(handle.startUrl);
+  const page = await fetch(handle.startUrl);
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /action="https:\/\/github\.com\/settings\/apps\/new\?state=state-2"/);
+  assert.match(html, /name="manifest"/);
+  assert.match(html, /document\.getElementById\("register"\)\.submit\(\)/);
+  const embedded = html.match(/name="manifest" value="([^"]*)"/)![1]!
+    .replaceAll("&quot;", '"').replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">");
+  assert.equal(JSON.parse(embedded).redirect_url, handle.callbackUrl);
+
+  const plain = await beginGithubAppSetup({ manifest, origin: f.origin, loopbackTest: true });
+  const root = await fetch(new URL("/", plain.callbackUrl));
+  assert.equal(root.status, 404);
+  plain.cancel();
+  handle.cancel();
+  await assert.rejects(() => handle.completed, /取消/);
+  await assert.rejects(() => plain.completed, /取消/);
+});
+
 test("GitHub App 凭据文件：0600 原子写入、往返读取、损坏拒绝", async t => {
   const f = await conversions(t);
   const handle = await beginGithubAppSetup({ manifest, expectedState: "s", origin: f.origin, loopbackTest: true });

@@ -276,7 +276,7 @@ node --test test/vivi-dsh-github-authority.test.ts test/vivi-dsh-github-deployme
 
 ## M11 原生适配：GitHub REST 读写与对账已实现
 
-详细端点、凭据、并发和证据合同见 [原生 REST 适配说明](vivi-dsh-github-rest.md)。新入口为 `GithubRestTransport`、`GithubNativePlanner`、`GithubNativeOperationAdapter` 与 `GithubNativeDeployment`；没有生产 Runtime、IPC、settings 或数据库迁移接入。另已实现 [GitHub App 认证模块](vivi-dsh-github-app.md)（App JWT、manifest 交换、installation token mint 与 bot 身份发现，以及 [manifest 一键安装流程](../src/main/bot/shadow/github-app-setup.ts)：表单 manifest 构造、loopback 回调、0600 凭据文件、安装枚举；均离线验收），供后续以 App bot 身份接入受控 Review/Merge；未接入任何部署或设置页。
+详细端点、凭据、并发和证据合同见 [原生 REST 适配说明](vivi-dsh-github-rest.md)。新入口为 `GithubRestTransport`、`GithubNativePlanner`、`GithubNativeOperationAdapter` 与 `GithubNativeDeployment`；没有生产 Runtime、IPC、settings 或数据库迁移接入。另已实现 [GitHub App 认证模块](vivi-dsh-github-app.md)（App JWT、manifest 交换、installation token mint 与 bot 身份发现，以及 [manifest 一键安装流程](../src/main/bot/shadow/github-app-setup.ts)：表单 manifest 构造、loopback 回调、startPage 自动提交页、0600 凭据文件、安装枚举；均离线验收），供后续以 App bot 身份接入受控 Review/Merge；命令行注册入口 [scripts/dsh-github-app-register.ts](../scripts/dsh-github-app-register.ts) 与 live runner 的 `--github-app` 接线已就绪，未接入任何产品设置页。
 
 - 原生 reader 使用完整 Link 分页与 ETag/304 接入真实 M9 Source；凭据、取消、timeout、路径边界、响应脱敏均由 transport 收口。默认 HTTPS GitHub origin，loopback 仅供显式契约测试。
 - 原生意图使用独立 `github-rest` 协议/版本，发送原生 owner/repo 路径和字段。纯 `buildIntent()` 不落库；业务 key 区分 Ticket 与 Review 的 head/base/artifact，支持同 Ticket 新 SHA 重新审核；同身份参数漂移仍拒绝。
@@ -314,4 +314,4 @@ node --test test/vivi-dsh-github-native-*.test.ts test/vivi-dsh-github-transport
 
 恢复分支已按用户要求提交并推送到 `origin/feat/vivi-dsh-recovered`，本轮实现提交为 `d8adef89`。后续宿主曾通过 workflow 发布 Actions bot 审批，并直接合并 PR #2、关闭 Issue #1；workflow 改变了 head，原模型产物没有覆盖新版本，且 Merge/close 未经过 DSH Operation，因此这些行政操作不计 M11 的受控收束验收。无条件审批已从 main 移除、仓库默认只读权限已恢复。实际 Source 轮询已观察 PR merged 并结束原 Follow/Ticket，重复轮询新增事件为 0，Operation 和 SDK receipts 均未改变；没有补造 Merge receipt 或 continuation。完整 SHA、CI 与纠正证据见[真实验收记录](vivi-dsh-live-vivi-test.md#后续行政操作与证据纠正)。
 
-当前受控 adapter 仍需要以 `/user` 核验的独立 reviewer 凭据，不能将 workflow 的 Actions token 当作已接入的审核身份。后续须在新的专用验收轮次中补齐当前版本模型审核、原生 Review/修复、受控 Merge 与 Issue continuation；人工 self-issue 回放与宿主 Decision 也不能作为自动接单证据。本次不声明 M11 完成。
+后续在 2026-11-10 的 Round 2–3 中完成了 GitHub App bot 身份链的真实验收（详见[验收记录](vivi-dsh-live-vivi-test.md#round-2-3github-app-bot-的完整闭环2026-11-10)）：用户一键注册 App `fastvibe-vivi` 后，round-3（Issue #6 / PR #7）六个 operation 全部 confirmed——commit、push、pull、App bot Review（APPROVED）、App bot Merge、best-effort Issue 收束（writer 身份经 DSH PATCH 关闭）。期间确认两个平台事实（App 合并不触发关联 Issue 自动关闭；merge 权限需 contents:write + statuses:read）并修复三处宿主缺陷。剩余未验收：自动 Source 接单、REQUEST_CHANGES → 修复 → 新 head 复审、真实平台故障注入；生产继续使用旧 Runtime。

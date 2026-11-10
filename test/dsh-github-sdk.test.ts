@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import { createHash } from "node:crypto";
+import { createHash, createVerify, generateKeyPairSync } from "node:crypto";
+import { createServer, type Server } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AddressInfo } from "node:net";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createFauxCore, fauxAssistantMessage, fauxToolCall, getCurrentTools, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import type { Policy } from "../src/main/bot/core/ports.ts";
+import { GithubAppInstallationCredentials } from "../src/main/bot/shadow/github-app-auth.ts";
 import { GithubPiDeployment, type GithubPiDeploymentOptions } from "../src/main/bot/shadow/github-pi-deployment.ts";
 import { GithubRestTransport } from "../src/main/bot/shadow/github-transport.ts";
 import { githubEventToTrigger, registerGithubShadowSource, type GithubSourceConfig } from "../src/main/bot/shadow/github-source.ts";
@@ -42,7 +45,7 @@ async function provider(root: string, name: string, responses: Responses) {
     models: [{ id: "offline", name: "offline", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100_000, maxTokens: 4096 }] });
   return { faux, runtime, model: runtime.getModel(name, "offline")! };
 }
-interface Options { worker?: Responses; reviewer?: Responses; verifiedChecks?: PiReviewInput["verifiedChecks"] }
+interface Options { worker?: Responses; reviewer?: Responses; verifiedChecks?: PiReviewInput["verifiedChecks"]; appReviewer?: boolean }
 async function harness(t: TestContext, options: Options = {}) {
   const root = mkdtempSync(join(tmpdir(), "dsh-github-sdk-")), store = openShadowStore(join(root, "shadow.db"));
   const server = new GithubNativeServer(); await server.start(); server.seedPull();
@@ -55,18 +58,62 @@ async function harness(t: TestContext, options: Options = {}) {
     assert.match(JSON.stringify(context.messages), /HOST_COMPLETE_DIFF/);
     return tool("read_file", { path: "a.ts" });
   }, context => { assert.match(JSON.stringify(context.messages), /export const answer = 42/); return tool("dsh_review", artifact()); }]);
-  const config = { ...gh.config, selfLogins: ["agent"], botLogins: ["helper", "reviewer"] };
+  const config = { ...gh.config, selfLogins: ["agent"], botLogins: options.appReviewer ? ["helper", "vivi-app[bot]"] : ["helper", "reviewer"] };
   const registry = new ShadowSourceRegistry(store); registerGithubShadowSource(registry); registry.configure("github", { enabled: true, config });
   const credentials = new ShadowCredentialHost(registry);
-  for (const [source, id, value] of [["github", "sdk.fake.writer", "fake-writer"], ["github-review", "sdk.fake.reviewer", "fake-reviewer"]] as const) {
-    credentials.register({ id, kind: "github" }, { resolve: async () => value }); credentials.bind(source, { id, kind: "github" });
+  credentials.register({ id: "sdk.fake.writer", kind: "github" }, { resolve: async () => "fake-writer" }); credentials.bind("github", { id: "sdk.fake.writer", kind: "github" });
+  let reviewerIdentity: { id: string; login: string } = { id: "2", login: "reviewer" }, reviewerPrincipalMode: "user" | "github-app" = "user";
+  let appRequests: { method: string; path: string; iss?: string; verified: boolean }[] = [], appMints = 0;
+  if (options.appReviewer) {
+    // A second loopback server plays api.github.com's App-auth endpoints; the PR/review
+    // endpoints still come from GithubNativeServer with the installation token mapped
+    // to the bot identity, exactly like a real installation token would be.
+    const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const verifiedJwt = (header: string | undefined): { ok: boolean; iss?: string } => {
+      const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+      if (!token) return { ok: false };
+      const [head, claims, signature] = token.split(".")!;
+      const ok = createVerify("RSA-SHA256").update(`${head}.${claims}`).verify(publicKey.export({ type: "spki", format: "pem" }), Buffer.from(signature!, "base64url"));
+      return { ok, iss: (JSON.parse(Buffer.from(claims!, "base64url").toString("utf8")) as { iss?: string }).iss };
+    };
+    const appServer: Server = await new Promise(resolve => {
+      const s = createServer((req, res) => {
+        const url = new URL(req.url ?? "/", "http://127.0.0.1");
+        const auth = verifiedJwt(req.headers.authorization);
+        const json = (status: number, body: unknown): void => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(body)); };
+        if (req.method === "GET" && url.pathname === "/app") {
+          appRequests.push({ method: "GET", path: "/app", iss: auth.iss, verified: auth.ok });
+          return auth.ok && auth.iss === "4242" ? json(200, { id: 4242, slug: "vivi-app" }) : json(401, { message: "Bad credentials" });
+        }
+        if (req.method === "GET" && url.pathname === "/users/vivi-app%5Bbot%5D") return json(200, { id: 9876543, login: "vivi-app[bot]", type: "Bot" });
+        if (req.method === "POST" && url.pathname === "/app/installations/99/access_tokens") {
+          appRequests.push({ method: "POST", path: url.pathname, iss: auth.iss, verified: auth.ok });
+          if (!auth.ok || auth.iss !== "4242") return json(401, { message: "Bad credentials" });
+          appMints += 1;
+          return json(201, { token: "ghs_vivi_app", expires_at: new Date(Date.now() + 3_600_000).toISOString(), permissions: { pull_requests: "write" } });
+        }
+        return json(404, { message: "Not Found" });
+      });
+      s.listen(0, "127.0.0.1", () => resolve(s));
+    });
+    t.after(() => appServer.close());
+    const appCredentials = new GithubAppInstallationCredentials({ appId: 4242, privateKeyPem: pem, installationId: 99,
+      origin: `http://127.0.0.1:${(appServer.address() as AddressInfo).port}`, loopbackTest: true });
+    credentials.register({ id: "sdk.app.reviewer", kind: "github" }, appCredentials); credentials.bind("github-review", { id: "sdk.app.reviewer", kind: "github" });
+    const principal = await appCredentials.principal();
+    reviewerIdentity = { id: principal.botUserId, login: principal.botLogin };
+    reviewerPrincipalMode = "github-app";
+    server.identities.set("ghs_vivi_app", { id: Number(principal.botUserId), login: principal.botLogin });
+  } else {
+    credentials.register({ id: "sdk.fake.reviewer", kind: "github" }, { resolve: async () => "fake-reviewer" }); credentials.bind("github-review", { id: "sdk.fake.reviewer", kind: "github" });
   }
-  const transport = (source: string) => new GithubRestTransport({ repository: config.repository, credentials, source, baseUrl: server.baseUrl, loopbackTest: true });
+  const transport = (source: string, principalMode?: "user" | "github-app") => new GithubRestTransport({ repository: config.repository, credentials, source, baseUrl: server.baseUrl, loopbackTest: true, ...(principalMode ? { principalMode } : {}) });
   const policy: Policy = { version: "github-sdk-test", paused: false, evalTimeoutMs: 60_000,
     gate: () => ({ admissible: true, strength: "explicit", basis: { via: "listed" } }), revalidate: () => true, admitsInferred: () => true };
   let snapshot = { headSha: HEAD, baseSha: BASE }, now = Date.now();
   const deploymentOptions: GithubPiDeploymentOptions = {
-    native: { reader: transport("github"), writer: transport("github"), reviewer: transport("github-review"), writerIdentity: { id: "1", login: "agent" }, reviewerIdentity: { id: "2", login: "reviewer" },
+    native: { reader: transport("github"), writer: transport("github"), reviewer: transport("github-review", reviewerPrincipalMode === "github-app" ? "github-app" : undefined), writerIdentity: { id: "1", login: "agent" }, reviewerIdentity,
       instance: "desktop", requiredChecks: ["test"], driver: { policy: () => policy, intervalMs: false, now: () => now },
       adapters: { assessment: async () => {}, release: async () => {}, relay: async () => {}, notice: async () => {} } },
     worker: { root, modelRuntime: worker.runtime, model: worker.model, maxWorkers: () => 1, now: () => now,
@@ -104,6 +151,7 @@ async function harness(t: TestContext, options: Options = {}) {
     engine.sources.receive(trigger); await d.idle(); return trigger;
   };
   return { root, store, server, registry, credentials, d, engine, worker, reviewer, binding, ticketId, ledger, sessionKey, records, operations, posts, transcript, deliver,
+    appRequests: () => appRequests, appMints: () => appMints, reviewerLogin: reviewerIdentity.login,
     enableAutomaticPoll: () => { deploymentOptions.poll = { targets: [{ id: "host-pr", kind: "issue", path: `${ROOT}/pulls/8` }], branches: [] }; },
     ticket: () => store.tickets.get(ticketId)!, reviewerTools: () => reviewerTools,
     setHead: (headSha: string) => { snapshot = { ...snapshot, headSha }; }, snapshot: () => structuredClone(snapshot) };
@@ -349,3 +397,16 @@ for (const reason of ["failed-check", "high-finding"] as const) test(`${reason} 
   await h.deliver(); assert.equal(h.posts().length, 1); assert.equal(h.posts()[0]!.body?.event, "REQUEST_CHANGES"); assert.equal(h.operations()[0]?.status, "confirmed");
   if (reason === "failed-check") assert.deepEqual(h.records()[0]!.artifact?.checks, checks);
 });
+
+test("GitHub App installation 凭据以 github-app principal 模式完成受控 Review，全程不读 /user", timeout, async t => {
+  const h = await harness(t, { appReviewer: true });
+  assert.equal(h.reviewerLogin, "vivi-app[bot]");
+  await h.deliver();
+  assert.equal(h.posts().length, 1, JSON.stringify(h.posts()));
+  assert.equal(h.posts()[0]!.actor, "vivi-app[bot]");
+  const operation = h.operations().find(op => (op.payload as { kind?: string }).kind === "review");
+  assert.equal(operation?.status, "confirmed", JSON.stringify(operation));
+  assert.ok(h.appMints() >= 1);
+  assert.ok(h.appRequests().length > 0 && h.appRequests().every(request => request.verified), JSON.stringify(h.appRequests()));
+  assert.ok(!h.server.requests.some(row => row.path === "/user"), "app principal mode must not read /user");
+}, timeout);

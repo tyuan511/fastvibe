@@ -62,8 +62,17 @@
 
 代码回归：完整 DSH/旧 Bot/数据库组合 **1020/1020**，Executor 专项 **20/20**，项目 typecheck 与包含 runner 的严格 ES2022 检查通过。依赖仍复用相同锁文件的主仓库安装，typecheck 使用 `pnpm --config.verify-deps-before-run=false typecheck`，不触发 pnpm 重装共享依赖。
 
+## Round 2–3：GitHub App bot 的完整闭环（2026-11-10）
+
+用户经 [注册脚本](../scripts/dsh-github-app-register.ts) 一键注册了 GitHub App `fastvibe-vivi`（appId 5689357，安装 #180349807，bot `fastvibe-vivi[bot]`/354680019），reviewer 从“保留身份”换成真实 installation 凭据。三轮真实验收逐步闭环，期间确认了两个平台事实并修复三处宿主缺陷：
+
+- **Round-2a（PR #4，未合并）**：真实模型修复 → 受控 commit/push → PR → CI green → **App bot 真实 Review APPROVED**（reviewId 5834963237）。merge 暴露 App 权限缺口：注册 manifest 只申请了 `contents: read`，而 merge 写入需要 `contents: write`、preflight 读 commit statuses 需要 `statuses: read`（用 mint token 实测 403）。`PATCH /app` 端点不存在，权限只能网页修改；修改后需重装安装才生效。failed merge operation 按合同为同身份终态。
+- **Round-2b（未成 PR）**：受控 commit/push 后，pull preflight 以 `state=all` 发现 round-2a 关闭的 PR #4 与新 head 同分支名，拒绝 `pull-for-branch-already-exists`。runner 增加 `--branch` 参数改用新分支。
+- **Round-2c（PR #5，已合并）**：全链到 merge——App bot squash merge confirmed（d6927356）。**平台事实：GitHub 不因 App 通过 API 合并而触发 `Closes #N` 关联 Issue 自动关闭**（PR 正文关键词完整、合入默认分支，Issue #3 仍开放）；strict settlement 的 external-fact 路径因此不可达，issue-close operation 被 strict 拒绝（终态 failed）。
+- **Round-3（Issue #6 / PR #7，完整闭环 ✅）**：runner 启用文档预设的 `issueClose: best-effort`。六个 operation 全部 confirmed：commit（26ffa4f）→ push → pull（PR #7）→ review（App bot APPROVED，5835259804）→ merge（App bot，34458a4f）→ issue-close（writer 身份经 DSH PATCH 关闭 Issue #6，state_reason completed）。settlement confirmed，证据归档 `~/Downloads/vivi-test-m11-acceptance/round3-app-bot-closed-loop.json`。
+
+随本轮落地的宿主修复：planReview 内部 grant 与全列表授权 profile 冲突（profile key 不含 allowed）；runner 的 issue/分支硬编码与证据 settlement 字段改存 idle 后终态；reviewDelivery 对宿主手动 reviewer 的构造器过度限制。Issue #3 的修复已由 PR #5 合并，但其 settlement operation 为 strict 轮终态 failed，该 Issue 保持开放由用户处置。
+
 ## 剩余验收
 
-当前原生 adapter 用 `/user` 核验独立发布身份，本机仍只有执行账号的用户凭据；Actions bot 在 workflow 中能发布 Review，并不等于已接入该受控凭据协议。后续需提供支持当前协议的独立 reviewer 用户凭据引用，或先实现并验收 GitHub App installation 身份协议，再在新的专用验收轮次中完成严格绑定当前 head/base 的模型审核、原生 Review → 修复 → 新 head 审核、受控 Merge 和独立 Issue continuation。不得重新运行已完成的原 runner、重放原 provider 请求或为已合并 PR 补造 Operation。
-
-单账号的显式回放不证明自动外部事件接单；本次宿主测试失败修复也不能代替原生 Review 反馈修复。完整 Source 驱动和真实平台故障演练仍需验收。生产继续使用旧 Runtime。
+App bot 身份链（installation 凭据 → mint 时身份校验 → 受控 Review → 受控 Merge → best-effort Issue 收束）已在 round-3 完整验收；单账号的显式回放不证明自动外部事件接单，本轮也未覆盖 REQUEST_CHANGES → Worker 修复 → 新 head 复审分支与真实平台故障注入（响应丢失/限流/并发推送）。这些仍需在后续轮次验收。生产继续使用旧 Runtime。
