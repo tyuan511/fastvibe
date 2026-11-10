@@ -43,16 +43,33 @@ test("Flutter Android release metadata and updater asset contract stay aligned",
   }
 });
 
+/**
+ * The shipping version, read from the one source of truth rather than written into the test.
+ *
+ * These two cases used to name `0.5.14` and `0.5.15` literally, so every mobile release turned
+ * them red: the metadata was correct and only the assertion was stale. The checker under test
+ * compares `version.properties` against the release tag, so the tag has to come from the same
+ * place the release workflow takes it from — `apps/mobile/pubspec.yaml`.
+ */
+function shippingVersion(): string {
+  const pubspec = readFileSync(join(root, "apps", "mobile", "pubspec.yaml"), "utf8");
+  const version = /^version:\s*(\d+\.\d+\.\d+)\+\d+$/m.exec(pubspec);
+  assert.ok(version, "Flutter package needs a version and build number");
+  return version[1];
+}
+
 test("Android metadata checker accepts the shipping version and matching tag", () => {
-  const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), "app-v0.5.14"]);
+  const version = shippingVersion();
+  const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), `app-v${version}`]);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Android 0\.5\.14 \(versionCode 514\), ABI arm64-v8a/);
+  assert.match(result.stdout, new RegExp(`Android ${version.replaceAll(".", "\\.")} \\(versionCode \\d+\\), ABI arm64-v8a`));
 });
 
 test("Android metadata checker rejects a mismatched release tag", () => {
-  const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), "app-v0.5.10"]);
+  const version = shippingVersion();
+  const result = bash(join(tool, "check-release.sh"), [join(android, "version.properties"), "app-v0.0.1"]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /does not match app-v0\.5\.14/);
+  assert.match(result.stderr, new RegExp(`does not match app-v${version.replaceAll(".", "\\.")}`));
 });
 
 test("signed Flutter release build fails closed before compilation without all signing inputs", () => {
