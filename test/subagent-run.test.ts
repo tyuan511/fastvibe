@@ -58,7 +58,9 @@ function fixture(options: { setup?: () => Promise<void>; create?: () => Promise<
       settings: any;
       constructor(settings: any) { this.settings = settings; }
       async reload() { await options.setup?.(); for (const extension of this.settings.extensionFactories ?? []) await extension.factory(api); }
+      getExtensions() { return { extensions: [{ tools }] }; }
     },
+    availableImageTools: (names: string[], available: boolean) => names.filter((name) => name !== "generate_image" || available),
     readDefaultModel: () => undefined,
     createAgentSession: async (settings: { thinkingLevel: string }) => {
       await options.create?.();
