@@ -51,19 +51,28 @@ const resolveModule = (specifier: string, containingFile: string) =>
 
 // This checks the actual source graph rather than an opt-out feature flag: there
 // must be no edge from any current application module into the staged domain.
-test("staged DSH domain and shadow storage are unreachable from existing production modules", () => {
+const PRODUCTION_BRIDGE = join(root, "src/main/bot/dsh-production.ts");
+test("staged DSH domain is unreachable from production modules except the one declared bridge", () => {
   const violations: string[] = [];
   for (const path of [...files(join(root, "src")), ...files(join(root, "resources/extensions"))]) {
     if (isStaged(path)) continue;
     for (const specifier of specifiers(path)) {
       const target = resolveModule(specifier, path);
-      if (target && isStaged(target)) {
+      // The production bridge is the single deliberate exception: it opens the persistent
+      // Shadow store and composes the runtime. Everything else stays unreachable, so a second
+      // accidental wiring path still fails this test.
+      if (target && isStaged(target) && path !== PRODUCTION_BRIDGE) {
         violations.push(`${relative(root, path)} -> ${specifier}`);
       }
     }
   }
   assert.deepEqual(violations, [], "M0–M11 preparation must not change runtime, IPC, UI, database registration, or extensions");
+  // The bridge must exist and must actually reach the domain; a bridge nobody can find is worse
+  // than none, because it makes the exception invisible.
+  assert.ok(imports(specifiers(PRODUCTION_BRIDGE)), "the declared production bridge must import the staged domain");
 });
+
+const imports = (list: readonly string[]): boolean => list.some(specifier => /(?:^|\/)shadow\//.test(specifier));
 
 test("domain dependency closure contains only local modules and node:crypto", () => {
   const sourceFiles = files(core);

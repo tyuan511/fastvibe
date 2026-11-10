@@ -115,7 +115,9 @@ test("unsupported 输入与旧扩展入口拒绝且零写入；SQL ABORT 回滚�
     await assert.rejects(h.facade.createWork({ requestId: "unsupported", title: "work", text: "work", ...extra }), /不支持/);
   }
   await assert.rejects(h.facade.ask({ conversationId: "x", question: "?" }), /主 Session/);
-  await assert.rejects(h.facade.answer({ attentionId: "x", answer: "yes" }), /主 Session/);
+  // `answer` now routes through the domain reply path: an unknown attention id is refused by the
+  // durable Ticket lookup, not by a missing main-Session port.
+  await assert.rejects(h.facade.answer({ attentionId: "x", answer: "yes" }), /attention 不存在或已被替换/);
   await assert.rejects(h.facade.progress({ conversationId: "x", phase: "working", text: "fake" }), /binding\/epoch/);
   await assert.rejects(h.facade.reply({ conversationId: "x", text: "fake" }), /binding\/epoch/);
   await assert.rejects(h.facade.report({ conversationId: "x", summary: "fake" }), /SDK/);

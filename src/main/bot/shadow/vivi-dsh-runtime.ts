@@ -8,6 +8,7 @@ import type { AdmissionRow } from "../core/admission.ts";
 import { ShadowDriver } from "./driver.ts";
 import type { ShadowAdapters } from "./driver.ts";
 import type { ShadowEffects } from "./effects.ts";
+import { ManagedPiAssessor } from "./pi-assessor.ts";
 import { PiExecutor } from "./pi-executor.ts";
 import { LocalSourceReplay } from "./local-source.ts";
 import { ShadowSourceRegistry } from "./source-registry.ts";
@@ -33,6 +34,15 @@ export interface ViviDshRuntimeOptions {
   now?: () => number;
   adapters?: ViviDshRuntimeAdapters;
   compose?: (context: ViviDshRuntimeComposeContext) => ViviDshRuntimeAdapters;
+  /**
+   * Automatic Source intake. When enabled, the runtime builds its own isolated model assessor
+   * from this same model binding and installs it as the assessment adapter, so an admitted
+   * Trigger becomes a Ticket without a host operator deciding by hand.
+   *
+   * An explicit `adapters.assessment` always wins: a deployment that wants a different judge
+   * (or a manual one) must pass it instead.
+   */
+  intake?: { enabled: boolean; scope: string; title?: (candidate: unknown) => string };
   beforePass?: () => void | Promise<void>;
   onEvent?: (event: DomainEvent) => void;
 }
@@ -66,7 +76,9 @@ export class ViviDshRuntime {
   private readonly replay: LocalSourceReplay;
   private readonly store: ShadowStore;
   private readonly settings: Settings;
+  private readonly intakeScope?: string;
   private readonly clock: () => number;
+  private assessor?: Promise<ManagedPiAssessor>;
   private started = false;
   private stopped = false;
   private stopping?: Promise<void>;
@@ -79,6 +91,7 @@ export class ViviDshRuntime {
     this.store = options.store;
     this.clock = options.now ?? Date.now;
     this.settings = clone(options.policy ?? defaultSettings());
+    this.intakeScope = options.intake?.scope;
     this.registry = new ShadowSourceRegistry(options.store, this.clock);
     this.registry.register({
       kind: "local",
@@ -104,6 +117,30 @@ export class ViviDshRuntime {
       effects: () => { if (!driver) throw new Error("Vivi DSH composition is not ready"); return driver.effects; },
     }) ?? {};
     const adapters = { ...options.adapters, ...composed };
+    if (options.intake?.enabled && adapters.assessment === undefined) {
+      // Automatic intake: the judge is a model in its own isolated Session, built from the
+      // same binding as the workers. An explicit assessment adapter always wins (a deployment
+      // that wants a manual or different judge passes one).
+      const intakeScope = options.intake.scope;
+      const intakeTitle = options.intake.title;
+      // ManagedPiAssessor.open() is async while this constructor is synchronous, so the
+      // instrument is created on the first assessment and reused afterwards.
+      const assessor = (): Promise<ManagedPiAssessor> => (this.assessor ??= ManagedPiAssessor.open({
+        store: options.store, root: options.root, ...(options.allowedRoot ? { allowedRoot: options.allowedRoot } : {}),
+        modelRuntime: options.modelRuntime, model: options.model,
+        describe: candidate => ({
+          title: intakeTitle?.(candidate) ?? candidate.triggers[0]?.text.split("\n")[0]?.slice(0, 120) ?? "Vivi work",
+          scope: intakeScope,
+        }),
+        decide: (triggerId, outcome) => { this.driver.engine.main.decide(triggerId, outcome); },
+        now: this.clock,
+      }));
+      adapters.assessment = async candidate => {
+        // A failed or undecided assessment must not fabricate a Decision: the Eval stays open and
+        // the host sees the failed record. Only a real model decision reaches the domain.
+        await (await assessor()).assess(candidate);
+      };
+    }
     driver = new ShadowDriver(options.store, {
       policy: () => settingsPolicy(this.settings, scope), scope, now: this.clock, onEvent: options.onEvent,
       beforePass: async () => { await this.executor.sweep(); await options.beforePass?.(); }, limits: { launch: options.maxWorkers },
@@ -134,7 +171,9 @@ export class ViviDshRuntime {
     if (this.stopping) return this.stopping;
     this.stopped = true;
     this.stopping = (async () => {
-      const results = await Promise.allSettled([this.driver.stop({ abort: true }), this.executor.stop()]);
+      const assessor = this.assessor;
+      const results = await Promise.allSettled([this.driver.stop({ abort: true }), this.executor.stop(),
+        assessor ? assessor.then(item => item.dispose(), () => undefined) : Promise.resolve()]);
       const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
       if (failures.length) throw new AggregateError(failures, "Vivi DSH shutdown failed");
     })();
@@ -144,7 +183,9 @@ export class ViviDshRuntime {
   submit(input: ViviDshSubmit): string {
     if (this.stopped) throw new Error("Vivi DSH runtime is stopped");
     if (!input.requestId.trim() || !input.text.trim()) throw new Error("local requestId 和 text 不能为空");
-    const payload = { text: input.text, title: input.title ?? input.text.slice(0, 120), scope: input.scope ?? "local" };
+    // A deployment's intake scope is the authority for locally submitted work; the caller may
+    // narrow it but must not silently widen it to a generic "local" that ignores configuration.
+    const payload = { text: input.text, title: input.title ?? input.text.slice(0, 120), scope: input.scope ?? this.intakeScope ?? "local" };
     const key = requestKey(input.requestId);
     return this.store.atomic(() => {
     const prior = this.store.get<{ payload: typeof payload; ticketId: string }>(key);
@@ -168,6 +209,25 @@ export class ViviDshRuntime {
 
   ticket(ticketId: string): Ticket | undefined { return clone(this.store.tickets.get(ticketId)); }
   tickets(): Ticket[] { return this.store.tickets.list().map(clone); }
+  /**
+   * Answer a ticket's open question through the domain's own reply path.
+   *
+   * The question identity comes from the durable Ticket, never from the caller: `answer` only
+   * carries what the person typed. `Replies.answer` re-checks that the text still matches the
+   * open attention, so a stale panel cannot reply to a question that was already replaced.
+   */
+  answerAttention(attentionId: string, text: string): Ticket {
+    if (this.stopped) throw new Error("Vivi DSH runtime is stopped");
+    if (!text.trim()) throw new Error("attention 答复不能为空");
+    return this.store.atomic(() => {
+      const ticket = this.store.tickets.list().find(item => item.attention?.id === attentionId);
+      if (!ticket?.attention) throw new Error("attention 不存在或已被替换");
+      const trigger = ticket.attention.triggerId ? this.store.triggers.get(ticket.attention.triggerId) : undefined;
+      this.driver.engine.main.reply({ purpose: "attention", ticketId: ticket.id, question: ticket.attention.question,
+        ...(trigger ? { triggerId: trigger.id } : {}), text });
+      return clone(this.store.tickets.get(ticket.id)!);
+    });
+  }
   stopTicket(ticketId: string, reason?: string): Ticket {
     if (this.stopped) throw new Error("Vivi DSH runtime is stopped");
     return clone(this.driver.engine.people.stopTicket(ticketId, reason));

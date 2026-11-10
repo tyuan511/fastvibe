@@ -322,3 +322,19 @@ node --test test/vivi-dsh-github-native-*.test.ts test/vivi-dsh-github-transport
 - **自动 Source 接单**：两处阻塞已消除。`GithubSourceConfig.selfIsHuman` 让单账号部署把仓库所有者自己的 Issue 当作人的请求（默认仍保持历史语义；真正的 bot 账号始终走机器路径）；新增 [`pi-assessor.ts`](../src/main/bot/shadow/pi-assessor.ts) 让 assessor 变成一个隔离 Session 里的真实模型——它只用 `dsh_assess` 作出 accept/ignore/unavailable，Ticket 的 `title` 与 `scope` 由宿主的 `describe` 提供，模型即使被诱导也无法扩大仓库范围。按 Eval 幂等：同一 Eval 重投不会二次询问模型；模型不作出决定则 fail closed（无 Ticket 产生）。
 
 这两个实现均未接入生产 Runtime/IPC/settings；真实 GitHub 轮次与平台故障注入仍待验收。
+
+### 生产组合根（M12 的唯一入口）
+
+新增 [`src/main/bot/dsh-production.ts`](../src/main/bot/dsh-production.ts)，它是全部 M0–M11 隔离代码**唯一**允许被应用引用的入口，也是 `test/vivi-dsh-isolation.test.ts` 显式登记的那一个例外——任何其它生产模块再碰 `shadow/` 仍然构建失败。
+
+它做三件事，也都只做这三件事：
+
+1. 在 userData 下打开 `runtime/engine/vivi-dsh/shadow.db`，以 `purpose: "vivi-dsh-production"` + 显式 `allowedRoot` 通过路径门禁；数据库永远不会落到 `fastvibe.db`。
+2. 用一个 `ViviDshRuntime` 组合出一个 driver + 一个 executor，`intake` 开启时用同一个模型绑定建立隔离的模型 assessor；`compose` 允许把 GitHub Source 叠到**同一套** driver/executor 上（而不是第二个调度器）。
+3. 把组合根发布为现有 `BotApi`，可直接交给 `registerBotIpc()`。
+
+同时修掉了三个真实缺陷：`DshBotFacade` 原本绑死 `ViviDshRuntime` 类型（现收窄为 `DshBotHost` 端口，GitHub 组合也能接）；facade 与 runtime 双重把 scope 写死成 `"local"`，导致部署配置的 intake scope 不生效、工作会落到错误仓库；`answer()` 从“明确拒绝”改为走真实的领域回复路径（renderer 一直在调用它）。
+
+验证：`test/dsh-production.test.ts` **5/5**——生产库位置与权限、无模型时只读快照、有模型时经真实 Bot IPC 跑完 Ticket、intake scope 由宿主决定、stop 后 store 释放。全量回归 **1186/1186**。
+
+**仍未做（M12 的实质）：** 从 `PiProcessManager` 构造这个桥、旧数据迁移、真实 UserData 切换与回滚演练、旧 `BotRuntime` 下线。现在它是可验收的组件，不是已经切换的生产路径。

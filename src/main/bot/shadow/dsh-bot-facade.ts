@@ -29,22 +29,43 @@ const at = (value?: string): number => {
 const hash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 export type DshBotRuntimeEvents = (listener: (event: DomainEvent) => void) => () => void;
+/** Events forwarded from the composed driver into the facade's own projection. */
+export type DshBotRuntime = (listener: (event: DomainEvent) => void) => () => void;
+
+/**
+ * What the facade needs from a composition root.
+ *
+ * Deliberately a port, not `ViviDshRuntime`: a production deployment may compose one driver and
+ * one executor with several Sources (local chat plus GitHub), reaching them through
+ * `GithubPiDeployment`, and that composition is not a `ViviDshRuntime`. The facade only needs
+ * these seven operations, so it should not dictate which root supplies them.
+ */
+export interface DshBotHost {
+  start(): void;
+  stop(): Promise<void>;
+  submit(input: ViviDshSubmit): string;
+  ticket(ticketId: string): Ticket | undefined;
+  tickets(): Ticket[];
+  stopTicket(ticketId: string, reason?: string): Ticket;
+  retryTicket(ticketId: string): Ticket;
+  answerAttention(attentionId: string, text: string): Ticket;
+}
 export type DshBotFacadeOptions = { now?: () => number; subscribe?: DshBotRuntimeEvents };
 
 export class DshBotFacade implements BotApi {
-  private runtime?: ViviDshRuntime;
+  private runtime?: DshBotHost;
   private readonly now: () => number;
   private readonly listeners = new Set<(event: BotChanged) => void>();
   private detachEvents?: () => void;
 
   private readonly store: ShadowStore;
-  constructor(store: ShadowStore, runtime?: ViviDshRuntime, options: DshBotFacadeOptions = {}) {
+  constructor(store: ShadowStore, runtime?: DshBotHost, options: DshBotFacadeOptions = {}) {
     this.store = store;
     this.runtime = runtime;
     this.now = options.now ?? Date.now;
     if (options.subscribe) this.detachEvents = options.subscribe(() => this.notifyDomainEvent());
   }
-  attachRuntime(runtime: ViviDshRuntime, subscribe?: DshBotRuntimeEvents): void {
+  attachRuntime(runtime: DshBotHost, subscribe?: DshBotRuntimeEvents): void {
     this.detachEvents?.();
     this.runtime = runtime;
     this.detachEvents = subscribe?.(() => this.notifyDomainEvent());
@@ -52,8 +73,8 @@ export class DshBotFacade implements BotApi {
   }
   start(): void { this.requireRuntime().start(); }
   async stop(): Promise<void> { await this.runtime?.stop(); }
-  private requireRuntime(): ViviDshRuntime {
-    if (!this.runtime) throw new Error("DSH Bot facade 尚未 attach ViviDshRuntime");
+  private requireRuntime(): DshBotHost {
+    if (!this.runtime) throw new Error("DSH Bot facade 尚未 attach 组合根");
     return this.runtime;
   }
   private state(): Projection {
@@ -170,17 +191,25 @@ export class DshBotFacade implements BotApi {
     if (input.images?.length || input.conversationId !== undefined || input.memoryRefs?.length || "project" in input || "workspace" in input || (input.behavior !== undefined && input.behavior !== "followUp")) {
       throw new Error("DSH submit 尚不支持 images/conversationId/memoryRefs/behavior 的请求语义");
     }
-    this.accept({ requestId: input.requestId, text: input.text, scope: "local" });
+    // No literal scope here: the runtime owns the deployment's intake scope, and a facade that
+    // hardcoded "local" would silently override it and put work in the wrong repository.
+    this.accept({ requestId: input.requestId, text: input.text });
     return this.getWorkSnapshot();
   }
   async createWork(input: BotCreateWorkRequest): Promise<BotConversationMeta> {
     if (input.project !== undefined || input.workspace !== undefined || input.memoryRefs?.length) throw new Error("DSH createWork 尚不支持 project/workspace/memoryRefs");
-    const id = this.accept({ requestId: input.requestId, text: input.text, title: input.title, scope: "local" });
+    const id = this.accept({ requestId: input.requestId, text: input.text, title: input.title });
     return this.meta(this.ticket(id)!);
   }
   async report(_input: BotReportRequest): Promise<BotResult> { throw new Error("DSH report 仅允许绑定当前 Assignment 的 SDK 报告入口；请通过 snapshot 读取报告"); }
   async ask(_input: Parameters<BotApi["ask"]>[0]): Promise<BotAttention> { throw new Error("DSH Bot facade 没有主 Session port，不能伪造 attention"); }
-  async answer(_input: Parameters<BotApi["answer"]>[0]): Promise<WorkSnapshot> { throw new Error("DSH Bot facade 没有主 Session port，不能伪造 resolved answer"); }
+  async answer(input: Parameters<BotApi["answer"]>[0]): Promise<WorkSnapshot> {
+    // The renderer's question card only knows the attention id; the question text and the asking
+    // trigger come from the durable Ticket, so a stale card cannot answer a replaced question.
+    this.requireRuntime().answerAttention(input.attentionId, input.answer);
+    this.notifyDomainEvent();
+    return this.getWorkSnapshot();
+  }
   async stopConversation(input: Parameters<BotApi["stopConversation"]>[0]): Promise<WorkSnapshot> {
     if (input.callerConversationId !== undefined) throw new Error("DSH stop 不支持未经 binding 校验的扩展调用");
     this.requireRuntime().stopTicket(input.conversationId, "stopped by user"); this.notifyDomainEvent(); return this.getWorkSnapshot();
