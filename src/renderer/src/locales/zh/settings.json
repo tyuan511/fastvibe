@@ -67,7 +67,8 @@
   "ssh": "SSH 远程主机",
   "computer": "电脑操控",
   "proxy": "网络代理",
-  "browser": "浏览器控制"
+  "browser": "浏览器控制",
+  "github": "GitHub 关联"
  },
  "vivi": {
     "title": "Vivi 桌面伙伴",
@@ -993,6 +994,38 @@
   "loading": "正在查找本机浏览器…",
   "noProfiles": "没有找到可导入的配置",
   "noProfilesDesc": "支持 Chrome、Edge、Brave、Chromium、Arc 和 Opera。"
+ },
+ "github": {
+  "title": "GitHub 关联",
+  "description": "Vivi 用自己的 GitHub App 机器人身份工作：提交 Review、合并 PR、关闭 Issue，都不借用你的个人凭据。",
+  "permissions": "需要授予的权限",
+  "permissionNames": {
+   "contents": "仓库内容",
+   "pullRequests": "拉取请求",
+   "checks": "检查结果",
+   "statuses": "提交状态"
+  },
+  "permissionValues": {
+   "contents": "读写",
+   "pullRequests": "读写",
+   "checks": "只读",
+   "statuses": "只读"
+  },
+  "permissionDescriptions": {
+   "contents": "合并 PR 会写入默认分支。",
+   "pullRequests": "提交 Review 意见并执行合并。",
+   "checks": "读取 PR 的 CI 结论，确认通过后才合并。",
+   "statuses": "合并前的检查会读取提交状态，缺少它会被拒绝。"
+  },
+  "reinstallTitle": "改完权限还需要重新安装",
+  "reinstallDescription": "GitHub 不会把 App 权限的改动自动带到已有安装上。改完权限后，请卸载并重新安装一次，否则新权限不生效。",
+  "links": "打开 GitHub",
+  "openAppSettings": "App 权限设置",
+  "openAppSettingsDescription": "修改权限、查看 App 信息。",
+  "manageInstallations": "管理安装",
+  "manageInstallationsDescription": "重新安装或撤销仓库授权。",
+  "open": "打开",
+  "registerHint": "首次注册与选择安装由脚本完成：node scripts/dsh-github-app-register.ts。凭据保存在本机独立文件中，不会经过设置页面。"
  },
  "providerTest": {
   "check": "发送两个小请求检测回答与工具调用，按供应商计费。",

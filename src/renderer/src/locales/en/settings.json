@@ -67,7 +67,8 @@
   "ssh": "SSH hosts",
   "computer": "Computer control",
   "proxy": "Network proxy",
-  "browser": "Browser control"
+  "browser": "Browser control",
+  "github": "GitHub"
  },
  "vivi": {
     "title": "Vivi desktop companion",
@@ -995,6 +996,38 @@
   "loading": "Looking for browsers…",
   "noProfiles": "No profiles to import",
   "noProfilesDesc": "Supports Chrome, Edge, Brave, Chromium, Arc and Opera."
+ },
+ "github": {
+  "title": "GitHub",
+  "description": "Vivi works through its own GitHub App bot identity: reviews, merges and issue closure never borrow your personal credentials.",
+  "permissions": "Permissions to grant",
+  "permissionNames": {
+   "contents": "Contents",
+   "pullRequests": "Pull requests",
+   "checks": "Checks",
+   "statuses": "Commit statuses"
+  },
+  "permissionValues": {
+   "contents": "Read and write",
+   "pullRequests": "Read and write",
+   "checks": "Read-only",
+   "statuses": "Read-only"
+  },
+  "permissionDescriptions": {
+   "contents": "Merging a pull request writes to the default branch.",
+   "pullRequests": "Posts review verdicts and performs the merge.",
+   "checks": "Reads CI results and only merges once they pass.",
+   "statuses": "The pre-merge check reads commit statuses; without it the merge is refused."
+  },
+  "reinstallTitle": "Permission changes need a reinstall",
+  "reinstallDescription": "GitHub does not push App permission changes to an existing installation. After editing permissions, uninstall and install again, or the new permissions will not take effect.",
+  "links": "Open GitHub",
+  "openAppSettings": "App permissions",
+  "openAppSettingsDescription": "Edit permissions and inspect the App.",
+  "manageInstallations": "Manage installations",
+  "manageInstallationsDescription": "Reinstall or revoke repository access.",
+  "open": "Open",
+  "registerHint": "Registration and installation selection run from the script: node scripts/dsh-github-app-register.ts. Credentials stay in a local file and never pass through this page."
  },
  "providerTest": {
   "check": "Sends two small requests to check replies and tool calls. Provider charges apply.",

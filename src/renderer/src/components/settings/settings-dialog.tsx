@@ -44,6 +44,7 @@ import { AboutSettings } from "./about-settings";
 import { PersonalizationSettings } from "./personalization-settings";
 import { SubagentsSettings } from "./subagents-settings";
 import { ViviSettings } from "./vivi-settings";
+import { GithubSettings } from "./github-settings";
 import { SettingsGroup as Group, SettingsRow as Row } from "./settings-group";
 import {
   SETTINGS_SECTIONS,
@@ -472,6 +473,7 @@ export function SettingsDialog({
           {section === "computer" ? <ComputerSettings /> : null}
           {section === "proxy" ? <ProxySettings /> : null}
           {section === "browser" ? <BrowserSettings /> : null}
+          {section === "github" ? <GithubSettings /> : null}
 
           {section === "subagents" ? <SubagentsSettings models={models} /> : null}
           {section === "memory" ? <MemorySettings models={models} /> : null}

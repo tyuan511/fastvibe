@@ -7,6 +7,7 @@ import {
   BoxesIcon,
   ComputerIcon,
   Globe02Icon,
+  GitBranchIcon,
   ImportIcon,
   InformationCircleIcon,
   KeyboardIcon,
@@ -50,6 +51,7 @@ export type SectionId =
   | "proxy"
   | "browser"
   | "vivi"
+  | "github"
   | "about";
 
 export type SettingsGroupId = "preferences" | "workspace" | "integrations" | "system" | "about";
@@ -91,6 +93,7 @@ export const SETTINGS_SECTIONS: Array<{
       { id: "mcp", icon: <HugeiconsIcon strokeWidth={2} icon={Plug01Icon} /> },
       { id: "skills", icon: <HugeiconsIcon strokeWidth={2} icon={SparklesIcon} /> },
       { id: "extensions", icon: <HugeiconsIcon strokeWidth={2} icon={PuzzleIcon} /> },
+      { id: "github", icon: <HugeiconsIcon strokeWidth={2} icon={GitBranchIcon} /> },
     ],
   },
   {
