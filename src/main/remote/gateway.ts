@@ -152,6 +152,9 @@ const CATALOG_RESULT_METHODS: ReadonlySet<string> = new Set([
   Ipc.conversationsDelete,
   Ipc.conversationsRecordPrompt,
   Ipc.conversationsSetProject,
+  Ipc.conversationsCreateWorktree,
+  Ipc.conversationsBindWorktree,
+  Ipc.conversationsUnbindWorktree,
   Ipc.projectsAdd,
   Ipc.projectsRename,
   Ipc.projectsRemove,
@@ -687,6 +690,11 @@ export class RemoteGateway {
     // namespaced path the way a listing does.
     if (method === Ipc.workspaceCreateEntry || method === Ipc.workspaceRenameEntry) return scopePathField(result, serverInstanceId);
     if (method === Ipc.workspaceReadDir) return scopeReadDir(result, serverInstanceId);
+    if (method === Ipc.conversationsListWorktrees && Array.isArray(result)) {
+      return result.map((item) => isRecord(item) && typeof item.path === "string" && item.path
+        ? { ...item, path: scopeId(item.path, serverInstanceId) }
+        : item);
+    }
     if (method === Ipc.engineGetRunning) return namespaceIdList(result, serverInstanceId);
     if (method === Ipc.engineStartReview || method === Ipc.engineFollowupAgent) return namespaceAgentThread(result, serverInstanceId);
     if (method === Ipc.engineGetAgentThreads || method === Ipc.engineWaitAgents) {

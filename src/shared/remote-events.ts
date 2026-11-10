@@ -112,6 +112,12 @@ export function namespaceConversationRecord(value: unknown, serverInstanceId: st
   if (typeof record.cwd === "string" && record.cwd) {
     record.cwd = namespaceWorkspace(record.cwd, serverInstanceId);
   }
+  if (typeof record.worktree === "object" && record.worktree !== null && !Array.isArray(record.worktree)) {
+    const worktree = record.worktree as Record<string, unknown>;
+    record.worktree = typeof worktree.path === "string" && worktree.path
+      ? { ...worktree, path: namespaceWorkspace(worktree.path, serverInstanceId) }
+      : { ...worktree };
+  }
   return record;
 }
 

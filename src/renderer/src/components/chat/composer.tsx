@@ -8,6 +8,7 @@ import { FileIcon } from "@/components/file-icon";
 import { IconButton } from "@/components/icon-button";
 import { ModelThinkingSelect } from "@/components/model-thinking-select";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { isTouchOnly } from "@/lib/platform";
@@ -270,6 +271,11 @@ export function Composer({
   projects,
   project,
   newSession,
+  workspaceCwd,
+  useWorktree = false,
+  worktreeBound = false,
+  preparingWorktree = false,
+  onWorktreeChange,
   hideProjectPicker = false,
   hideModelPicker = false,
   commands,
@@ -333,6 +339,12 @@ export function Composer({
   project?: string;
   /** New sessions have no top bar, so the project binding is shown above the input. */
   newSession?: boolean;
+  /** The checkout may differ from the project root after a Worktree is bound. */
+  workspaceCwd?: string;
+  useWorktree?: boolean;
+  worktreeBound?: boolean;
+  preparingWorktree?: boolean;
+  onWorktreeChange?: (checked: boolean) => void;
   /** Hide the project chip entirely (auxiliary chats inherit the parent workspace). */
   hideProjectPicker?: boolean;
   /** Hide the model/thinking control when a surface always follows its host model. */
@@ -750,7 +762,7 @@ export function Composer({
   const [gitEpoch, setGitEpoch] = useState(0);
   // The persistent header owns status after the first message. Stop polling here
   // at that point so one visible repository never starts two git processes.
-  const gitStatus = useGitStatus(newSession ? project : undefined, `${streaming ? "streaming" : "idle"}:${gitEpoch}`);
+  const gitStatus = useGitStatus(newSession && project ? workspaceCwd ?? project : undefined, `${streaming ? "streaming" : "idle"}:${gitEpoch}`);
   const git = gitStatus?.isRepository && gitStatus.branch ? gitStatus : null;
   // Project/branch chips only belong to an empty conversation. Once a message
   // has been sent the top bar carries the title, so the chips are dropped.
@@ -935,7 +947,7 @@ export function Composer({
       ) : null}
 
       {showWorkspace && (showProjectPicker || git) ? (
-        <div className="mb-2 flex items-center gap-0.5 px-1.5">
+        <div className="mb-2 flex flex-wrap items-center gap-x-0.5 gap-y-1 px-1.5">
           {showProjectPicker ? (
             <Popover
               open={projectOpen}
@@ -1035,6 +1047,20 @@ export function Composer({
           ) : null}
           {git ? (
             <GitBranchChip status={git} onBranchChange={() => setGitEpoch((value) => value + 1)} />
+          ) : null}
+          {showProjectPicker && onWorktreeChange ? (
+            <label
+              className="ml-auto flex min-h-7 cursor-pointer items-center gap-2 px-2 text-xs text-muted-foreground has-disabled:cursor-default has-disabled:opacity-60"
+              title={worktreeBound ? t("composer.worktreeBound") : gitStatus?.isRepository ? t("composer.worktreeHint") : t("composer.worktreeNeedsProject")}
+            >
+              <Checkbox
+                checked={useWorktree}
+                aria-label={t("composer.useWorktree")}
+                disabled={!project || !gitStatus?.isRepository || worktreeBound || preparingWorktree || readOnly}
+                onCheckedChange={onWorktreeChange}
+              />
+              {preparingWorktree ? t("composer.worktreePreparing") : t("composer.useWorktree")}
+            </label>
           ) : null}
         </div>
       ) : null}

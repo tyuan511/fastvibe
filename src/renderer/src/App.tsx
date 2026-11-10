@@ -136,6 +136,8 @@ export function App(): JSX.Element {
   const conversations = useSessionStore((state) => state.conversations);
   const activeId = useSessionStore((state) => state.activeId);
   // A choice belongs to the project's unfinished conversation, just like its draft.
+  const [worktreeChoices, setWorktreeChoices] = useState<Record<string, boolean>>({});
+  const [preparingWorktree, setPreparingWorktree] = useState<string | null>(null);
   // `messages` is intentionally not subscribed here: the array changes on every
   // streamed token. Derive only the stable facts the shell needs, and let
   // `MessageThread` read the transcript itself.
@@ -867,6 +869,22 @@ export function App(): JSX.Element {
       }
       consumedOwner = conversationId;
       consumedVersion = useSessionStore.getState().composerDrafts[conversationId]?.version;
+      const target = useSessionStore.getState().conversations.find((item) => item.id === conversationId);
+      if (target && !target.preview && !target.worktree && worktreeChoices[conversationId]) {
+        setPreparingWorktree(conversationId);
+        // Complete the cwd rebind before recording or dispatching the first prompt.
+        // A failure uses the composer reservation below to return text and attachments.
+        const snapshot = await window.fastvibe.conversations.createWorktree(conversationId);
+        applyList(snapshot);
+        const bound = snapshot.conversations.find((item) => item.id === conversationId);
+        if (!bound?.worktree || bound.cwd !== bound.worktree.path) {
+          throw new Error(i18n.t("chat:composer.worktreeFailed"));
+        }
+        setWorktreeChoices((choices) => ({ ...choices, [conversationId]: false }));
+        const state = await engine.getState(conversationId);
+        if (useSessionStore.getState().activeId === conversationId) setSession(state);
+        setPreparingWorktree(null);
+      }
       // A queued `/compact`, `/handoff` or `/review` is a command, not a prompt: it must
       // not become the chat's title or preview.
       if (!compact && !handoff && !review) {
@@ -982,6 +1000,7 @@ export function App(): JSX.Element {
         setError(err instanceof Error ? err.message : String(err));
       }
     } finally {
+      setPreparingWorktree(null);
       submitting.current = false;
     }
   }
@@ -1462,7 +1481,7 @@ export function App(): JSX.Element {
   async function discardDraft(id: string | null | undefined): Promise<void> {
     if (!id) return;
     const item = useSessionStore.getState().conversations.find((entry) => entry.id === id);
-    if (!item || item.preview) return;
+    if (!item || item.preview || preparingWorktree === id) return;
     try {
       applyList(await window.fastvibe.conversations.delete(id));
       disposeSidePaneTabs(useSidePaneStore.getState().forgetScope(id));
@@ -1745,7 +1764,7 @@ export function App(): JSX.Element {
       render={(draft, attachments) => (
         <Composer
           value={draft}
-          disabled={!canChat}
+          disabled={!canChat || (preparingWorktree !== null && preparingWorktree === activeId)}
           streaming={streaming}
           working={conversationWorking}
           suggestion={canChat && replySuggestionsOn && activeId ? suggestions[activeId] : undefined}
@@ -1758,6 +1777,13 @@ export function App(): JSX.Element {
           projects={projects}
           project={active?.project}
           newSession={isNewSession}
+          workspaceCwd={active?.cwd}
+          useWorktree={Boolean(active?.worktree || activeId && worktreeChoices[activeId])}
+          worktreeBound={Boolean(active?.worktree)}
+          preparingWorktree={Boolean(activeId && preparingWorktree === activeId)}
+          onWorktreeChange={(checked) => {
+            if (activeId) setWorktreeChoices((choices) => ({ ...choices, [activeId]: checked }));
+          }}
           commands={paletteCommands}
           queued={queued}
           queuePause={queuePause}

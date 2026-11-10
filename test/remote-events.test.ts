@@ -6,6 +6,7 @@ import {
   classifyRemotePush,
   isConversationPush,
   namespaceCatalogSnapshot,
+  namespaceConversationRecord,
   namespaceConversationSnapshot,
   namespaceIdList,
   namespaceIdMap,
@@ -84,6 +85,25 @@ test("catalog and engine pushes are classified; settings and global status are d
 test("settings and global navigation channels are not rewritten into a relay payload", () => {
   assert.equal(namespaceRemotePush(Ipc.settingsChanged, { themeMode: "dark" }, SERVER), undefined);
   assert.equal(namespaceRemotePush(Ipc.status, { state: "ready" }, SERVER), undefined);
+});
+
+test("conversation worktree path follows cwd namespace without mutating the source", () => {
+  const payload = {
+    id: "conv-1",
+    project: "/home/dev/app",
+    cwd: "/home/dev/app/.fastvibe-worktree",
+    worktree: { path: "/home/dev/app/.fastvibe-worktree", branch: "feature/demo" },
+  };
+  const original = structuredClone(payload);
+  const scoped = namespaceConversationRecord(payload, SERVER) as typeof payload;
+
+  assert.equal(scoped.cwd, "remote:srv_alpha:/home/dev/app/.fastvibe-worktree");
+  assert.deepEqual(scoped.worktree, {
+    path: "remote:srv_alpha:/home/dev/app/.fastvibe-worktree",
+    branch: "feature/demo",
+  });
+  assert.equal(scoped.worktree.path, scoped.cwd);
+  assert.deepEqual(payload, original);
 });
 
 test("workspace:changed namespaces conversations and workspaces and strips activeId", () => {

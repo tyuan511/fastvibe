@@ -6,6 +6,12 @@
 
 本页承接根 `AGENTS.md` 拆出的详细合同、故障背景和验证资料。反引号中的源码与脚本路径相对仓库根；Markdown 链接相对本文件。历史实测只说明所述环境，不能当作当前性能保证；当前行为以源码、类型和所属功能文档核对。
 
+## 新会话的独立 Worktree
+
+新会话的项目、分支行提供「使用独立 Worktree」复选框，默认不勾选；选择 Git 项目后可启用。选择按当前窗口内的空会话 ID 保留，切换会话不串用，不作为所有新会话的全局默认值。尚未绑定项目或所选目录不是 Git 仓库时禁用；辅助聊天不显示该选项。
+
+勾选本身不创建目录。首次发送时，renderer 在记录首条提示词和调用引擎前，等待现有 `conversations.createWorktree(id)` 完成创建及 cwd 绑定，并按同一会话 ID 刷新引擎状态。沿用默认目录 `~/.fastvibe/worktree/<project-name>/` 和独立分支命名；从项目当前 HEAD 创建，不复制未提交修改。创建失败时停止发送，按草稿版本恢复文本与附件；成功绑定后即使后续发送失败，重试也复用该 Worktree。已绑定的空会话显示勾选且禁用，不重复创建；分支 chip 读取实际会话 cwd。SSH 项目使用主机侧同一组 Worktree API。
+
 ## File icons
 
 File/folder glyphs come from **vscode-icons** (24.7M installs on the Marketplace, MIT),

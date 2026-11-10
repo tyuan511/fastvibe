@@ -167,6 +167,10 @@ export function registerAgentIpc(deps: AgentIpcDeps): void {
   handle(Ipc.conversationsDelete, (payload: { id: string }) => engine.deleteConversation(payload.id));
   handle(Ipc.conversationsRecordPrompt, (payload: { id: string; text: string }) => engine.recordPrompt(payload.id, payload.text));
   handle(Ipc.conversationsSetProject, (payload: { id: string; project: string | null }) => engine.setConversationProject(payload.id, payload.project));
+  handle(Ipc.conversationsCreateWorktree, (payload: { id: string; path?: string; branch?: string; label?: string }) => engine.createConversationWorktree(payload.id, payload));
+  handle(Ipc.conversationsBindWorktree, (payload: { id: string; path: string }) => engine.bindConversationWorktree(payload.id, payload.path));
+  handle(Ipc.conversationsUnbindWorktree, (payload: { id: string; remove?: boolean }) => engine.unbindConversationWorktree(payload.id, payload));
+  handle(Ipc.conversationsListWorktrees, (payload: { id: string }) => engine.listConversationWorktrees(payload.id));
   handle(Ipc.conversationsSearch, (payload: { query?: string }) => engine.searchConversations(payload?.query ?? ""));
   handle(Ipc.conversationsCreateSide, (payload: { project?: string; parentId?: string; title?: string }) => engine.createSideConversation(payload?.project, payload?.parentId, payload?.title));
   handle(Ipc.projectsAddRemote, (payload: { cwd?: string }) => {

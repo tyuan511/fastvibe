@@ -965,6 +965,61 @@ test("unknown remote pushes are dropped", () => {
   assert.equal(broadcasts.length, 0);
 });
 
+test("remote worktree mutations unscope payloads and return merged catalogs", async () => {
+  const cases = [
+    { method: Ipc.conversationsCreateWorktree, options: { path: "remote:srv_alpha:/tmp/worktree", branch: "feature/demo", label: "demo" }, expected: { path: "/tmp/worktree", branch: "feature/demo", label: "demo" } },
+    { method: Ipc.conversationsBindWorktree, options: { path: "remote:srv_alpha:/tmp/worktree" }, expected: { path: "/tmp/worktree" } },
+    { method: Ipc.conversationsUnbindWorktree, options: { remove: false }, expected: { remove: false } },
+  ];
+  for (const { method, options, expected } of cases) {
+    const file = bindingsFile();
+    saveBinding(file, binding());
+    const conversation = {
+      ...localConversation(), id: "remote-chat", project: "/home/dev/app", cwd: "/tmp/worktree",
+      worktree: { path: "/tmp/worktree", branch: "feature/demo" },
+    };
+    const remote = { projects: [{ ...localProject(), cwd: "/home/dev/app" }], conversations: [conversation], activeId: "remote-chat" };
+    const original = structuredClone(remote);
+    const connections = fakeConnections({
+      servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],
+      results: { [method]: remote },
+    });
+    const { instance, localCalls } = gateway({ file, connections });
+    const payload = { id: "remote:srv_alpha:remote-chat", ...options };
+    const snapshot = await instance.dispatch(method, payload, {}) as WorkspaceSnapshot;
+    assert.deepEqual(connections.calls.at(-1), { server: "srv_alpha", method, payload: { id: "remote-chat", ...expected } });
+    assert.deepEqual(snapshot.projects.map((project) => project.cwd), [localProject().cwd, bindingProjectKey(binding())]);
+    assert.deepEqual(snapshot.conversations.map((item) => item.id), ["local-c1", "remote:srv_alpha:remote-chat"]);
+    const scoped = snapshot.conversations[1]!;
+    assert.equal(scoped.cwd, "remote:srv_alpha:/tmp/worktree");
+    assert.equal(scoped.worktree?.path, scoped.cwd);
+    assert.equal(scoped.worktree?.branch, "feature/demo");
+    assert.equal(snapshot.activeId, "local-c1");
+    assert.deepEqual(instance.aggregate(localSnap()), snapshot);
+    assert.deepEqual(remote, original);
+    assert.equal(payload.id, "remote:srv_alpha:remote-chat");
+    assert.deepEqual(localCalls, []);
+  }
+});
+
+test("remote worktree lists namespace paths while preserving metadata and the source", async () => {
+  const worktrees = [
+    { path: "/home/dev/app", branch: "main", head: "abc", bare: false },
+    { path: "/tmp/worktree", branch: "feature/demo", head: "def", locked: true },
+  ];
+  const original = structuredClone(worktrees);
+  const connections = fakeConnections({
+    servers: [{ connectionId: "host-a", serverInstanceId: "srv_alpha", capabilities: ["engine"] }],
+    results: { [Ipc.conversationsListWorktrees]: worktrees },
+  });
+  const { instance, localCalls } = gateway({ connections });
+  const result = await instance.dispatch(Ipc.conversationsListWorktrees, { id: "remote:srv_alpha:remote-chat" }, {});
+  assert.deepEqual(connections.calls.at(-1), { server: "srv_alpha", method: Ipc.conversationsListWorktrees, payload: { id: "remote-chat" } });
+  assert.deepEqual(result, worktrees.map((item) => ({ ...item, path: `remote:srv_alpha:${item.path}` })));
+  assert.deepEqual(worktrees, original);
+  assert.deepEqual(localCalls, []);
+});
+
 test("local conversation cannot be moved onto a remote project", async () => {
   const file = bindingsFile();
   saveBinding(file, binding());
