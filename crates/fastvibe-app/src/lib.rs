@@ -1,0 +1,1 @@
+//! FastVibe's GPUI application.

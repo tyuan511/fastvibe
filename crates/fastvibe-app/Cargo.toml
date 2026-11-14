@@ -1,0 +1,18 @@
+[package]
+name = "fastvibe-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = []
+gpui-fast = ["gpui-kit/gpui-fast"]
+
+[dependencies]
+anyhow.workspace = true
+fastvibe-core = { path = "../fastvibe-core" }
+env_logger = "0.11"
+gpui-kit = { version = "=0.9.1", default-features = true }
+uuid.workspace = true
+
