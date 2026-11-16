@@ -14,5 +14,6 @@ anyhow.workspace = true
 fastvibe-core = { path = "../fastvibe-core" }
 env_logger = "0.11"
 gpui-kit = { version = "=0.9.1", default-features = true }
+gpui-kit-assets = "=0.9.1"
 uuid.workspace = true
 

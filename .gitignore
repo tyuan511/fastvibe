@@ -1,77 +1,7 @@
-node_modules
-.next
-out
-dist
-dist-electron
-build
-# electron-builder's output dir only. Anchored: a bare `release` also swallowed
-# `.agents/skills/release/`, so the release skill could not be committed.
-/release/
+/target/
 .DS_Store
 *.log
-*.tsbuildinfo
-*.tgz
-*.pyc
-__pycache__/
 .env
 .env.*
-.firecrawl
-*.local
 .vscode
 .idea
-resources/models-dev/**
-!resources/models-dev/.gitkeep
-.firecrawl
-.openchamber
-.claude
-# Signing material. Nothing here is ever meant to be committed: the certificate
-# lives in the login keychain and in the APPLE_CERT_P12 secret, the App Store
-# Connect key in ~/private_keys and in APPLE_API_KEY_P8. A rule costs nothing and
-# catches the one time somebody exports a .p12 into the repo to "just try it".
-*.p12
-*.p8
-# Mobile build products (Flutter UI and shared Rust core)
-# Legacy workspaces retain only generated build products after the source migration.
-/native/target/
-/apps/mobile_flutter/
-/rust/target/
-apps/mobile/.dart_tool/
-apps/mobile/.flutter-plugins*
-apps/mobile/build/
-apps/mobile/packages/rust_core/android/src/main/jniLibs/
-apps/mobile/packages/rust_core/ios/Frameworks/
-apps/mobile/ios/.symlinks/
-apps/mobile/ios/Flutter/Generated.xcconfig
-apps/mobile/ios/Flutter/flutter_export_environment.sh
-apps/mobile/ios/Flutter/ephemeral/
-apps/mobile/ios/Runner/GeneratedPluginRegistrant.*
-apps/mobile/android/.gradle/
-apps/mobile/android/local.properties
-apps/mobile/.visual-review/
-apps/mobile/android/**/build/
-apps/mobile/ios/.native-build/
-apps/mobile/ios/DerivedData/
-apps/mobile/ios/Pods/
-apps/mobile/ios/**/xcuserdata/
-apps/mobile/ios/.build/
-
-# Fetched at build time by scripts/fetch-cua-driver.mjs, pinned and checksummed there.
-# 63 MB of third-party executable belongs in the release artifact, not in history.
-resources/cua-driver/
-# OfficeCLI binaries, fetched by scripts/fetch-officecli.mjs against scripts/officecli.json.
-# LICENSE and NOTICE stay: distributing the binary requires them (Apache-2.0 §4).
-resources/officecli/*/
-resources/officecli/manifest.json
-
-# The marketing-video workspace: ~700 MB of rendered frames, screen stills, phone
-# recordings and a Remotion project with its own node_modules (14k+ files, and one
-# 188 MB webpack cache pack that GitHub would refuse outright). Everything in it is
-# regenerable from promo/README.md, so it lives on disk and in release artifacts,
-# never in history. Ignore the whole directory: it is a scratch workspace for a
-# deliverable, not source the app builds.
-promo/
-# Local loading-motion previews and screenshots, not application source.
-/design-demos/loading/
-.zcode
-apps/mobile/ios/.xcode-final/
-apps/mobile/ios/.xcode-sim-build/

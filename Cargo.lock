@@ -1614,6 +1614,7 @@ dependencies = [
  "env_logger",
  "fastvibe-core",
  "gpui-kit",
+ "gpui-kit-assets",
  "uuid",
 ]
 
